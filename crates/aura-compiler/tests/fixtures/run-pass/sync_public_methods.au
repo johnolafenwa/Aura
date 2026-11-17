@@ -32,3 +32,20 @@ def main():
     print(counts.get(-1))
     counts.set(-1, 8)
     print(counts.get(-1))
+    counts.set(0, 0)
+    match counts.get(0):
+        case Lookup.Found(word):
+            counts.set(0, 19)
+            print(word)
+        case Lookup.Missing:
+            print(-1)
+    match own counts.get(-1):
+        case Lookup.Found(word):
+            print(word)
+        case Lookup.Missing:
+            print(-1)
+    match counts.get(5):
+        case Lookup.Found(word):
+            print(word)
+        case Lookup.Missing:
+            print("absent")

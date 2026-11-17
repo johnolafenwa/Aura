@@ -63,6 +63,52 @@ fn word_kind(ty: &DirectType) -> Option<i64> {
 }
 
 impl FunctionCompiler<'_> {
+    pub(super) fn map_lookup_word(&mut self, place: &str) -> Option<ValueRef> {
+        let address = *self.map_word_slots.get(place)?;
+        let word = self.builder.load(types::I64, MemFlags::new(), address, 0);
+        Some(ValueRef {
+            values: vec![word],
+            ty: DirectType::Scalar(ScalarKind::Int64),
+        })
+    }
+
+    /// The checked match reads its own copied payload. No pointer into the
+    /// shared map escapes the lock, and a stored zero keeps its presence bit.
+    pub(super) fn compile_map_word_lookup(
+        &mut self,
+        value: &Rvalue,
+        address: Val,
+    ) -> std::result::Result<(), String> {
+        let present = if let Rvalue::Use(Operand::MovePlace(source)) = value {
+            let source = self.map_word_slots[source];
+            let word = self.builder.load(types::I64, MemFlags::new(), source, 0);
+            self.builder.store(MemFlags::new(), word, address, 0);
+            self.builder.load(types::I64, MemFlags::new(), source, 8)
+        } else {
+            let (receiver, key) = lookups::map_word_get(value)
+                .ok_or_else(|| "direct backend expected an integer map lookup".to_owned())?;
+            let handle = match receiver {
+                Operand::Place(place)
+                    if self.moved_operands.contains(&std::ptr::from_ref(receiver)) =>
+                {
+                    self.take_place(place)?
+                }
+                receiver => self.load_operand(receiver)?,
+            };
+            let key_ty = DirectType::Scalar(ScalarKind::Int64);
+            let key = self.load_operand_for_target(&key.value, &key_ty)?;
+            let key = self.coerce_value(key, &key_ty)?;
+            self.builder
+                .call(
+                    self.runtime[RuntimeFn::SyncMapGetWord],
+                    &[handle.values[0], key.values[0], address],
+                )
+                .results[0]
+        };
+        self.builder.store(MemFlags::new(), present, address, 8);
+        Ok(())
+    }
+
     /// A new instance of a class that wraps a `sync` handle: the handle's
     /// box. An initializer starts from an instance with no fields, which
     /// takes the ordinary path until the initializer stores the handle.

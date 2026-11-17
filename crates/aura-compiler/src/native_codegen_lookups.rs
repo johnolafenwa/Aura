@@ -38,6 +38,8 @@ pub(super) fn is_dict_get(value: &Rvalue) -> bool {
 enum SlotKind {
     /// A `Lookup` from a `dict` `get`.
     Lookup,
+    /// A lookup in a shared map whose key and value are both int64.
+    MapWord,
     /// A `QueueReceive` from a queue receive that waits for an item.
     Receive,
     /// The `Result` of a queue `put`, which nothing reads.
@@ -56,7 +58,7 @@ impl SlotKind {
         let enum_name = arm.enum_name.as_deref();
         let variant_name = arm.variant_name.as_deref();
         match self {
-            SlotKind::Lookup => {
+            SlotKind::Lookup | SlotKind::MapWord => {
                 matches!(enum_name, None | Some("Lookup"))
                     && matches!(variant_name, Some("Found" | "Missing"))
             }
@@ -81,11 +83,31 @@ impl SlotKind {
     /// `variant_name` reads.
     fn keeps_payload_of(self, variant_name: &str) -> bool {
         match self {
-            SlotKind::Lookup | SlotKind::Receive | SlotKind::Recovery => true,
+            SlotKind::Lookup | SlotKind::MapWord | SlotKind::Receive | SlotKind::Recovery => true,
             SlotKind::Result => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
     }
+}
+
+/// The checked standard library method whose receiver is the actual cell
+/// handle and whose key and payload both fit in a machine word.
+pub(super) fn map_word_get(value: &Rvalue) -> Option<(&Operand, &MirArg)> {
+    let Rvalue::Call {
+        callee:
+            CallTarget::Member {
+                object,
+                dispatch: Some(crate::mir::MethodDispatch::Static { function }),
+                ..
+            },
+        args,
+        ..
+    } = value
+    else {
+        return None;
+    };
+    let [key] = args.as_slice() else { return None };
+    (function == "sync::Map.get[int64, int64]").then_some((object, key))
 }
 
 fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
@@ -105,6 +127,7 @@ fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
             RuntimeOp::Function(op) if parse_kind(*op).is_some() => Some(SlotKind::Result),
             _ => None,
         },
+        lookup if map_word_get(lookup).is_some() => Some(SlotKind::MapWord),
         _ => None,
     }
 }
@@ -147,7 +170,7 @@ fn is_temporary(place: &str) -> bool {
 /// compiler temporary that is assigned only from one kind of `get` and is
 /// otherwise only matched on the variants its slot tells apart, unpacked
 /// in one place at most once per lookup, and released.
-pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
+pub(super) fn lookup_slots(function: &MirFunction) -> (HashSet<String>, HashSet<String>) {
     payload_slots(function, slot_kind)
 }
 
@@ -176,12 +199,13 @@ pub(super) fn recovery_payload_slots(
     payload_slots(function, |value| {
         supports(value).then_some(SlotKind::Recovery)
     })
+    .0
 }
 
 fn payload_slots(
     function: &MirFunction,
     origin: impl Fn(&Rvalue) -> Option<SlotKind>,
-) -> HashSet<String> {
+) -> (HashSet<String>, HashSet<String>) {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
     // Each move of one temporary into another, by target.
@@ -244,7 +268,7 @@ fn payload_slots(
     }
     candidates.retain(|name, _| !rejected.contains(name));
     if candidates.is_empty() {
-        return HashSet::new();
+        return (HashSet::new(), HashSet::new());
     }
 
     for block in &function.blocks {
@@ -324,6 +348,10 @@ fn payload_slots(
         .iter()
         .map(|block| (block.label.as_str(), successors(&block.terminator)))
         .collect::<HashMap<_, _>>();
+    let word_candidates = candidates
+        .iter()
+        .filter_map(|(&name, c)| (c.kind == Some(SlotKind::MapWord)).then_some(name))
+        .collect::<HashSet<_>>();
     let mut slots = candidates
         .into_iter()
         .filter(|(_, candidate)| match candidate.unpacked_in.as_slice() {
@@ -345,7 +373,16 @@ fn payload_slots(
             }
         }
     }
-    slots.into_iter().map(str::to_string).collect()
+    let words = slots
+        .intersection(&word_candidates)
+        .map(|name| (*name).to_owned())
+        .collect();
+    (slots.into_iter().map(str::to_string).collect(), words)
+}
+
+#[cfg(test)]
+pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
+    lookup_slots(function).0
 }
 
 #[derive(Default)]

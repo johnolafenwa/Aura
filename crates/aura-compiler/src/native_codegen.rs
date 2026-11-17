@@ -2052,7 +2052,8 @@ impl<'a> NativeCodegen<'a> {
             recovery_slots.insert(name, (variable, kind));
         }
 
-        let lookup_slots = lookups::lookup_payload_slots(function)
+        let (lookup_slots, map_word_slots) = lookups::lookup_slots(function);
+        let lookup_slots = lookup_slots
             .into_iter()
             .filter(|name| {
                 matches!(
@@ -2062,6 +2063,19 @@ impl<'a> NativeCodegen<'a> {
                 )
             })
             .collect::<HashSet<_>>();
+        // Each nonescaping matched integer lookup has its own two words.
+        let mut map_word_names = map_word_slots
+            .intersection(&lookup_slots)
+            .collect::<Vec<_>>();
+        map_word_names.sort_unstable();
+        let map_word_slots = map_word_names
+            .into_iter()
+            .map(|name| {
+                let slot = builder.create_sized_stack_slot(16, 3);
+                let address = builder.stack_addr(types::I64, slot, 0);
+                (name.clone(), address)
+            })
+            .collect();
         let lent_places = lookups::lent_lookup_places(
             function,
             &lookup_slots,
@@ -2527,6 +2541,7 @@ impl<'a> NativeCodegen<'a> {
             lookup_slots,
             recovery_slots,
             indexed_ascii_literals: lookups::indexed_ascii_literals(function),
+            map_word_slots,
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -3970,6 +3985,8 @@ struct FunctionCompiler<'a> {
     /// The success value of a match-only recovered call. Its ordinary
     /// temporary holds null on success and the genuine boxed Result on failure.
     recovery_slots: HashMap<String, (Var, ScalarKind)>,
+    /// Payload and presence of a nonescaping integer lookup in a shared map.
+    map_word_slots: HashMap<String, Val>,
     /// The slices of a list of bytes that only the `str.from_bytes` right
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
@@ -6223,6 +6240,13 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lookup_slots.contains(place.as_str())
                 );
+                let map_word_presence = match scrutinee {
+                    Operand::Place(place) => self
+                        .map_word_slots
+                        .get(place)
+                        .map(|address| self.builder.load(types::I64, MemFlags::new(), *address, 8)),
+                    _ => None,
+                };
                 let lent = matches!(
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
@@ -6267,7 +6291,11 @@ impl<'a> FunctionCompiler<'a> {
                         // the receive got no item.
                         let found = lookups::is_payload_variant(arm.variant_name.as_deref());
                         let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
-                        self.builder.icmp_imm(cc, scrutinee.values[0], 0)
+                        self.builder.icmp_imm(
+                            cc,
+                            map_word_presence.unwrap_or(scrutinee.values[0]),
+                            0,
+                        )
                     } else {
                         let test = if lent {
                             RuntimeFn::LentVariantMatches
@@ -15114,6 +15142,11 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(None);
         };
         let target_ty = self.type_of_place(target)?;
+        if target_ty == DirectType::Scalar(ScalarKind::Int64) {
+            if let Some(value) = self.map_lookup_word(place) {
+                return Ok(Some(value));
+            }
+        }
         let lent = self.lent_places.contains(place.as_str());
         if self.recovery_slots.contains_key(place.as_str()) {
             // The rvalue reads Ok directly from its scalar variable.
@@ -15229,6 +15262,9 @@ impl<'a> FunctionCompiler<'a> {
         target: &str,
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
+        if let Some(&address) = self.map_word_slots.get(target) {
+            return self.compile_map_word_lookup(value, address);
+        }
         let target_ty = self.type_of_place(target)?;
         if let Rvalue::Use(Operand::MovePlace(source)) = value {
             if self.lookup_slots.contains(source.as_str()) {
@@ -15358,6 +15394,9 @@ impl<'a> FunctionCompiler<'a> {
         place: &str,
         moved: bool,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(word) = self.map_lookup_word(place) {
+            return self.ensure_opaque(word);
+        }
         let payload = if moved {
             self.take_place(place)?
         } else {

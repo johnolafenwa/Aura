@@ -441,6 +441,7 @@ runtime_functions! {
     FfiCallbackCheck => ("aura_direct_ffi_callback_check", [], None),
     MonotonicTimeMs => ("aura_direct_monotonic_time_ms", [], Some(I64)),
     SyncAtom => ("aura_direct_sync_atom", [I64, I64, I64, I64], Some(I64)),
+    SyncMapGetWord => ("aura_direct_sync_map_get_word", [I64, I64, I64], Some(I64)),
     SyncMapGetInt64 => ("aura_direct_sync_map_get_int64", [I64, I64], Some(I64)),
     SyncCellTake => ("aura_direct_sync_cell_take", [I64], Some(I64)),
     SyncCellPut => ("aura_direct_sync_cell_put", [I64, I64], None),
