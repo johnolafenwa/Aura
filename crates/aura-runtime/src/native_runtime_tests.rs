@@ -30453,6 +30453,10 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
                 7,
                 0,
             );
+            assert_eq!(
+                unsafe { (*shared).list_access.load(Ordering::Relaxed) },
+                super::FUNCTION_VIEW_ACCESS
+            );
             let inline = super::aura_direct_function_callable(shared, 7);
             assert_ne!(inline, 0);
             assert_eq!(unsafe { *(inline as *const i64).add(1) }, 41);
@@ -30481,6 +30485,12 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
                 });
             }
             assert_ne!(super::aura_direct_function_callable(shared, 7), 0);
+            unsafe { super::share_direct_value(shared) };
+            assert_eq!(
+                unsafe { (*shared).list_access.load(Ordering::Relaxed) },
+                super::DirectListAccess::None as u32
+            );
+            assert_eq!(super::aura_direct_function_callable(shared, 7), inline);
             assert_eq!(drops(), before);
             unsafe {
                 release_value(shared);
@@ -30564,6 +30574,8 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
             assert_eq!(at(0, 8), 0);
             assert_eq!(at(2, 7), 0);
             assert_eq!(at(3, 7), 0);
+            assert_eq!(at(i64::MIN, 7), 0);
+            assert_eq!(at(i64::MAX, 7), 0);
             let other = int_value(1);
             assert_eq!(super::aura_direct_vec_callable(other, 0, 7), 0);
             let mut copy = [0i64; 4];
@@ -30587,12 +30599,41 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
                 0
             );
             assert_eq!(untouched, [0i64; 4]);
+            let access = || unsafe { (*list).list_access.load(Ordering::Relaxed) };
+            assert_eq!(access(), super::DirectListAccess::Callables as u32);
+            let old = super::aura_direct_vec_set_in_place(list, 0, boxed_value(element(19, 0)));
+            unsafe { release_value(old) };
+            assert_eq!(access(), super::DirectListAccess::Values as u32);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 19);
+            // Materializing a mutable environment releases its inline words.
+            // Even a cached entry must check that the words are still live.
+            unsafe {
+                super::with_value(list, |value| {
+                    let Value::Vec(vector) = value else {
+                        unreachable!()
+                    };
+                    let Some(Value::Function(function)) = vector.elements.value_at(1) else {
+                        unreachable!()
+                    };
+                    function
+                        .closure_environment
+                        .as_ref()
+                        .unwrap()
+                        .capture_value(0)
+                        .unwrap();
+                });
+            }
+            assert_eq!(at(1, 7), 0);
+            unsafe { super::share_direct_value(list) };
+            assert_eq!(access(), super::DirectListAccess::None as u32);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 19);
+            assert_eq!(at(1, 7), 0);
             let before_list = drops();
             unsafe {
                 release_value(list);
                 release_value(other);
             }
-            assert_eq!(drops(), before_list + 2);
+            assert_eq!(drops(), before_list + 1);
 
             // A callable with no captures has no environment.
             let words = inline_callable_test_words(0);
@@ -30612,7 +30653,7 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
                 });
                 release_value(plain);
             }
-            assert_eq!(drops(), before + 5);
+            assert_eq!(drops(), before + 6);
             Ok(Value::Unit)
         })
     });
