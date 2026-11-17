@@ -75,14 +75,9 @@ fn recovered_trap_exposes_the_innermost_path_position_and_shortened_chain() {
     let Value::Vec(frames) = &fields["frames"] else {
         panic!("expected a list of call frames");
     };
-    let display: Vec<_> = frames
-        .elements
-        .iter()
-        .map(|value| format_runtime_value(&value))
-        .collect();
     assert_eq!(
-        display,
-        ["read at 2:1", "... 7 more calls ...", "parse at 2:1"]
+        frames.elements.to_vec(),
+        ["read at 2:1", "... 7 more calls ...", "parse at 2:1"].map(Value::string),
     );
 }
 
