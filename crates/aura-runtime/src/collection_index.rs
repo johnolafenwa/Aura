@@ -948,7 +948,7 @@ impl<T> IndexedEntries<T> {
     /// The address of the storage, which clones share until a write.
     pub fn as_ptr(&self) -> *const T {
         match self.eager() {
-            EagerRef::Small(entries) => entries.as_ptr(),
+            EagerRef::Small(entries) => entries.as_slice().as_ptr(),
             EagerRef::Large(large) => large.slots.as_ptr().cast(),
         }
     }
