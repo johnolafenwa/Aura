@@ -26,7 +26,10 @@ survive a failed call.
 The separate nested cleanup fixture produced the same 17 lines on MIR and
 the Linux native backend. It checks a direct call and the named-argument
 path, order of exits, the innermost source location and the recovery
-boundary's call chain.
+boundary's call chain. A second fixture cancels a task while its recovered
+call is waiting. The next cancellation check inside `control.retry` exits
+the callee and caller in order. Both native paths and MIR produced the
+same six lines and returned `TaskResult.Cancelled`.
 
 All 24 checked listings in the edited pages passed. The compiler-backed
 editor test passed after failing on the missing completion. Z3 proved the
