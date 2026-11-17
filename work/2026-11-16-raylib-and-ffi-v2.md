@@ -187,4 +187,14 @@ failed task releases the array while reporting the invalid writeback.
 The three-language benchmark is in
 [`benchmarks/ffi_calls`](../benchmarks/ffi_calls/README.md#struct-arrays-array-fields-unions-and-text-callbacks).
 The Linux host links raylib 6.0, GLFW, SDL2 and SQLite under Xvfb.
-The full host suites and cross-platform CI are in progress.
+When the second C string passed to a callback is invalid, both backends
+let C finish and report `AU4005`. The native regression checks that the
+first string was freed.
+
+Process CPU medians against Rust were 2.69× for a four-record struct array,
+2.49× for a fixed array field, 14.04× for an indexed union member and 4.59×
+for a text callback. All four beat Python ctypes. A separate paired comparison
+measured the numeric union getter at 8.94 ns with a frame on every read and
+5.62 ns with a frame only for the slow conversion. A malformed union still
+reports `AU4005` with the same `Word.code` and `main` frames on both backends.
+Union reads and text callbacks remain above the three-times-Rust goal.

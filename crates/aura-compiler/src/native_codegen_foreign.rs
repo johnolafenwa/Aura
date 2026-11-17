@@ -1101,10 +1101,14 @@ impl FunctionCompiler<'_> {
         if !layout.is_plain() {
             let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
             let fast = self.copy_foreign_array_field(layout, value, slot)?;
+            self.push_frameless_frame();
             self.builder.call(
                 self.runtime[RuntimeFn::FfiPackStruct],
                 &[value.values[0], descriptor, length, slot],
             );
+            if self.frameless_descriptor.is_some() {
+                self.builder.call(self.runtime[RuntimeFn::ExitCall], &[]);
+            }
             if let Some(done) = fast {
                 self.builder.jump(done, &[]);
                 self.builder.switch_to_block(done);

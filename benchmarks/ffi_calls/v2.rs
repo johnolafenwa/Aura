@@ -1,5 +1,4 @@
 use std::ffi::{c_char, CStr};
-use std::time::Instant;
 
 #[repr(C)]
 struct Pixel {
@@ -22,6 +21,7 @@ union Word {
 
 #[link(name = "ffi_calls")]
 extern "C" {
+    fn fc_bench_time_ns() -> i64;
     fn fc_pixels(pixels: *const Pixel, count: i32) -> i64;
     fn fc_samples(samples: Samples) -> i64;
     fn fc_words(words: *mut Word, count: i32);
@@ -35,11 +35,11 @@ extern "C" fn character_count(text: *const c_char) -> i64 {
 
 fn measure(name: &str, expected: i64, mut call: impl FnMut(usize) -> i64) {
     let count = 2_000_000;
-    let started = Instant::now();
+    let started = unsafe { fc_bench_time_ns() };
     let total: i64 = (0..count).map(&mut call).sum();
-    let elapsed = started.elapsed();
+    let elapsed = unsafe { fc_bench_time_ns() } - started;
     assert_eq!(total, expected * count as i64);
-    println!("{name} {}", elapsed.as_nanos() as f64 / count as f64);
+    println!("{name} {}", elapsed as f64 / count as f64);
 }
 
 fn main() {
