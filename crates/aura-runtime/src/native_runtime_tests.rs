@@ -29318,6 +29318,36 @@ fn direct_trap_message(run: impl FnOnce() + Send + 'static) -> String {
 }
 
 #[test]
+fn direct_integer_math_preserves_results_and_diagnostics() {
+    use super::aura_direct_math_integer;
+    for (i, (left, right, expected)) in [
+        (18, -27, 9),
+        (-4, 6, 12),
+        (99, 0, 9),
+        (5, 0, 120),
+        (7, 2, 21),
+        (7, 2, 42),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(aura_direct_math_integer(i as i64, left, right), expected);
+    }
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(0, i64::MIN, 0);
+    })
+    .contains("math.gcd"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(2, -1, 0);
+    })
+    .contains("math.isqrt"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(99, 0, 0);
+    })
+    .contains("invalid integer math operation"));
+}
+
+#[test]
 fn direct_time_helpers_write_parse_and_keep_the_outcome() {
     let text = |value: *mut OpaqueValue| match unsafe { take_value(value) } {
         Value::String(text) => text.to_string(),
@@ -31051,6 +31081,18 @@ fn direct_set_algebra_opcodes_read_both_sets_and_update_consumes_the_other() {
     assert!(wrong
         .message
         .contains("`update` requires another `set[T]` value"));
+}
+
+#[test]
+fn direct_index_reuses_an_immutable_box_for_the_same_ascii_character() {
+    let opcode = crate::text_methods::text_method_opcode("char_at").unwrap();
+    let receiver = string_value("abba");
+    let first = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), 0);
+    let last = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), -1);
+    assert_eq!(first, last);
+    assert_eq!(unsafe { take_value(first) }, Value::string("a"));
+    assert_eq!(unsafe { take_value(last) }, Value::string("a"));
+    unsafe { release_value(receiver) };
 }
 
 #[test]

@@ -47,6 +47,17 @@ fn characters_convert_between_strings_and_scalar_values() {
 }
 
 #[test]
+fn indexed_characters_use_inline_text_storage() {
+    for (source, ascii, index, expected) in [("abc", true, -1, "c"), ("a😀z", false, 1, "😀")] {
+        let Value::String(character) = super::char_at(source, ascii, index).unwrap() else {
+            panic!("indexing a string yields a string");
+        };
+        assert_eq!(character.as_str(), expected);
+        assert_eq!(character.capacity(), crate::text::INLINE_CAPACITY);
+    }
+}
+
+#[test]
 fn char_at_counts_characters_from_either_end() {
     for (text, ascii) in [("héllo", false), ("hello", true), ("hello", false)] {
         let first = super::char_at(text, ascii, 0).expect("index 0");

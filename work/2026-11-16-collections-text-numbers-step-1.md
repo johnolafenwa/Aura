@@ -81,3 +81,17 @@ members. The compiler returned all eight new methods. The test now
 expects those names and checks the signatures for producing a set,
 testing a relation, and updating a set in place. All 158 language server
 tests passed on Linux with the compiler built from this branch.
+
+## Integration and measurements
+
+The Linux repo gate passed compiler coverage at 96.55% of lines and
+97.39% of functions. The audit then reported an advisory in the
+documentation toolchain. The patched glob dependency is pinned in the
+workspace lockfile.
+
+`benchmarks/collections_text` compares integer math, text indexing,
+set union and UTF-16 conversion in Aura, Rust and Python. The three
+implementations produce the same checksums. The native integer math
+entry passes its operands and result as machine words. A set union
+reuses the receiver's storage until a new key is inserted, and an
+ASCII string index can reuse an immutable one-character box.

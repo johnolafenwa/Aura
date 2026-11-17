@@ -110,6 +110,8 @@ are in progress. See `2026-11-17-ordered-collections.md`.
   the cost of list operations on a class field is removed.
 - The language server suite passes all 158 tests on Linux after updating
   the set completion list and checking its result and argument types.
+- Four cross-language workloads cover integer math, ASCII indexing, set
+  union and UTF-16. The compiler and runtime use a scalar integer math entry.
 
 ## Three compiler defects from the book sections (complete)
 

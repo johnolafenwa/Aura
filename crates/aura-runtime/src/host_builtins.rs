@@ -270,6 +270,16 @@ fn magnitude_gcd(mut left: u64, mut right: u64) -> u64 {
     left
 }
 
+/// Qualified host name, diagnostic name and arity for the native integer math ABI.
+pub const INTEGER_MATH_CALLS: &[(&str, &str, usize)] = &[
+    ("math::gcd", "math.gcd", 2),
+    ("math::lcm", "math.lcm", 2),
+    ("math::isqrt", "math.isqrt", 1),
+    ("math::factorial", "math.factorial", 1),
+    ("math::comb", "math.comb", 2),
+    ("math::perm", "math.perm", 2),
+];
+
 /// A `math` function over `int64` values: `gcd`, `lcm`, `isqrt`,
 /// `factorial`, `comb`, and `perm`. A negative count is `AU4001`, and a
 /// result outside `int64` is `AU4002`.

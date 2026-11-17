@@ -1864,6 +1864,34 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn integer_math_passes_words_to_the_runtime() {
+    let source = r#"
+import math
+
+def integer_math(value: int64) -> int64:
+    return math.gcd(value, 15) + math.lcm(value, 2) + math.isqrt(value) + math.factorial(value) + math.comb(value, 2) + math.perm(value, 2)
+
+def main() -> None:
+    print(integer_math(4))
+"#;
+    let mir = lower_source_to_mir(source).expect("integer math lowers");
+    let object = emit_unoptimized_object(&mir).expect("integer math compiles");
+    let symbols = object_function_referenced_symbols(&object, "aura_fn_integer_math");
+    assert!(
+        symbols
+            .iter()
+            .any(|name| name.contains("aura_direct_math_integer")),
+        "integer math should accept int64 arguments directly: {symbols:?}"
+    );
+    assert!(
+        symbols
+            .iter()
+            .all(|name| !name.contains("aura_host_math_") && !name.contains("arg_buffer")),
+        "integer math should keep its inputs and outputs in words: {symbols:?}"
+    );
+}
+
+#[test]
 fn direct_monotonic_time_uses_scalar_runtime_abi_without_generic_host_boxing() {
     let source = r#"
 import sys

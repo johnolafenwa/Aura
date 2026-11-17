@@ -20,7 +20,6 @@ use std::ptr::NonNull;
 use std::slice;
 use std::str;
 use std::sync::atomic::AtomicPtr;
-#[cfg(any(test, coverage))]
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[cfg(test)]
@@ -8291,6 +8290,14 @@ pub extern "C-unwind" fn aura_direct_string_text_method(
             })
         };
         match result {
+            Ok(Value::String(text)) if *method == "char_at" && text.len() == 1 => {
+                // Each ASCII scalar can share the same immutable box as a string literal.
+                static CHARACTERS: [AtomicUsize; 128] = [const { AtomicUsize::new(0) }; 128];
+                let cell = &CHARACTERS[usize::from(text.as_bytes()[0])];
+                // SAFETY: the cell is static and the one-byte UTF-8 string
+                // remains valid until the helper has read it.
+                unsafe { aura_direct_string_literal_cell(cell, text.as_ptr(), 1) }
+            }
             Ok(value) => boxed_value(value),
             Err(error) => runtime_diagnostic_error(error),
         }
@@ -21294,6 +21301,18 @@ pub extern "C-unwind" fn aura_direct_big_add_words(
 pub extern "C-unwind" fn aura_direct_small_pow_mod(base: i64, exponent: i64, modulus: i64) -> i64 {
     task_runtime_boundary(|| {
         crate::numbers_host::small_pow_mod(base, exponent, modulus)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// Evaluates the integer math functions on the same words used by compiled callers.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_math_integer(operation: i64, left: i64, right: i64) -> i64 {
+    task_runtime_boundary(|| {
+        let (_, name, _) = host_builtins::INTEGER_MATH_CALLS
+            .get(operation as usize)
+            .unwrap_or_else(|| runtime_error("invalid integer math operation"));
+        host_builtins::math_integer(name, left, right)
             .unwrap_or_else(|error| runtime_diagnostic_error(error))
     })
 }
