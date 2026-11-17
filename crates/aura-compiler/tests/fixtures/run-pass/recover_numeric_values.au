@@ -1,0 +1,22 @@
+import control
+from numbers import BigInt, Decimal
+
+def add_one(value: own BigInt) -> BigInt:
+    return value + BigInt.from_int(1)
+
+def double(value: own Decimal) -> Decimal:
+    return value + value
+
+def main() -> None:
+    for value in [BigInt.from_int(7), BigInt.from_int(9223372036854775807)]:
+        match control.recover(add_one, value.copy()):
+            case Ok(result):
+                print(str(result))
+            case Err(trap):
+                print(trap.describe())
+    amount = Decimal.from_parts(BigInt.from_int(9223372036854775807), -2)
+    match control.recover(double, amount):
+        case Ok(result):
+            print(result.to_fixed(2))
+        case Err(trap):
+            print(trap.describe())

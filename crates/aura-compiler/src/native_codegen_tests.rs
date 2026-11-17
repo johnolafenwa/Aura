@@ -17933,6 +17933,20 @@ def main() -> None:
 }
 
 #[test]
+fn recovered_numeric_calls_transfer_the_embedded_handle() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_numeric_values.au");
+    let mir = lower_source_to_mir(source).expect("numeric recovery lowers");
+    let object = emit_unoptimized_object(&mir).expect("numeric recovery compiles");
+    let symbols = object_function_referenced_symbols(&object, "aura_fn_main");
+    assert!(symbols
+        .iter()
+        .any(|name| name.contains("aura_direct_start_task_call")));
+    assert!(symbols
+        .iter()
+        .all(|name| !name.contains("aura_direct_recover_begin")));
+}
+
+#[test]
 fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
     let big = Type::named("numbers.BigInt");
     let words = Type::Named("list".into(), vec![Type::named("uint64")]);

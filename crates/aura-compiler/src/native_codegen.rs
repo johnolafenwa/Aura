@@ -18226,11 +18226,10 @@ impl<'a> FunctionCompiler<'a> {
             .get(name.as_str())
             .cloned()
             .unwrap_or_default();
-        let plain = |ty: &DirectType| match ty {
-            DirectType::Scalar(_) | DirectType::PlainClass(_) | DirectType::Opaque(_) => true,
-            DirectType::Union(union) => !union.owns_handles(),
-            DirectType::Callable(_) => false,
-        };
+        // An opaque box can move between ledgers. A class or union with an
+        // embedded reference needs the runtime call path to transfer its payload.
+        let plain =
+            |ty: &DirectType| matches!(ty, DirectType::Opaque(_)) || !layout_owns_handles(ty);
         if args.len() != expected.len()
             || args
                 .iter()

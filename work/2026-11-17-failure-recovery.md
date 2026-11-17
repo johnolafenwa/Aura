@@ -49,3 +49,9 @@ A combined FFI fixture checks recovery on either side of a C callback.
 Both backends report AU4001 after C marks its cleanup complete. Recovery
 inside a callback lets C continue and return its original value. A
 runtime regression covers pending callback state between recovered calls.
+
+A recovered call can accept and return a numeric value whose inline
+representation owns a heap reference. The native compiler transfers
+these values through the same boxed call boundary as an owning union.
+The regression covers small integers, overflow into a large integer,
+and a decimal with a large coefficient.
