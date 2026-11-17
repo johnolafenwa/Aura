@@ -77,10 +77,7 @@ Verification:
 
 - Step 2: local `def` statements (ADR-0105).
 - Benchmarks against Rust `Box<dyn Fn>` and Python closures.
-- A callable element of a list in a field cannot be called through an
-  index, `self.steps[0](1)`. It reports `AU2999`. Loop over the list or
-  read the list into a local first.
-- A Shared callable in a tuple element cannot be called through an index,
-  `pair[0]()`. It reports `AU3005`. Unpack the tuple first.
+- Indexed call regression tests and current benchmark evidence are in
+  `2026-11-17-indexed-closure-calls.md`.
 - A generic function cannot infer its type parameters from a lambda whose
   parameter types depend on them. Write the type arguments.

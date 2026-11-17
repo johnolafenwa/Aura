@@ -16541,3 +16541,10 @@ fn callable_destination_lowers_to_the_packing_instruction() {
     // A value that is packed already moves without a second packing.
     assert_eq!(packs("apply"), 0);
 }
+
+#[test]
+fn calling_indexed_closures_preserves_field_and_tuple_storage() {
+    let source = include_str!("../tests/fixtures/run-pass/callable_indexed_places.au");
+    let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
+    validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
+}

@@ -21915,6 +21915,13 @@ impl<'a> Lowerer<'a> {
                         .get(tuple_index)
                         .cloned()
                         .expect("tuple index bounds are validated by sema");
+                    if matches!(&element_type, Type::Callable(_)) {
+                        let Operand::Place(tuple) = self.lower_expr_at_sequence_point(object, None)
+                        else {
+                            unreachable!("tuple values are held in MIR places");
+                        };
+                        return Operand::Place(format!("{tuple}.{tuple_index}"));
+                    }
                     debug_assert!(
                         type_is_copy_in_program(&element_type, self.program),
                         "non-Copy tuple indices are rejected by sema"
@@ -25761,6 +25768,12 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        let indexed = callee.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        });
+        let callee = indexed.as_ref().unwrap_or(callee);
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
@@ -29072,6 +29085,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        if let Some(indexed) = expr.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        }) {
+            return self.infer_expr_type(&indexed);
+        }
         if let Some(read) = self.narrowed_read(expr) {
             return Some(read.member_type);
         }
