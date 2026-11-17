@@ -1160,6 +1160,22 @@ def main():
 }
 
 #[test]
+fn word_arithmetic_for_exact_numbers_stays_unboxed() {
+    let source = "\
+def grow(value: int64, rhs: int64) -> int64:
+    return value.wrapping_mul(rhs).saturating_add(rhs).saturating_sub(value)
+
+def main() -> None:
+    print(grow(9223372036854775807, 2))
+";
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(!referenced
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_width_binary")));
+}
+
+#[test]
 fn direct_dynamic_binary_opcodes_match_the_runtime_abi() {
     for (operator, opcode) in [
         (BinaryOp::Add, 0),

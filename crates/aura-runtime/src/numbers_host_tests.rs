@@ -638,7 +638,16 @@ fn digit_counts_and_powers() {
 fn small_modular_powers_use_floor_remainders_at_both_word_limits() {
     for base in [i64::MIN, -19, -1, 0, 1, 17, i64::MAX] {
         for exponent in [0, 1, 2, 31, 65537, i64::MAX] {
-            for modulus in [i64::MIN, -23, -1, 1, 13, i64::MAX] {
+            for modulus in [
+                i64::MIN,
+                -23,
+                -1,
+                1,
+                13,
+                i64::from(u32::MAX),
+                1 << 32,
+                i64::MAX,
+            ] {
                 let expected =
                     BigInt::from(base).modpow(&BigInt::from(exponent), &BigInt::from(modulus));
                 assert_eq!(
@@ -684,4 +693,14 @@ fn adding_magnitudes_propagates_carries_and_cancels_opposite_signs() {
         );
     }
     assert!(add_big_words(&empty(), &empty()).is_err());
+}
+
+#[test]
+fn compact_decimal_operations_normalize_and_defer_overflow() {
+    assert_eq!(small_decimal_binary(false, 12, 1, -25, 0), Some([95, 0]));
+    assert_eq!(small_decimal_binary(false, -1, 8, 1, 8), Some([0, 0]));
+    assert_eq!(small_decimal_binary(true, 25, -2, 4, 0), Some([1, 0]));
+    assert_eq!(small_decimal_binary(false, i64::MAX, 0, 1, 0), None);
+    assert_eq!(small_decimal_binary(true, i64::MAX, 0, 2, 0), None);
+    assert_eq!(small_decimal_binary(true, 2, 1 << 62, 5, 0), None);
 }

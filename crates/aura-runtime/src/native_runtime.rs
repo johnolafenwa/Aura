@@ -21347,6 +21347,26 @@ pub extern "C-unwind" fn aura_direct_math_integer(operation: i64, left: i64, rig
     })
 }
 
+/// Tries the scalar Decimal operation without transferring either input.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_small_decimal_binary(
+    multiply: i64,
+    a: i64,
+    a_power: i64,
+    b: i64,
+    b_power: i64,
+    out: *mut [i64; 2],
+) -> i64 {
+    let Some(result) =
+        crate::numbers_host::small_decimal_binary(multiply != 0, a, a_power, b, b_power)
+    else {
+        return 0;
+    };
+    // Generated callers supply an aligned, writable two-word result slot.
+    unsafe { out.write(result) };
+    1
+}
+
 /// `regex.Regex.is_match`, `count`, and the group index of a name: the
 /// search `operation` of pattern `number` over the `str` handle `text`.
 #[cfg_attr(not(coverage), no_mangle)]
