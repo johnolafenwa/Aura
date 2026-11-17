@@ -2,12 +2,14 @@
 
 Last updated: 2026-11-17
 
-## Ordered collections (in progress)
+## Ordered collections (verification in progress)
 
 Five fixtures pass on MIR and the direct backend, including custom ordering,
 snapshot independence, B-tree splits and merges, and moving stored values
 that cannot be cloned. Editor completions and the manual examples pass.
-Primitive keys now use runtime storage. Release comparisons are in progress.
+All four measured int64 workloads beat Python. Aura took 2.10 times Rust
+for deque, 0.90 for heap, 2.23 for sorted map and 2.17 for sorted set.
+The diagnostic fixtures and platform checks are in progress.
 See `2026-11-17-ordered-collections.md`.
 
 ## Collections, text, and numbers (step 1 of 3 complete)
