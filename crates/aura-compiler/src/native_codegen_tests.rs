@@ -1963,6 +1963,54 @@ fn indexed_text_compares_as_a_unicode_scalar() {
 }
 
 #[test]
+fn known_text_encodings_borrow_one_input_and_dynamic_names_keep_the_host_entry() {
+    let source = r#"
+import bytes
+
+def fixed(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "uTF_16-LE")
+
+def variable(input: list[uint8], name: str) -> Result[str, bytes.EncodingError]:
+    return bytes.decode(input, name)
+
+def unsupported(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "future-codec")
+
+def main() -> None:
+    print(fixed("😀"))
+    print(variable([65], "ascii"))
+    print(unsupported("A"))
+"#;
+    let module = lower_source_to_mir(source).expect("known and variable encodings lower");
+    let object = emit_unoptimized_object(&module).expect("both codec paths compile");
+    let fixed = object_function_referenced_symbols(&object, "aura_fn_fixed");
+    let variable = object_function_referenced_symbols(&object, "aura_fn_variable");
+    let unsupported = object_function_referenced_symbols(&object, "aura_fn_unsupported");
+    assert!(
+        fixed
+            .iter()
+            .any(|name| name.contains("aura_direct_text_codec")),
+        "{fixed:?}"
+    );
+    assert!(
+        fixed.iter().all(|name| !name.contains("arg_buffer")),
+        "{fixed:?}"
+    );
+    assert!(
+        variable
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_decode")),
+        "{variable:?}"
+    );
+    assert!(
+        unsupported
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_encode")),
+        "{unsupported:?}"
+    );
+}
+
+#[test]
 fn integer_math_passes_words_to_the_runtime() {
     let source = r#"
 import math

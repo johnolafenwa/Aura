@@ -8406,6 +8406,30 @@ pub extern "C-unwind" fn aura_direct_string_scalar_at(value: *mut OpaqueValue, i
     })
 }
 
+/// Borrows a byte list or text for a codec whose name is known at compilation.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_text_codec(
+    value: *mut OpaqueValue,
+    code: i64,
+    decode: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let encoding = usize::try_from(code)
+            .ok()
+            .and_then(|code| crate::text_encodings::Encoding::ALL.get(code))
+            .unwrap_or_else(|| runtime_error("invalid direct text encoding"));
+        let result = unsafe {
+            with_value(value, |value| {
+                host_builtins::text_codec(value, *encoding, decode != 0)
+            })
+        };
+        match result {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// Dispatches one `str` text-convenience method. `opcode` indexes
 /// `text_methods::TEXT_METHOD_NAMES`. `argument` is an owned `str` handle or
 /// null; `count` is the scalar argument of `repeat`.

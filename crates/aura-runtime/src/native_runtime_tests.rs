@@ -31363,6 +31363,46 @@ fn direct_string_scalar_reads_signed_indices_and_preserves_errors() {
 }
 
 #[test]
+fn native_literal_codecs_borrow_their_source_and_preserve_encoding_errors() {
+    use crate::text_encodings::Encoding;
+    let source = string_value("A");
+    for (index, _) in Encoding::ALL.iter().enumerate() {
+        let code = index as i64;
+        let bytes = expect_result_ok_payload(super::aura_direct_text_codec(source, code, 0));
+        let bytes = boxed_value(bytes);
+        let decoded = super::aura_direct_text_codec(bytes, code, 1);
+        assert_eq!(expect_result_ok_string(decoded), "A");
+        unsafe { release_value(bytes) };
+    }
+    unsafe { release_value(source) };
+    for (source, encoding, decode, variant, index) in [
+        (string_value("A😀"), Encoding::Ascii, 0, "Unencodable", 1),
+        (
+            direct_byte_list(&[65, 0, 0]),
+            Encoding::Utf16Le,
+            1,
+            "Invalid",
+            2,
+        ),
+    ] {
+        let code = Encoding::ALL
+            .iter()
+            .position(|item| *item == encoding)
+            .unwrap() as i64;
+        let error = expect_result_err_payload(super::aura_direct_text_codec(source, code, decode));
+        let Value::EnumVariant(error) = error else {
+            panic!("expected an encoding error, got {error:?}");
+        };
+        assert_eq!(error.variant_name, variant);
+        assert_eq!(
+            error.single_payload().unwrap(),
+            &Value::Int(IntegerValue::from_i64(index))
+        );
+        unsafe { release_value(source) };
+    }
+}
+
+#[test]
 fn direct_char_at_reads_one_character_and_traps_out_of_range() {
     assert_eq!(
         direct_text_method("char_at", "héllo", None, 1),

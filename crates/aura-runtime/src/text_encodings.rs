@@ -44,6 +44,21 @@ const WINDOWS_1252_HIGH: [u16; 32] = [
 ];
 
 impl Encoding {
+    /// Encoding codes shared by generated native calls and the runtime.
+    pub const ALL: [Self; 11] = [
+        Self::Utf8,
+        Self::Utf8Sig,
+        Self::Utf16,
+        Self::Utf16Le,
+        Self::Utf16Be,
+        Self::Utf32,
+        Self::Utf32Le,
+        Self::Utf32Be,
+        Self::Latin1,
+        Self::Ascii,
+        Self::Windows1252,
+    ];
+
     /// The encoding a name spells. Case, `-`, `_`, and spaces do not
     /// matter, so `UTF-16LE`, `utf_16_le`, and `utf16le` are one name.
     pub fn from_name(name: &str) -> Option<Self> {
