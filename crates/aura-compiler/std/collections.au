@@ -457,7 +457,7 @@ public class SortedMap[K: Ord[K], V]:
             self.root.collect_range(low, high, result)
         return result
 
-    def entries(own self) -> list[(K, V)]:
+    def drain_entries(own self) -> list[(K, V)]:
         mut result: list[(K, V)] = []
         result.reserve(self.count)
         self.root.drain(result)
@@ -468,7 +468,7 @@ impl[K: Ord[K], V] IntoIterator[(K, V)] for SortedMap[K, V]:
     type Iter = ListIter[(K, V)]
 
     def into_iter(own self) -> ListIter[(K, V)]:
-        return self.entries().into_iter()
+        return self.drain_entries().into_iter()
 
 
 def only_key[T](pair: own Lookup[(T, None)]) -> Lookup[T]:
@@ -531,6 +531,6 @@ impl[T: Ord[T]] IntoIterator[T] for SortedSet[T]:
 
     def into_iter(own self) -> ListIter[T]:
         mut keys: list[T] = []
-        for key, _ in own self.map.entries():
+        for key, _ in own self.map.drain_entries():
             keys.append(key)
         return keys.into_iter()

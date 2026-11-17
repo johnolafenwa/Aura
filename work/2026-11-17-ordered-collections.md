@@ -21,3 +21,8 @@ On the release baseline at 8,192 keys the source implementation took
 24 ms for the deque, 732 ms for the heap, 94,036 ms for the map and
 119,877 ms for the set. These measurements missed the target. Runtime
 storage work and final native parity checks are in progress.
+
+Ubuntu verification detected that the collection naming check treated
+`Heap.push` as a list method. The scanner now recognizes imported heap
+receiver types and still rejects `list.push`. The ordered-key fixture uses
+a name outside the historical map-compatibility checks.

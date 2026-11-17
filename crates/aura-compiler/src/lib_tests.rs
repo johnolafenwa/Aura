@@ -4482,7 +4482,7 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     }
     for source in [
         include_str!("../tests/fixtures/check-fail/ordered_heap_requires_order.au"),
-        include_str!("../tests/fixtures/check-fail/ordered_map_requires_order.au"),
+        include_str!("../tests/fixtures/check-fail/sorted_key_requires_order.au"),
     ] {
         let error = check_source(source).expect_err("unordered keys should be rejected");
         assert!(error.message.contains("does not implement trait `Ord["));

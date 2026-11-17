@@ -139,6 +139,16 @@ def _user_method_receivers(source: str) -> tuple[dict[str, set[str]], dict[str, 
             if method:
                 methods[block[1]].add(method.group(1))
 
+    # Heap.push is a library method. A list still appends. Establish the
+    # receiver's nominal type from a real import, constructor or annotation.
+    for imported in re.findall(r"(?m)^\s*from\s+collections\s+import\s+([^\n]+)", source):
+        for item in imported.split(","):
+            heap = re.fullmatch(r"\s*Heap(?:\s+as\s+(\w+))?\s*", item)
+            if heap:
+                methods[heap.group(1) or "Heap"] = {"push"}
+    for module in re.finditer(r"(?m)^\s*import\s+collections(?:\s+as\s+(\w+))?\s*$", source):
+        methods[f"{module.group(1) or 'collections'}.Heap"] = {"push"}
+
     receivers: dict[str, str] = {}
     nominal_alternation = "|".join(map(re.escape, methods))
     if nominal_alternation:
@@ -156,7 +166,7 @@ def _user_method_receivers(source: str) -> tuple[dict[str, set[str]], dict[str, 
             receivers[match.group(1)] = match.group(2)
         for match in re.finditer(
             rf"\b([A-Za-z_]\w*)\s*=\s*({nominal_alternation})"
-            rf"\.[A-Za-z_]\w*\s*\(",
+            rf"(?:\s*\[[^\n\]]*\])?\.[A-Za-z_]\w*\s*\(",
             source,
         ):
             receivers[match.group(1)] = match.group(2)
@@ -865,6 +875,20 @@ def inspect(stack: Stack, item: Vec[int64], alias: int64):
             ),
             [],
         )
+
+    def test_heap_push_needs_a_known_heap_receiver(self) -> None:
+        source = """from collections import Deque, Heap as Priority
+import collections as col
+
+def inspect(numbers: list[int64], other: Priority[int64]):
+    mut queue = Priority[int64].from_list([3, 1])
+    mut largest = col.Heap[int64].max()
+    queue.push(2)
+    largest.push(2)
+    other.push(2)
+    numbers.push(2)
+"""
+        self.assertEqual(scan_aura_collection_surface(source), [(10, "builtin method push")])
 
     def test_embedded_fragment_scanner_respects_host_language_literals(self) -> None:
         rust = r'''// Read each child's stderr without treating the apostrophe as a string.
