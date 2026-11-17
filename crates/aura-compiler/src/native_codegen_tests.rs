@@ -17157,6 +17157,37 @@ def main() -> int32:
 }
 
 #[test]
+fn numeric_c_union_reads_only_enter_their_frame_on_the_slow_path() {
+    let mir = lower_ffi_source_to_mir(
+        r#"
+extern "C" union Packet:
+    code: int32
+    flag: bool
+
+def main() -> int32:
+    packet = Packet()
+    print(packet.flag)
+    return packet.code
+"#,
+    );
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect();
+    let frameless = |name| {
+        let function = mir
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        super::frameless_leaf(function, &classes)
+    };
+    assert!(frameless("Packet.code"));
+    assert!(!frameless("Packet.flag"));
+}
+
+#[test]
 fn direct_ffi_codegen_packs_array_fields_and_struct_arrays_in_the_runtime() {
     let module = lower_ffi_source_to_mir(
         r#"

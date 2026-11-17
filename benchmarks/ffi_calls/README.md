@@ -94,6 +94,9 @@ bash benchmarks/ffi_calls/run.sh v2
 
 Each implementation builds its input once. Each timed loop runs two million
 iterations and checks the accumulated result. Times include loop overhead.
+All three read the same nanosecond clock from the fixture C library. The
+default measures wall time. Set `AURA_FFI_BENCH_CLOCK=cpu` to measure
+process CPU time when sharing the host with other work.
 
 | Case | Work in one iteration |
 | --- | --- |
@@ -106,3 +109,31 @@ Aura gives C a private copy of a struct list. Rust and ctypes pass the
 address of a C-layout array they already hold. In the callback, Aura owns
 a checked copy of the C string. Rust borrows and validates it with
 `CStr::to_str`. Python decodes the bytes passed by ctypes.
+
+### FFI v2 results
+
+Linux x86-64, 2026-11-17. Each row gives median nanoseconds per operation
+from three runs on one pinned CPU. The order of the three implementations
+rotated each run. Compilation and input construction finished before timing.
+The Aura program used LLVM's `default<O3>` pipeline and the release runtime.
+The Rust compiler frontend for Aura was built in the dev profile. Rust used
+`rustc -C opt-level=3`. Other compilations on the host account for some of
+the difference between process CPU and elapsed time.
+
+| Case | Aura CPU | Rust CPU | ctypes CPU | Aura elapsed | Rust elapsed | ctypes elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `struct_array` | 18.87 | 7.02 | 1003.41 | 20.62 | 10.74 | 2072.74 |
+| `array_field` | 7.82 | 3.13 | 760.16 | 9.77 | 4.88 | 1692.03 |
+| `union_read` | 6.74 | 0.48 | 212.24 | 7.85 | 0.51 | 415.52 |
+| `text_callback` | 112.78 | 24.59 | 1100.07 | 176.81 | 48.48 | 1865.62 |
+
+The struct array and fixed array field took 2.69 and 2.49 times Rust's
+process CPU time. The union read took 14.04 times Rust's and the text
+callback took 4.59 times Rust's. Those two cases remain above the
+three-times-Rust target. All four took less time than ctypes on both clocks.
+
+Rust reads a member from an indexed C-layout union. Aura borrows the indexed
+class, checks the storage and length of its byte field, then loads the member.
+The numeric getter now enters a diagnostic frame only on the fallback path.
+Using the same release runtime, six alternating pairs of runs measured
+8.94 ns per union read before this change and 5.62 ns after it.

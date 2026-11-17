@@ -17917,6 +17917,44 @@ fn small_leaf(function: &MirFunction) -> bool {
             <= LEAF_INLINE_INSTRUCTIONS
 }
 
+/// Reading a numeric member of a C union borrows the receiver's bytes.
+/// The common path is a checked load. FFI packing enters the omitted frame
+/// if the bytes need the runtime's conversion or size diagnostic.
+fn reads_numeric_c_union_member(instruction: &Instruction) -> bool {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee: CallTarget::Extern(call),
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return false;
+    };
+    let ([param], [arg], Some(result)) = (
+        call.params.as_slice(),
+        args.as_slice(),
+        &call.c_struct_result,
+    ) else {
+        return false;
+    };
+    let [field] = result.fields.as_slice() else {
+        return false;
+    };
+    let crate::c_layout::CFieldKind::Scalar(scalar) = field.kind else {
+        return false;
+    };
+    call.symbol == crate::ffi::REINTERPRET_SYMBOL
+        && param.passing == MirReceiverKind::Borrow
+        && !param.pointer
+        && param.c_struct.as_ref().is_some_and(|layout| layout.union)
+        && matches!(&arg.value, Operand::Place(place) if place == "self")
+        && !result.union
+        && scalar != crate::ffi::FfiScalar::Bool
+}
+
 /// The body rule of `frameless_leaf`.
 fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     fn words_only(ty: &DirectType) -> bool {
@@ -17963,7 +18001,9 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
         let mut mentions = Vec::new();
         for block in &function.blocks {
             for instruction in &block.instructions {
-                crate::mir::instruction_place_mentions(instruction, &mut mentions);
+                if !reads_numeric_c_union_member(instruction) {
+                    crate::mir::instruction_place_mentions(instruction, &mut mentions);
+                }
             }
             mentions.extend(crate::mir::terminator_place_mentions(&block.terminator));
         }
@@ -18003,6 +18043,7 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
                 | Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::SourceName { .. } => true,
+                Instruction::Assign { .. } if reads_numeric_c_union_member(instruction) => true,
                 Instruction::Assign { value, .. } => match value {
                     Rvalue::Use(operand) => plain_operand(operand),
                     Rvalue::Binary {

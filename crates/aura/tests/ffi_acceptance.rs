@@ -1093,6 +1093,11 @@ void fx_log_with_cleanup(void (*sink)(const char *, double, const char *)) {
 }
 void fx_text_null(void (*sink)(const char *message)) { sink(NULL); }
 void fx_text_bad(void (*sink)(const char *message)) { sink("\xff\xfe"); }
+void fx_text_bad_second(void (*sink)(const char *, const char *)) {
+    sink("first", "\xff");
+    puts("C finished cleanup");
+    fflush(stdout);
+}
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -1412,6 +1417,7 @@ extern "C" def fx_log(sink: def(message: cstr, value: float64, unit: cstr) -> No
 extern "C" def fx_log_with_cleanup(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
 extern "C" def fx_text_null(sink: def(message: cstr) -> None) -> None
 extern "C" def fx_text_bad(sink: def(message: cstr) -> None) -> None
+extern "C" def fx_text_bad_second(sink: def(first: cstr, second: cstr) -> None) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -2490,6 +2496,32 @@ def main() -> int32:
         "{stderr}"
     );
     assert_eq!(stats.opaque_boxes, stats.freed_boxes, "{stderr}");
+}
+
+#[test]
+fn a_bad_second_text_argument_releases_the_first_and_returns_to_c() {
+    let (_package, source) = fixture_package(
+        r#"
+def sink(first: str, second: str) -> None:
+    print("unexpected callback entry")
+
+def main() -> int32:
+    fx_text_bad_second(sink)
+    return 0
+"#,
+    );
+    let interpreted = run_mir(&source);
+    let (direct, stats) = native_stats(&source);
+    for output in [&interpreted, &direct] {
+        assert_eq!(output.stdout, b"C finished cleanup\n");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success() && stderr.contains("AU4005"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("not valid UTF-8"), "{stderr}");
+    }
+    assert_eq!(stats.opaque_boxes, stats.freed_boxes);
 }
 
 #[test]

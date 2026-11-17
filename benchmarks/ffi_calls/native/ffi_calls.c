@@ -1,7 +1,10 @@
 /* The C side of the FFI call-overhead benchmark. Each function does almost
  * nothing, so a caller's time is the cost of crossing into C. */
+#define _POSIX_C_SOURCE 200809L
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <time.h>
 
 int64_t fc_add(int64_t a, int64_t b) { return a + b; }
 int32_t fc_narrow(int32_t a, uint8_t b) { return a + b; }
@@ -33,6 +36,16 @@ Vec2 fc_vec2_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }
 Triple fc_triple_next(Triple t) { Triple r = {t.b, t.c, t.a + 1}; return r; }
 void fc_vec2_move(Vec2 *v, double by) { v->x += by; v->y -= by; }
 int64_t fc_apply(int64_t (*f)(int64_t, int32_t), int64_t value) { return f(value, 3); }
+
+/* All three benchmark programs read this clock outside their timed loops. */
+int64_t fc_bench_time_ns(void) {
+    const char *clock_name = getenv("AURA_FFI_BENCH_CLOCK");
+    clockid_t clock_id = clock_name && strcmp(clock_name, "cpu") == 0
+        ? CLOCK_PROCESS_CPUTIME_ID : CLOCK_MONOTONIC;
+    struct timespec now;
+    if (clock_gettime(clock_id, &now) != 0) abort();
+    return (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
+}
 
 typedef struct { int32_t x, y; } Pixel;
 typedef struct { int32_t lanes[4]; } Samples;
