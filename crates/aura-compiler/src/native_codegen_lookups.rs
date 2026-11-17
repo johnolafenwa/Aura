@@ -45,6 +45,8 @@ enum SlotKind {
     /// The `Result` of `str.from_bytes` or a number parse, whose error
     /// nothing reads.
     Result,
+    /// Scalar success kept in a register, or a complete recovery error.
+    Recovery,
 }
 
 impl SlotKind {
@@ -67,7 +69,7 @@ impl SlotKind {
                         || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
                             && arm.label == otherwise))
             }
-            SlotKind::Result => {
+            SlotKind::Result | SlotKind::Recovery => {
                 matches!(enum_name, None | Some("Result"))
                     && matches!(variant_name, Some("Ok" | "Err"))
             }
@@ -79,7 +81,7 @@ impl SlotKind {
     /// `variant_name` reads.
     fn keeps_payload_of(self, variant_name: &str) -> bool {
         match self {
-            SlotKind::Lookup | SlotKind::Receive => true,
+            SlotKind::Lookup | SlotKind::Receive | SlotKind::Recovery => true,
             SlotKind::Result => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
@@ -146,6 +148,40 @@ fn is_temporary(place: &str) -> bool {
 /// otherwise only matched on the variants its slot tells apart, unpacked
 /// in one place at most once per lookup, and released.
 pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
+    payload_slots(function, slot_kind)
+}
+
+/// Match-only temporaries holding eligible scalar recovery results. The error
+/// remains a regular boxed Result, so either arm may read its payload repeatedly.
+pub(super) fn recovery_payload_slots(
+    function: &MirFunction,
+    supports: impl Fn(&Rvalue) -> bool,
+) -> HashSet<String> {
+    let has_recovery = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::StartTask { recover: true, .. },
+                    ..
+                }
+            )
+        });
+    if !has_recovery {
+        return HashSet::new();
+    }
+    payload_slots(function, |value| {
+        supports(value).then_some(SlotKind::Recovery)
+    })
+}
+
+fn payload_slots(
+    function: &MirFunction,
+    origin: impl Fn(&Rvalue) -> Option<SlotKind>,
+) -> HashSet<String> {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
     // Each move of one temporary into another, by target.
@@ -157,7 +193,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
                     moves.push((target, source, &block.label));
                     continue;
                 }
-                let kind = slot_kind(value).filter(|_| is_temporary(target));
+                let kind = origin(value).filter(|_| is_temporary(target));
                 if let Some(kind) = kind {
                     let candidate = candidates.entry(target).or_default();
                     if candidate
@@ -291,6 +327,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
     let mut slots = candidates
         .into_iter()
         .filter(|(_, candidate)| match candidate.unpacked_in.as_slice() {
+            _ if candidate.kind == Some(SlotKind::Recovery) => true,
             [] => true,
             [block] => !reaches_again_without_assignment(block, &candidate.assigned, &successors),
             // Two copies of one payload would share one box.

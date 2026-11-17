@@ -29,6 +29,45 @@ use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
 #[test]
+fn recovered_scalar_bodies_require_total_work_outside_a_failed_check() {
+    let source = r#"
+def check(x: int64) -> int64:
+    assert x >= 0, "negative"
+    return x
+
+def dynamic(x: int64) -> int64:
+    assert x >= 0, str(x)
+    return x
+
+def divide(x: int64) -> int64:
+    return 12 // x
+
+def effect(x: int64) -> int64:
+    print(x)
+    return x
+
+def loop_bound(x: int64) -> int64:
+    mut found = 0
+    for i in range(x):
+        found = i
+    return found
+"#;
+    let module = lower_source_to_mir(source).expect("validation functions lower");
+    for name in ["check", "dynamic", "divide", "effect", "loop_bound"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        assert_eq!(
+            super::checked_scalar_leaf(function, &HashMap::new()),
+            name == "check",
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
     use super::{direct_view_maps_equivalent, DirectViewAlternative};
     let a = DirectViewAlternative {

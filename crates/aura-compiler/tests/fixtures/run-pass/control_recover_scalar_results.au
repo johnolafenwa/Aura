@@ -1,0 +1,47 @@
+import control
+
+
+def invert(value: bool) -> bool:
+    assert value, "false flag"
+    return false
+
+
+def halve(value: float64) -> float64:
+    assert value >= 0.0, "negative fraction"
+    return value / 2.0
+
+
+def no_value(ok: bool) -> None:
+    assert ok, "expected true"
+
+
+def saved(ok: bool) -> Result[bool, control.Trap]:
+    return control.recover(invert, ok)
+
+
+def main() -> None:
+    for index in range(4):
+        match control.recover(invert, index % 2 == 0):
+            case Ok(value):
+                print(value)
+            case Err(trap):
+                assert trap.code == "AU4001"
+                assert trap.path.ends_with("control_recover_scalar_results.au")
+                assert trap.line == 5 and trap.column == 5
+                assert len(trap.frames) == 1 and trap.frames[0] == "invert at 4:1"
+                print(trap.message)
+        match control.recover(halve, 7.0):
+            case Ok(value):
+                print(value == 3.5)
+            case Err(trap):
+                print(trap.message)
+    match control.recover(no_value, true):
+        case Ok(_):
+            print("returned")
+        case Err(trap):
+            print(trap.message)
+    match saved(false):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.code)
