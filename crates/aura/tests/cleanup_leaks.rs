@@ -392,10 +392,22 @@ def main() -> None:
     mut tally = counter(9223372036854775807)
     print(tally(1))
 "#;
-    let diagnostic = assert_frees_everything("forwarded-method-overflow", source, "", 1);
-    assert!(diagnostic.contains("AU4002"), "{diagnostic}");
-    assert!(
-        diagnostic.contains("Count.add at 6:5 -> counter::__lambda_12_12 at 12:12 -> main at 14:1"),
-        "{diagnostic}"
-    );
+    for backend in ["mir", "direct"] {
+        let result = run("forwarded-method-overflow", source, backend);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stdout.is_empty(), "{}", result.stdout);
+        assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("Count.add at 6:5 -> counter::__lambda_12_12 at 12:12 -> main at 14:1"),
+            "{}",
+            result.stderr
+        );
+        if backend == "direct" {
+            // The scalar receiver can stay entirely in the callable's words.
+            let (allocated, freed) = result.boxes.expect("direct runtime stats");
+            assert_eq!(allocated, freed, "{}", result.stderr);
+        }
+    }
 }

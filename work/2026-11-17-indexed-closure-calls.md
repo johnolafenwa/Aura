@@ -28,3 +28,7 @@ words directly from confined function boxes and list tables. Mutable
 closures that exactly forward to a plain receiver's leaf method defer
 both frame records until a trap. The overflow regression retains the
 method, closure and caller locations on both backends.
+
+The scalar receiver in the forwarded overflow case can stay entirely in
+the callable's inline words. The test checks both backtraces and balanced
+native allocation counts, including the zero-allocation case seen on ARM64.
