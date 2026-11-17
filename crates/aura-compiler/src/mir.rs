@@ -31056,13 +31056,11 @@ impl<'a> Lowerer<'a> {
         if let Some(handle) = self.lock_exits.get(&place).cloned() {
             // A lock item registered no cleanup. Leaving moves the guarded
             // value back into its cell, which releases the lock.
-            let payload = self.local_types[&place].clone();
             let ignored = self.new_typed_temp(Type::Unit);
             self.emit(Instruction::Assign {
                 target: ignored,
                 value: Self::lock_call(
                     "sync::__aura_cell_put",
-                    payload,
                     [Operand::Place(handle), Operand::MovePlace(place)],
                 ),
             });
@@ -31112,7 +31110,7 @@ impl<'a> Lowerer<'a> {
         (class.module_name == "sync" && class.decl.name == "Mutex").then_some(object)
     }
 
-    fn lock_call(name: &str, payload: Type, operands: impl IntoIterator<Item = Operand>) -> Rvalue {
+    fn lock_call(name: &str, operands: impl IntoIterator<Item = Operand>) -> Rvalue {
         let builtin =
             crate::runtime_ops::HostBuiltin::from_name(name).expect("a sync host operation");
         Rvalue::Call {
@@ -31129,7 +31127,7 @@ impl<'a> Lowerer<'a> {
                     writeback_place: None,
                 })
                 .collect(),
-            type_args: BTreeMap::from([("T".to_string(), payload)]),
+            type_args: BTreeMap::new(),
         }
     }
 
@@ -31193,14 +31191,10 @@ impl<'a> Lowerer<'a> {
                 target: handle.clone(),
                 value: Rvalue::Use(value),
             });
-            let held = self.new_typed_temp(payload.clone());
+            let held = self.new_typed_temp(payload);
             self.emit(Instruction::Assign {
                 target: held.clone(),
-                value: Self::lock_call(
-                    "sync::__aura_cell_take",
-                    payload,
-                    [Operand::Place(handle.clone())],
-                ),
+                value: Self::lock_call("sync::__aura_cell_take", [Operand::Place(handle.clone())]),
             });
             self.lock_exits.insert(held.clone(), handle);
             held
