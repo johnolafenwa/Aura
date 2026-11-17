@@ -82,3 +82,23 @@ def main() -> None:
                 case Err(second):
                     print(render(first))
                     print(render(second))
+    match control.recover(pair, false, 17):
+        case Ok(flag):
+            print(flag)
+        case Err(trap):
+            print(trap.message)
+    match control.recover(message_divides, 0):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.code)
+
+
+def pair(flag: bool, count: int64) -> bool:
+    assert flag, f"flag {flag} count {count}"
+    return flag
+
+
+def message_divides(value: int64) -> int64:
+    assert value != 0, f"ratio {10 // value}"
+    return value

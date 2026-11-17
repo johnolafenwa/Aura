@@ -1535,7 +1535,11 @@ impl<'a> NativeCodegen<'a> {
         // recursion with no loop yields like a loop does.
         // It is also where the machine stack is checked, since a call
         // chain grows without bound only through such a function.
-        if self.recursive_functions.contains(&function.name) {
+        let checked_entry = self.recovery_functions.get(&function.name) == Some(&func_id);
+        // This entry admits only total scalar work and failed checks. It
+        // cannot reenter Aura, even when the conservative call graph marks
+        // the ordinary entry as a possible target of a callback.
+        if !checked_entry && self.recursive_functions.contains(&function.name) {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -2356,8 +2360,7 @@ impl<'a> NativeCodegen<'a> {
             function_refs,
             leaf_refs,
             recovery_refs,
-            checked_scalar_body: (self.recovery_functions.get(&function.name) == Some(&func_id))
-                .then_some(func_id),
+            checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,

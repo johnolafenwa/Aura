@@ -108,12 +108,16 @@ exit. For the length of the call the function gets a frame stack, cleanup
 stack and ownership ledger of its own, installed under the caller's task
 identity, so that "everything the call owned" is exactly one ledger.
 
-For a small scalar function whose only possible failures are literal
-assertions or contract checks, the compiler can return the scalar and an
-error directly to a local match. Such a function cannot call out, register
-cleanup, loop or acquire resources. A failed check describes the callee
-using its source descriptor. Each such site keeps its immutable failure
-result in a program-data cell, just as the runtime shares a string literal.
+For a small scalar function whose only possible failures are assertions or
+contract checks, the compiler can return the scalar and an error directly
+to a local match. The check may have a literal message or interpolate
+scalar values. Such a function cannot call out, register cleanup, loop or
+acquire resources. A failed check describes the callee using its source
+descriptor. A site with a literal message keeps its immutable failure
+result in a program-data cell. An interpolated message belongs to its
+invocation and keeps its text and source frame in a fresh result.
+If evaluating a message can itself trap, the full recovery boundary
+captures that failure. Dividing by zero in a message reports AU4004.
 Extracting the diagnostic gives the caller a value it can change. The first
 field read formats the saved diagnostic. A write detaches that copy before
 changing it. Program teardown releases each initialized cell.
