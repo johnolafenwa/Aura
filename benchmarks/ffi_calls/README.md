@@ -82,3 +82,27 @@ In `callback` the C function calls the function it is handed once. Rust
 passes an `extern "C" fn`, and Python a `CFUNCTYPE` or `ffi.callback`
 wrapper of a lambda. Aura's 4 ns over Rust is the frame its entry packs and
 the guard that keeps a failure from unwinding through C.
+
+## Struct Arrays, Array Fields, Unions, And Text Callbacks
+
+Build a release compiler and run the four FFI v2 comparisons.
+
+```sh
+cargo build --release -p aura -p aura-runtime
+bash benchmarks/ffi_calls/run.sh v2
+```
+
+Each implementation builds its input once. Each timed loop runs two million
+iterations and checks the accumulated result. Times include loop overhead.
+
+| Case | Work in one iteration |
+| --- | --- |
+| `struct_array` | Pass four two-field records to C. C sums their eight signed 32-bit coordinates. |
+| `array_field` | Pass a struct by value. C sums its four inline signed 32-bit integers. |
+| `union_read` | Read a signed 32-bit member of one of four unions populated by C before timing. |
+| `text_callback` | Call C with a named function. The callback counts the Unicode scalars in `café`. |
+
+Aura gives C a private copy of a struct list. Rust and ctypes pass the
+address of a C-layout array they already hold. In the callback, Aura owns
+a checked copy of the C string. Rust borrows and validates it with
+`CStr::to_str`. Python decodes the bytes passed by ctypes.
