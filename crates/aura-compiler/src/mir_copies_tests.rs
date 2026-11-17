@@ -132,3 +132,21 @@ def orders_the_binding():
     }
     assert_eq!(results.len(), expected.len());
 }
+
+#[test]
+fn a_shared_callable_loop_binding_is_lent_only_for_direct_calls() {
+    let mut callable = crate::sema::CallableType {
+        task: false,
+        call_kind: crate::sema::ClosureCallKind::Repeatable,
+        params: vec![],
+        return_type: Type::Unit,
+    };
+    let source = "def call():\n    x()\n\ndef save():\n    f = x\n";
+    let outcomes = borrows(source, &Type::Callable(Box::new(callable.clone())));
+    assert_eq!(
+        outcomes,
+        vec![("call".into(), true), ("save".into(), false)]
+    );
+    callable.call_kind = crate::sema::ClosureCallKind::MutableRepeatable;
+    assert!(!borrows(source, &Type::Callable(Box::new(callable)))[0].1);
+}

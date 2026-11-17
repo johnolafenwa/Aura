@@ -38,9 +38,8 @@ use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
 /// temporary it fills to the loan it reads. The temporary is filled by one
 /// `ReadLoan`, named as the callee of the call that follows it in the same
 /// block, released right after that call, and named nowhere else. Only
-/// plain moves of values into other temporaries may stand between the read
-/// and the call. Native code calls such a callee through the loan, where
-/// its collection keeps it, and makes no copy.
+/// simple, non-trapping computations of arguments may stand between the read
+/// and the call. Native code calls such a callee through its loan.
 pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, String> {
     let mut mentions = HashMap::<&str, usize>::new();
     for block in &function.blocks {
@@ -65,20 +64,45 @@ pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, Strin
                 continue;
             }
             let mut rest = block.instructions[index + 1..].iter();
-            let call = rest.find(|later| {
+            let independent = |operand: &Operand| {
                 !matches!(
-                    later,
-                    Instruction::Assign {
-                        target: moved,
-                        value: Rvalue::Use(operand),
-                    } if moved != target
-                        && moved != loan
-                        && !matches!(
-                            operand,
-                            Operand::Place(place) | Operand::MovePlace(place)
-                                if root(place) == target || root(place) == loan
-                        )
+                    operand,
+                    Operand::Place(place) | Operand::MovePlace(place)
+                        if root(place) == target || root(place) == loan
                 )
+            };
+            let call = rest.find(|later| {
+                let Instruction::Assign {
+                    target: temp,
+                    value,
+                } = later
+                else {
+                    return true;
+                };
+                if !temp.starts_with("%t") || temp.contains('.') || temp == target || temp == loan {
+                    return true;
+                }
+                match value {
+                    Rvalue::Use(operand) => !independent(operand),
+                    Rvalue::Binary {
+                        op:
+                            crate::ast::BinaryOp::BitAnd
+                            | crate::ast::BinaryOp::BitOr
+                            | crate::ast::BinaryOp::BitXor,
+                        left,
+                        right,
+                        trap: crate::mir::ArithmeticTrap::None,
+                        ..
+                    } => {
+                        !independent(left)
+                            || !independent(right)
+                            || !function.local_types.iter().any(|local| {
+                                local.name == *temp
+                                    && crate::integer::integer_type_bounds(&local.ty).is_some()
+                            })
+                    }
+                    _ => true,
+                }
             });
             let called = matches!(
                 call,
