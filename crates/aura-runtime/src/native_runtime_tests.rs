@@ -29292,6 +29292,43 @@ fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
 }
 
 #[test]
+fn guarded_words_round_trip_through_host_and_generic_callers() {
+    use crate::runtime_value::SyncValue;
+    for (kind, initial, changed) in [(0, 41, 42), (1, 0, 1)] {
+        let as_value = |word| {
+            if kind == 0 {
+                Value::Int(IntegerValue::from_i64(word))
+            } else {
+                Value::Bool(word != 0)
+            }
+        };
+        let handle = SyncValue::cell(as_value(initial));
+        let native = boxed_value(Value::Sync(handle.clone()));
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        assert_eq!(handle.take().unwrap(), as_value(changed));
+        handle.put(as_value(initial)).unwrap();
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        let payload = super::aura_direct_sync_cell_take(native);
+        assert_eq!(unsafe { value_ref(payload) }, as_value(changed));
+        super::aura_direct_sync_cell_put(native, payload);
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            changed
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        unsafe { release_value(native) };
+    }
+}
+
+#[test]
 fn a_native_mutex_moves_the_same_collection_box_between_tasks() {
     use crate::runtime_value::SyncValue;
     let handle = SyncValue::cell(Value::Unit);

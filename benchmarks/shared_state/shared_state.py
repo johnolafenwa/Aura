@@ -78,7 +78,7 @@ def main():
     table = {}
     start = time.perf_counter()
     dict_steps(lock, table, DICT_STEPS)
-    print(f"dict {milliseconds(start)} {len(table)}")
+    print(f"dict {milliseconds(start)} {len(table)} {sum(table.values())}")
 
     counter = Counter()
     start = time.perf_counter()

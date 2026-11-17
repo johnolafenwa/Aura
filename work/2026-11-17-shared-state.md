@@ -67,3 +67,13 @@ their own `Cell` enum that failed MIR validation. Linux reproduced the
 same failure with either `Cell` or `Atom` as a local enum. The shared
 state module's two host handles now keep their qualified runtime names.
 The regression declares both enums and calls the imported atomic counter.
+
+## Lock Cost
+
+A preliminary native run identified repeated wrapper tag changes in
+`mutex.lock()` and copies of a general runtime value around each integer
+step. Lowering now retains the original cell for the block. A custom
+factory still runs once, and rebinding the source variable in the body
+still releases the original mutex. Native integer and boolean steps read
+and write the word in its guarded slot; tests cross between native word,
+boxed, and interpreter accesses to the same cell.

@@ -1,0 +1,22 @@
+import sync
+
+class Factory:
+    counter: sync.Mutex[int64]
+
+    def lock(self) -> sync.Locked[int64]:
+        print("factory")
+        return self.counter.lock()
+
+def main():
+    mut counter = sync.Mutex[int64](3)
+    original = counter
+    with value = counter.lock():
+        value += 4
+        counter = sync.Mutex[int64](11)
+    with value = Factory(counter=original).lock():
+        value += 2
+    manager = counter.lock()
+    with value = manager:
+        value += 5
+    print(original.replace(0))
+    print(counter.replace(0))

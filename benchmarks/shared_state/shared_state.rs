@@ -63,7 +63,9 @@ fn main() {
     let table = Mutex::new(HashMap::new());
     let start = Instant::now();
     dict_steps(&table, DICT_STEPS);
-    println!("dict {} {}", start.elapsed().as_millis(), table.lock().unwrap().len());
+    let elapsed = start.elapsed().as_millis();
+    let entries = table.lock().unwrap();
+    println!("dict {elapsed} {} {}", entries.len(), entries.values().sum::<i64>());
 
     let counter = Arc::new(Mutex::new(0i64));
     let start = Instant::now();

@@ -4314,6 +4314,27 @@ fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
 }
 
 #[test]
+fn direct_lock_entries_remember_the_receiver_and_evaluate_custom_factories() {
+    let source = include_str!("../tests/fixtures/run-pass/sync_lock_binding.au");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    for step in ["sync::__aura_cell_take", "sync::__aura_cell_put"] {
+        assert!(main.blocks.iter().flat_map(|block| &block.instructions).any(|instruction| matches!(
+            instruction,
+            Instruction::Assign { value: Rvalue::Call { callee: CallTarget::Runtime { op: RuntimeOp::Host(builtin), .. }, .. }, .. } if builtin.name() == step
+        )), "lock entries call {step} directly");
+    }
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        include_str!("../tests/fixtures/run-pass/sync_lock_binding.stdout")
+    );
+}
+
+#[test]
 fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
     let module = crate::lower_source_to_mir(source).unwrap();

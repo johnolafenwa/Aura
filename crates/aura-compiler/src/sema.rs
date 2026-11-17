@@ -85,8 +85,7 @@ mod iterator_fast_tests;
 pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
-    classify_manager, hidden_manager_binding, manager_method_call, manager_method_call_with,
-    ManagerEntry, ManagerExit, LOCK_PUT_METHOD, LOCK_TAKE_METHOD,
+    classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
 };
 mod patterns;
 mod structural_patterns;

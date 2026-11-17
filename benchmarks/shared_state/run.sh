@@ -5,10 +5,10 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-out="${TMPDIR:-/tmp}/aura-shared-state"
-mkdir -p "$out"
+out="$(mktemp -d)"
+trap 'rm -rf "$out"' EXIT
 
-"$root/target/release/aura" build "$here/shared_state.au" -o "$out/shared_state_aura"
+"${AURA:-$root/target/release/aura}" build "$here/shared_state.au" -o "$out/shared_state_aura"
 rustc --edition=2021 -C opt-level=3 -C overflow-checks=on -o "$out/shared_state_rust" "$here/shared_state.rs"
 
 export AURA_WORKERS="${AURA_WORKERS:-4}"

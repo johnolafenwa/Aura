@@ -12280,7 +12280,7 @@ struct Lowerer<'a> {
     /// Exit result shape of each active `with` place whose action is a
     /// manager `__exit__`, keyed by the place in `with_stack`.
     manager_exits: BTreeMap<String, ManagerExitResult>,
-    /// The `sync.Locked[T]` handle of each active lock item, keyed by the
+    /// The underlying `sync.Cell` of each active lock item, keyed by the
     /// place in `with_stack`, which holds the guarded value.
     lock_exits: BTreeMap<String, String>,
     match_writeback_stack: Vec<MatchWritebackState>,
@@ -31056,19 +31056,16 @@ impl<'a> Lowerer<'a> {
         if let Some(handle) = self.lock_exits.get(&place).cloned() {
             // A lock item registered no cleanup. Leaving moves the guarded
             // value back into its cell, which releases the lock.
-            let span = Span::new(0, 0);
-            let held = Expr {
-                kind: ExprKind::Name(place),
-                span,
-            };
-            let put = crate::sema::manager_method_call_with(
-                &handle,
-                crate::sema::LOCK_PUT_METHOD,
-                vec![held],
-                span,
-            );
-            let value = self.lower_expr(&put);
-            self.emit(Instruction::Eval { value });
+            let payload = self.local_types[&place].clone();
+            let ignored = self.new_typed_temp(Type::Unit);
+            self.emit(Instruction::Assign {
+                target: ignored,
+                value: Self::lock_call(
+                    "sync::__aura_cell_put",
+                    payload,
+                    [Operand::Place(handle), Operand::MovePlace(place)],
+                ),
+            });
             return;
         }
         let Some(exit_result) = self.manager_exits.get(&place).copied() else {
@@ -31094,6 +31091,46 @@ impl<'a> Lowerer<'a> {
         }
         let value = self.lower_expr(&exit_call);
         self.emit(Instruction::Eval { value });
+    }
+
+    /// The standard Mutex.lock method only wraps the same cell. For every
+    /// other expression evaluate the manager itself once, including user calls.
+    fn mutex_lock_receiver<'b>(&self, manager: &'b Expr) -> Option<&'b Expr> {
+        let ExprKind::Call { callee, args, .. } = &manager.kind else {
+            return None;
+        };
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        if field != "lock" || !args.is_empty() {
+            return None;
+        }
+        let Type::Named(name, _) = self.infer_expr_type(object)? else {
+            return None;
+        };
+        let class = self.resolve_class_info(&name)?;
+        (class.module_name == "sync" && class.decl.name == "Mutex").then_some(object)
+    }
+
+    fn lock_call(name: &str, payload: Type, operands: impl IntoIterator<Item = Operand>) -> Rvalue {
+        let builtin =
+            crate::runtime_ops::HostBuiltin::from_name(name).expect("a sync host operation");
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Host(builtin),
+                receiver: None,
+                receiver_place: None,
+            },
+            args: operands
+                .into_iter()
+                .map(|value| MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                })
+                .collect(),
+            type_args: BTreeMap::from([("T".to_string(), payload)]),
+        }
     }
 
     /// Lowers one `with` item (checkpoint F1-F5). A multi-item header was
@@ -31137,44 +31174,52 @@ impl<'a> Lowerer<'a> {
             Some(crate::sema::ManagerEntry::Lock { payload }) => Some(payload.clone()),
             _ => None,
         };
-        // A view-returning `__enter__` keeps the manager in a hidden managed
-        // place, a fresh temporary that source code cannot name (F4).
-        let place = if matches!(
-            shape.as_ref().map(|shape| &shape.entry),
-            Some(crate::sema::ManagerEntry::View { .. } | crate::sema::ManagerEntry::Lock { .. })
-        ) {
-            match manager_ty.clone() {
-                Some(ty) => self.new_typed_temp(ty),
-                None => self.new_temp(),
-            }
-        } else {
-            self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
-        };
-        let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
-        self.emit(Instruction::Assign {
-            target: place.clone(),
-            value: Rvalue::Use(value),
-        });
-
         let span = with_stmt.span;
-        // A lock item: `place` holds the `sync.Locked[T]` handle. Taking
-        // the lock moves the guarded value into a second hidden local, and
-        // that local is the place the item's exits act on.
-        let place = match lock_payload {
-            Some(payload) => {
-                let handle = place;
-                let held = self.new_typed_temp(payload);
-                let take =
-                    crate::sema::manager_method_call(&handle, crate::sema::LOCK_TAKE_METHOD, span);
-                let value = self.lower_expr(&take);
-                self.emit(Instruction::Assign {
-                    target: held.clone(),
-                    value: Rvalue::Use(value),
-                });
-                self.lock_exits.insert(held.clone(), handle);
-                held
-            }
-            None => place,
+        let place = if let Some(payload) = lock_payload {
+            // Keep the cell even when the source variable is reassigned in the body.
+            let handle = self.new_typed_temp(Type::named("sync.Cell"));
+            let source = self
+                .mutex_lock_receiver(&with_stmt.value)
+                .unwrap_or(&with_stmt.value);
+            let cell = Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(source.clone()),
+                    field: "cell".to_string(),
+                },
+                span,
+            };
+            let value = self.lower_expr(&cell);
+            self.emit(Instruction::Assign {
+                target: handle.clone(),
+                value: Rvalue::Use(value),
+            });
+            let held = self.new_typed_temp(payload.clone());
+            self.emit(Instruction::Assign {
+                target: held.clone(),
+                value: Self::lock_call(
+                    "sync::__aura_cell_take",
+                    payload,
+                    [Operand::Place(handle.clone())],
+                ),
+            });
+            self.lock_exits.insert(held.clone(), handle);
+            held
+        } else {
+            // A view-returning entry keeps its manager in a hidden place.
+            let place = if matches!(
+                shape.as_ref().map(|shape| &shape.entry),
+                Some(crate::sema::ManagerEntry::View { .. })
+            ) {
+                self.new_typed_temp(manager_ty.clone().expect("a typed view manager"))
+            } else {
+                self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
+            };
+            let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(value),
+            });
+            place
         };
         let mut entry_loan = None;
         self.loan_scopes.push(Vec::new());
