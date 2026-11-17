@@ -15456,9 +15456,14 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
     index: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let index =
+        let slot =
             usize::try_from(index).unwrap_or_else(|_| runtime_error("invalid enum payload index"));
         unsafe {
+            // A frozen variant belongs to the program. An owning match
+            // receives its own payload while later matches can still read it.
+            if direct_value_is_frozen(value) {
+                return with_value(value, |value| direct_variant_payload_clone(value, index));
+            }
             value_mut(value, |value| {
                 let Value::EnumVariant(variant) = value else {
                     runtime_error(format!(
@@ -15467,10 +15472,10 @@ pub extern "C-unwind" fn aura_direct_variant_take_payload(
                     ));
                 };
                 // A typed variant's payload box moves out as it is.
-                if let Some(element) = variant.payloads.take_box(index) {
+                if let Some(element) = variant.payloads.take_box(slot) {
                     return owned_element_box(element);
                 }
-                boxed_value(variant.payloads.take(index).unwrap_or_else(|| {
+                boxed_value(variant.payloads.take(slot).unwrap_or_else(|| {
                     runtime_error(format!(
                         "enum variant `{}.{}` does not carry a payload at index {}",
                         nominal_runtime_base_name(&variant.enum_name),
