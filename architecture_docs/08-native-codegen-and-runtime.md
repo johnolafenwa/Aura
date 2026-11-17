@@ -497,17 +497,19 @@ instead of copying it into a new box.
 
 Generated code holds a callable as four words: a descriptor and three
 environment words. A class field and a list element hold a runtime
-function value. A callable kept there is still called through its
-descriptor.
+function value. When that value keeps the native words, callers can
+invoke its descriptor directly.
 
-- **Kept words.** The `box` adapter of a Shared or Mutable shape hands
-  the four words to `aura_direct_closure_value_deferred`. The function
+- **Kept words.** The `box` adapter of a Shared or Mutable shape with
+  captures that own no runtime handles hands the four words to `aura_direct_closure_value_deferred`. The function
   value keeps them in a `DirectCallable` with the key of the contract's
   `invoke` signature (`contract_abi_key`). The descriptor's
   `box_captures` adapter, at offset 48, turns the captures into runtime
   values. The runtime calls it the first time runtime code reads them. A
   Mutable callable then moves its state to those values and releases the
-  words. A Consuming shape is boxed with its captures as before.
+  words. A Consuming shape or a shape that captures a task-tracked handle
+  boxes its captures eagerly. The resulting function can outlive its
+  creator without retaining an entry in the creator's task ledger.
 - **A call in place.** `stored_callable_in_place` in `native_codegen.rs`
   recognizes a callee that is a field of an instance kept in place, an
   element of a local list, or an element of a list in such a field. It

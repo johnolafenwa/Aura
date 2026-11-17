@@ -741,9 +741,9 @@ struct NativeCodegen<'a> {
     /// function backend.
     object: Option<Box<dyn ModuleBackend>>,
     functions: HashMap<String, FuncHandle>,
-    /// The frameless second body of each function that has one (see
-    /// `leaf_variant`).
-    leaf_functions: HashMap<String, FuncHandle>,
+    /// Bodies that need no write-through sinks. Leaf bodies also defer their
+    /// frame until an error.
+    sinkless_functions: HashMap<String, FuncHandle>,
     /// Scalar bodies whose only failure is an explicit check. Their
     /// recovered entry returns the scalar and an optional error.
     recovery_functions: HashMap<String, FuncHandle>,
@@ -1018,7 +1018,7 @@ impl<'a> NativeCodegen<'a> {
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
-        let mut leaf_functions = HashMap::new();
+        let mut sinkless_functions = HashMap::new();
         let mut recovery_functions = HashMap::new();
         let recovered_targets = module
             .functions
@@ -1072,25 +1072,27 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
+            let mutable_leaf = leaf_variant(function, &classes);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
                 // through a thunk.
                 if small_leaf(function) {
                     object.mark_inline(func_id);
                 }
-            } else if leaf_variant(function, &classes) {
-                let leaf_id = try_or_string_error!(
-                    object.declare_function(
-                        &mangle_leaf_symbol(&function.name),
-                        Linkage::Local,
-                        &signature
-                    ),
-                    "failed to declare the leaf body of `{}`: {}",
+            } else if mutable_leaf || sinkless_closure(function) {
+                let symbol = if mutable_leaf {
+                    mangle_leaf_symbol(&function.name)
+                } else {
+                    format!("{}__nosinks", mangle_symbol(&function.name))
+                };
+                let sinkless_id = try_or_string_error!(
+                    object.declare_function(&symbol, Linkage::Local, &signature),
+                    "failed to declare the sink-free body of `{}`: {}",
                     function.name
                 );
-                leaf_functions.insert(function.name.clone(), leaf_id);
+                sinkless_functions.insert(function.name.clone(), sinkless_id);
                 if small_leaf(function) {
-                    object.mark_inline(leaf_id);
+                    object.mark_inline(sinkless_id);
                 }
             } else if small_leaf(function) && frameless_leaf(function, &classes) {
                 object.mark_inline(func_id);
@@ -1235,7 +1237,7 @@ impl<'a> NativeCodegen<'a> {
             program_source: program_source.to_string(),
             object: Some(object),
             functions,
-            leaf_functions,
+            sinkless_functions,
             recovery_functions,
             function_thunks,
             function_default_binders,
@@ -1415,14 +1417,14 @@ impl<'a> NativeCodegen<'a> {
                 |codegen, builder| codegen.emit_function(builder, function, id, true),
             )?;
         }
-        let Some(leaf_id) = self.leaf_functions.get(&function.name).copied() else {
+        let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
             return Ok(());
         };
         self.define_body(
-            leaf_id,
+            sinkless_id,
             &signature,
-            &format!("the leaf body of `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, leaf_id, true),
+            &format!("the sink-free body of `{}`", function.name),
+            |codegen, builder| codegen.emit_function(builder, function, sinkless_id, true),
         )
     }
 
@@ -1487,7 +1489,7 @@ impl<'a> NativeCodegen<'a> {
         builder: &mut dyn FunctionBackend,
         function: &MirFunction,
         func_id: FuncHandle,
-        leaf: bool,
+        without_sinks: bool,
     ) -> std::result::Result<(), String> {
         let reachable_blocks = self
             .reachable_blocks
@@ -1543,8 +1545,11 @@ impl<'a> NativeCodegen<'a> {
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let frameless =
-            leaf || self.freestanding.is_some() || frameless_leaf(function, &self.classes);
+        let checked_scalar_body = self.recovery_functions.get(&function.name) == Some(&func_id);
+        let frameless = checked_scalar_body
+            || self.freestanding.is_some()
+            || frameless_leaf(function, &self.classes)
+            || (without_sinks && leaf_body(function, &self.classes));
         let (mut body, entered_in_runtime) = if frameless {
             (entry, builder.iconst(types::I64, 0))
         } else {
@@ -1777,10 +1782,9 @@ impl<'a> NativeCodegen<'a> {
             }
             call_slot += 1;
         }
-        if self.freestanding.is_some() {
-            // A write-through sink publishes a `mut` argument for the
-            // runtime's trap-time cleanup. A freestanding call only hands
-            // the updated values back.
+        if self.freestanding.is_some() || without_sinks {
+            // The call updates its mutable arguments through its normal
+            // return values. No caller has installed write-through sinks.
             mutable_param_indices.clear();
         }
         // The write-through sink of each mutable parameter. A caller hands
@@ -1846,11 +1850,11 @@ impl<'a> NativeCodegen<'a> {
         for (name, id) in functions {
             recovery_refs.insert(name.clone(), builder.import_function(*id));
         }
-        let mut leaf_refs = HashMap::new();
-        let mut leaf_functions = self.leaf_functions.iter().collect::<Vec<_>>();
-        leaf_functions.sort_by(|left, right| left.0.cmp(right.0));
-        for (name, func_id) in leaf_functions {
-            leaf_refs.insert(name.clone(), builder.import_function(*func_id));
+        let mut sinkless_refs = HashMap::new();
+        let mut sinkless_functions = self.sinkless_functions.iter().collect::<Vec<_>>();
+        sinkless_functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in sinkless_functions {
+            sinkless_refs.insert(name.clone(), builder.import_function(*func_id));
         }
         let mut function_thunk_refs = HashMap::new();
         let mut function_thunks = self.function_thunks.iter().collect::<Vec<_>>();
@@ -2373,9 +2377,9 @@ impl<'a> NativeCodegen<'a> {
             variable_types,
             next_variable_index: variable_index,
             function_refs,
-            leaf_refs,
+            sinkless_refs,
             recovery_refs,
-            checked_scalar_body: self.recovery_functions.get(&function.name) == Some(&func_id),
+            checked_scalar_body,
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -3778,9 +3782,9 @@ struct FunctionCompiler<'a> {
     variable_types: HashMap<String, DirectType>,
     next_variable_index: usize,
     function_refs: HashMap<String, FuncRef>,
-    /// The frameless second bodies (see `leaf_variant`), which a call with
+    /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
-    leaf_refs: HashMap<String, FuncRef>,
+    sinkless_refs: HashMap<String, FuncRef>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: bool,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -15537,7 +15541,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok((Some(active), sinks))
     }
 
-    /// The body a direct call of `name` enters: its frameless second body
+    /// The body a direct call of `name` enters: its sink-free second body
     /// when the call hands no sink over and the function has one, and
     /// `framed` otherwise.
     fn sinkless_callee(
@@ -15546,7 +15550,7 @@ impl<'a> FunctionCompiler<'a> {
         framed: FuncRef,
         sinks: &(Option<Val>, Vec<Val>),
     ) -> FuncRef {
-        match (sinks.0, self.leaf_refs.get(name)) {
+        match (sinks.0, self.sinkless_refs.get(name)) {
             (None, Some(leaf)) => *leaf,
             _ => framed,
         }
@@ -19023,6 +19027,13 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
     takes_mutable(function)
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && leaf_body(function, classes)
+}
+
+/// Small closure bodies can forward mutations of an owned environment
+/// directly to another method. When no write-through sink was handed to
+/// the adapter, that method can use its existing sink-free entry as well.
+fn sinkless_closure(function: &MirFunction) -> bool {
+    function.name.contains("::__lambda_") && takes_mutable(function) && small_leaf(function)
 }
 
 /// The scalar fields of the receiver of a method of a class kept in a

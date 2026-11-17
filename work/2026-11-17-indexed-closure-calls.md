@@ -13,3 +13,10 @@ optimized loop at 1,133 ms. A shared list element used only for calls can
 stay in place. A mutable element call with a bit mask in its argument can
 also use its existing loan. The shared and mutable list calls and mutable
 local still exceed the three-times-Rust target on this host.
+
+A module-level decorator that captured a string reached task shutdown with
+that string still on the creating task's native ledger. The release WIP
+and the extended stored-call branch both reproduced it. The compiler boxes
+handle-owning captures into runtime values at the storage boundary. A
+cleanup test exercises the decorated function to shutdown and checks its
+output, exit status and allocation/free counts.

@@ -350,3 +350,25 @@ fn class_fields_in_boxes_free_every_box() {
         include_str!("../../aura-compiler/tests/fixtures/run-pass/class_fields_in_boxes.stdout");
     assert_frees_everything("leak-class-field-boxes", source, expected, 0);
 }
+
+#[test]
+fn a_decorated_module_function_owns_its_captures_until_shutdown() {
+    let source = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Decorator = Callable[def(step: own Step) -> Step]
+
+def named(label: own str) -> Decorator:
+    return lambda [own label] own step: named_step(label.clone(), step)
+
+def named_step(label: own str, step: own Step) -> Step:
+    return lambda [own label, own step] value: label.len() + step(value)
+
+@named("tag")
+def twice(value: int64) -> int64:
+    return value * 2
+
+def main() -> None:
+    print(twice(4))
+"#;
+    assert_frees_everything("leak-decorator-captures", source, "11\n", 0);
+}
