@@ -1646,9 +1646,8 @@ impl<'a> NativeCodegen<'a> {
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let checked_scalar_body =
-            (self.recovery_functions.get(&function.name) == Some(&func_id)).then_some(func_id);
-        let frameless = checked_scalar_body.is_some()
+        let checked_entry = self.recovery_functions.get(&function.name) == Some(&func_id);
+        let frameless = checked_entry
             || self.freestanding.is_some()
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes));
@@ -1661,7 +1660,10 @@ impl<'a> NativeCodegen<'a> {
         // recursion with no loop yields like a loop does.
         // It is also where the machine stack is checked, since a call
         // chain grows without bound only through such a function.
-        if self.recursive_functions.contains(&function.name) {
+        // This entry admits only total scalar work and failed checks. It
+        // cannot reenter Aura, even when the conservative call graph marks
+        // the ordinary entry as a possible target of a callback.
+        if !checked_entry && self.recursive_functions.contains(&function.name) {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -2490,7 +2492,7 @@ impl<'a> NativeCodegen<'a> {
             function_refs,
             sinkless_refs,
             recovery_refs,
-            checked_scalar_body,
+            checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
