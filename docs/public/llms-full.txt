@@ -5832,7 +5832,8 @@ order.
 `SortedMap[K, V]()` and `SortedSet[T]()` keep their keys in ascending order.
 The key type implements `Ord` against itself. Its comparisons must give a
 consistent order. Keys compare equal when neither precedes the other.
-Inserting a value for an equal map key updates the value in place.
+Inserting a value for an equal map key updates the value in place. Floating
+point keys put NaN after all numbers. All NaNs occupy the same position.
 
 | Operation | Map | Set |
 | --- | --- | --- |

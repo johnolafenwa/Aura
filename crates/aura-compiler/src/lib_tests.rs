@@ -4469,6 +4469,10 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
             include_str!("../tests/fixtures/run-pass/ordered_collection_keys.stdout"),
         ),
         (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.stdout"),
+        ),
+        (
             include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.au"),
             include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.stdout"),
         ),
@@ -4487,4 +4491,14 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
         let error = check_source(source).expect_err("unordered keys should be rejected");
         assert!(error.message.contains("does not implement trait `Ord["));
     }
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_lookup_owns_clone.au"
+    ))
+    .expect_err("reading a retained non-cloneable RNG must fail");
+    assert_eq!(error.code, "AU3007");
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_is_private.au"
+    ))
+    .expect_err("the type-erased collection storage must be private");
+    assert!(error.message.contains("private"));
 }

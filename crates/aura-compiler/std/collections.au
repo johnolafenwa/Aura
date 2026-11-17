@@ -1,3 +1,4 @@
+import collections
 from iter import IntoIterator, Iterator, ListIter, Step
 from prelude import Ord
 
@@ -18,36 +19,62 @@ public class Deque[T]:
     """A double-ended queue with amortized constant-time pushes and pops."""
     left: list[T]
     right: list[T]
+    store: list[collections.__Store]
 
     public def __init__(self):
         self.left = []
         self.right = []
+        self.store = []
 
     public def len(self) -> int64:
+        if self.store.len() > 0:
+            return collections.__aura_len(self.store[0])
         return self.left.len() + self.right.len()
 
     public def push_front(mut self, value: own T):
         """Moves a value to the front of the queue."""
+        if self.store.len() > 0 or (self.len() == 0 and collections.__aura_supported(value)):
+            if self.store.len() == 0:
+                self.store.append(collections.__aura_new(0))
+            state = collections.__aura_deque_push(self.store.pop(), value, true)
+            self.store.append(state)
+            return
         self.left.append(value)
 
     public def push_back(mut self, value: own T):
         """Moves a value to the back of the queue."""
+        if self.store.len() > 0 or (self.len() == 0 and collections.__aura_supported(value)):
+            if self.store.len() == 0:
+                self.store.append(collections.__aura_new(0))
+            state = collections.__aura_deque_push(self.store.pop(), value, false)
+            self.store.append(state)
+            return
         self.right.append(value)
 
     public def pop_front(mut self) -> T:
         """Removes the front value. An empty queue traps."""
+        if self.store.len() > 0:
+            state, value = collections.__aura_deque_pop[T](self.store.pop(), true)
+            self.store.append(state)
+            return value
         if self.left.len() == 0:
             refill(self.right, self.left)
         return self.left.pop()
 
     public def pop_back(mut self) -> T:
         """Removes the back value. An empty queue traps."""
+        if self.store.len() > 0:
+            state, value = collections.__aura_deque_pop[T](self.store.pop(), false)
+            self.store.append(state)
+            return value
         if self.right.len() == 0:
             refill(self.left, self.right)
         return self.right.pop()
 
     public def get(self, index: int64) -> Lookup[T]:
         """Clones the indexed element, or returns Missing for an invalid index."""
+        if self.store.len() > 0:
+            return collections.__aura_deque_get[T](self.store[0], index)
         mut position = index
         if position < 0:
             position += self.len()
@@ -74,6 +101,7 @@ public class Deque[T]:
         return self.get(-1)
 
     public def clear(mut self):
+        self.store.clear()
         self.left.clear()
         self.right.clear()
 
@@ -89,10 +117,12 @@ public class Heap[T: Ord[T]]:
     """A binary priority queue that pops the least value first by default."""
     items: list[T]
     descending: bool
+    store: list[collections.__Store]
 
     public def __init__(self):
         self.items = []
         self.descending = false
+        self.store = []
 
     public def max() -> Heap[T]:
         """Creates an empty priority queue that pops its greatest value first."""
@@ -103,6 +133,11 @@ public class Heap[T: Ord[T]]:
     public def from_list(items: own list[T]) -> Heap[T]:
         """Moves a list into a min-heap in linear time."""
         mut heap = Heap[T]()
+        if items.len() > 0:
+            view head = items[0]
+            if collections.__aura_supported(head):
+                heap.store.append(collections.__aura_heap_from(items))
+                return heap
         heap.items = items
         mut index = heap.len() // 2
         while index > 0:
@@ -111,6 +146,8 @@ public class Heap[T: Ord[T]]:
         return heap
 
     public def len(self) -> int64:
+        if self.store.len() > 0:
+            return collections.__aura_len(self.store[0])
         return self.items.len()
 
     def precedes(self, left: int64, right: int64) -> bool:
@@ -133,6 +170,15 @@ public class Heap[T: Ord[T]]:
             position = child
 
     public def push(mut self, value: own T):
+        if self.store.len() > 0 or (self.items.len() == 0 and collections.__aura_supported(value)):
+            if self.store.len() == 0:
+                mut kind = 1
+                if self.descending:
+                    kind = 2
+                self.store.append(collections.__aura_new(kind))
+            state = collections.__aura_heap_push(self.store.pop(), value)
+            self.store.append(state)
+            return
         self.items.append(value)
         mut position = self.len() - 1
         while position > 0:
@@ -144,10 +190,16 @@ public class Heap[T: Ord[T]]:
 
     public def peek(self) -> Lookup[T]:
         """Clones the next value or returns Missing for an empty heap."""
+        if self.store.len() > 0:
+            return collections.__aura_heap_peek[T](self.store[0])
         return self.items.get(0)
 
     public def pop(mut self) -> T:
         """Removes the next value. An empty heap traps."""
+        if self.store.len() > 0:
+            state, value = collections.__aura_heap_take[T](self.store.pop())
+            self.store.append(state)
+            return value
         self.items.swap(0, -1)
         result = self.items.pop()
         self.sift_down(0)
@@ -405,28 +457,46 @@ public class SortedMap[K: Ord[K], V]:
     """A B-tree map whose entries iterate in increasing key order."""
     root: Node[K, V]
     count: int64
+    store: list[collections.__Store]
 
     public def __init__(self):
         self.root = Node[K, V]()
         self.count = 0
+        self.store = []
 
     public def len(self) -> int64:
+        if self.store.len() > 0:
+            return collections.__aura_len(self.store[0])
         return self.count
 
     public def set(mut self, key: own K, value: own V):
         """Inserts a key or replaces its value when the ordering is equal."""
+        if self.store.len() > 0 or (self.count == 0 and collections.__aura_supported(key)):
+            if self.store.len() == 0:
+                self.store.append(collections.__aura_new(3))
+            state = collections.__aura_map_put(self.store.pop(), key, value)
+            self.store.append(state)
+            return
         if self.root.keys.len() == 11:
             self.root.grow_root()
         if self.root.insert(key, value):
             self.count += 1
 
     public def get(self, key: K) -> Lookup[V]:
+        if self.store.len() > 0:
+            return collections.__aura_map_get[K, V](self.store[0], key)
         return self.root.get(key)
 
     public def contains(self, key: K) -> bool:
+        if self.store.len() > 0:
+            return collections.__aura_map_has[K](self.store[0], key)
         return self.root.contains(key)
 
     public def remove(mut self, key: K) -> Lookup[V]:
+        if self.store.len() > 0:
+            state, removed = collections.__aura_map_take[K, V](self.store.pop(), key)
+            self.store.append(state)
+            return removed
         match own self.root.remove(key):
             case Found(value):
                 self.count -= 1
@@ -437,27 +507,45 @@ public class SortedMap[K: Ord[K], V]:
                 return Lookup.Missing
 
     public def first(self) -> Lookup[(K, V)]:
+        if self.store.len() > 0:
+            return collections.__aura_map_edge[K, V](self.store[0], false)
         return self.root.edge(false)
 
     public def last(self) -> Lookup[(K, V)]:
+        if self.store.len() > 0:
+            return collections.__aura_map_edge[K, V](self.store[0], true)
         return self.root.edge(true)
 
     public def floor(self, key: K) -> Lookup[(K, V)]:
         """Gets the greatest entry whose key is at most key."""
+        if self.store.len() > 0:
+            return collections.__aura_map_bound[K, V](self.store[0], key, 0)
         return self.root.bound(key, false)
 
     public def ceiling(self, key: K) -> Lookup[(K, V)]:
         """Gets the least entry whose key is at least key."""
+        if self.store.len() > 0:
+            return collections.__aura_map_bound[K, V](self.store[0], key, 1)
         return self.root.bound(key, true)
 
     public def range(self, low: K, high: K) -> list[(K, V)]:
         """Clones the entries from low inclusive to high exclusive."""
+        if self.store.len() > 0:
+            return collections.__aura_map_range[K, V](self.store[0], low, high)
         mut result: list[(K, V)] = []
         if low < high:
             self.root.collect_range(low, high, result)
         return result
 
+    def entry_for(self, key: K) -> Lookup[(K, V)]:
+        if self.store.len() > 0:
+            return collections.__aura_map_bound[K, V](self.store[0], key, 2)
+        return self.root.bound(key, false, true)
+
     def drain_entries(own self) -> list[(K, V)]:
+        if self.store.len() > 0:
+            mut slots = self.store
+            return collections.__aura_map_drain[K, V](slots.pop())
         mut result: list[(K, V)] = []
         result.reserve(self.count)
         self.root.drain(result)
@@ -495,7 +583,7 @@ public class SortedSet[T: Ord[T]]:
 
     public def get(self, key: T) -> Lookup[T]:
         """Clones the stored member whose ordering equals key."""
-        return only_key(self.map.root.bound(key, false, true))
+        return only_key(self.map.entry_for(key))
 
     public def contains(self, key: T) -> bool:
         return self.map.contains(key)

@@ -13047,6 +13047,20 @@ impl<'a> Lowerer<'a> {
             .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))
     }
 
+    /// A library module can call its private host functions through the self
+    /// import used to check its source. External callers use its exports.
+    fn module_function<'n>(
+        &self,
+        namespace: &'n ModuleNamespace,
+        name: &str,
+    ) -> Option<&'n crate::sema::FunctionInfo> {
+        if namespace.path == self.module_name {
+            namespace.all_functions.get(name)
+        } else {
+            namespace.functions.get(name)
+        }
+    }
+
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
         if self.module_name == self.program.module_name {
             None
@@ -26358,7 +26372,7 @@ impl<'a> Lowerer<'a> {
                             });
                             return Operand::Place(temp);
                         }
-                        if let Some(function) = namespace.functions.get(field).cloned() {
+                        if let Some(function) = self.module_function(namespace, field).cloned() {
                             if module_path == "control" && field == "retry" {
                                 self.lower_control_retry_call(
                                     expr,
@@ -29508,7 +29522,7 @@ impl<'a> Lowerer<'a> {
                                 if let Some(child) = namespace.modules.get(field) {
                                     return Some(Type::Module(child.path.clone()));
                                 }
-                                if let Some(function) = namespace.functions.get(field) {
+                                if let Some(function) = self.module_function(namespace, field) {
                                     let substitutions = if let Some(type_args) = explicit_type_args
                                     {
                                         substitutions_from_decl_type_args(

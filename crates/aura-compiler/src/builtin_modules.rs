@@ -1647,6 +1647,136 @@ fn iter_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// Opaque, copy-on-write storage owned by the source collection classes.
+fn collections_namespace() -> ModuleNamespace {
+    let ty = |name| type_ref(name, Vec::new());
+    let state = || ty("collections.__Store");
+    let k = || ty("K");
+    let v = || ty("V");
+    let t = || ty("T");
+    let flag = || ty("bool");
+    let index = || ty("int64");
+    let pair = |left, right| TypeRef::tuple(vec![left, right], false, builtin_span());
+    let lookup = |item| type_ref("Lookup", vec![item]);
+    let list = |item| type_ref("list", vec![item]);
+    let read = || borrow_param("storage", state());
+    let write = || own_param("storage", state());
+    let function = |name, params, result| function_info("collections", name, params, result);
+    let generic = |name, parameters, params, result| {
+        generic_function_info("collections", name, parameters, params, result)
+    };
+    let functions = vec![
+        function("__aura_new", vec![value_param("kind", index())], state()),
+        function("__aura_len", vec![read()], index()),
+        generic(
+            "__aura_supported",
+            vec!["T"],
+            vec![borrow_param("value", t())],
+            flag(),
+        ),
+        generic(
+            "__aura_deque_push",
+            vec!["T"],
+            vec![
+                write(),
+                own_param("value", t()),
+                value_param("front", flag()),
+            ],
+            state(),
+        ),
+        generic(
+            "__aura_deque_pop",
+            vec!["T"],
+            vec![write(), value_param("front", flag())],
+            pair(state(), t()),
+        ),
+        generic(
+            "__aura_deque_get",
+            vec!["T"],
+            vec![read(), value_param("index", index())],
+            lookup(t()),
+        ),
+        generic(
+            "__aura_heap_from",
+            vec!["T"],
+            vec![own_param("items", list(t()))],
+            state(),
+        ),
+        generic(
+            "__aura_heap_push",
+            vec!["T"],
+            vec![write(), own_param("value", t())],
+            state(),
+        ),
+        generic(
+            "__aura_heap_take",
+            vec!["T"],
+            vec![write()],
+            pair(state(), t()),
+        ),
+        generic("__aura_heap_peek", vec!["T"], vec![read()], lookup(t())),
+        generic(
+            "__aura_map_put",
+            vec!["K", "V"],
+            vec![write(), own_param("key", k()), own_param("value", v())],
+            state(),
+        ),
+        generic(
+            "__aura_map_get",
+            vec!["K", "V"],
+            vec![read(), borrow_param("key", k())],
+            lookup(v()),
+        ),
+        generic(
+            "__aura_map_has",
+            vec!["K"],
+            vec![read(), borrow_param("key", k())],
+            flag(),
+        ),
+        generic(
+            "__aura_map_take",
+            vec!["K", "V"],
+            vec![write(), borrow_param("key", k())],
+            pair(state(), lookup(v())),
+        ),
+        generic(
+            "__aura_map_edge",
+            vec!["K", "V"],
+            vec![read(), value_param("last", flag())],
+            lookup(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_bound",
+            vec!["K", "V"],
+            vec![
+                read(),
+                borrow_param("key", k()),
+                value_param("mode", index()),
+            ],
+            lookup(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_range",
+            vec!["K", "V"],
+            vec![read(), borrow_param("low", k()), borrow_param("high", k())],
+            list(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_drain",
+            vec!["K", "V"],
+            vec![write()],
+            list(pair(k(), v())),
+        ),
+    ];
+    let mut namespace = function_only_namespace("collections", functions);
+    let storage = class_info("collections", "__Store");
+    namespace
+        .all_classes
+        .insert("__Store".to_string(), storage.clone());
+    namespace.classes.insert("__Store".to_string(), storage);
+    namespace
+}
+
 /// The host part of `regex`: the searches themselves, keyed by the number
 /// the runtime gave the pattern. `Regex`, `Match`, `Captures`, and `compile`
 /// are Aura source in `std/regex.au`.
@@ -3077,7 +3207,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "prelude" => Some(function_only_namespace("prelude", Vec::new())),
         // The lane classes are Aura source in `std/simd.au`.
         "simd" => Some(function_only_namespace(name, Vec::new())),
-        "collections" => Some(function_only_namespace(name, Vec::new())),
+        "collections" => Some(collections_namespace()),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
@@ -3085,8 +3215,24 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "tensor", "json",
-    "iter", "toml", "metrics", "log", "trace", "random",
+    "sys",
+    "path",
+    "math",
+    "mem",
+    "bytes",
+    "gzip",
+    "regex",
+    "time",
+    "http",
+    "tensor",
+    "json",
+    "iter",
+    "toml",
+    "metrics",
+    "log",
+    "trace",
+    "random",
+    "collections",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
