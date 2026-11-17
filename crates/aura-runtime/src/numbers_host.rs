@@ -29,8 +29,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::list_elements::ListElements;
-use crate::runtime_value::{Value, VecValue};
-use aura_core::types::Type;
+use crate::runtime_value::{SharedType, Value, VecValue};
+use std::sync::OnceLock;
 
 /// The words before the magnitude in the wire form.
 const HEADER: usize = 4;
@@ -154,7 +154,14 @@ fn word_list(words: Vec<u64>) -> Value {
     } else {
         ListElements::Uint64(words.into())
     };
-    Value::Vec(VecValue::new(Type::named("uint64"), elements))
+    static WORD_TYPE: OnceLock<SharedType> = OnceLock::new();
+    Value::Vec(VecValue {
+        element_type: WORD_TYPE
+            .get_or_init(|| SharedType::named("uint64"))
+            .clone(),
+        elements,
+        str_view: Default::default(),
+    })
 }
 
 fn no_value() -> Value {
@@ -455,19 +462,31 @@ pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
     result.extend_from_slice(longer);
     result[..HEADER].copy_from_slice(&[1, negative, 0, 0]);
     let (common, remaining) = result[HEADER..].split_at_mut(shorter.len() - HEADER);
-    let mut carry = 0u8;
-    for (digit, &rhs) in common.iter_mut().zip(&shorter[HEADER..]) {
+    #[inline]
+    fn add_digit(carry: u8, digit: &mut u64, rhs: u64) -> u8 {
         #[cfg(target_arch = "x86_64")]
         {
-            // ADC is in the baseline x86-64 ISA and writes only this digit.
-            carry = unsafe { std::arch::x86_64::_addcarry_u64(carry, *digit, rhs, digit) };
+            std::arch::x86_64::_addcarry_u64(carry, *digit, rhs, digit)
         }
         #[cfg(not(target_arch = "x86_64"))]
         {
             let (value, next) = digit.carrying_add(rhs, carry != 0);
             *digit = value;
-            carry = u8::from(next);
+            u8::from(next)
         }
+    }
+    let mut carry = 0;
+    // The fixed group lets the compiler carry the processor flag through
+    // consecutive digits before the loop comparison changes it.
+    let (groups, tail) = common.as_chunks_mut::<8>();
+    let (rhs_groups, rhs_tail) = shorter[HEADER..].as_chunks::<8>();
+    for (group, rhs) in groups.iter_mut().zip(rhs_groups) {
+        for index in 0..8 {
+            carry = add_digit(carry, &mut group[index], rhs[index]);
+        }
+    }
+    for (digit, &rhs) in tail.iter_mut().zip(rhs_tail) {
+        carry = add_digit(carry, digit, rhs);
     }
     for digit in remaining {
         if carry == 0 {
