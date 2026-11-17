@@ -1,0 +1,11 @@
+[a, bc]
+[def, a]
+[]
+[1, 2]
+[a]
+{a}
+{a: 1, bc: 2, def: 3}
+[aa, abc, bcbc]
+[y]
+[p]
+[a, bc, def]
