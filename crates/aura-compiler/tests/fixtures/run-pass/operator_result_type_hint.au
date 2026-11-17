@@ -7,7 +7,7 @@ impl Add[Count, Count] for int64:
         return Count(value=self + rhs.value)
 
 
-def make[T](value: T) -> T:
+def make[T](value: own T) -> T:
     return value
 
 
