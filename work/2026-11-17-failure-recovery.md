@@ -34,7 +34,11 @@ same six lines and returned `TaskResult.Cancelled`.
 All 24 checked listings in the edited pages passed. The compiler-backed
 editor test passed after failing on the missing completion. Z3 proved the
 valid recovered call and returned AU5101 for the invalid precondition.
-A freestanding build reported AU2052 at the recovery call.
+A freestanding build reported AU2052 at the recovery call. An explicit
+768 KiB task stack held seven nested scopes on the local debug interpreter
+and 10,178 on a native build. Both ran exactly one exit per entered scope
+before reporting AU4005. The CLI regression counts each backend’s own
+scopes instead of pinning an implementation-dependent depth.
 
 Release comparisons and the compiler and runtime library suites are in
 progress. The benchmark in

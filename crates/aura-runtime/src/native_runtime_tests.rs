@@ -68,6 +68,38 @@ fn bool_value(value: bool) -> *mut OpaqueValue {
 }
 
 #[test]
+fn recovered_calls_move_owned_values_across_nested_boundaries() {
+    super::with_direct_task_runtime_scope(|| {
+        let argument = super::boxed_value(Value::string("owned argument"));
+        let count =
+            || super::with_direct_task_runtime_state(|state| state.owned_values().count(argument));
+        assert_eq!(count(), 1);
+        let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        let mut inner = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        // Both calls finish normally, so neither jump buffer is resumed.
+        unsafe {
+            assert_eq!(super::aura_direct_recover_begin(outer.as_mut_ptr(), 41), 41);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_begin(inner.as_mut_ptr(), 42), 42);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            super::aura_direct_recover_adopt(std::ptr::null_mut());
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            super::aura_direct_release_value(argument);
+        }
+        assert!(super::with_direct_task_runtime_state(|state| state
+            .owned_values()
+            .is_empty()));
+    });
+}
+
+#[test]
 fn adr0038_direct_returned_view_projection_handoff_is_exact_and_consuming() {
     unsafe {
         super::aura_direct_enter_call(1, 1, b"caller".as_ptr(), b"caller".len());
