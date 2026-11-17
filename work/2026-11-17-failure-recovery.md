@@ -23,7 +23,7 @@ survive a failed call.
 
 ## Verification
 
-The separate nested cleanup fixture produced the same 17 lines on MIR and
+The separate nested cleanup fixture produced the same 18 lines on MIR and
 the Linux native backend. It checks a direct call and the named-argument
 path, order of exits, the innermost source location and the recovery
 boundary's call chain. A second fixture cancels a task while its recovered
@@ -31,8 +31,9 @@ call is waiting. The next cancellation check inside `control.retry` exits
 the callee and caller in order. Both native paths and MIR produced the
 same six lines and returned `TaskResult.Cancelled`.
 
-All 24 checked listings in the edited pages passed. The compiler-backed
-editor test passed after failing on the missing completion. Z3 proved the
+All 24 checked listings in the edited pages and all 158 language-server
+tests passed. The compiler-backed test covers the recovery signature,
+argument names and fields on the inferred diagnostic. Z3 proved the
 valid recovered call and returned AU5101 for the invalid precondition.
 A freestanding build reported AU2052 at the recovery call. An explicit
 768 KiB task stack held seven nested scopes on the local debug interpreter
@@ -40,10 +41,23 @@ and 10,178 on a native build. Both ran exactly one exit per entered scope
 before reporting AU4005. The CLI regression counts each backend’s own
 scopes instead of pinning an implementation-dependent depth.
 
-Release comparisons and the compiler and runtime library suites are in
-progress. The benchmark in
-`benchmarks/failure_recovery/` times successful calls and traps separately
-and checks the outcomes in all three languages.
+The scalar and call-chain fixtures exercise an owning match, independent
+mutation, two wrappers reaching the same literal assertion and failures
+with invocation-specific messages. MIR and Linux native matched across all
+65 output lines in the five fixtures. A division by zero while building a
+message reported AU4004 on both backends.
+
+All 1,304 runtime library tests passed. The cached-file read test ran on
+Linux tmpfs, which supports its nonblocking read. The released Linux x86-64
+compiler from CI run 44197632386 built a hello-world executable of 1,144,456 bytes after unused native
+recovery code was removed, down 42,080 bytes with the same size gate.
+
+On the release compiler, ten million successful checked scalar calls
+and 100,000 caught failures produced medians of 6.40 ns and 308.14 ns per
+call with a literal message, or 2.64 ns and 399.13 ns with an interpolated
+message. The caught error retains its source and its own formatted
+message. The [benchmark](../benchmarks/failure_recovery/README.md)
+records comparisons against Rust and Python and the earlier compiler.
 
 A combined FFI fixture checks recovery on either side of a C callback.
 Both backends report AU4001 after C marks its cleanup complete. Recovery

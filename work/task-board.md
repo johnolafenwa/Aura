@@ -16,15 +16,18 @@ Last updated: 2026-11-17
 - Combined verification with failure recovery covers a mutex held by the caller
   and a second mutex abandoned by a recovered call. See the shared-state note.
 
-## Failure recovery (in progress)
+## Failure recovery
 
-- Bring the `control.recover` API and stack-bounded recursion to both
-  backends. See `2026-11-17-failure-recovery.md`.
-- The interpreter and native compiler agree on the task/cancellation
-  fixture. Six compiler fixtures cover incorrect inputs and moves.
+- Both backends implement `control.recover` and stack-bounded recursion.
+  Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
+- A release build measured 6.40 ns per successful scalar call and 308.14 ns
+  per caught literal assertion. With an interpolated message the medians
+  were 2.64 ns and 399.13 ns. Both variants beat Python and came within
+  twice Rust’s success time.
+- The [work note](2026-11-17-failure-recovery.md) records the verification
+  and example. [PR #302](https://github.com/johnolafenwa/Aura/pull/302)
+  targets the shared integration branch.
 - Recovery inside and outside a C text callback agrees on both backends.
-- Compiler and runtime tests, editor checks and release benchmarks are
-  underway. The shared branch collects this work.
 
 ## The `image` module (complete)
 

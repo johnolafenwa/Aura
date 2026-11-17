@@ -17,3 +17,29 @@ table construction, output and checksum validation are outside the timed
 loops. Rust uses `catch_unwind` with an empty panic hook. Python uses
 `try` and `except AssertionError`. Aura matches `control.recover`,
 including its structured error value.
+
+## Results
+
+Median nanoseconds per call on one Intel Xeon Platinum 8573C core, Linux
+x86-64, using the release compiler from CI run 44197632386 (feature
+commit `7a1147db`), Rust 1.95.0 and CPython 3.12.14. Each column uses
+five samples. The script checks the checksum of every run.
+
+| Language | Literal success | Literal failure | Formatted success | Formatted failure |
+| --- | ---: | ---: | ---: | ---: |
+| Aura | 6.40 | 308.14 | 2.64 | 399.13 |
+| Rust | 3.85 | 11246.96 | 1.49 | 9836.45 |
+| Python | 387.87 | 2115.95 | 198.37 | 1204.27 |
+
+The handoff revision (`67b0d91`) took 379.66 ns per success and
+12,008.88 ns per failure on the literal workload. After optimizing
+literal checks, the same run with a formatted message took 118.48 ns per
+success and 5,698.23 ns per failure (`c76ec361`). Returning a checked
+scalar result directly also handles the formatted message and preserves
+each failing input in its own diagnostic.
+
+These loops count errors without reading their fields. Reading or
+changing a diagnostic, recovering a stored callable, and cleaning up
+resources exercise other runtime paths. The conformance fixtures cover
+their behavior. These timing results apply to the checked scalar calls
+measured here.
