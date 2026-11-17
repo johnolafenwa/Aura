@@ -25,9 +25,13 @@ may move between tasks under the usual ownership rules.
 Native locals and calls carry the storage tag and active payload directly.
 Only the large member owns a list reference. A number stored inside
 another language union uses the ordinary nominal class at that boundary.
-Both execution engines use the same arbitrary-precision kernels. Native
-code directly calls the borrowed-limb addition entry and the scalar
-modular exponentiation entry.
+The native caller emits checked word operations for small integer
+addition, subtraction and multiplication. Small decimal addition and
+multiplication use a kernel that writes a normalized coefficient and
+exponent into the caller’s result slot. Overflow in either path falls
+through to the ordinary method. Both execution engines use the same
+arbitrary-precision kernels. The native backend also directly calls the
+borrowed-limb addition and scalar modular exponentiation entries.
 
 Addition, subtraction, and multiplication of decimals preserve the exact
 result. Precision and rounding belong to individual operations. Division
