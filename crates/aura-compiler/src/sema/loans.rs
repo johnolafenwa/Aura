@@ -3525,7 +3525,7 @@ impl<'a> FunctionChecker<'a> {
                     .collect::<BTreeSet<_>>();
                 let mut seen = BTreeSet::new();
                 let mut captures = Vec::new();
-                Self::collect_lambda_capture_uses(body, &bound, &mut seen, &mut captures);
+                self.collect_lambda_capture_uses(locals, body, &bound, &mut seen, &mut captures);
                 for (name, span) in captures {
                     push_place(PlacePath::root(name), span);
                 }

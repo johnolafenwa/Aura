@@ -33727,3 +33727,11 @@ fn callable_destination_keeps_every_packing_rule() {
         );
     }
 }
+
+#[test]
+fn calling_a_tuple_closure_borrows_its_place_while_evaluating_arguments() {
+    let source =
+        include_str!("../tests/fixtures/check-fail/callable_tuple_overlapping_argument.au");
+    let error = crate::check_source(source).expect_err("the argument replaces the held callable");
+    assert_eq!(error.code, "AU3002", "{error:?}");
+}
