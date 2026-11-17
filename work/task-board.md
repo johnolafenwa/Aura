@@ -22,6 +22,7 @@ Last updated: 2026-11-17
   backends. See `2026-11-17-failure-recovery.md`.
 - The interpreter and native compiler agree on the task/cancellation
   fixture. Six compiler fixtures cover incorrect inputs and moves.
+- Recovery inside and outside a C text callback agrees on both backends.
 - Compiler and runtime tests, editor checks and release benchmarks are
   underway. The shared branch collects this work.
 

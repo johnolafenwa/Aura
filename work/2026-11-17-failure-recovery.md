@@ -44,3 +44,8 @@ Release comparisons and the compiler and runtime library suites are in
 progress. The benchmark in
 `benchmarks/failure_recovery/` times successful calls and traps separately
 and checks the outcomes in all three languages.
+
+A combined FFI fixture checks recovery on either side of a C callback.
+Both backends report AU4001 after C marks its cleanup complete. Recovery
+inside a callback lets C continue and return its original value. A
+runtime regression covers pending callback state between recovered calls.

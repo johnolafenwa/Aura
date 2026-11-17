@@ -12099,6 +12099,10 @@ work and not the whole task.
 than 256 calls keeps its 128 innermost and 128 outermost calls, with one entry
 of the form `... N more calls ...` between them.
 
+If an Aura callback traps during a foreign call, C finishes the call
+before an enclosing `control.recover` returns the trap. A callback can
+also call `control.recover` itself, handle the trap, and return to C.
+
 ### Typing Rules
 
 The function and its arguments follow the rules of `TaskGroup.start`

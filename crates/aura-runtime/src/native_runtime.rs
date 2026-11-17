@@ -22178,7 +22178,9 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_end(
     let Some(mut state) = state else {
         return returned;
     };
-    let clean = state.owned_values().is_empty()
+    let clean = !state.foreign_callback_active
+        && state.foreign_callback_failure.is_none()
+        && state.owned_values().is_empty()
         && state.cleanup_stack.is_empty()
         && state.call_depth() == 0
         && state.returned_views.is_empty()

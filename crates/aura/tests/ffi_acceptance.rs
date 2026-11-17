@@ -2726,6 +2726,67 @@ fn glfw_reports_errors_and_opens_a_window_with_backend_parity() {
 }
 
 #[test]
+fn recovery_inside_and_outside_a_foreign_callback_preserves_c_cleanup() {
+    let package = TempPackage::new(true);
+    package.c_library(
+        "callback_recovery",
+        r#"
+#include <stdint.h>
+
+static int32_t cleaned = 0;
+
+int32_t fc_call(void (*visit)(const char *)) {
+    cleaned = 0;
+    visit("callback stopped");
+    cleaned = 1;
+    return 17;
+}
+
+int32_t fc_cleaned(void) { return cleaned; }
+"#,
+    );
+    package
+        .manifest("\n[ffi]\nlibraries = [\"callback_recovery\"]\nlibrary_paths = [\"native\"]\n");
+    let source = package.source(
+        r#"
+import control
+
+extern "C" def fc_call(visit: def(text: cstr) -> None) -> int32
+extern "C" def fc_cleaned() -> int32
+
+def reject(text: str) -> None:
+    assert text == "", text
+
+def foreign_failure() -> int32:
+    return fc_call(reject)
+
+def inner_recovery(text: str) -> None:
+    match control.recover(reject, text.clone()):
+        case Err(trap):
+            print(f"inner {trap.code}: {trap.message}")
+        case Ok(value):
+            print("unexpected inner success")
+
+def main() -> int32:
+    match control.recover(foreign_failure):
+        case Err(trap):
+            print(f"outer {trap.code}: {trap.message}")
+            print(f"C finished cleanup {fc_cleaned()}")
+        case Ok(value):
+            print(f"unexpected outer success {value}")
+    print(fc_call(inner_recovery))
+    print(f"C finished cleanup {fc_cleaned()}")
+    return 0
+"#,
+    );
+    let (interpreted, compiled) = run_on_both_backends(&package, &source);
+    for (backend, output) in [("mir", interpreted), ("direct", compiled)] {
+        assert_success(&output, backend);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "outer AU4001: callback stopped\nC finished cleanup 1\ninner AU4001: callback stopped\n17\nC finished cleanup 1\n", "{backend}");
+    }
+}
+
+#[test]
 fn a_failing_callback_fails_its_foreign_call_with_backend_parity() {
     let (package, source) = fixture_package(
         r#"

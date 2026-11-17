@@ -68,6 +68,33 @@ fn bool_value(value: bool) -> *mut OpaqueValue {
 }
 
 #[test]
+fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
+    super::with_direct_task_runtime_scope(|| {
+        let mut buffer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        // Each call returns normally so the jump buffer is never resumed.
+        unsafe {
+            for active in [false, true] {
+                super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
+                super::with_direct_task_runtime_state(|state| {
+                    if active {
+                        state.foreign_callback_active = true;
+                    } else {
+                        state.foreign_callback_failure = Some(Box::new("unfinished callback"));
+                    }
+                });
+                super::aura_direct_recover_end(std::ptr::null_mut());
+                super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
+                super::with_direct_task_runtime_state(|state| {
+                    assert!(!state.foreign_callback_active);
+                    assert!(state.foreign_callback_failure.is_none());
+                });
+                super::aura_direct_recover_end(std::ptr::null_mut());
+            }
+        }
+    });
+}
+
+#[test]
 fn recovered_calls_move_owned_values_across_nested_boundaries() {
     super::with_direct_task_runtime_scope(|| {
         let argument = super::boxed_value(Value::string("owned argument"));
