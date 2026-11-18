@@ -1323,7 +1323,7 @@ impl SetElements {
             }
             return result;
         };
-        if Arc::ptr_eq(left, right) {
+        if EntriesArc::ptr_eq(left, right) {
             return self.clone();
         }
 
@@ -1363,7 +1363,7 @@ impl SetElements {
             }
         }
         Self {
-            storage: Storage::Large(Arc::new(result)),
+            storage: Storage::Large(EntriesArc::new(result)),
         }
     }
 
