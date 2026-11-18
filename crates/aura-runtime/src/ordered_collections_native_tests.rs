@@ -206,3 +206,118 @@ fn ordered_receivers_reject_an_unformatted_trap_without_reading_its_fields() {
         "AU4001"
     );
 }
+
+#[test]
+fn rejected_native_instructions_preserve_the_live_deque() {
+    for entry in ["guarded", "open", "step"] {
+        let receiver = boxed_value(sequence("collections.Deque", false));
+        aura_direct_ordered_i64(receiver, I64Op::PushBack as i64, 41, 0);
+        let address = receiver as usize;
+        let error = run_lightweight_root_task(move || {
+            with_direct_task_runtime_scope(|| {
+                with_task_runtime_error_capture(|| {
+                    let receiver = address as *mut OpaqueValue;
+                    match entry {
+                        "guarded" => {
+                            aura_direct_ordered_i64(receiver, -1, 0, 0);
+                        }
+                        "open" => {
+                            // Map lookups cannot open a deque's packed sequence.
+                            aura_direct_ordered_local_words(receiver, I64Op::MapGet as i64);
+                        }
+                        _ => {
+                            let words =
+                                aura_direct_ordered_local_words(receiver, I64Op::PushBack as i64);
+                            assert!(!words.is_null());
+                            // SAFETY: the acquired address is exclusive and the receiver stays live.
+                            unsafe { aura_direct_ordered_local_step(words, -1, 0) };
+                        }
+                    }
+                    Ok(Value::Unit)
+                })
+            })
+        })
+        .expect_err("invalid instructions are reported to the task");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, "invalid native ordered collection receiver");
+        assert_eq!(
+            aura_direct_ordered_i64(receiver, I64Op::PopFront as i64, 0, 0),
+            41
+        );
+        // SAFETY: the completed task borrowed the receiver for the call.
+        unsafe { aura_direct_release_value(receiver) };
+    }
+}
+
+#[test]
+fn packed_deque_open_declines_a_typed_receiver_without_storage() {
+    use crate::native_runtime::class_layouts::{
+        register_class_layout, TypedFields, FIRST_CLASS_ACCESS,
+    };
+    use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
+
+    let name = "OrderedReceiverWithoutStore";
+    let mut env = LayoutEnv::default();
+    env.classes.insert(
+        name.into(),
+        ClassDefinition {
+            type_params: vec![],
+            fields: vec![("tag".into(), Type::named("int64"))],
+        },
+    );
+    let descriptor = encode_descriptor(&Type::named(name), &env).unwrap();
+    let layout = register_class_layout(&descriptor, FIRST_CLASS_ACCESS + 0x0D00_0000).unwrap();
+    let receiver = boxed_value(Value::Instance(InstanceValue {
+        class_name: name.into(),
+        fields: InstanceFields::Typed(TypedFields::new(layout)),
+    }));
+    assert!(aura_direct_ordered_local_words(receiver, I64Op::PushFront as i64).is_null());
+    // SAFETY: the declined borrow retained no reference to the receiver.
+    unsafe { aura_direct_release_value(receiver) };
+}
+
+#[test]
+fn native_empty_pop_keeps_its_registered_source_path() {
+    const CHILD: &str = "AURA_TEST_ORDERED_POP_SOURCE";
+    if std::env::var_os(CHILD).is_none() {
+        // Program source is registered once per process, as in a compiled program.
+        let thread = std::thread::current();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", thread.name().unwrap(), "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = "deque.au";
+    let source = b"def main():\n    pass\n";
+    aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
+    let receiver = boxed_value(sequence("collections.Deque", false));
+    let address = receiver as usize;
+    let error = run_lightweight_root_task(move || {
+        with_direct_task_runtime_scope(|| {
+            with_task_runtime_error_capture(|| {
+                let site = I64Op::pop_site(Span::new(2, 5));
+                aura_direct_ordered_i64(
+                    address as *mut OpaqueValue,
+                    I64Op::PopBack as i64,
+                    site,
+                    0,
+                );
+                Ok(Value::Unit)
+            })
+        })
+    })
+    .expect_err("an empty deque must trap");
+    // SAFETY: the task has finished borrowing this receiver.
+    unsafe { aura_direct_release_value(receiver) };
+    assert_eq!(error.code, "AU4003");
+    assert_eq!(error.call_frames[0].function, "collections::Deque.pop_back");
+    assert_eq!(error.call_frames[0].span.path.as_deref(), Some(path));
+    assert_eq!(error.call_frames[0].span.start, Span::new(2, 5));
+}
