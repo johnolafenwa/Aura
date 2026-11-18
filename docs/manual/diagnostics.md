@@ -905,12 +905,16 @@ Aura never clamps the request or silently substitutes the default.
 
 On the MIR backend, an Aura call traps with `AU4005` when it would leave less
 than the interpreter's headroom reserve on the running task's writable
-coroutine stack. The message reads "task stack exhausted while calling ...". It
-names the callee and the writable bytes that remain. The guard page below the
+coroutine stack. The guard page below the
 requested capacity does not count toward that headroom. The reserve is 128 KiB
-in an optimized interpreter build and 224 KiB in a debug-assertion build. The
-direct backend performs no headroom probe and has only its 256-call depth
-limit.
+in an optimized interpreter build and 224 KiB in a debug-assertion build.
+
+A built program traps with `AU4005` at the entry of a function that can call
+itself when less than 128 KiB of the running stack remains. The message on
+both backends reads "call stack exhausted while calling ..." and names the
+callee. No count limits nested calls.
+[Call Depth](/manual/failure-recovery#call-depth) specifies the rule and how
+long call chains are shortened in the diagnostic.
 
 **Runtime configuration.** `AU4006` reports invalid process runtime
 configuration. `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and

@@ -7987,7 +7987,7 @@ def main() -> int32:
         "direct backend recursion overflow should not terminate by signal"
     );
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        String::from_utf8_lossy(&run.stderr).contains("call stack exhausted"),
         "expected a direct-backend recursion diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -8989,6 +8989,38 @@ fn build_produces_a_runnable_binary() {
         String::from_utf8_lossy(&run.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "5.0\n");
+}
+
+#[test]
+fn a_known_local_callable_keeps_its_invoke_target_across_loop_iterations() {
+    let temp = TempDir::new("aura-known-local-callable");
+    let source = repo_root().join("benchmarks/closures/local_functions.au");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(temp.path().join("program"))
+        .arg(source)
+        .env("AURA_CACHE_DIR", temp.path().join("cache"))
+        .env("AURA_DUMP_LLVM_IR", temp.path().join("program"))
+        .output()
+        .expect("build the local function and lambda loops");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let units: Vec<_> = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ll"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect();
+    assert!(!units.is_empty(), "the build should emit optimized IR");
+    for line in units.iter().flat_map(|unit| unit.lines()) {
+        assert!(
+            !(line.contains("call i64 %") && line.contains(", i64 1, i64 ")),
+            "known one-argument callable still dispatches indirectly: {line}"
+        );
+    }
 }
 
 #[test]
@@ -10117,6 +10149,12 @@ fn run_and_direct_backends_discover_queues_nested_in_task_arguments() {
     );
 
     assert_run_and_direct_source_stdout("aura-nested-task-queue-parity", source, expected);
+}
+
+#[test]
+fn run_and_direct_backends_share_atomic_mutex_and_map_handles() {
+    let source = include_str!("../../../examples/concurrency/shared_state.au");
+    assert_run_and_direct_source_stdout("aura-shared-state", source, "400\n400\n81\n10\n11400\n");
 }
 
 #[test]
@@ -14329,7 +14367,8 @@ def main() -> int32:
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
-        stderr.contains("maximum call depth") && stderr.contains("while calling `recurse`"),
+        stderr.contains("error[AU4005]: call stack exhausted while calling `recurse`")
+            && stderr.contains("more calls ..."),
         "stderr should describe the Aura recursion limit, stderr was:\n{}",
         stderr
     );
@@ -14341,7 +14380,7 @@ def main() -> int32:
 }
 
 #[test]
-fn direct_backend_recursion_with_with_frames_matches_run_cleanup_count() {
+fn recursion_exhaustion_closes_every_entered_scope_on_both_backends() {
     let source = r#"
 class Resource:
     def close(mut self):
@@ -14349,62 +14388,76 @@ class Resource:
 
 def recurse(value: int32) -> int32:
     with resource = Resource():
+        print("OPEN_REC")
         return recurse(value + 1)
 
-def main() -> int32:
-    return recurse(0)
+def main():
+    with group = TaskGroup():
+        job = group.start_with_stack(786432, recurse, 0)
+        match job.result():
+            case TaskResult.Error(message):
+                print(message)
+            case _:
+                print("unexpected outcome")
 "#;
 
     let (temp, source_path) = write_temp_source("aura-recursion-with-cleanup-count", source);
-    let run = Command::new(aura_bin())
-        .arg("run")
+    let interpreter = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
         .arg(&source_path)
         .output()
-        .expect("failed to run aura run");
-    assert!(!run.status.success(), "aura run should fail on recursion");
-
-    let run_stdout = String::from_utf8_lossy(&run.stdout);
-    let run_close_count = run_stdout
-        .lines()
-        .filter(|line| *line == "CLOSE_REC")
-        .count();
-    assert_eq!(
-        run_close_count, 254,
-        "aura run should preserve the established cleanup count"
-    );
-
+        .expect("failed to run the interpreter");
     let output_path = temp.path().join("out");
     let build = Command::new(aura_bin())
-        .arg("build")
-        .arg("--backend")
-        .arg("direct")
-        .arg("-o")
+        .args(["build", "--backend", "direct", "-o"])
         .arg(&output_path)
         .arg(&source_path)
         .output()
-        .expect("failed to run aura build --backend direct");
+        .expect("failed to build the native program");
     assert!(
         build.status.success(),
-        "direct backend build should succeed, stderr was:\n{}",
+        "{}",
         String::from_utf8_lossy(&build.stderr)
     );
-
-    let direct = generated_binary(&output_path)
+    let native = generated_binary(&output_path)
         .output()
-        .expect("failed to run direct binary");
-    assert!(
-        !direct.status.success(),
-        "direct binary should fail on recursion"
-    );
-    let direct_stdout = String::from_utf8_lossy(&direct.stdout);
-    let direct_close_count = direct_stdout
-        .lines()
-        .filter(|line| *line == "CLOSE_REC")
-        .count();
-    assert_eq!(
-        direct_close_count, run_close_count,
-        "direct backend should unwind the same number of with frames as aura run"
-    );
+        .expect("run the native program");
+
+    // Stack space per call differs between the two backends. Each has to
+    // run one cleanup per entered scope before the task reports the trap.
+    for (backend, output) in [("interpreter", interpreter), ("native", native)] {
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let mut lines = stdout.lines().peekable();
+        let mut entered = 0;
+        while lines.next_if_eq(&"OPEN_REC").is_some() {
+            entered += 1;
+        }
+        assert!(
+            entered > 0,
+            "{backend}: expected at least one entered scope"
+        );
+        for depth in (0..entered).rev() {
+            assert_eq!(
+                lines.next(),
+                Some("CLOSE_REC"),
+                "{backend}: cleanup at depth {depth}"
+            );
+        }
+        assert_eq!(
+            lines.next(),
+            Some("call stack exhausted while calling `recurse`"),
+            "{backend}"
+        );
+        assert!(
+            lines.next().is_none(),
+            "{backend}: unexpected output after the trap"
+        );
+    }
 }
 
 #[test]
@@ -14432,7 +14485,7 @@ def main() -> int32:
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "close A\n");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        String::from_utf8_lossy(&run.stderr).contains("call stack exhausted"),
         "stderr should describe the Aura recursion limit, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );

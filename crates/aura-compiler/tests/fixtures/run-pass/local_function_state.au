@@ -1,0 +1,29 @@
+type Step = Callable[def(value: int64) -> int64]
+
+
+def choose_step(index: int64) -> Step:
+    steps: list[Step] = [lambda value: value + 3, lambda value: value * 2]
+    def call(value: int64) -> int64:
+        return steps[index](value)
+    return call
+
+
+def main() -> None:
+    labels = ["alpha", "beta"]
+    def label(depth: int64) -> str:
+        if depth == 0:
+            return labels[1].clone()
+        return label(depth - 1)
+    print(label(3))
+    mut total = 0
+    def add(amount: int64) -> int64:
+        total += amount
+        return total
+    print(add(3))
+    print(add(2))
+    print(total)
+    chosen = choose_step(1)
+    print(chosen(9))
+    def identity(identity: int64) -> int64:
+        return identity
+    print(identity(7))

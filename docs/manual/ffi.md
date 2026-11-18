@@ -414,14 +414,14 @@ def main() -> int32:
 | `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
 | `-> Name` | `struct name` | | the struct comes back by value |
 
-- **Fields.** A field is a scalar of the [Scalars](#scalars) table,
-  another `extern "C"` class, which is held inline as a nested struct, or
-  an [array](#array-fields) of either. Any other field type is `AU2002`.
+- **Fields.** A field is a [scalar](#scalars), a C struct or [union](#unions),
+  or a fixed-size [array](#array-fields) of values with those layouts.
+  Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** In Aura code the class is a `copy class`, unless
-  it holds an array field. Construct it with keyword arguments, read and
-  assign its fields, and keep it in a list or another class. It has no C
-  identity until it crosses.
+- **An ordinary value.** A struct is Copy when each field is a scalar or
+  another Copy struct. A struct that contains an array or a union moves on
+  assignment. Construct it with keyword arguments, read and assign its fields,
+  and keep it in a list or another class. It has no C identity until it crosses.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -446,8 +446,8 @@ the stack, as each convention requires.
 #### Array Fields
 
 A field of type `array[T, N]` is laid out as `T name[N]`: `N` elements in a
-row, with the alignment of one. `T` is a scalar, an `extern "C"` class, or
-another array. `N` is a whole number from 1 to 1048576, written in the
+row with the alignment of `T`. An element can be a scalar, a C struct or
+union, or another array. `N` is a whole number from 1 to 1048576, written in the
 source.
 
 ```aura fragment

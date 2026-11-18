@@ -1818,7 +1818,7 @@ pub(crate) use aura_core::types::optional_type;
 pub(crate) fn text_convenience_result_type(method: &str) -> Option<Type> {
     let text = || Type::named("str");
     match method {
-        "trim_start" | "trim_end" | "repeat" => Some(text()),
+        "trim_start" | "trim_end" | "repeat" | "char_at" => Some(text()),
         "split_once" | "rsplit_once" => Some(optional_type(Type::Tuple(vec![text(), text()]))),
         "lines" | "chars" | "split_whitespace" => {
             Some(Type::Named("list".to_string(), vec![text()]))

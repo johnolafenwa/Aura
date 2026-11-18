@@ -63,8 +63,9 @@ How to read the rows:
 - `encode_jpeg` and `resize` use all four cores in Aura. With
   `AURA_ARRAY_THREADS=1` the resize takes about 5.4 ms, and the JPEG
   encoder about 18 ms. Rust's `image` crate and Pillow run both on one
-  thread. Aura's and Pillow's JPEG files are the same length because both
-  use the standard tables and 4:2:0 colour sampling at quality 90.
+  thread. In this run Aura and Pillow wrote the same number of bytes.
+  Restart markers and rounding can change the file size even with the same
+  quality and colour sampling.
 - `to_floats` is the one row where Aura is behind Rust. The Rust side
   writes into a vector it sized in advance. Aura builds an `Array` value
   with its own storage.
@@ -72,3 +73,56 @@ How to read the rows:
 The checks agree between the sides where the work is exact. The decoders
 return the same samples for the PNG. For the JPEG and the resize the means
 agree, and single samples may differ by one step between libraries.
+
+## Integrated Linux release
+
+The dedicated x86-64 runner used the release compiler from `248ffb7e`.
+The table gives milliseconds per operation. Aura decoded JPEG faster
+than Pillow in this run. Pillow encoded it 1.0 ms faster than Aura.
+[Image benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634589)
+
+| Operation | Aura | Rust | Python |
+| --- | ---: | ---: | ---: |
+| Decode PNG | 12.3 | 13.0 | 28.0 |
+| Decode JPEG | 6.9 | 7.1 | 7.9 |
+| Encode PNG | 93.8 | 428.3 | 548.8 |
+| Encode PNG fast | 12.0 | 9.9 | 118.9 |
+| Encode JPEG | 6.0 | 41.3 | 5.0 |
+| Resize | 3.4 | 16.5 | 7.9 |
+| Convert to floats | 5.3 | 2.8 | 9.6 |
+
+## JPEG encoding on 2026-11-18
+
+The `encode_jpeg` input is the same 1600 by 1200 RGB image at quality 90.
+On the dedicated Linux runner the previous encoder took 5.9 ms in Aura,
+41.3 ms in the Rust reference, and 4.9 ms in Pillow.
+[Linux benchmark](https://github.com/johnolafenwa/Aura/actions/runs/44212212238/job/134502108424)
+
+In a separate single-core comparison using the same input, the two Rust
+encoders took 22.18 ms with `jpeg-encoder` 0.7.1 and 7.72 ms with
+`libjpeg-turbo-rs` 0.9.0. The figures are process CPU medians over nine
+rotating rounds of three encodes. The single-strip JPEG from
+`libjpeg-turbo-rs` and the one from Pillow were byte-for-byte identical
+on this input. With four strips, the restart markers change the byte
+stream while preserving the decoded pixels.
+
+On a four-CPU Xeon Platinum 8573C worker shared with compiler tests, the
+compiled Aura benchmark took 45.26 ms with the previous runtime and
+12.99 ms with the new one. Pillow 13.0.0 took 25.97 ms. Each program
+decoded the input once, warmed up the encoder, and timed eight encodes;
+the figures are the medians of nine rounds with the program order rotated.
+The four-strip Aura file was 390,941 bytes and Pillow wrote 390,828 bytes.
+
+On the dedicated Linux runner at `92535bb9`, encoding took 1.9 ms in Aura,
+41.2 ms in Rust and 4.9 ms in Pillow. The files were 390,941, 433,556 and
+390,828 bytes respectively. Decoding took 6.9, 6.9 and 7.2 ms and each
+program produced the same checksum of 120.
+[Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497825)
+
+On the Linux x86-64 package at `1a5c2eb0`, JPEG encoding took 2.6 ms in
+Aura, 61.8 ms in Rust and 6.7 ms in Pillow. Decoding took 10.2, 9.7 and
+9.5 ms respectively, with the same checksum. The four-CPU runs rotated the
+process order. A separate 64-block comparison reused the parsed JPEG header
+with identical pixels, but its estimated change on this photo ranged from
+−3.06% to +3.49% at 95% confidence. The release uses the original decoder.
+[Package and comparison](https://github.com/johnolafenwa/Aura/pull/309)

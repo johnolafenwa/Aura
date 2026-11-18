@@ -762,6 +762,9 @@ pub(crate) trait FunctionBackend {
     fn symbol_value(&mut self, ty: ScalarType, data: DataRef) -> Val;
 
     fn call(&mut self, callee: FuncRef, args: &[Val]) -> Call;
+    /// The signature `callee` was declared with, for a call through its
+    /// address.
+    fn signature_of(&mut self, callee: FuncRef) -> SigRef;
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call;
     fn jump(&mut self, block: Blk, args: &[Val]);
     fn brif(

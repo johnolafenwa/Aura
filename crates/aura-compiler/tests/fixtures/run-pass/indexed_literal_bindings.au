@@ -1,0 +1,30 @@
+def replace(text: mut str) -> None:
+    text = "cab"
+
+def immutable(index: int64) -> bool:
+    text = "abc"
+    return text[index] == "b"
+
+def mutable(index: int64) -> bool:
+    mut text = "abc"
+    replace(text)
+    return text[index] == "b"
+
+def conditional(change: bool, index: int64) -> bool:
+    mut text = "abc"
+    if change:
+        text = "cab"
+    return text[index] == "b"
+
+def unicode(index: int64) -> bool:
+    text = "a😀"
+    return text[index] == "😀"
+
+def main() -> None:
+    print(immutable(-2))
+    print(immutable(0))
+    print(mutable(1))
+    print(mutable(-1))
+    print(conditional(true, 1))
+    print(conditional(false, 1))
+    print(unicode(-1))

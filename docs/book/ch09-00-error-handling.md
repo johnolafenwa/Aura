@@ -10,12 +10,12 @@ raise, without reading every function it calls.
 
 Aura splits failures into two kinds and gives each its own mechanism. A failure
 that means the program itself is wrong, such as an index out of range or a
-broken invariant, is a *trap*: the current task stops at once, cleanup runs,
-and the diagnostic points at the line that failed. A failure that a working
+broken invariant, is a *trap*. Cleanup runs and the diagnostic points at the
+line that failed. A trap ends the task unless a caller used
+`control.recover` to contain it. A failure that a working
 program should expect, such as bad input or a missing file, is a value. The
 function returns a `Result`, its signature says so, and the compiler makes the
-caller decide what to do with it. There is no third route. Aura has no
-exceptions, no `raise`, and no way to catch a trap.
+caller decide what to do with it.
 
 In this chapter we'll write a small loader for a settings file made of `key =
 value` lines. The first version trusts its input and traps when the input is

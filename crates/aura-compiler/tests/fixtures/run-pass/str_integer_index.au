@@ -1,0 +1,23 @@
+def initials(words: list[str]) -> str:
+    mut out = ""
+    for word in words:
+        out += word[0]
+    return out
+
+
+def main() -> None:
+    text = "héllo, wörld"
+    print(text[0])
+    print(text[1])
+    print(text[-1])
+    print(text[-5])
+    print(text.char_at(4))
+    print(text.char_at(index=-12))
+    print(initials(["alpha", "beta", "γάμμα"]))
+    plain = "abcdef"
+    mut reversed = ""
+    for i in range(len(plain)):
+        reversed += plain[len(plain) - 1 - i]
+    print(reversed)
+    print(plain[2] == "c")
+    print("日本語"[1])

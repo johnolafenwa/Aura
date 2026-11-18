@@ -510,6 +510,27 @@ impl Expr {
         })
     }
 
+    /// The member call used by a read-only subscript on a library type.
+    pub(crate) fn indexed_member(object: &Expr, index: &Expr, method: &str, span: Span) -> Self {
+        Self {
+            kind: ExprKind::Call {
+                callee: Box::new(Self {
+                    kind: ExprKind::Member {
+                        object: Box::new(object.clone()),
+                        field: method.to_string(),
+                    },
+                    span,
+                }),
+                args: vec![Argument {
+                    name: None,
+                    value: index.clone(),
+                    span: index.span,
+                }],
+            },
+            span,
+        }
+    }
+
     /// Calls `visit` on each direct child expression, in source order.
     pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
         match &mut self.kind {
@@ -570,7 +591,13 @@ impl Expr {
                 visit(condition);
                 visit(else_expr);
             }
-            ExprKind::Lambda { body, .. } => visit(body),
+            ExprKind::Lambda { body, .. } => {
+                // Statement suites have a separate lexical scope. Passes that
+                // rewrite statements enter them through their block walkers.
+                if let crate::ast::ClosureBody::Expression(value) = body {
+                    visit(value);
+                }
+            }
             ExprKind::Call { callee, args } => {
                 visit(callee);
                 for arg in args {
@@ -1150,6 +1177,14 @@ pub struct LambdaParam {
     pub span: Span,
 }
 
+/// The expression of a lambda or the statement suite of a named local function.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum ClosureBody {
+    Expression(Box<Expr>),
+    Function { name: String, statements: Vec<Stmt> },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LambdaCapture {
     pub name: String,
@@ -1221,7 +1256,7 @@ pub enum ExprKind {
     Lambda {
         captures: Option<Vec<LambdaCapture>>,
         params: Vec<LambdaParam>,
-        body: Box<Expr>,
+        body: ClosureBody,
     },
     Call {
         callee: Box<Expr>,

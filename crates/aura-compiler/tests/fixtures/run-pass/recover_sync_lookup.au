@@ -1,0 +1,31 @@
+import control
+import sync
+
+def checked(value: int64) -> int64:
+    assert value >= 0, f"negative {value}"
+    return value
+
+def probe(table: sync.Map[int64, int64], key: int64) -> None:
+    match table.get(key):
+        case Lookup.Found(value):
+            table.set(key, 7)
+            match control.recover(checked, value):
+                case Ok(result):
+                    print(result)
+                case Err(trap):
+                    print(trap.message)
+        case Lookup.Missing:
+            print("missing")
+    match table.get(key):
+        case Lookup.Found(value):
+            print(value)
+        case Lookup.Missing:
+            print("still missing")
+
+def main() -> None:
+    table = sync.Map[int64, int64]()
+    table.set(2, -3)
+    table.set(3, 0)
+    probe(table, 1)
+    probe(table, 2)
+    probe(table, 3)

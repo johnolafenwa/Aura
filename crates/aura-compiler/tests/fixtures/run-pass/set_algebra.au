@@ -1,0 +1,50 @@
+def show(label: str, items: set[int64]) -> None:
+    mut parts: list[str] = []
+    for item in items:
+        parts.append(str(item))
+    print(label + ": " + ", ".join(parts))
+
+
+def evens(limit: int64) -> set[int64]:
+    mut out: set[int64] = set[int64]()
+    for i in range(0, limit, 2):
+        out.add(i)
+    return out
+
+
+class Basket:
+    fruit: set[str]
+
+
+def main() -> None:
+    a: set[int64] = {1, 2, 3, 4}
+    b: set[int64] = {3, 4, 5}
+    show("union", a.union(b))
+    show("intersection", a.intersection(other=b))
+    show("difference", a.difference(b))
+    show("symmetric_difference", a.symmetric_difference(b))
+    show("or", a | b)
+    show("and", a & b)
+    show("minus", a - b)
+    show("xor", a ^ b)
+    show("chain", (a | b) - evens(10) & a)
+    print(a.is_subset(b))
+    print((a & b).is_subset(a))
+    print(a.is_superset({1, 2}))
+    print(a.is_superset({1, 9}))
+    print(a.is_disjoint({9}))
+    print(a.is_disjoint(b))
+    print(a.is_disjoint(evens(1000)))
+    mut c: set[int64] = {10}
+    c.update(b)
+    c.update({10, 11})
+    c |= {12}
+    c -= {3}
+    show("update", c)
+    show("a", a)
+    print(len(a - a))
+    mut basket = Basket(fruit={"apple", "pear"})
+    basket.fruit.update({"fig", "pear"})
+    print(len(basket.fruit | {"plum"}))
+    print(basket.fruit.is_superset({"fig"}))
+    print(3 | 4)

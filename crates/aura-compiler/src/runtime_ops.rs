@@ -577,6 +577,7 @@ str_ops! {
         Count => (StringCount, StringTextMethod, &[7], 1),
         Repeat => (StringRepeat, StringTextMethod, &[8], 1),
         Chars => (StringChars, StringTextMethod, &[9], 2),
+        CharAt => (StringCharAt, StringTextMethod, &[10], 1),
     }
     private {
         // `text[a:b]`.
@@ -602,7 +603,7 @@ impl StrOp {
             Replace | ToLower | ToUpper | Trim | Join => text(),
             StripPrefix | StripSuffix => optional_type(text()),
             TrimStart | TrimEnd | SplitOnce | RsplitOnce | Lines | Chars | SplitWhitespace
-            | Find | Count | Repeat => {
+            | Find | Count | Repeat | CharAt => {
                 return text_convenience_result_type(self.builtin_member()?.name())
             }
             Slice | SliceStep => text(),
@@ -1706,6 +1707,14 @@ pub enum SetOp {
     AddInt64,
     Remove,
     Discard,
+    Union,
+    Intersection,
+    Difference,
+    SymmetricDifference,
+    IsSubset,
+    IsSuperset,
+    IsDisjoint,
+    Update,
     Clear,
     Reserve,
     /// `__index_option(index)`: a borrowed iteration read.
@@ -1724,6 +1733,14 @@ impl SetOp {
         SetOp::AddInt64,
         SetOp::Remove,
         SetOp::Discard,
+        SetOp::Union,
+        SetOp::Intersection,
+        SetOp::Difference,
+        SetOp::SymmetricDifference,
+        SetOp::IsSubset,
+        SetOp::IsSuperset,
+        SetOp::IsDisjoint,
+        SetOp::Update,
         SetOp::Clear,
         SetOp::Reserve,
         SetOp::IndexOption,
@@ -1739,6 +1756,14 @@ impl SetOp {
             SetOp::Add | SetOp::AddInt64 => M::SetInsert,
             SetOp::Remove => M::SetRemove,
             SetOp::Discard => M::SetDiscard,
+            SetOp::Union => M::SetUnion,
+            SetOp::Intersection => M::SetIntersection,
+            SetOp::Difference => M::SetDifference,
+            SetOp::SymmetricDifference => M::SetSymmetricDifference,
+            SetOp::IsSubset => M::SetIsSubset,
+            SetOp::IsSuperset => M::SetIsSuperset,
+            SetOp::IsDisjoint => M::SetIsDisjoint,
+            SetOp::Update => M::SetUpdate,
             SetOp::Clear => M::SetClear,
             SetOp::Reserve => M::SetReserve,
             SetOp::IndexOption | SetOp::TakeIndexOption => return None,
@@ -1754,6 +1779,14 @@ impl SetOp {
             M::SetInsert => SetOp::Add,
             M::SetRemove => SetOp::Remove,
             M::SetDiscard => SetOp::Discard,
+            M::SetUnion => SetOp::Union,
+            M::SetIntersection => SetOp::Intersection,
+            M::SetDifference => SetOp::Difference,
+            M::SetSymmetricDifference => SetOp::SymmetricDifference,
+            M::SetIsSubset => SetOp::IsSubset,
+            M::SetIsSuperset => SetOp::IsSuperset,
+            M::SetIsDisjoint => SetOp::IsDisjoint,
+            M::SetUpdate => SetOp::Update,
             M::SetClear => SetOp::Clear,
             M::SetReserve => SetOp::Reserve,
             _ => return None,
@@ -1809,6 +1842,14 @@ impl SetOp {
                 COLLECTION_SET_DISCARD_WORDS,
                 1,
             ),
+            SetOp::Union => helper_with(RuntimeFn::CollectionOperation, &[8], 1),
+            SetOp::Intersection => helper_with(RuntimeFn::CollectionOperation, &[9], 1),
+            SetOp::Difference => helper_with(RuntimeFn::CollectionOperation, &[10], 1),
+            SetOp::SymmetricDifference => helper_with(RuntimeFn::CollectionOperation, &[11], 1),
+            SetOp::IsSubset => helper_with(RuntimeFn::CollectionOperation, &[12], 1),
+            SetOp::IsSuperset => helper_with(RuntimeFn::CollectionOperation, &[13], 1),
+            SetOp::IsDisjoint => helper_with(RuntimeFn::CollectionOperation, &[14], 1),
+            SetOp::Update => helper_with(RuntimeFn::CollectionOperation, &[15], 1),
             // A clear passes neither a value nor an index.
             SetOp::Clear => helper_with(
                 RuntimeFn::CollectionOperation,
@@ -1827,11 +1868,23 @@ impl SetOp {
     fn result_type(self, element: Option<Type>) -> Type {
         match self {
             SetOp::Len => Type::named("int64"),
-            SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64 => Type::named("bool"),
+            SetOp::IsEmpty
+            | SetOp::Contains
+            | SetOp::ContainsInt64
+            | SetOp::IsSubset
+            | SetOp::IsSuperset
+            | SetOp::IsDisjoint => Type::named("bool"),
+            SetOp::Union | SetOp::Intersection | SetOp::Difference | SetOp::SymmetricDifference => {
+                Type::Named(
+                    "set".to_string(),
+                    vec![element.unwrap_or_else(|| Type::named("Unknown"))],
+                )
+            }
             SetOp::Add
             | SetOp::AddInt64
             | SetOp::Remove
             | SetOp::Discard
+            | SetOp::Update
             | SetOp::Clear
             | SetOp::Reserve => Type::Unit,
             SetOp::IndexOption | SetOp::TakeIndexOption => {
@@ -2550,6 +2603,8 @@ function_ops! {
         Ord => ("ord", StringOrd),
         Chr => ("chr", StringChr),
         MonotonicTimeMs => ("sys::monotonic_time_ms", MonotonicTimeMs),
+        BigAddWords => ("numbers::__aura_big_add_words", BigAddWords),
+        SmallPowMod => ("numbers::__aura_small_pow_mod", SmallPowMod),
         RegexIsMatch => ("regex::__aura_is_match", RegexScalar),
         RegexCount => ("regex::__aura_count", RegexScalar),
         RegexGroupIndex => ("regex::__aura_group_index", RegexScalar),

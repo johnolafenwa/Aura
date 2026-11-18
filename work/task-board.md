@@ -2,7 +2,73 @@
 
 Last updated: 2026-11-18
 
-## First-class closures (in progress)
+## Combined feature verification
+
+The Linux x86-64 package for `1a5c2eb0` passed 1,123 documentation examples
+and 162 language-server tests. The same source passed 2,212 compiler and
+1,474 runtime unit tests. Both Linux packages reproduced the final queued
+value after the producer exited and closed every entered scope before a
+stack-exhaustion diagnostic. [Combined checks and package results](https://github.com/johnolafenwa/Aura/pull/309)
+
+In the eight native benchmark suites, 38 of 40 workloads on this package
+ran faster than Python and within three times Rust. The C text callback took
+58.29 ns in Aura, 19.16 ns in Rust and 534.70 ns in Python. JPEG decoding
+took 10.2 ms in Aura, 9.7 ms in Rust and 9.5 ms in Pillow. The earlier
+hosted run met both targets on 39 of 40 and finished ahead of Python on all
+40. [Hosted benchmark run](https://github.com/johnolafenwa/Aura/actions/runs/44225018396)
+
+At `344b3b09`, all 2,213 compiler and 1,488 runtime unit tests passed
+locally. The hosted runs covered 97.48% of functions and 96.53% of lines
+on Ubuntu, and 97.46% of functions and 96.51% of lines on Apple Silicon.
+Linux ARM64 passed all 1,137 fixtures under both the interpreter and native
+backend. [Linux coverage](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705451158) · [Apple Silicon coverage](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705450675) · [ARM64 parity](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705451098)
+
+The Linux x86-64 package for that revision beat Python on 38 of the same
+40 workloads and took at most three times Rust on 39. It met both targets
+on 37 in the initial measurements. The C text callback took 66.16 ns in
+Aura, 20.25 ns in Rust and 582.37 ns in Python. JPEG decode took 8.7 ms,
+9.1 ms and 8.4 ms respectively. UTF-16 round-trip was the other miss in
+the initial five trials. A separate 15-trial repeat took 5.83 ms, 5.90 ms
+and 8.27 ms with the same checksum. [All measurements](https://github.com/johnolafenwa/Aura/pull/309)
+
+## Failure recovery
+
+- Both backends implement `control.recover` and stack-bounded recursion.
+  Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
+  Runtime tests also check portable native recovery, argument ownership,
+  nested cancellation and cleanup when its execution stack is abandoned.
+- A release build measured 1.35 ns per successful scalar call and 104.49 ns
+  per caught literal assertion. With an interpolated message the medians
+  were 5.53 ns and 781.29 ns. Both variants beat Python and came within
+  twice Rust’s success time.
+- The [work note](2026-11-17-failure-recovery.md) records the verification
+  and example. [PR #302](https://github.com/johnolafenwa/Aura/pull/302)
+  targets the shared integration branch.
+- Both backends preserve C cleanup and the recovered diagnostic when a C
+  text callback traps or recovers an inner failure.
+
+## Shared Mutable State (implemented)
+
+- The sync module provides `Mutex[T]`, `AtomicInt`, `AtomicBool` and
+  `Map[K, V]`. Checkpoint 31 and ADR-0102 cover the design.
+- Empty collection literals in generic class initializers keep their
+  specialized element type. The compiler regression covers both a local
+  class and an imported mutex. See `2026-11-17-shared-state.md`.
+- ADR-0103, the manual and Chapter 15 describe shared state. Runtime,
+  verifier, CLI and editor regressions cover lock release, handle transfer
+  and the multi-task example.
+- The integrated compiler at `92535bb9` finished ahead of Python and within
+  three times Rust on all six shared-state workloads. The uncontended lock
+  took 19.5 ns per update. The four-task mutex took 411 ms in Aura, 307 ms
+  in Rust and 546 ms in Python. Five alternating same-runner trials put
+  the earlier and current Aura mutex medians at 780 and 343 ms.
+  [Shared-state measurements](../benchmarks/shared_state/README.md)
+
+- The combined mutex and recovery fixture holds one lock in the caller,
+  recovers a failed call holding another, and checks that both can be used
+  again. See the shared-state work note.
+
+## First-class closures (implemented)
 
 - Target: John's 2026-11-16 approval of item 3 of the missing features
   list: a capturing closure needed an alias and a constructor call to be
@@ -22,8 +88,55 @@ Last updated: 2026-11-18
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
   The six release workloads took 0.15 to 2.74 times the Rust wall time.
   Measurements and checksums are in `benchmarks/closures/README.md`.
-- Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0116).
+- Local functions support statement bodies and shared recursion under
+  ADR-0116. See `2026-11-17-local-functions.md` for verification.
+  With the same runtime inputs, the named local function and typed lambda
+  took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
+  18,443 ms for Python.
+
+
+## Ordered collections (implemented)
+
+Five fixtures pass on MIR and the direct backend, including custom ordering,
+snapshot independence, B-tree splits and merges, and moving stored values
+that cannot be cloned. Editor completions and the manual examples pass.
+On the dedicated Linux runner all four int64 workloads beat Python. Aura
+took 2.80 times Rust for deque, 1.03 for heap, 2.02 for sorted map and
+1.87 for sorted set. Empty and drained collections produced matching
+diagnostics on both backends. All 14 required checks passed on the scoped
+revision `37062702`, including the full ARM64 backend comparison and
+both coverage gates. [Hosted checks](https://github.com/johnolafenwa/Aura/pull/308/checks)
+See `2026-11-17-ordered-collections.md`.
+
+## Collections, text, and numbers (three steps implemented)
+
+- Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
+  survey. The plan is
+  `architecture_docs/32-collections-text-numbers-design-checkpoint.md`,
+  and step 1 is in `2026-11-16-collections-text-numbers-step-1.md`.
+- Done: 27 `math` functions and `tau`, byte strings, `text[index]`,
+  `bytes.encode` and `bytes.decode`, and set algebra (ADR-0110 to 0112).
+- Verification: runtime and compiler library tests, fixtures recorded on
+  both backends, `check_doc_examples.py`, and the extension grammar tests.
+- Step 2 adds BigInt, Decimal and Complex (ADR-0113). All six measured
+  workloads in the 21-run feature comparison beat Python and took at most
+  1.46 times Rust’s time. In the first integrated Linux run, Fibonacci
+  took 6.779 ms in Aura and 6.455 ms in Python. The faster four-limb add
+  at `1033d521` took 4.841 ms in Aura, 3.890 ms in Rust and 6.452 ms in Python. Tests
+  and measurements are in [the numbers work note](2026-11-17-numbers.md).
+- Step 3 adds `Deque`, `Heap`, `SortedMap` and `SortedSet` under ADR-0117.
+  The [ordered collections work note](2026-11-17-ordered-collections.md)
+  records the fixtures, storage and four benchmark workloads.
+- The language server suite passes all 158 tests on Linux after updating
+  the set completion list and checking its result and argument types.
+- Four cross-language workloads cover integer math, ASCII indexing, set
+  union and UTF-16. The compiler and runtime use a scalar integer math entry.
+- The measured ASCII index and UTF-16 round trip now complete ahead of
+  Python and within the Rust target. The benchmark notes give the source
+  shape, check totals and measurements. Materialized union took 4.493 ms
+  in Aura, 16.457 ms in Rust and 5.699 ms in Python by elapsed time. A
+  process CPU run took 5.451 ms in Aura and 5.150 ms in Python. The
+  first write to a shared union cost 10.7% on the mutation workload.
 
 ## The `image` module (complete)
 
@@ -37,8 +150,11 @@ Last updated: 2026-11-18
   `benchmarks/image_codec` against Rust and Pillow.
   The documentation build and both dependency audits pass with the pinned glob matcher.
 - Left out: 16-bit samples, metadata, other formats, drawing.
+- JPEG encoding averages colour across 2 by 2 pixel groups. Both backends
+  decode a 20,000-pixel row or column within the caller’s pixel limit.
+  [Codec measurements](../benchmarks/image_codec/README.md)
 
-## raylib graphics and FFI v2 (in progress)
+## raylib graphics and FFI v2
 
 - Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
   additions that C graphics libraries need: array fields, unions, and
@@ -55,8 +171,9 @@ Last updated: 2026-11-18
   had run out. The binding now covers 587 of raylib 6.0's 600 functions.
 - Verification: unit tests in the runtime and compiler, and acceptance
   tests against a C fixture library and raylib on both backends on x86-64
-  Linux under Xvfb. Not run on macOS, Windows, or arm64 here; the AArch64
-  call sequence was checked by reading the generated assembly.
+  Linux under Xvfb. The hosted AArch64 raylib run passed all 25 FFI cases
+  and the interpreter/native fixture comparison. The FFI v2 calling
+  convention was also checked against an AArch64 GCC-built C callee under QEMU.
 - Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
   that runs an SDL event loop on both backends.
 - Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
@@ -66,9 +183,9 @@ Last updated: 2026-11-18
   reads, and UTF-8 callbacks. Native record arrays with a matching C
   layout copy directly into a call buffer. C-filled union lists used only
   for numeric member reads can reuse those bytes. A callback that only reads
-  its text inputs can hold the owned strings on its stack. The latest nine-run
-  CPU medians were 1.71×, 2.66×, 1.29× and 3.42× Rust’s respectively.
-  All four beat Python ctypes in a separate five-run comparison. The
+  its text inputs can hold the owned strings on its stack. In the dedicated
+  run at `92535bb9`, text callbacks took 29.98 ns in Aura, 9.62 ns in Rust
+  and 377.61 ns in Python. All four workloads finished ahead of ctypes. The
   expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
   GLFW and SQLite.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)

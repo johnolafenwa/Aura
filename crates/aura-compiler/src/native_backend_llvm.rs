@@ -1583,6 +1583,12 @@ impl FunctionBackend for LlvmFunction<'_> {
             .call_results(Op::Call(callee, args.to_vec()), &returns)
     }
 
+    fn signature_of(&mut self, callee: FuncRef) -> SigRef {
+        let function = self.ir.func_refs[callee.0 as usize];
+        let signature = self.module.functions[function.0 as usize].signature.clone();
+        self.import_signature(signature)
+    }
+
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call {
         let returns = self.ir.sig_refs[signature.0 as usize].returns.clone();
         self.ir
@@ -2403,6 +2409,18 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                                 .create_enum_attribute(Attribute::get_named_enum_kind_id(name), 0),
                         );
                     }
+                }
+                if decl.name == crate::runtime_abi::RECOVER_SET_JUMP {
+                    // The call returns a second time when a recovered
+                    // call traps, so its caller keeps every value it
+                    // needs afterwards where the first return left it.
+                    function.add_attribute(
+                        AttributeLoc::Function,
+                        context.create_enum_attribute(
+                            Attribute::get_named_enum_kind_id("returns_twice"),
+                            0,
+                        ),
+                    );
                 }
                 if decl.task_invariant {
                     for attribute in &task_invariant {

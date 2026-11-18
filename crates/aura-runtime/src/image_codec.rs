@@ -161,12 +161,7 @@ pub fn header(data: &[u8]) -> Result<Header, ImageError> {
             let info = reader.info();
             (info.width as usize, info.height as usize, channels)
         }
-        Format::Jpeg => {
-            let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
-            decoder.decode_headers().map_err(jpeg_decode_error)?;
-            let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
-            (width, height, jpeg_output_channels(&decoder))
-        }
+        Format::Jpeg => jpeg_header(data)?,
         Format::Pnm => {
             let header = PnmHeader::parse(data)?;
             (header.width, header.height, header.channels())
@@ -307,22 +302,30 @@ fn jpeg_decode_error(error: zune_jpeg::errors::DecodeErrors) -> ImageError {
     }
 }
 
-fn jpeg_output_channels(decoder: &zune_jpeg::JpegDecoder<ZCursor<&[u8]>>) -> usize {
-    match decoder.input_colorspace() {
-        Some(zune_jpeg::zune_core::colorspace::ColorSpace::Luma) => 1,
+fn jpeg_header(data: &[u8]) -> Result<(usize, usize, usize), ImageError> {
+    use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+
+    // A JPEG side occupies 16 bits. Aura checks the combined pixel count
+    // before it allocates the decoded frame.
+    let options = DecoderOptions::default()
+        .set_max_width(usize::from(u16::MAX))
+        .set_max_height(usize::from(u16::MAX));
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    decoder.decode_headers().map_err(jpeg_decode_error)?;
+    let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
+    let channels = match decoder.input_colorspace() {
+        Some(ColorSpace::Luma) => 1,
         _ => 3,
-    }
+    };
+    Ok((width, height, channels))
 }
 
 fn decode_jpeg(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     use zune_jpeg::zune_core::colorspace::ColorSpace;
     use zune_jpeg::zune_core::options::DecoderOptions;
 
-    let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
-    decoder.decode_headers().map_err(jpeg_decode_error)?;
-    let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
+    let (width, height, channels) = jpeg_header(data)?;
     let pixels = checked_pixels(width, height, limit_pixels)?;
-    let channels = jpeg_output_channels(&decoder);
     let colorspace = if channels == 1 {
         ColorSpace::Luma
     } else {
@@ -383,30 +386,30 @@ fn encode_jpeg_on(
     quality: u8,
     threads: usize,
 ) -> Result<Vec<u8>, ImageError> {
+    use libjpeg_turbo_rs::{PixelFormat, Subsampling};
+
     let (jpeg_width, jpeg_height) = match (u16::try_from(width), u16::try_from(height)) {
         (Ok(width), Ok(height)) => (width, height),
         _ => return Err(unsupported("JPEG holds at most 65535 pixels a side")),
     };
-    let color =
+    let (color, sampling) =
         match channels {
-            1 => jpeg_encoder::ColorType::Luma,
-            3 => jpeg_encoder::ColorType::Rgb,
+            1 => (PixelFormat::Grayscale, Subsampling::S444),
+            3 => (PixelFormat::Rgb, Subsampling::S420),
             _ => return Err(unsupported(
                 "JPEG has no alpha channel: convert the image with `to_rgb()` or `to_gray()` first",
             )),
         };
     let encode = |rows: &[u8], height: u16| {
-        let mut output = Vec::with_capacity(rows.len() / 6 + 1024);
-        let mut encoder = jpeg_encoder::Encoder::new(&mut output, quality);
-        // What libjpeg and Pillow do at these qualities: colour at half
-        // resolution both ways.
-        if channels == 3 {
-            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
-        }
-        encoder
-            .encode(rows, jpeg_width, height, color)
-            .map(|()| output)
-            .map_err(jpeg_failed)
+        libjpeg_turbo_rs::compress(
+            rows,
+            usize::from(jpeg_width),
+            usize::from(height),
+            color,
+            quality,
+            sampling,
+        )
+        .map_err(|error| invalid(format!("JPEG encoding failed: {error}")))
     };
 
     // A strip is a whole number of block rows, so its data is exactly what
@@ -449,10 +452,6 @@ fn encode_jpeg_on(
 
 fn jpeg_without_frame() -> ImageError {
     invalid("the JPEG has no frame header")
-}
-
-fn jpeg_failed(error: jpeg_encoder::EncodingError) -> ImageError {
-    invalid(format!("JPEG encoding failed: {error}"))
 }
 
 fn jpeg_strip_failed() -> ImageError {

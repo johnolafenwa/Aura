@@ -1,0 +1,5 @@
+error[AU2001]: unknown type `collections.__Store`
+ --> crates/aura-compiler/tests/fixtures/check-fail/ordered_storage_type_is_private.au:4:20
+  |
+4 | def consume(value: collections.__Store):
+  |                    ^

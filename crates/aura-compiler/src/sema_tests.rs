@@ -4009,15 +4009,73 @@ def classify(value: PairState):
 }
 
 #[test]
-fn d4_string_indexing_remains_rejected() {
-    let error = crate::check_source(
-        "def index_text() -> str:\n    text = 'Aura'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
+fn string_indexing_reads_one_character_and_rejects_writes_and_other_indices() {
+    crate::check_source(
+        "def index_text() -> str:\n    text = 'Aura'\n    return text[0] + text.char_at(-1)\n\ndef main() -> int32:\n    return 0\n",
     )
-    .expect_err("Aura does not define integer str indexing");
-    assert_eq!(
-        error.message,
-        "cannot index non-Array, list, or dict value `str`"
-    );
+    .expect("a str index reads one character");
+    let write =
+        crate::check_source("def main() -> None:\n    mut text = 'Aura'\n    text[0] = 'x'\n")
+            .expect_err("a str index is not a place");
+    assert_eq!(write.code.as_str(), "AU2003");
+    assert_eq!(write.message, "a `str` cannot be changed through an index");
+    let key = crate::check_source("def main() -> None:\n    text = 'Aura'\n    print(text['a'])\n")
+        .expect_err("a str index is an integer");
+    assert!(key
+        .message
+        .starts_with("str indices must have type `int64`"));
+    let float = crate::check_source(
+        "def main() -> None:\n    text = 'Aura'\n    print(text.char_at(1.5))\n",
+    )
+    .expect_err("char_at takes an integer");
+    assert_eq!(float.code.as_str(), "AU2002");
+}
+
+#[test]
+fn set_algebra_checks_operand_types_mutability_and_result_types() {
+    let source = |body: &str| {
+        format!("def main() -> None:\n    a: set[int64] = {{1, 2}}\n    names: set[str] = {{'x'}}\n    mut c: set[int64] = {{3}}\n{body}")
+    };
+    crate::check_source(&source(
+        "    d: set[int64] = (a | c) & a.union(c) - a.difference(c) ^ a.symmetric_difference(c)\n    e: bool = a.is_subset(d) or a.is_superset(d) or a.is_disjoint(other=d)\n    c.update(d)\n    c |= a\n    print(e)\n",
+    ))
+    .expect("set algebra should type-check");
+    for (body, code, message) in [
+        (
+            "    print(len(a.union(names)))\n",
+            "AU2002",
+            "`union` expects `set[int64]`, found `set[str]`",
+        ),
+        (
+            "    print(a.is_subset([1]))\n",
+            "AU2002",
+            "`is_subset` expects `set[int64]`, found `list[int64]`",
+        ),
+        (
+            "    print(len(a | names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    print(len(a - names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    a.update(c)\n",
+            "AU3003",
+            "method `update` requires a mutable receiver",
+        ),
+    ] {
+        let error = crate::check_source(&source(body)).expect_err(body);
+        assert_eq!(error.code.as_str(), code, "{body}");
+        assert_eq!(error.message, message, "{body}");
+    }
+    let missing =
+        crate::check_source(&source("    print(a.union())\n")).expect_err("union needs a set");
+    assert!(!missing.code.is_empty());
+    let shift = crate::check_source(&source("    print(len(a << c))\n")).expect_err("no set shift");
+    assert_eq!(shift.code.as_str(), "AU2003");
 }
 
 #[test]
@@ -8010,6 +8068,7 @@ fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> C
     ClassInfo {
         module_name: "<test>".to_string(),
         is_builtin: false,
+        is_builtin_source: false,
         decl: class_decl(name, copy, decl_fields),
         type_param_bounds: BTreeMap::new(),
         fields,
@@ -8151,6 +8210,7 @@ fn local_binding(
             .collect(),
         frozen_places: BTreeMap::new(),
         shared_match_places: BTreeMap::new(),
+        local_function: None,
         captured: false,
         view: None,
         closure_loans: Vec::new(),
@@ -9493,7 +9553,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Index {
-                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                object: Box::new(expr(ExprKind::Bool(true))),
                 index: Box::new(expr(ExprKind::Int(0))),
             }),
             &mut locals,
@@ -9707,7 +9767,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("non-indexable assignment targets should fail")
         .message
-        .contains("cannot index non-Array, list, or dict value"));
+        .contains("cannot be changed through an index"));
 
     let mut locals = HashMap::from([(
         "nums".to_string(),
@@ -14437,6 +14497,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14472,6 +14533,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14504,6 +14566,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -19694,6 +19757,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ]),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19741,6 +19805,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19766,6 +19831,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19918,6 +19984,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -25468,7 +25535,7 @@ def main():
 }
 
 #[test]
-fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unavailable() {
+fn owned_slices_reject_unsupported_bases_and_scalars_have_no_index() {
     for source in [
         "def main():\n    value: int32 = 1\n    print(value[:])\n",
         "def main():\n    values = {1, 2}\n    print(values[:])\n",
@@ -25486,8 +25553,10 @@ fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unav
         );
     }
 
-    let indexed = crate::check_source("def main():\n    print(\"text\"[0])\n")
-        .expect_err("str scalar indexing remains unavailable");
+    crate::check_source("def main():\n    print(\"text\"[0])\n")
+        .expect("a str index reads one character");
+    let indexed =
+        crate::check_source("def main():\n    print(true[0])\n").expect_err("a bool has no index");
     assert!(indexed.message.contains("cannot index"));
 }
 
@@ -34049,9 +34118,95 @@ fn callable_destination_keeps_every_packing_rule() {
 }
 
 #[test]
+fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
+    let cases = [
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_branch_packing.au"),
+            "AU2015",
+            "a call kind may only weaken",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_mutable_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_binding_reassign.au"),
+            "AU3003",
+            "immutable binding",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_capture_escape.au"),
+            "AU3010",
+            "live shared loan",
+        ),
+        (
+            r#"def main() -> None:
+    for n in range(3):
+        def stop() -> None:
+            break
+        stop()
+"#,
+            "AU2999",
+            "only allowed inside a loop",
+        ),
+        (
+            r#"def main() -> None:
+    def compute(x: int64) -> int64:
+        if x == 0:
+            return x
+"#,
+            "AU2002",
+            "must return `int64` on every path",
+        ),
+        (
+            r#"def main() -> None:
+    def identity(value: int64) -> int64:
+        next = identity
+        return value
+"#,
+            "AU2005",
+            "target of a direct call",
+        ),
+        (
+            r#"def main() -> None:
+    def one(value: int64) -> int64:
+        return twice(value)
+    def twice(value: int64) -> int64:
+        return value * 2
+"#,
+            "AU2001",
+            "unknown function `twice`",
+        ),
+    ];
+    for (source, code, message) in cases {
+        let error = crate::check_source(source).expect_err("invalid local function usage");
+        assert_eq!(error.code, code, "{error:?}");
+        assert!(format!("{error:?}").contains(message), "{error:?}");
+    }
+}
+
+#[test]
 fn calling_a_tuple_closure_borrows_its_place_while_evaluating_arguments() {
     let source =
         include_str!("../tests/fixtures/check-fail/callable_tuple_overlapping_argument.au");
     let error = crate::check_source(source).expect_err("the argument replaces the held callable");
     assert_eq!(error.code, "AU3002", "{error:?}");
+}
+
+#[test]
+fn numbers_require_explicit_conversion_for_arithmetic() {
+    let source =
+        include_str!("../tests/fixtures/check-fail/bigint_requires_explicit_conversion.au");
+    let error = crate::check_source(source).expect_err("mixed integer arithmetic must be explicit");
+    assert_eq!(error.code.as_str(), "AU2999");
+    assert!(
+        error.message.contains("BigInt") && error.message.contains("int64"),
+        "{error:?}"
+    );
 }

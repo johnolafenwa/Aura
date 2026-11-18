@@ -65,3 +65,40 @@ failed the audit. The lockfile pins the patched `@ryotsu/picomatch`
 4.0.7-a fork until upstream ships a fixed release. Both npm and Cargo
 audits pass locally. All 11 documentation-site tests pass, and
 VitePress builds and renders the site with the pinned package.
+
+On November 18, the fork's npm tarball matched the lockfile SHA-512 and
+all ten files at the publisher's Git commit. Sigstore verified the signed
+tarball digest and the tagged GitHub Actions workflow that published it.
+The fork adds no dependencies or install hooks. Its parser also changes
+how brackets, newlines and some wildcards match. The publisher's upstream
+proposal closed without merging. The advisory still lists every official
+release through 4.0.7 and gives no fixed release. Revisit the override
+when upstream publishes a fix.
+[Fork source](https://github.com/ryotsu-kankichi/secured-picomatch/tree/3ab5a7627d480259e3d9ca67fbc14c125d374f0e) · [Upstream proposal](https://github.com/micromatch/picomatch/pull/240) · [Advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+
+## Integration on 2026-11-18
+
+PR #301 passed the platform and coverage gates and landed on
+`codex/aura-integration` at `0008bf2d`. The raylib picture example
+produced byte-identical 320×200 PNGs through the interpreter and native
+backend. The image module read the expected sun and grass colors from
+both files. On a dedicated Linux runner the integrated release beat
+Python in six of seven workloads. Encoding JPEG took 6.0 ms in Aura,
+41.3 ms in Rust and 5.0 ms in Pillow.
+[Image benchmark results](../benchmarks/image_codec/README.md#integrated-linux-release)
+
+## JPEG encoding on 2026-11-18
+
+The pure Rust `libjpeg-turbo-rs` encoder averages colour across each 2 by 2
+group of RGB pixels. On a red, green, blue, and white checkerboard, the
+previous top-left filter produced a red cast, with a maximum channel
+difference of 254. The regression checks that the decoded cells are neutral.
+The strip layout, quality range, grayscale support, and image-size limits
+are covered by the codec tests. Timings and sample conditions are in
+`benchmarks/image_codec/README.md`.
+
+Both JPEG header readers now accept legal long, narrow images. A 20,000 by
+1 file previously hit the underlying decoder's 16,384-pixel side limit
+before Aura considered its 20,000-pixel area. The regression checks both
+orientations on the interpreter and native backend, and distinguishes the
+successful decode from a caller's 19,999-pixel limit.

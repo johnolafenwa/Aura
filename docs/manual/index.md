@@ -102,6 +102,7 @@ maintained surface by area and states how it may change.
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
   integers at a raw address.
+- [Numbers Module](/manual/numbers) covers arbitrary-size integers, exact decimal arithmetic, and complex numbers.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -127,6 +128,7 @@ maintained surface by area and states how it may change.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,
   cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
   `wait_all`, and scheduler-aware waits.
+- [Sync Module](/manual/sync) covers mutexes, atomic counters and flags, and shared maps.
 - [I/O Module](/manual/io): standard input and output, and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, line
   and chunk reads, scoped file cleanup, and byte and text limits.

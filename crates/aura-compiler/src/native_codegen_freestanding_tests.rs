@@ -380,6 +380,17 @@ export "C" def run(a: int64) -> int64:
             &["starts a task", "uses a `with` block"],
         ),
         (
+            r#"
+import control
+def work(a: int64) -> int64:
+    return a
+export "C" def run(a: int64) -> int64:
+    _ = control.recover(work, a)
+    return a
+"#,
+            &["calls `control.recover`"],
+        ),
+        (
             "import sys\nexport \"C\" def run(a: int64) -> int64:\n    return len(sys.args()) + a\n",
             &["calls `sys::args`"],
         ),

@@ -373,7 +373,17 @@ pub(super) fn last_name_reference_span_in_expr(
         ExprKind::Lambda { params, body, .. } if params.iter().any(|param| param.name == name) => {
             None
         }
-        ExprKind::Lambda { body, .. } => last_name_reference_span_in_expr(body, name),
+        ExprKind::Lambda { body, .. } => match body {
+            crate::ast::ClosureBody::Expression(value) => {
+                last_name_reference_span_in_expr(value, name)
+            }
+            crate::ast::ClosureBody::Function {
+                name: own_name,
+                statements,
+            } => (own_name != name)
+                .then(|| last_name_reference_span_in_block(statements, name))
+                .flatten(),
+        },
         ExprKind::Int(_)
         | ExprKind::Float(_)
         | ExprKind::Bool(_)
@@ -2700,6 +2710,9 @@ impl<'a> FunctionChecker<'a> {
     }
 
     pub(super) fn current_view_return(&self) -> Option<&crate::ast::ViewReturn> {
+        if self.local_return_moves.is_some() {
+            return None;
+        }
         match &self.closure_owner {
             ClosureOwner::Function(name) => self
                 .functions
@@ -3525,7 +3538,7 @@ impl<'a> FunctionChecker<'a> {
                     .collect::<BTreeSet<_>>();
                 let mut seen = BTreeSet::new();
                 let mut captures = Vec::new();
-                self.collect_lambda_capture_uses(locals, body, &bound, &mut seen, &mut captures);
+                self.collect_closure_body_uses(locals, body, &bound, &mut seen, &mut captures);
                 for (name, span) in captures {
                     push_place(PlacePath::root(name), span);
                 }

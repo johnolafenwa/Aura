@@ -1,0 +1,5 @@
+error[AU2004]: `control.recover` takes the function it runs as its first positional argument
+ --> crates/aura-compiler/tests/fixtures/check-fail/control_recover_named_target.au:7:25
+  |
+7 |     _ = control.recover(function=identity, value=3)
+  |                         ^

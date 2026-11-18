@@ -2807,7 +2807,35 @@ test("compiler bridge exposes the complete math module function surface", async 
     "    print(math.sin(0.0))",
     "    print(math.cos(0.0))",
     "    print(math.tan(0.0))",
+    "    print(math.sqrt(1.0))",
+    "    print(math.cbrt(1.0))",
+    "    print(math.asin(1.0))",
+    "    print(math.acos(1.0))",
+    "    print(math.atan(1.0))",
+    "    print(math.sinh(1.0))",
+    "    print(math.cosh(1.0))",
+    "    print(math.tanh(1.0))",
+    "    print(math.asinh(1.0))",
+    "    print(math.acosh(1.0))",
+    "    print(math.atanh(1.0))",
+    "    print(math.expm1(1.0))",
+    "    print(math.log1p(1.0))",
+    "    print(math.degrees(1.0))",
+    "    print(math.radians(1.0))",
+    "    print(math.atan2(1.0, 1.0))",
+    "    print(math.hypot(3.0, 4.0))",
+    "    print(math.copysign(1.0, -1.0))",
+    "    print(math.is_nan(1.0))",
+    "    print(math.is_inf(1.0))",
+    "    print(math.is_finite(1.0))",
+    "    print(math.gcd(4, 6))",
+    "    print(math.lcm(4, 6))",
+    "    print(math.isqrt(9))",
+    "    print(math.factorial(5))",
+    "    print(math.comb(5, 2))",
+    "    print(math.perm(5, 2))",
     "    print(math.pi)",
+    "    print(math.tau)",
     "    print(math.e)",
     "    print(math.inf)",
     "    print(math.nan)",
@@ -2826,13 +2854,41 @@ test("compiler bridge exposes the complete math module function surface", async 
     ["log10", "log10(value: float64) -> float64"],
     ["sin", "sin(value: float64) -> float64"],
     ["cos", "cos(value: float64) -> float64"],
-    ["tan", "tan(value: float64) -> float64"]
+    ["tan", "tan(value: float64) -> float64"],
+    ["sqrt", "sqrt(value: float64) -> float64"],
+    ["cbrt", "cbrt(value: float64) -> float64"],
+    ["asin", "asin(value: float64) -> float64"],
+    ["acos", "acos(value: float64) -> float64"],
+    ["atan", "atan(value: float64) -> float64"],
+    ["sinh", "sinh(value: float64) -> float64"],
+    ["cosh", "cosh(value: float64) -> float64"],
+    ["tanh", "tanh(value: float64) -> float64"],
+    ["asinh", "asinh(value: float64) -> float64"],
+    ["acosh", "acosh(value: float64) -> float64"],
+    ["atanh", "atanh(value: float64) -> float64"],
+    ["expm1", "expm1(value: float64) -> float64"],
+    ["log1p", "log1p(value: float64) -> float64"],
+    ["degrees", "degrees(value: float64) -> float64"],
+    ["radians", "radians(value: float64) -> float64"],
+    ["atan2", "atan2(y: float64, x: float64) -> float64"],
+    ["hypot", "hypot(x: float64, y: float64) -> float64"],
+    ["copysign", "copysign(magnitude: float64, sign: float64) -> float64"],
+    ["is_nan", "is_nan(value: float64) -> bool"],
+    ["is_inf", "is_inf(value: float64) -> bool"],
+    ["is_finite", "is_finite(value: float64) -> bool"],
+    ["gcd", "gcd(left: int64, right: int64) -> int64"],
+    ["lcm", "lcm(left: int64, right: int64) -> int64"],
+    ["isqrt", "isqrt(value: int64) -> int64"],
+    ["factorial", "factorial(value: int64) -> int64"],
+    ["comb", "comb(count: int64, chosen: int64) -> int64"],
+    ["perm", "perm(count: int64, chosen: int64) -> int64"]
   ]);
   const constants = new Map([
     ["pi", "float64"],
     ["e", "float64"],
     ["inf", "float64"],
-    ["nan", "float64"]
+    ["nan", "float64"],
+    ["tau", "float64"]
   ]);
 
   try {
@@ -4347,7 +4403,11 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     );
     assert.deepEqual(
       [...setNames].sort(),
-      ["add", "clear", "copy", "discard", "is_empty", "len", "remove", "reserve"]
+      [
+        "add", "clear", "copy", "difference", "discard", "intersection",
+        "is_disjoint", "is_empty", "is_subset", "is_superset", "len",
+        "remove", "reserve", "symmetric_difference", "union", "update"
+      ]
     );
     const setLengthCompletions = setCompletions.filter((item) => item.name === "len");
     assert.equal(
@@ -4367,6 +4427,9 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     assert.equal(setDetails.get("discard"), "discard(value: T) -> None");
     assert.equal(setDetails.get("copy"), "copy() -> set[T]");
     assert.equal(setDetails.get("reserve"), "reserve(additional: int64) -> None");
+    assert.equal(setDetails.get("union"), "union(other: set[T]) -> set[T]");
+    assert.equal(setDetails.get("is_subset"), "is_subset(other: set[T]) -> bool");
+    assert.equal(setDetails.get("update"), "update(other: own set[T]) -> None");
 
     const entriesOccurrence = analysis.occurrences.find(
       (occurrence) =>
@@ -4647,6 +4710,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
       "control",
       "gzip",
       "image",
+      "numbers",
       "regex",
       "time",
       "simd",
@@ -4690,6 +4754,11 @@ test("compiler bridge exposes control-plane module completions", async () => {
       assert.ok(simdNames.has(expected), `simd completion should include ${expected}`);
     }
 
+    const numberNames = await completionNames("numbers");
+    for (const expected of ["BigInt", "Decimal", "Complex", "Rounding", "factorial"]) {
+      assert.ok(numberNames.has(expected), `numbers completion should include ${expected}`);
+    }
+
     const regexNames = await completionNames("regex");
     for (const expected of ["compile", "escape", "Regex", "Match", "Captures", "Error"]) {
       assert.ok(regexNames.has(expected), `regex completion should include ${expected}`);
@@ -4698,6 +4767,40 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const timeNames = await completionNames("time");
     for (const expected of ["now", "utc", "parse_rfc3339", "monotonic", "DateTime", "Error"]) {
       assert.ok(timeNames.has(expected), `time completion should include ${expected}`);
+    }
+
+    const controlItems = await completions("control");
+    const recoverDetail = "recover(function, arguments...) -> Result[T, control.Trap]";
+    assert.equal(controlItems.find((item) => item.name === "recover")?.detail, recoverDetail);
+    assert.ok(controlItems.some((item) => item.name === "Trap"));
+    assert.ok(!controlItems.some((item) => item.name === "__aura_caught"));
+
+    const recoverySource = [
+      "import control as ctl",
+      "def checked(value: int64) -> int64:",
+      "    return value",
+      "def main():",
+      "    result = ctl.recover(checked, 1)",
+      "    match result:",
+      "        case Ok(value):",
+      "            print(value)",
+      "        case Err(trap):",
+      "            print(trap.describe())"
+    ].join("\n");
+    const recovery = await analyzeWithCompiler(mainUri, recoverySource);
+    assert.deepEqual(recovery.diagnostics, []);
+    const at = (line, word) => compilerHoverAtPosition(
+      recovery, line, recoverySource.split("\n")[line].indexOf(word)
+    )?.value;
+    assert.ok(at(4, "recover")?.includes(recoverDetail));
+    assert.ok(at(5, "result")?.includes("Result[int64, control.Trap]"));
+    assert.ok(at(9, "describe")?.includes("describe("));
+    const fieldSource = recoverySource.replace("trap.describe()", "trap.");
+    const fields = await completeWithCompiler(
+      mainUri, fieldSource, 9, fieldSource.split("\n")[9].indexOf("trap.") + 5, "."
+    );
+    for (const name of ["code", "message", "path", "line", "column", "frames", "describe"]) {
+      assert.ok(fields.some((field) => field.name === name), `expected Trap member ${name}`);
     }
 
     const retryCompletion = (await completions("control")).find(
@@ -4739,6 +4842,62 @@ test("compiler bridge exposes control-plane module completions", async () => {
     );
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("numbers methods expose their argument types in completion and hover", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-numbers-"));
+  try {
+    const uri = `file://${path.join(tempRoot, "main.au")}`;
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const lines = ["from numbers import Decimal", "", "def main() -> None:", "    price = Decimal.from_int(12)"];
+    const end = "    price.";
+    const completions = await completeWithCompiler(uri, [...lines, end].join("\n"), lines.length, end.length, ".");
+    const fixed = completions.find((item) => item.name === "to_fixed");
+    assert.ok(fixed, "a Decimal completes its fixed-point formatter");
+    assert.ok(fixed.detail.includes("places: int64") && fixed.detail.includes("str"), fixed.detail);
+    const line = "    print(price.to_fixed(2))";
+    const analysis = await analyzeWithCompiler(uri, [...lines, line].join("\n"));
+    assert.deepEqual(analysis.diagnostics, []);
+    const hover = compilerHoverAtPosition(analysis, lines.length, line.indexOf("to_fixed"));
+    assert.ok(hover?.value.includes("to_fixed") && hover.value.includes("places: int64"), hover?.value);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("sync completions and lock bindings use the guarded type", async () => {
+  const example = path.join(repoRoot, "examples", "concurrency", "shared_state.au");
+  const uri = `file://${example}`;
+  const source = fs.readFileSync(example, "utf8");
+  const lines = source.split("\n");
+  setWorkspaceRoots([repoRoot]);
+  const analysis = await analyzeWithCompiler(uri, source);
+  assert.deepEqual(analysis.diagnostics, []);
+  const declaration = lines.findIndex((line) => line.includes("with record = stats.lock()"));
+  const use = declaration + 1;
+  const column = lines[use].indexOf("record");
+  assert.match(compilerHoverAtPosition(analysis, use, column).value, /mutable view record: Stats/);
+  assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, use, column).range.start, {
+    line: declaration,
+    character: lines[declaration].indexOf("record")
+  });
+
+  const complete = async (expression) => {
+    const prefix = [ "import sync", "", "def main():", "    counter = sync.AtomicInt(0)" ];
+    const line = `    ${expression}.`;
+    const text = [...prefix, line].join("\n");
+    return (await completeWithCompiler(uri, text, prefix.length, line.length, "."))
+      .map((item) => item.name);
+  };
+  const names = await complete("sync");
+  for (const name of ["Mutex", "AtomicInt", "AtomicBool", "Map"]) {
+    assert.ok(names.includes(name), `missing sync.${name}`);
+  }
+  assert.ok(names.every((name) => !name.startsWith("__aura_")));
+  const methods = await complete("counter");
+  for (const name of ["add", "load", "store", "swap", "compare_and_set"]) {
+    assert.ok(methods.includes(name), `missing counter.${name}`);
   }
 });
 
@@ -7110,5 +7269,55 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     } else {
       process.env.AURA_OFFLINE = savedOffline;
     }
+  }
+});
+
+test("compiler bridge resolves a local function's parameter and captured binding", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-local-function-"));
+  const lines = [
+    "def main() -> None:",
+    "    base: int64 = 4",
+    "    def add(value: int64) -> int64:",
+    "        return value + base",
+    "    print(add(3))",
+    ""
+  ];
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const uri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(uri, lines.join("\n"));
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [name, line] of [["value", 2], ["base", 1]]) {
+      const read = analysis.occurrences.find(
+        (item) => item.line === 3 && item.start_character === lines[3].indexOf(name)
+      );
+      assert.equal(read?.definition.line, line, name);
+      assert.equal(read?.definition.start_character, lines[line].indexOf(name), name);
+      assert.match(read.hover, /int64/);
+    }
+  } finally {
+    setWorkspaceRoots([repoRoot]);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("compiler bridge completes ordered collection methods and their signatures", async () => {
+  const uri = `file://${path.join(repoRoot, "examples/collections/delivery_queue.au")}`;
+  const declarations = [
+    "from collections import Deque, Heap, SortedMap, SortedSet",
+    "def inspect(queue: Deque[str], heap: Heap[int64], stops: SortedMap[int64, str], days: SortedSet[str]):"
+  ];
+  setWorkspaceRoots([repoRoot]);
+  for (const [binding, method, signature] of [
+    ["queue", "push_front", "value"],
+    ["heap", "into_sorted", "list["],
+    ["stops", "range", "high"],
+    ["days", "ceiling", "Lookup["]
+  ]) {
+    const line = `    ${binding}.`;
+    const entries = await completeWithCompiler(uri, [...declarations, line].join("\n"), 2, line.length, ".");
+    const item = entries?.find((entry) => entry.name === method);
+    assert.ok(item, `missing ${binding}.${method}`);
+    assert.ok(item.detail.includes(signature), item.detail);
   }
 });

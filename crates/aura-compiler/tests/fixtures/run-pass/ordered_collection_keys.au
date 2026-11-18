@@ -1,0 +1,55 @@
+from collections import Heap, SortedMap, SortedSet
+
+copy class Key:
+    rank: int64
+    id: int64
+
+
+impl Ord[Key] for Key:
+    def lt(self, rhs: Key) -> bool:
+        return self.rank < rhs.rank
+    def le(self, rhs: Key) -> bool:
+        return self.rank <= rhs.rank
+    def gt(self, rhs: Key) -> bool:
+        return self.rank > rhs.rank
+    def ge(self, rhs: Key) -> bool:
+        return self.rank >= rhs.rank
+
+
+def main():
+    a = Key(rank=2, id=100)
+    b = Key(rank=1, id=200)
+    same = Key(rank=2, id=300)
+    mut queue = Heap[Key]()
+    queue.push(a)
+    queue.push(b)
+    print(queue.pop().id)
+    mut set = SortedSet[Key]()
+    set.add(a)
+    set.add(same)
+    match own set.get(same):
+        case Found(stored):
+            print(stored.id)
+        case _:
+            assert false
+    mut labels = SortedMap[Key, str]()
+    labels.set(a, "old")
+    labels.set(same, "new")
+    print(labels.get(a))
+    print(labels.len())
+    print(labels.floor(b))
+    print(labels.ceiling(Key(rank=3, id=0)))
+    print(labels.range(same, b).len())
+
+    mut tree = SortedMap[Key, int64]()
+    for i in range(109):
+        k = Key(rank=(i * 37) % 109, id=i)
+        tree.set(k, i)
+    for i in range(109):
+        k = Key(rank=(i * 37) % 109, id=0)
+        match own tree.remove(k):
+            case Found(value):
+                assert value == i
+            case _:
+                assert false
+    print(tree.len())

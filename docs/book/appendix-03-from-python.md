@@ -12,6 +12,15 @@ so that the first week with Aura is less of a negotiation with the compiler.
 If you have read the book from the start, you have already met all of these.
 Treat this as the cheat sheet you hand a Python colleague.
 
+## Python Numeric Types
+
+When a Python integer grows beyond 64 bits, its storage grows with it. In
+Aura we choose `numbers.BigInt` for that range. For prices we use
+`numbers.Decimal.parse("19.95")` and match the result, or construct the
+value from a coefficient and exponent. We pass precision and rounding to
+individual operations. For Python's `1j`, write
+`numbers.Complex(re=0.0, im=1.0)`. [Numbers Module](/manual/numbers)
+
 ## Scripts and `main`
 
 A file of top-level statements is a script, and runs from top to bottom with
@@ -208,11 +217,12 @@ see every place it happens.
 `is None` and `is not None`. The compiler narrows the type after the test, so
 there is no `Optional` unwrapping to do by hand.
 
-Some failures are not recoverable values: an index out of range, a failed
-`assert`, integer overflow, division by zero. Those *trap*, stopping the task
-with an `AU40xx` diagnostic and an Aura call chain, much like an uncaught
-exception would. The difference is that you cannot catch a trap, so it is
-reserved for bugs, not for conditions a program should handle.
+An index out of range, a failed `assert`, integer overflow and division by
+zero each raise a *trap*. A trap ends the task by default and reports an
+`AU40xx` diagnostic with a call chain. At a plug-in or request boundary
+we can use `control.recover(function, arguments...)`. It runs the function
+in the current task and returns either its value in `Ok` or its diagnostic
+in `Err`. [Chapter 9](/book/ch09-01-traps) builds a working example.
 
 ## Classes, without inheritance
 
@@ -272,9 +282,10 @@ hierarchies in Python, you may not miss it.
 
 ## Strings
 
-`str` is Unicode, and `len(text)` counts Unicode scalar values. Strings are
-not indexable: `text[0]` is an error, but slices such as `text[1:4]` work and
-return a new string. Most methods have the names you expect, and a few have
+`str` is Unicode, and `len(text)` counts Unicode scalar values. `text[0]`
+and `text[-1]` give one character as a string, and slices such as
+`text[1:4]` return a new string. A byte string, `b"..."`, is a
+`list[uint8]`. Most methods have the names you expect, and a few have
 Aura names:
 
 | Python | Aura |

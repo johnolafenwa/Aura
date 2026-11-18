@@ -1,0 +1,19 @@
+import sync
+
+class Container[T]:
+    data: T
+
+    def __init__(self, value: own T):
+        self.data = value
+
+def main() -> int32:
+    empty = Container[list[int64]](value=[])
+    print(empty.data.len())
+    bytes = Container[list[uint8]]([1, 255])
+    print(bytes.data)
+    mutex = sync.Mutex[list[int64]]([])
+    with numbers = mutex.lock():
+        numbers.append(42)
+    with numbers = mutex.lock():
+        print(numbers)
+    return 0

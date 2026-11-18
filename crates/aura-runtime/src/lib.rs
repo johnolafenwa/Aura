@@ -33,6 +33,7 @@ pub mod list_elements;
 pub mod list_sort;
 mod native_allocator;
 pub mod native_runtime;
+pub mod numbers_host;
 #[cfg(any(windows, test))]
 mod pipe_bridge;
 pub mod randomness;
@@ -42,6 +43,7 @@ pub mod runtime_value;
 #[cfg(any(windows, test))]
 mod socket_watcher;
 pub mod text;
+pub mod text_encodings;
 pub mod text_methods;
 pub mod union_runtime;
 #[cfg(windows)]

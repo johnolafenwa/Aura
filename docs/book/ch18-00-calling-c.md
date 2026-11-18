@@ -528,12 +528,11 @@ Aura passes the address of a C copy of `now`, and when the call returns,
 `const struct timespec *` for a struct the function only reads. Declare that
 as `mut` too, and pass a `mut` variable.
 
-On the Aura side there is nothing foreign about these values. An
-`extern "C"` class is a `copy class`: we build one with keyword arguments,
-read its fields, copy it by assignment, and keep it in a list. What it gives
-up is everything a C struct does not have. It has no methods, no field
-defaults, and no type parameters, and each field is a scalar or another
-`extern "C"` class, which C would hold inline as a nested struct.
+Our `Timespec` has only scalar fields, so assignment copies it. We can
+build one with keyword arguments, read its fields, and keep it in a list.
+C lays out nested structs inline. If a field contains a fixed-size array or
+a union, even inside a nested struct, assignment moves the value. An
+`extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a

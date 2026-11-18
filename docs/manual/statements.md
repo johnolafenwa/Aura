@@ -9,6 +9,7 @@ Aura 0.16 has these statements:
 - binding and assignment
 - local `view` bindings
 - expression statements
+- local `def`
 - `return`
 - `assert`
 - `if` / `elif` / `else`
@@ -17,7 +18,7 @@ Aura 0.16 has these statements:
 - `with`
 - `break`, `continue`, and `pass`
 
-Class, enum, function, trait, and implementation declarations are items, not statements. Items appear only at module level. Declaration members such as fields, enum variants, and methods appear only in the item bodies that permit them. Aura does not support nested functions, classes, enums, traits, or implementations.
+A local `def` binds a closure in the enclosing block. Its parameters, result type, captures, and statement body are described in [Closures](/manual/closures). Class, enum, trait, and implementation declarations live at module level. Fields, variants, and methods live in the item bodies that permit them.
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 
@@ -869,7 +870,7 @@ Every implemented statement form uses the same checker and MIR lowering for MIR 
 - Loops have no `else` clause.
 - Statement match arms cannot be inline.
 - A statement can span physical lines only inside an open `(`, `[`, or `{`. Backslash continuation is not available.
-- Items cannot nest inside suites.
+- A function suite may contain a local `def`. Class, enum, and trait declarations require module scope.
 - Range iteration yields copy `int64` values and accepts only the bare form, as described above.
 
 No statement evaluation order is implementation-defined.
@@ -878,6 +879,6 @@ No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression statements, `return`, `assert`, conditionals, loops, `match`, scoped cleanup, `pass`, imports, and top-level execution in entry modules are implemented as described. Tuple targets for assignment and loops are implemented.
 
-Class and collection destructuring, loop `else`, exception statements, `raise`, `async`, and nested declarations are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
+Class and collection destructuring, loop `else`, exception statements, `raise`, and `async` are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
 
 Design record: the loop ownership modes are those accepted in ADR-0006. One-time iterable selection is the accepted ADR-0017 rule. Tuple assignment and loop targets follow Accepted ADR-0026.

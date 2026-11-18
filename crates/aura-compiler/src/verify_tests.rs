@@ -2748,6 +2748,24 @@ def main():
 }
 
 #[test]
+fn recover_checks_its_targets_preconditions() {
+    assert_open(
+        r#"
+import control
+
+def work(n: int64) -> int64:
+    requires n >= 0
+    return n
+
+def main():
+    _ = control.recover(work, 4)
+    _ = control.recover(work, -1)
+"#,
+        &["10 requires failed"],
+    );
+}
+
+#[test]
 fn extern_functions_have_trusted_contracts() {
     let dir = script_dir("extern-contract");
     std::fs::write(
@@ -4053,4 +4071,62 @@ def main():
 "#,
         &["6 loop invariant failed"],
     );
+}
+
+#[test]
+fn local_function_bodies_have_independent_verification_conditions() {
+    let source = r#"
+def main() -> None:
+    base: int64 = 7
+    def pick(value: int64) -> int64:
+        if value == 0:
+            assert value == 0
+            return base
+        assert value != 0
+        return value
+    print(pick(2))
+"#;
+    if let Some(report) = verify(source) {
+        assert!(report.is_proved(), "{report:#?}");
+        assert_eq!(report.obligations.len(), 2);
+    }
+    let bad = source.replace("assert value == 0", "assert value != 0");
+    if let Some(report) = verify(&bad) {
+        assert!(!report.is_proved(), "the branch violates its assertion");
+    }
+}
+
+#[test]
+fn fresh_sync_reads_do_not_preserve_a_previous_observation() {
+    let source = r#"import sync
+
+def observe(counter: sync.AtomicInt, guard: sync.Mutex[int64]):
+    first = counter.load()
+    second = counter.load()
+    assert first == second
+    with value = guard.lock():
+        value = 17
+    with next_value = guard.lock():
+        assert next_value == 17
+
+def observe_map(cache: sync.Map[int64, int64]):
+    first = cache.get(1)
+    second = cache.get(1)
+    assert first == second
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else { return };
+    for line in [6, 10, 15] {
+        assert!(
+            report
+                .obligations
+                .iter()
+                .any(|check| check.span.line == line
+                    && check.kind.name() == "assert"
+                    && check.status != Status::Proved),
+            "shared read at line {line} must stay unproved: {report:#?}",
+        );
+    }
 }

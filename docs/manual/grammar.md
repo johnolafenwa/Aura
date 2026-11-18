@@ -24,7 +24,7 @@ The lexer produces two kinds of tokens used here:
 
 - Layout tokens: `NEWLINE`, `INDENT`, `DEDENT`, and `EOF`.
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
-  `FSTRING`, and `BOOLEAN`, described below.
+  `BYTES`, `FSTRING`, and `BOOLEAN`, described below.
 
 Every comma-separated list that a production closes with `)`, `]`, or `}`
 accepts one optional `","` before that closing delimiter. The productions
@@ -140,8 +140,13 @@ whitespace.
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters are preserved. A raw string
 cannot span a physical line or end in an odd run of backslashes. Raw triple
-strings, raw f-strings, and byte strings are not tokens. There is no separate
+strings and raw f-strings are not tokens. There is no separate
 character-literal token.
+
+`BYTES` is a byte string: lowercase `b` immediately followed by one single or
+double quote, a body of printable ASCII characters and the ordinary escapes
+without `\u{...}`, and the matching quote. It is single-line. In it `\xHH` is
+one byte.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Literal braces work
@@ -292,6 +297,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], extern-aggregate-declaration
     | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
@@ -302,12 +308,24 @@ type-alias-declaration
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type,
+      "(", [ parameter-list ], ")", "->", type, [ "symbol", STRING ],
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+extern-aggregate-declaration
+    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+      INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
+
+extern-member
+    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    | "pass", NEWLINE ;
+
+extern-field-type
+    = type
+    | "array", "[", extern-field-type, ",", INTEGER, "]" ;
 
 export-function-declaration
     = "export", STRING, function-declaration ;
@@ -316,9 +334,9 @@ contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
-Item declarations are module-level. They are not statements and cannot appear
-inside function or control-flow suites. `public` is not allowed on an
-implementation block.
+Item declarations appear at module level. A `def` inside a function introduces
+a local closure using the statement grammar below. `public` is not allowed on
+an implementation block.
 
 A type alias is recognized contextually. A module-level line that reads
 `type`, an identifier, optional bounded type parameters, and `=` declares a
@@ -326,11 +344,12 @@ transparent alias for the written target type. The target may use the alias's
 own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
-Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic. An extern function's optional
-indented block holds only `requires` and `ensures` clauses, its trusted
-contract. `symbol` and `drop` are words only in these clauses.
-[FFI](/manual/ffi) restricts their parameter modes and types.
+Extern declarations require the ABI string `"C"` and take no type parameters.
+An extern function's optional block holds only `requires` and `ensures`
+clauses, its trusted contract. The contextual words `symbol` and `drop`
+name the C symbol and the handle's release function respectively. A C struct
+or union needs at least one field with a C layout. [FFI](/manual/ffi) gives
+the field types, array lengths and call signatures that can cross the boundary.
 
 `export` is a word only when a string follows it at the start of a
 module-level declaration. The string must be exactly `"C"`. The function has
@@ -420,7 +439,7 @@ A function type spells a complete callable contract, for example
 
 A literal or expression after `=` in a type is rejected with `AU1101`.
 
-The same `*` boundary rule applies to declaration and lambda parameter lists.
+The same `*` boundary rule applies to declaration and lambda parameter lists. A local function requires a type for each parameter and a written result type. Local-function parameters take no defaults.
 A list has at most one `*`, it must be followed by at least one named
 parameter, and it adds no variadics.
 
@@ -674,7 +693,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = assignment-statement
+    = local-function-statement
+    | assignment-statement
     | view-statement
     | return-statement
     | assert-statement
@@ -689,6 +709,10 @@ statement
     | expression-statement ;
 
 statement-end = NEWLINE | DEDENT | EOF ;
+
+local-function-statement
+    = "def", identifier, [ lambda-capture-list ], "(", [ parameter-list ], ")",
+      "->", type, ":", NEWLINE, suite ;
 
 assignment-statement
     = [ "mut" ], assignment-target,
@@ -1081,6 +1105,7 @@ primary-expression
     | FLOAT
     | BOOLEAN
     | STRING
+    | BYTES
     | FSTRING
     | parenthesized-expression
     | list-literal

@@ -18,8 +18,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numbers And Durations
 
-- Integers are fixed-width.
-- Aura has no arbitrary-precision integer, implicit width promotion, rotate operator, literal suffix, hexadecimal floating literal, or distinct unsigned-right-shift operator.
+- Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
+- Integer operations require explicit width conversion. Rotate operators, literal suffixes, hexadecimal floating literals and a distinct unsigned-right-shift operator are outside the current syntax.
 - Power is builtin-only.
 - `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
@@ -45,9 +45,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Ordinary and triple-quoted strings may use single or double quotes. F-strings use double quotes.
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
-- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. `text[index]` and `char_at(index)` read one character by scalar position, in constant time for ASCII text and by a scan otherwise. A `str` cannot be changed through an index. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
+- `list[uint8]` is the bytes type, and a byte string `b"..."` is a literal of it. Text conversion is explicit: UTF-8 through `to_bytes` and `from_bytes`, and UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252 through `bytes.encode` and `bytes.decode`. Other text encodings, lossy decoding with a replacement character, triple-quoted and raw byte strings, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -97,7 +97,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice assignment to a list or `str` is a reserved `AU2005` form.
-- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, grapheme slicing and indexing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms
@@ -141,6 +141,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Tasks
 
+- A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
+- Each shared-map method is a single operation. Use `sync.Mutex[dict[K, V]]` to protect a sequence of reads and writes.
+
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own` target parameters. `mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form. Use `TaskGroup`.
 
@@ -181,8 +184,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact `int64` requests from 256 KiB through 64 MiB inclusive.
 - Accepted requests are rounded up to the host page size and guard-protected. Smaller and larger requests are rejected, not clamped.
 - The stack override API is provisional.
-- The MIR and direct runtime entry thread reserves 64 MiB. Maintained execution paths stop with a recursion-depth diagnostic after 256 nested Aura calls.
-- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. The direct backend has only the depth limit.
+- The program's first task has a 64 MiB stack in a built program and 256 MiB under `aura run`. No count limits nested calls: a call that would not fit on the running stack traps with `AU4005` ([Call Depth](/manual/failure-recovery#call-depth)). `aura run` reaches a much smaller depth than a built program, because one interpreted call costs about 11 KiB of stack.
+- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. A built program checks at the entry of every function that can call itself.
 - The 256 KiB lower bound is an opt-in minimum for measured shallow tasks, not a generally safe default. The complete compiled Aura HTTP example faulted when 256 KiB was the global default and succeeded with a 512 KiB default.
 - An isolated runtime protocol round trip succeeds with 256 KiB callers because it excludes compiled language-execution frames. It proves the service offload boundary, not a 256 KiB whole-program default.
 

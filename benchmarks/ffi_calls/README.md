@@ -160,3 +160,16 @@ revised callback took 86.31 ns of process CPU time, Rust took 23.81 ns
 and Python ctypes took 1,215.18 ns. Median elapsed time in a separate
 series was 232.07, 57.51 and 3,165.77 ns. The revised callback beat
 Python and exceeded three times the Rust time in both series.
+
+The Linux runner at `92535bb9` measured the same four FFI v2 workloads
+in nanoseconds per operation.
+[Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497845)
+
+| Workload | Aura | Rust | Python ctypes |
+| --- | ---: | ---: | ---: |
+| `struct_array` | 3.72 | 2.62 | 369.16 |
+| `array_field` | 2.51 | 1.31 | 274.63 |
+| `union_read` | 0.32 | 0.22 | 74.75 |
+| `text_callback` | 29.98 | 9.62 | 377.61 |
+
+The text callback took 3.12 times Rust’s time. All four completed ahead of ctypes.

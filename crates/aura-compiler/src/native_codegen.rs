@@ -481,6 +481,25 @@ struct PlainClassField {
 }
 
 impl DirectType {
+    /// A number wraps one union field. Its tag and payload travel as the
+    /// class's own words, so only its large member holds a reference.
+    fn owned_union(&self) -> Option<&DirectUnionType> {
+        let union = match self {
+            Self::Union(union) => union,
+            Self::PlainClass(class) => {
+                let [field] = class.fields.as_slice() else {
+                    return None;
+                };
+                let Self::Union(union) = &field.ty else {
+                    return None;
+                };
+                union
+            }
+            _ => return None,
+        };
+        union.owns_handles().then_some(union)
+    }
+
     fn abi_types(&self) -> Vec<ScalarType> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
@@ -620,6 +639,9 @@ impl LayoutScratch {
 
 #[derive(Clone, Copy)]
 struct TaskStartMode {
+    /// A `control.recover` call: the function runs in place and the
+    /// result is a `Result`, not a task handle.
+    recover: bool,
     returns_handle: bool,
     result_is_copy: bool,
 }
@@ -705,8 +727,9 @@ struct NativeCodegen<'a> {
     explicit_locals: HashMap<String, crate::mir::ownership::ExplicitLocals>,
     reachable_blocks: HashMap<String, HashSet<String>>,
     safepoints_enabled: bool,
-    /// The functions on a call cycle, whose entries count the task's call
-    /// fuel (see `mir::recursion`). Empty when safepoints are elided.
+    /// The functions on a call cycle (see `mir::recursion`). Their entries
+    /// check the machine stack, and count the task's call fuel unless
+    /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
     program_path: String,
     program_source: String,
@@ -721,6 +744,9 @@ struct NativeCodegen<'a> {
     /// Bodies that need no write-through sinks. Leaf bodies also defer their
     /// frame until an error.
     sinkless_functions: HashMap<String, FuncHandle>,
+    /// Scalar bodies whose only failure is an explicit check. Their
+    /// recovered entry returns the scalar and an optional error.
+    recovery_functions: HashMap<String, FuncHandle>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -948,10 +974,12 @@ impl<'a> NativeCodegen<'a> {
         // for a loop to starve. Keep explicit MIR markers for portability, but
         // elide their native fast-path cost for provably sequential programs.
         let safepoints_enabled = !collect_task_start_targets(module, &reachable_blocks).is_empty();
-        let recursive_functions = if safepoints_enabled {
-            crate::mir::recursion::recursive_functions(module)
-        } else {
+        // A freestanding program has no runtime to count fuel in or to
+        // report an exhausted stack to.
+        let recursive_functions = if freestanding.is_some() {
             HashSet::new()
+        } else {
+            crate::mir::recursion::recursive_functions(module)
         };
         let mut classes = HashMap::new();
         for class in &module.classes {
@@ -991,6 +1019,26 @@ impl<'a> NativeCodegen<'a> {
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
         let mut sinkless_functions = HashMap::new();
+        let mut recovery_functions = HashMap::new();
+        let recovered_targets = module
+            .functions
+            .iter()
+            .chain(module.top_level.iter())
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::StartTask {
+                            recover: true,
+                            function: Operand::Function { name, .. },
+                            ..
+                        },
+                    ..
+                } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1048,6 +1096,19 @@ impl<'a> NativeCodegen<'a> {
                 }
             } else if small_leaf(function) && frameless_leaf(function, &classes) {
                 object.mark_inline(func_id);
+            }
+            if freestanding.is_none()
+                && recovered_targets.contains(function.name.as_str())
+                && checked_scalar_leaf(function, &classes)
+            {
+                let mut signature = signature.clone();
+                signature.returns.push(types::I64);
+                let symbol = format!("aura_recovered_{}", mangle_symbol(&function.name));
+                let id = object
+                    .declare_function(&symbol, Linkage::Local, &signature)
+                    .map_err(|error| format!("failed to declare recovered function: {error}"))?;
+                object.mark_inline(id);
+                recovery_functions.insert(function.name.clone(), id);
             }
             let thunk_signature = thunk_signature();
             if freestanding.is_none() {
@@ -1177,6 +1238,7 @@ impl<'a> NativeCodegen<'a> {
             object: Some(object),
             functions,
             sinkless_functions,
+            recovery_functions,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1345,6 +1407,16 @@ impl<'a> NativeCodegen<'a> {
             &format!("direct function `{}`", function.name),
             |codegen, builder| codegen.emit_function(builder, function, func_id, false, None),
         )?;
+        if let Some(id) = self.recovery_functions.get(&function.name).copied() {
+            let mut signature = signature.clone();
+            signature.returns.push(types::I64);
+            self.define_body(
+                id,
+                &signature,
+                "a recovered scalar function",
+                |codegen, builder| codegen.emit_function(builder, function, id, true, None),
+            )?;
+        }
         let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
             return Ok(());
         };
@@ -1574,7 +1646,9 @@ impl<'a> NativeCodegen<'a> {
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let frameless = self.freestanding.is_some()
+        let checked_entry = self.recovery_functions.get(&function.name) == Some(&func_id);
+        let frameless = checked_entry
+            || self.freestanding.is_some()
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes));
         let (mut body, entered_in_runtime) = if frameless {
@@ -1584,8 +1658,16 @@ impl<'a> NativeCodegen<'a> {
         };
         // An entry of a function on a call cycle is a safepoint, so deep
         // recursion with no loop yields like a loop does.
-        if self.recursive_functions.contains(&function.name) {
-            body = emit_call_safepoint(builder, &runtime_refs);
+        // It is also where the machine stack is checked, since a call
+        // chain grows without bound only through such a function.
+        // This entry admits only total scalar work and failed checks. It
+        // cannot reenter Aura, even when the conservative call graph marks
+        // the ordinary entry as a possible target of a callback.
+        if !checked_entry && self.recursive_functions.contains(&function.name) {
+            if self.safepoints_enabled {
+                emit_call_safepoint(builder, &runtime_refs);
+            }
+            body = emit_stack_check(builder, &runtime_refs);
         }
         blocks.insert(function.entry.clone(), body);
 
@@ -1866,6 +1948,12 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = builder.import_function(*func_id);
             function_refs.insert(name.clone(), func_ref);
         }
+        let mut recovery_refs = HashMap::new();
+        let mut functions = self.recovery_functions.iter().collect::<Vec<_>>();
+        functions.sort_by_key(|(name, _)| *name);
+        for (name, id) in functions {
+            recovery_refs.insert(name.clone(), builder.import_function(*id));
+        }
         let mut sinkless_refs = HashMap::new();
         let mut sinkless_functions = self.sinkless_functions.iter().collect::<Vec<_>>();
         sinkless_functions.sort_by(|left, right| left.0.cmp(right.0));
@@ -1909,7 +1997,63 @@ impl<'a> NativeCodegen<'a> {
             None => current_function_path,
         };
 
-        let lookup_slots = lookups::lookup_payload_slots(function)
+        // For a local match of a plain scalar recovered call, keep Ok's
+        // unboxed return and Err's ordinary boxed Result separately.
+        let recovery_names = lookups::recovery_payload_slots(function, |value| {
+            let Rvalue::StartTask {
+                recover: true,
+                function: Operand::Function { name, .. },
+                args,
+                ..
+            } = value
+            else {
+                return false;
+            };
+            (cfg!(unix) || self.recovery_functions.contains_key(name))
+                && self.functions.contains_key(name)
+                && matches!(
+                    self.function_return_types.get(name),
+                    Some(DirectType::Scalar(_))
+                )
+                && self.function_param_types.get(name).is_some_and(|params| {
+                    args.len() == params.len()
+                        && params.iter().all(|ty| matches!(ty, DirectType::Scalar(_)))
+                })
+                && args
+                    .iter()
+                    .all(|arg| arg.name.is_none() && arg.writeback_place.is_none())
+                && self
+                    .function_writeback_types
+                    .get(name)
+                    .is_none_or(Vec::is_empty)
+        });
+        let mut recovery_slots = HashMap::new();
+        let mut names = recovery_names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let Some(DirectType::Opaque(Type::Named(result, args))) = variable_types.get(&name)
+            else {
+                continue;
+            };
+            let [ok, _] = args.as_slice() else {
+                continue;
+            };
+            let Some(DirectType::Scalar(kind)) = direct_type(ok, &self.classes) else {
+                continue;
+            };
+            if result != "Result" {
+                continue;
+            }
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, kind.signature_type());
+            let zero = kind.zero_value(builder);
+            builder.def_var(variable, zero);
+            recovery_slots.insert(name, (variable, kind));
+        }
+
+        let (lookup_slots, map_word_slots) = lookups::lookup_slots(function);
+        let lookup_slots = lookup_slots
             .into_iter()
             .filter(|name| {
                 matches!(
@@ -1919,6 +2063,19 @@ impl<'a> NativeCodegen<'a> {
                 )
             })
             .collect::<HashSet<_>>();
+        // Each nonescaping matched integer lookup has its own two words.
+        let mut map_word_names = map_word_slots
+            .intersection(&lookup_slots)
+            .collect::<Vec<_>>();
+        map_word_names.sort_unstable();
+        let map_word_slots = map_word_names
+            .into_iter()
+            .map(|name| {
+                let slot = builder.create_sized_stack_slot(16, 3);
+                let address = builder.stack_addr(types::I64, slot, 0);
+                (name.clone(), address)
+            })
+            .collect();
         let lent_places = lookups::lent_lookup_places(
             function,
             &lookup_slots,
@@ -2086,7 +2243,8 @@ impl<'a> NativeCodegen<'a> {
                 })
         });
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
-            lookup_slots.contains(local)
+            recovery_slots.contains_key(local)
+                || lookup_slots.contains(local)
                 || lent_places.contains(local)
                 || lent_element_reads.lists.contains_key(local)
                 || lent_element_reads.payloads.contains_key(local)
@@ -2216,6 +2374,15 @@ impl<'a> NativeCodegen<'a> {
             })
             .cloned()
             .collect::<HashSet<_>>();
+        let mut ordered_word_views = HashMap::new();
+        for local in ordered::word_local_roots(function, &self.program_shapes) {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            ordered_word_views.insert(local, variable);
+        }
         let mut key_loops = HashMap::new();
         let mut key_loop_keys = HashMap::new();
         for (list, key_loop) in
@@ -2338,6 +2505,8 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             sinkless_refs,
+            recovery_refs,
+            checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -2370,6 +2539,9 @@ impl<'a> NativeCodegen<'a> {
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
+            recovery_slots,
+            indexed_ascii_literals: lookups::indexed_ascii_literals(function),
+            map_word_slots,
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -2417,6 +2589,7 @@ impl<'a> NativeCodegen<'a> {
             node_read_maps,
             key_loops,
             key_loop_keys,
+            ordered_word_views,
             lent_entry_copies,
             lent_fused_copies: HashSet::new(),
             shadow_fused_copies: HashSet::new(),
@@ -3226,6 +3399,7 @@ fn function_op_arg_layout(op: FunctionOp, index: usize) -> FunctionOpArgLayout {
         FunctionOp::RngNew
         | FunctionOp::RandomSecureInt
         | FunctionOp::RandomSecureBytes
+        | FunctionOp::SmallPowMod
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
         | FunctionOp::DurationMinutes
@@ -3263,6 +3437,7 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
         | FunctionOp::TimeFailed
         | FunctionOp::RegexIsMatch => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
         FunctionOp::RandomSecureInt
+        | FunctionOp::SmallPowMod
         | FunctionOp::MonotonicTimeMs
         | FunctionOp::TimeParsedSeconds
         | FunctionOp::TimeParsedNanos
@@ -3744,6 +3919,8 @@ struct FunctionCompiler<'a> {
     /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
     sinkless_refs: HashMap<String, FuncRef>,
+    recovery_refs: HashMap<String, FuncRef>,
+    checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
     /// The entry code of each callback the module passes to C.
     callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
@@ -3810,10 +3987,17 @@ struct FunctionCompiler<'a> {
     /// The `Lookup` temporaries kept as the found value's box or null. See
     /// `lookups::lookup_payload_slots`.
     lookup_slots: HashSet<String>,
+    /// The success value of a match-only recovered call. Its ordinary
+    /// temporary holds null on success and the genuine boxed Result on failure.
+    recovery_slots: HashMap<String, (Var, ScalarKind)>,
+    /// Payload and presence of a nonescaping integer lookup in a shared map.
+    map_word_slots: HashMap<String, Val>,
     /// The slices of a list of bytes that only the `str.from_bytes` right
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
     text_byte_slices: HashSet<String>,
+    /// Indexed locals that keep the same ASCII string literal throughout the function.
+    indexed_ascii_literals: HashMap<String, String>,
     /// The list and slice words of each of `text_byte_slices` whose
     /// `str.from_bytes` is still to compile.
     byte_slice_words: HashMap<String, Vec<Val>>,
@@ -3962,6 +4146,8 @@ struct FunctionCompiler<'a> {
     key_loops: HashMap<String, (key_loops::KeyLoop, Var, Var)>,
     /// The key local of each of `key_loops`, with its keys copy.
     key_loop_keys: HashMap<String, String>,
+    /// The packed backing of a freshly constructed, unaliased word sequence.
+    ordered_word_views: HashMap<String, Var>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
@@ -4190,17 +4376,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn temporary_owns_union(&self, value: &ValueRef) -> bool {
-        matches!(value.ty, DirectType::Union(_))
+        value.ty.owned_union().is_some()
             && self.layout_scratch.unions.contains_key(&value.values[0])
     }
 
     fn mark_temporary_union_owned(&mut self, value: &ValueRef) {
-        if let DirectType::Union(union) = &value.ty {
-            if union.owns_handles() {
-                self.layout_scratch
-                    .unions
-                    .insert(value.values[0], (value.values.clone(), union.clone()));
-            }
+        if let Some(union) = value.ty.owned_union() {
+            self.layout_scratch
+                .unions
+                .insert(value.values[0], (value.values.clone(), union.clone()));
         }
     }
 
@@ -4262,8 +4446,7 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_union_owned(value);
             return value.values.clone();
         }
-        if let DirectType::Union(union) = &value.ty {
-            let union = union.clone();
+        if let Some(union) = value.ty.owned_union().cloned() {
             self.retain_union_words(&union, &value.values);
         }
         value.values.clone()
@@ -4404,7 +4587,7 @@ impl<'a> FunctionCompiler<'a> {
     fn transfer_values(&mut self, value: &ValueRef) -> Vec<Val> {
         match &value.ty {
             DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
-            DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
+            ty if ty.owned_union().is_some() => self.transfer_union_words(value),
             DirectType::Callable(_) => self.transfer_callable_words(value),
             _ => value.values.clone(),
         }
@@ -4430,11 +4613,11 @@ impl<'a> FunctionCompiler<'a> {
         {
             return Ok(());
         }
+        if let Some(union) = ty.owned_union() {
+            self.release_union_words(union, &words);
+            return Ok(());
+        }
         match &ty {
-            DirectType::Union(union) => {
-                let union = union.clone();
-                self.release_union_words(&union, &words);
-            }
             DirectType::Callable(_) => self.release_callable_words(&words),
             _ if self.lent_places.contains(name) => {
                 let owned = self.owned_lent_word(words[0]);
@@ -4845,6 +5028,55 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
         self.enter_snapshot_block(&block.label);
+        if let (
+            Some(id),
+            Terminator::AssertFail {
+                message,
+                span,
+                kind,
+                ..
+            },
+        ) = (self.checked_scalar_body, &block.terminator)
+        {
+            let (line, column) = self.span_values(Some(*span));
+            let descriptor = self.frameless_descriptor.expect("scalar body descriptor");
+            let kind = self.builder.iconst(types::I64, kind.word());
+            let error = match message {
+                Some(Operand::Place(name) | Operand::MovePlace(name)) => {
+                    let message = self.checked_failure_message(block, name)?;
+                    let error = self
+                        .builder
+                        .call(
+                            self.runtime[RuntimeFn::RecoverFormattedAssertion],
+                            &[descriptor, message.values[0], line, column, kind],
+                        )
+                        .results[0];
+                    self.release_all_temporary_owned();
+                    error
+                }
+                None | Some(Operand::String(_)) => {
+                    let text = match message {
+                        Some(Operand::String(text)) => text.as_str(),
+                        _ => "assertion failed",
+                    };
+                    // Only a literal failure belongs wholly to its source site.
+                    let key = format!("\0recovered check {} {}", id.0, block.label);
+                    let cell = word_cell(self.tag_cells, self.builder, &key)?;
+                    let (ptr, len) = self.string_constant(text.as_bytes())?;
+                    self.builder
+                        .call(
+                            self.runtime[RuntimeFn::RecoverAssertion],
+                            &[cell, descriptor, ptr, len, line, column, kind],
+                        )
+                        .results[0]
+                }
+                _ => return Err("expected a checked scalar assertion message".to_string()),
+            };
+            let mut words = return_ty.zero_values(self.builder);
+            words.push(error);
+            self.builder.return_(&words);
+            return Ok(());
+        }
 
         let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
@@ -4870,6 +5102,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
                 skipped = fused - 1;
+                continue;
+            }
+            if self.compile_indexed_str_comparison(&block.instructions[instruction_index..])? {
+                skipped = 2;
                 continue;
             }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
@@ -4917,6 +5153,35 @@ impl<'a> FunctionCompiler<'a> {
         compiled
     }
 
+    /// Evaluate the scalar copies leading to the message and its interpolation.
+    /// Other formatting in this block captures operands for uncaught assertions.
+    fn checked_failure_message(
+        &mut self,
+        block: &BasicBlock,
+        name: &str,
+    ) -> std::result::Result<ValueRef, String> {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::FormatString { parts },
+                } if target == name => {
+                    return self.compile_format_string(parts);
+                }
+                Instruction::Assign {
+                    value: Rvalue::Use(_),
+                    ..
+                } => {
+                    self.compile_instruction(&block.label, index, instruction)?;
+                }
+                _ => {}
+            }
+        }
+        Err(format!(
+            "checked assertion message `{name}` has no format expression"
+        ))
+    }
+
     fn compile_instruction(
         &mut self,
         block_label: &str,
@@ -4929,6 +5194,15 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
+        // Clear the cached backing when its owning local is initialized or dropped.
+        if let Instruction::Assign { target: place, .. } | Instruction::Release { place } =
+            instruction
+        {
+            if let Some(&cache) = self.ordered_word_views.get(place) {
+                let zero = self.builder.iconst(types::I64, 0);
+                self.builder.def_var(cache, zero);
+            }
+        }
         if !self.element_promotions.is_empty() {
             if let Some(temps) = self
                 .element_promotions
@@ -5236,13 +5510,13 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(ty),
                 }
             }
-            DirectType::Union(union) if union.owns_handles() => {
+            ty if ty.owned_union().is_some() => {
                 if self.temporary_owns_union(&value) {
                     self.clear_temporary_union_owned(&value);
                     value
                 } else {
-                    let union = union.clone();
-                    self.retain_union_words(&union, &value.values);
+                    let union = ty.owned_union().expect("matched an owning union");
+                    self.retain_union_words(union, &value.values);
                     let fresh = self.fresh_words(value);
                     self.retained_unions.insert(fresh.values[0]);
                     fresh
@@ -5889,6 +6163,8 @@ impl<'a> FunctionCompiler<'a> {
                     && !self.lookup_slots.contains(target.as_str())
                 {
                     self.compile_lent_assign(target, value)?;
+                } else if let Some(&(slot, _)) = self.recovery_slots.get(target.as_str()) {
+                    self.compile_recovery_slot_assign(target, slot, value)?;
                 } else if self.lookup_slots.contains(target.as_str()) {
                     self.compile_lookup_slot_assign(target, value)?;
                 } else if self.text_byte_slices.contains(target.as_str()) {
@@ -6001,10 +6277,21 @@ impl<'a> FunctionCompiler<'a> {
                 arms,
                 otherwise,
             } => {
+                let recovery_slot = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.recovery_slots.contains_key(place.as_str())
+                );
                 let lookup_slot = matches!(
                     scrutinee,
                     Operand::Place(place) if self.lookup_slots.contains(place.as_str())
                 );
+                let map_word_presence = match scrutinee {
+                    Operand::Place(place) => self
+                        .map_word_slots
+                        .get(place)
+                        .map(|address| self.builder.load(types::I64, MemFlags::new(), *address, 8)),
+                    _ => None,
+                };
                 let lent = matches!(
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
@@ -6037,12 +6324,23 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(());
                     }
                     let next_block = self.builder.create_block();
-                    let matched = if lookup_slot {
+                    let matched = if recovery_slot {
+                        let test = if arm.variant_name.as_deref() == Some("Ok") {
+                            IntCC::Equal
+                        } else {
+                            IntCC::NotEqual
+                        };
+                        self.builder.icmp_imm(test, scrutinee.values[0], 0)
+                    } else if lookup_slot {
                         // A slot is null exactly when the key was missing or
                         // the receive got no item.
                         let found = lookups::is_payload_variant(arm.variant_name.as_deref());
                         let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
-                        self.builder.icmp_imm(cc, scrutinee.values[0], 0)
+                        self.builder.icmp_imm(
+                            cc,
+                            map_word_presence.unwrap_or(scrutinee.values[0]),
+                            0,
+                        )
                     } else {
                         let test = if lent {
                             RuntimeFn::LentVariantMatches
@@ -6252,6 +6550,10 @@ impl<'a> FunctionCompiler<'a> {
         self.release_boxed_copy_roots()?;
         if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
+        }
+        if self.checked_scalar_body.is_some() {
+            let success = self.builder.iconst(types::I64, 0);
+            return_values.push(success);
         }
         self.builder.return_(&return_values);
         Ok(())
@@ -6821,6 +7123,14 @@ impl<'a> FunctionCompiler<'a> {
                 index,
             } => {
                 if let Operand::Place(place) | Operand::MovePlace(place) = scrutinee {
+                    if variant_name == "Ok" && *index == 0 {
+                        if let Some(&(variable, kind)) = self.recovery_slots.get(place.as_str()) {
+                            return Ok(ValueRef {
+                                values: vec![self.builder.use_var(variable)],
+                                ty: DirectType::Scalar(kind),
+                            });
+                        }
+                    }
                     if self.lookup_slots.contains(place.as_str()) {
                         let moved = matches!(scrutinee, Operand::MovePlace(_));
                         return self.compile_lookup_slot_payload(place, moved);
@@ -6856,6 +7166,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_variant_payload(scrutinee, *index)
             }
             Rvalue::StartTask {
+                recover,
                 returns_handle,
                 result_is_copy,
                 stack_size,
@@ -6865,6 +7176,7 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => self.compile_start_task(TaskStart {
                 mode: TaskStartMode {
+                    recover: *recover,
                     returns_handle: *returns_handle,
                     result_is_copy: *result_is_copy,
                 },
@@ -7814,6 +8126,105 @@ impl<'a> FunctionCompiler<'a> {
         }))
     }
 
+    /// A character immediately compared against a one-scalar literal and then
+    /// released has no observable string identity. Keep its scalar in a word.
+    fn compile_indexed_str_comparison(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<bool, String> {
+        let [Instruction::Assign {
+            target: character,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Str(StrOp::CharAt),
+                            receiver: Some(Operand::Place(text)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }, Instruction::Assign {
+            target,
+            value: Rvalue::Binary {
+                op, left, right, ..
+            },
+        }, Instruction::Release { place }, ..] = instructions
+        else {
+            return Ok(false);
+        };
+        if place != character || !character.starts_with("%t") {
+            return Ok(false);
+        }
+        let condition = match op {
+            BinaryOp::Eq => IntCC::Equal,
+            BinaryOp::NotEq => IntCC::NotEqual,
+            _ => return Ok(false),
+        };
+        let ((Operand::Place(compared), Operand::String(literal))
+        | (Operand::String(literal), Operand::Place(compared))) = (left, right)
+        else {
+            return Ok(false);
+        };
+        let mut scalars = literal.chars();
+        let (Some(literal), None) = (scalars.next(), scalars.next()) else {
+            return Ok(false);
+        };
+        let [argument] = args.as_slice() else {
+            return Ok(false);
+        };
+        if compared != character || text.contains('.') || argument.writeback_place.is_some() {
+            return Ok(false);
+        }
+        let known = self.indexed_ascii_literals.get(text).cloned();
+        let text = self.load_place(text)?.values[0];
+        let index =
+            self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+        let index = self
+            .coerce_value(index, &DirectType::Scalar(ScalarKind::Int64))?
+            .values[0];
+        let actual = if let Some(bytes) = known {
+            let (data, length) = self.string_constant(bytes.as_bytes())?;
+            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, index, 0);
+            let from_end = self.builder.iadd(index, length);
+            let position = self.builder.select(negative, from_end, index);
+            let outside = self
+                .builder
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, position, length);
+            let (fast, slow, join) = emit_frame_branch(&mut *self.builder, outside);
+            self.builder.append_block_param(join, types::I64);
+            self.builder.switch_to_block(fast);
+            let address = self.builder.iadd(data, position);
+            let byte = self.builder.uload8(types::I64, MemFlags::new(), address, 0);
+            self.builder.jump(join, &[byte]);
+            self.builder.switch_to_block(slow);
+            let checked = self
+                .builder
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index]);
+            self.builder.jump(join, &[checked.results[0]]);
+            self.builder.switch_to_block(join);
+            self.builder.seal_block(join);
+            self.builder.block_params(join)[0]
+        } else {
+            self.builder
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index])
+                .results[0]
+        };
+        let comparison = self
+            .builder
+            .icmp_imm(condition, actual, i64::from(u32::from(literal)));
+        let word = self.builder.uextend(types::I64, comparison);
+        self.store_place(
+            target,
+            ValueRef {
+                values: vec![word],
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            },
+        )?;
+        Ok(true)
+    }
+
     /// Compares a `str` value with a string literal without boxing the
     /// literal. Returns `None` when neither operand fits that shape.
     fn compile_str_literal_comparison(
@@ -8039,6 +8450,48 @@ impl<'a> FunctionCompiler<'a> {
                 ],
             );
             return Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")));
+        }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            && left.ty == right.ty
+            && left.ty.scalar_kind().is_none()
+        {
+            if let DirectType::PlainClass(class) = left.ty.clone() {
+                // A Copy class is equal field by field, each field under
+                // the rule of its own type.
+                let mut equal = self.builder.iconst(types::I64, 1);
+                let mut at = 0;
+                for field in &class.fields {
+                    let words = field.ty.abi_types().len();
+                    let field_equal = self.compile_binary(
+                        BinaryOp::Eq,
+                        ValueRef {
+                            values: left.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        ValueRef {
+                            values: right.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        span,
+                        ArithmeticTrap::None,
+                    )?;
+                    equal = self.builder.band(equal, field_equal.values[0]);
+                    at += words;
+                }
+                let result = if op == BinaryOp::Eq {
+                    equal
+                } else {
+                    self.builder.bxor_imm(equal, 1)
+                };
+                return Ok(ValueRef {
+                    values: vec![result],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                });
+            }
+            // Any other inline value: the runtime compares the boxed forms.
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            return self.compile_binary(op, left, right, span, trap);
         }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(lhs), Some(rhs)) if lhs == rhs && lhs.is_narrow_integer() => {
@@ -8911,18 +9364,18 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.seal_block(done_block);
         }
 
-        // The environment words may have changed (mutated captures), so the
-        // callee's words are read back into its local or owned temporary.
-        let reloaded = (0..1 + CALLABLE_ENVIRONMENT_WORDS)
-            .map(|index| {
-                self.builder.load(
-                    types::I64,
-                    MemFlags::new(),
-                    callable_ptr,
-                    (index as i32) * 8,
-                )
-            })
-            .collect::<Vec<_>>();
+        // Invoke adapters can update captured values. The descriptor that
+        // selects the adapter stays the same across calls.
+        let mut reloaded = Vec::with_capacity(1 + CALLABLE_ENVIRONMENT_WORDS);
+        reloaded.push(descriptor);
+        for index in 1..=CALLABLE_ENVIRONMENT_WORDS {
+            reloaded.push(self.builder.load(
+                types::I64,
+                MemFlags::new(),
+                callable_ptr,
+                (index as i32) * 8,
+            ));
+        }
         if let Some(root) = callee_root.as_deref() {
             if matches!(self.local_type(root)?, DirectType::Callable(_)) {
                 let vars = self.local_vars(root)?;
@@ -9298,9 +9751,7 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_call_result_owned(&mut self, value: &ValueRef) {
         match &value.ty {
             DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(value)
-            }
+            ty if ty.owned_union().is_some() => self.mark_temporary_union_owned(value),
             DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
             _ => {}
         }
@@ -9703,7 +10154,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         match op {
             RuntimeOp::Print(kind) => self.compile_print(kind, args),
-            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args),
+            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args, target),
             RuntimeOp::Function(function) => self.compile_function_op(function, args, target),
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
@@ -10118,8 +10569,28 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         builtin: HostBuiltin,
         args: &[MirArg],
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
+        if let Some(operation) = aura_runtime::runtime_value::host_builtins::INTEGER_MATH_CALLS
+            .iter()
+            .position(|&(qualified, _, arity)| qualified == name && arity == args.len())
+        {
+            let operation = self.builder.iconst(types::I64, operation as i64);
+            let left = self.load_word(&args[0], ScalarKind::Int64, true)?;
+            let right = match args.get(1) {
+                Some(arg) => self.load_word(arg, ScalarKind::Int64, true)?,
+                None => self.builder.iconst(types::I64, 0),
+            };
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::MathInteger],
+                &[operation, left, right],
+            );
+            return Ok(ValueRef {
+                values: call.results,
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            });
+        }
         if lookups::is_str_from_bytes(builtin) {
             let slot = self.lookup_payload == Some(false);
             if let Some(text) = self.compile_text_from_byte_slice(args)? {
@@ -10142,6 +10613,58 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
         }
+        if let Some(value) = self.compile_sync_access(builtin, args, target)? {
+            return Ok(value);
+        }
+        use aura_runtime::text_encodings::Encoding;
+        let literal_codec = match (name, args) {
+            ("bytes::encode" | "bytes::decode", [source, label]) => {
+                match (&source.value, &label.value) {
+                    (Operand::Place(source), Operand::String(label)) => Encoding::from_name(label)
+                        .and_then(|encoding| {
+                            Encoding::ALL
+                                .iter()
+                                .position(|supported| supported == &encoding)
+                        })
+                        .map(|code| (source, code)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let results = if let Some((source, code)) = literal_codec {
+            let source = self.load_place(source)?;
+            let code = self.builder.iconst(types::I64, code as i64);
+            let decode = self
+                .builder
+                .iconst(types::I64, i64::from(name == "bytes::decode"));
+            self.builder
+                .call(
+                    self.runtime[RuntimeFn::TextCodec],
+                    &[source.values[0], code, decode],
+                )
+                .results
+        } else {
+            self.call_host_arg_buffer(builtin, args)?
+        };
+        let semantic_type = RuntimeOp::Host(builtin)
+            .result_type(None, &[])
+            .expect("a host builtin names its result type");
+        let result = self.owned_opaque_result(results, semantic_type.clone());
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{name}`"),
+        )?;
+        self.coerce_value(result, &target)
+    }
+
+    fn call_host_arg_buffer(
+        &mut self,
+        builtin: HostBuiltin,
+        args: &[MirArg],
+    ) -> std::result::Result<Vec<Val>, String> {
+        let name = builtin.name();
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -10162,25 +10685,25 @@ impl<'a> FunctionCompiler<'a> {
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = buffer_call.results[0];
         for (index, loaded) in loaded_args.iter().enumerate() {
+            // The private collection operations consume their store. Keeping a
+            // second reference here would detach its entire snapshot on every
+            // update, even when the source program owns it exclusively.
+            let mode = if name.starts_with("collections::")
+                && builtin.metadata().params[index].passing == ReceiverKind::Value
+                && self.temporary_owns_opaque(loaded)
+            {
+                self.clear_temporary_opaque_owned(loaded);
+                RuntimeFn::ArgBufferStoreOwned
+            } else {
+                RuntimeFn::ArgBufferStore
+            };
             let index = self.builder.iconst(types::I64, index as i64);
-            self.builder.call(
-                self.runtime[RuntimeFn::ArgBufferStore],
-                &[buffer, index, loaded.values[0]],
-            );
+            self.builder
+                .call(self.runtime[mode], &[buffer, index, loaded.values[0]]);
         }
         let entry = self.host_builtin_ref(builtin)?;
         let call = self.builder.call(entry, &[buffer, count]);
-
-        let semantic_type = RuntimeOp::Host(builtin)
-            .result_type(None, &[])
-            .expect("a host builtin names its result type");
-        let result = self.owned_opaque_result(call.results, semantic_type.clone());
-        let target = ensure_direct_type(
-            &semantic_type,
-            &self.classes,
-            &format!("return value of `{name}`"),
-        )?;
-        self.coerce_value(result, &target)
+        Ok(call.results)
     }
 
     /// `json.as_int`, `json.as_float`, or `json.as_bool` whose `T | None`
@@ -10382,6 +10905,20 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
+        }
+        if let (
+            Operand::Place(place),
+            MemberCallee::Method {
+                dispatch: MethodDispatch::Static { function },
+                ..
+            },
+        ) = (object, callee)
+        {
+            if receiver_place == Some(place.as_str()) {
+                if let Some(result) = self.compile_ordered_i64_method(function, place, args)? {
+                    return Ok(result);
+                }
+            }
         }
         if let MemberCallee::Method { field, dispatch } = callee {
             if let Some(result) =
@@ -12187,6 +12724,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(element, &direct_type)
             }
             DirectType::Opaque(_) => {
+                if let Some(handle) = sync::handle_class_field(&object.ty, &self.classes) {
+                    if handle.name == field {
+                        // The instance is its handle: the same box, read
+                        // as the field's type.
+                        return Ok(ValueRef {
+                            values: object.values,
+                            ty: DirectType::Opaque(handle.ty.clone()),
+                        });
+                    }
+                }
                 let field_ty =
                     direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums);
                 if let Some(field_ty) = &field_ty {
@@ -12326,6 +12873,13 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::TypeParam(_))
                 {
                     return self.unbox_inline_union(&union, value.values[0]);
+                }
+            }
+            if matches!(&value.ty, DirectType::PlainClass(_)) && value.ty.owned_union().is_some() {
+                let boxed_ty = DirectType::Opaque(direct_type_to_type(&value.ty));
+                if union.members.iter().any(|member| member.ty == boxed_ty) {
+                    let boxed = self.ensure_opaque(value)?;
+                    return self.coerce_value_at(boxed, target, span);
                 }
             }
             // A bare member value lifts into the union it is a member of
@@ -13459,6 +14013,52 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(join_block);
     }
 
+    /// Swaps scalar slots in one unshared list view. A shared backing store,
+    /// non-scalar representation, or invalid index takes the regular swap.
+    fn emit_scalar_list_swap(
+        &mut self,
+        list: Val,
+        first: Val,
+        second: Val,
+        kind: ScalarElement,
+        function: FuncRef,
+    ) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = scalar_list_slot(kind);
+        let slow = self.builder.create_block();
+        let fast = self.builder.create_block();
+        let write = self.builder.create_block();
+        let join = self.builder.create_block();
+        self.emit_list_access_check(list, access, &layout, slow, fast);
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
+        let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
+        let capacity = self
+            .builder
+            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
+        self.builder.brif(writable, write, &[], slow, &[]);
+
+        self.builder.switch_to_block(write);
+        self.builder.seal_block(write);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
+        let left = self.scalar_list_element(elements, left, stride);
+        let right = self.scalar_list_element(elements, right, stride);
+        let a = self.load_scalar_list_element(kind, left);
+        let b = self.load_scalar_list_element(kind, right);
+        self.store_scalar_list_element(kind, b, left);
+        self.store_scalar_list_element(kind, a, right);
+        self.builder.jump(join, &[]);
+
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        self.builder.call(function, &[list, first, second]);
+        self.builder.jump(join, &[]);
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+    }
+
     /// The address of the element at `position` in unboxed storage whose
     /// elements are `stride` bytes wide.
     fn scalar_list_element(&mut self, elements: Val, position: Val, stride: i64) -> Val {
@@ -13667,6 +14267,17 @@ impl<'a> FunctionCompiler<'a> {
         let root = segments.remove(0);
         let result = if segments.is_empty() {
             self.store_root(root, value)
+        } else if let Some(root_ty) = self.handle_class_store(root, &segments) {
+            // The instance is its handle: the written box becomes the
+            // instance.
+            let value = self.ensure_opaque(value)?;
+            self.store_root(
+                root,
+                ValueRef {
+                    values: value.values,
+                    ty: root_ty,
+                },
+            )
         } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
             match self.store_class_place(place, value)? {
                 None => Ok(()),
@@ -13816,9 +14427,9 @@ impl<'a> FunctionCompiler<'a> {
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         let expected = self.local_type(name)?;
-        // A lookup slot holds a payload's box, which its `Lookup` type
-        // must not tag.
-        let value = if self.lookup_slots.contains(name) {
+        // These locals may hold a payload box or the null success marker.
+        // The declared enum describes the original MIR value.
+        let value = if self.lookup_slots.contains(name) || self.recovery_slots.contains_key(name) {
             value
         } else {
             self.coerce_value(value, &expected)?
@@ -14584,7 +15195,16 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(None);
         };
         let target_ty = self.type_of_place(target)?;
+        if target_ty == DirectType::Scalar(ScalarKind::Int64) {
+            if let Some(value) = self.map_lookup_word(place) {
+                return Ok(Some(value));
+            }
+        }
         let lent = self.lent_places.contains(place.as_str());
+        if self.recovery_slots.contains_key(place.as_str()) {
+            // The rvalue reads Ok directly from its scalar variable.
+            return Ok(None);
+        }
         if self.lookup_slots.contains(place.as_str()) {
             // The slot keeps the found value's box until its release, so a
             // scalar is read out of the box where it lies.
@@ -14695,6 +15315,9 @@ impl<'a> FunctionCompiler<'a> {
         target: &str,
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
+        if let Some(&address) = self.map_word_slots.get(target) {
+            return self.compile_map_word_lookup(value, address);
+        }
         let target_ty = self.type_of_place(target)?;
         if let Rvalue::Use(Operand::MovePlace(source)) = value {
             if self.lookup_slots.contains(source.as_str()) {
@@ -14731,6 +15354,32 @@ impl<'a> FunctionCompiler<'a> {
                 ty: target_ty,
             },
         )
+    }
+
+    fn compile_recovery_slot_assign(
+        &mut self,
+        target: &str,
+        slot: Var,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let result_type = self.type_of_place(target)?;
+        let result = match value {
+            Rvalue::Use(Operand::MovePlace(source)) => {
+                let (source_slot, _) = self
+                    .recovery_slots
+                    .get(source)
+                    .copied()
+                    .ok_or_else(|| format!("missing scalar recovery storage for `{source}`"))?;
+                let value = self.builder.use_var(source_slot);
+                self.builder.def_var(slot, value);
+                self.take_place(source)?
+            }
+            Rvalue::StartTask { function, args, .. } => self
+                .compile_recovered_call(function, args, &result_type, Some(slot))?
+                .ok_or_else(|| "direct backend lost a scalar recovered call".to_string())?,
+            _ => return Err("direct backend expected a recovered call or a move".to_string()),
+        };
+        self.store_place(target, result)
     }
 
     /// Compiles the slice of one of `text_byte_slices` to its words alone,
@@ -14798,6 +15447,9 @@ impl<'a> FunctionCompiler<'a> {
         place: &str,
         moved: bool,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(word) = self.map_lookup_word(place) {
+            return self.ensure_opaque(word);
+        }
         let payload = if moved {
             self.take_place(place)?
         } else {
@@ -15808,14 +16460,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             });
             let value = writebacks.last().expect("just pushed writeback");
-            match &value.ty {
-                DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-                DirectType::Union(union) if union.owns_handles() => {
-                    self.mark_temporary_union_owned(value)
-                }
-                DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
-                _ => {}
-            }
+            self.mark_call_result_owned(value);
             cursor += count;
         }
         let result = ValueRef {
@@ -15823,14 +16468,7 @@ impl<'a> FunctionCompiler<'a> {
             ty: result_ty,
         };
         // The callee exported one owned reference; the caller adopts it.
-        match &result.ty {
-            DirectType::Callable(_) => self.mark_temporary_callable_owned(&result),
-            DirectType::Opaque(_) => self.mark_temporary_opaque_owned(&result),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(&result)
-            }
-            _ => {}
-        }
+        self.mark_call_result_owned(&result);
         Ok((result, writebacks))
     }
 
@@ -15952,6 +16590,88 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Keep compact arithmetic in the caller. Both operands are borrowed and
+    /// the scalar branch owns no handles. The ordinary method performs every
+    /// promotion and supplies its usual owned result on the other branch.
+    fn call_numeric_method(
+        &mut self,
+        name: &str,
+        receiver: &DirectType,
+        callee: FuncRef,
+        args: &[Val],
+    ) -> Vec<Val> {
+        let operation = match name {
+            "Add[numbers.BigInt, numbers.BigInt] for numbers.BigInt.add"
+            | "Add[numbers.Decimal, numbers.Decimal] for numbers.Decimal.add" => BinaryOp::Add,
+            "Sub[numbers.BigInt, numbers.BigInt] for numbers.BigInt.sub" => BinaryOp::Sub,
+            "Mul[numbers.BigInt, numbers.BigInt] for numbers.BigInt.mul"
+            | "Mul[numbers.Decimal, numbers.Decimal] for numbers.Decimal.mul" => BinaryOp::Mul,
+            _ => return self.builder.call(callee, args).results,
+        };
+        let Some(union) = receiver.owned_union() else {
+            return self.builder.call(callee, args).results;
+        };
+        let scalar_index = union.members.iter().position(|member| {
+            member.ty == DirectType::Scalar(ScalarKind::Int64)
+                || matches!(&member.ty, DirectType::PlainClass(class) if class.class_name == "numbers.SmallDecimal")
+        });
+        let Some(scalar_index) = scalar_index else {
+            return self.builder.call(callee, args).results;
+        };
+        let count = receiver.value_count();
+        debug_assert_eq!(args.len(), 2 * count);
+        let (left, right) = args.split_at(count);
+        let fallback = self.builder.create_block();
+        let done = self.builder.create_block();
+        for _ in 0..count {
+            self.builder.append_block_param(done, types::I64);
+        }
+        let tag = self.builder.iconst(types::I64, scalar_index as i64);
+        let a_small = self.builder.icmp(IntCC::Equal, left[0], tag);
+        let b_small = self.builder.icmp(IntCC::Equal, right[0], tag);
+        let both_small = self.builder.band(a_small, b_small);
+        if count == 2 {
+            let (value, overflow) = match operation {
+                BinaryOp::Add => self.builder.sadd_overflow(left[1], right[1]),
+                BinaryOp::Sub => self.builder.ssub_overflow(left[1], right[1]),
+                _ => self.builder.smul_overflow(left[1], right[1]),
+            };
+            let fits = self.builder.icmp_imm(IntCC::Equal, overflow, 0);
+            let inline = self.builder.band(both_small, fits);
+            self.builder
+                .brif(inline, done, &[tag, value], fallback, &[]);
+        } else {
+            let calculate = self.builder.create_block();
+            let found = self.builder.create_block();
+            self.builder.brif(both_small, calculate, &[], fallback, &[]);
+            self.builder.switch_to_block(calculate);
+            self.builder.seal_block(calculate);
+            let slot = self.builder.create_sized_stack_slot(16, 3);
+            let out = self.builder.stack_addr(types::I64, slot, 0);
+            let multiply = self
+                .builder
+                .iconst(types::I64, i64::from(operation == BinaryOp::Mul));
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::SmallDecimalBinary],
+                &[multiply, left[1], left[2], right[1], right[2], out],
+            );
+            let fits = self.builder.icmp_imm(IntCC::NotEqual, call.results[0], 0);
+            self.builder.brif(fits, found, &[], fallback, &[]);
+            self.builder.switch_to_block(found);
+            self.builder.seal_block(found);
+            let coefficient = self.builder.load(types::I64, MemFlags::new(), out, 0);
+            let exponent = self.builder.load(types::I64, MemFlags::new(), out, 8);
+            self.builder.jump(done, &[tag, coefficient, exponent]);
+        }
+        self.builder.switch_to_block(fallback);
+        self.builder.seal_block(fallback);
+        let result = self.builder.call(callee, args).results;
+        self.builder.jump(done, &result);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.block_params(done)
+    }
+
     /// Calls the method `function` MIR resolved for a member call, with
     /// the receiver first. A `mut self` receiver writes back to its place.
     fn compile_method_call(
@@ -16055,8 +16775,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-        let inst = self.builder.call(func_ref, &lowered_args);
-        let results = inst.results;
+        let results =
+            self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
         if keeps_shape {
@@ -16366,7 +17086,7 @@ impl<'a> FunctionCompiler<'a> {
         let object = self.ensure_opaque(object)?;
         let zero = self.builder.iconst(types::I64, 0);
         let (argument, count) = match (op, args.first()) {
-            (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
+            (RuntimeOp::Str(StrOp::Repeat | StrOp::CharAt), Some(argument)) => {
                 let count =
                     self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
                 let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
@@ -16520,6 +17240,47 @@ impl<'a> FunctionCompiler<'a> {
                     ),
                     other => (other.clone(), direct_type_to_type(other)),
                 };
+                if object.ty == DirectType::Scalar(ScalarKind::Int64)
+                    && matches!(
+                        op,
+                        ScalarOp::WrappingAdd
+                            | ScalarOp::WrappingSub
+                            | ScalarOp::WrappingMul
+                            | ScalarOp::SaturatingAdd
+                            | ScalarOp::SaturatingSub
+                            | ScalarOp::SaturatingMul
+                    )
+                {
+                    let rhs = self.load_operand_for_target(&argument.value, &target)?;
+                    let rhs = self.coerce_value(rhs, &target)?.values[0];
+                    let lhs = object.values[0];
+                    let value = match op {
+                        ScalarOp::WrappingAdd => self.builder.iadd(lhs, rhs),
+                        ScalarOp::WrappingSub => self.builder.isub(lhs, rhs),
+                        ScalarOp::WrappingMul => self.builder.imul(lhs, rhs),
+                        _ => {
+                            let (result, overflow) = match op {
+                                ScalarOp::SaturatingAdd => self.builder.sadd_overflow(lhs, rhs),
+                                ScalarOp::SaturatingSub => self.builder.ssub_overflow(lhs, rhs),
+                                _ => self.builder.smul_overflow(lhs, rhs),
+                            };
+                            let sign = if op == ScalarOp::SaturatingMul {
+                                self.builder.bxor(lhs, rhs)
+                            } else {
+                                lhs
+                            };
+                            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, sign, 0);
+                            let min = self.builder.iconst(types::I64, i64::MIN);
+                            let max = self.builder.iconst(types::I64, i64::MAX);
+                            let limit = self.builder.select(negative, min, max);
+                            self.builder.select(overflow, limit, result)
+                        }
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: target,
+                    });
+                }
                 let left = self.ensure_opaque(object)?;
                 let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
                 let mut words = vec![left.values[0], right.values[0]];
@@ -16939,7 +17700,11 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Swap => {
                 let first = self.load_word(args[0], int64, false)?;
                 let second = self.load_word(args[1], int64, false)?;
-                self.builder.call(function, &[list, first, second]);
+                if let Some(kind) = ScalarElement::of(&element_ty) {
+                    self.emit_scalar_list_swap(list, first, second, kind, function);
+                } else {
+                    self.builder.call(function, &[list, first, second]);
+                }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -17103,16 +17868,20 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(indexed, &value_direct_ty)
             }
             DictOp::SetIndex if value_direct_ty == DirectType::Scalar(ScalarKind::Int64) => {
-                // An `int64` value goes in as its word, with no box.
-                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
-                let loaded =
-                    self.load_operand_with_integer_hint(&args[1].value, Some(ScalarKind::Int64))?;
-                let value = self.coerce_value(loaded, &value_direct_ty)?.values[0];
-                let key = self.transfer_owned_opaque_value(&key);
-                self.builder.call(
-                    self.runtime[RuntimeFn::MapSetIndexInt64],
-                    &[map, key, value],
-                );
+                let (key, entry) = if key_direct_ty == DirectType::Scalar(ScalarKind::Int64) {
+                    (
+                        self.load_word(args[0], ScalarKind::Int64, true)?,
+                        RuntimeFn::MapSetIndexInt64Pair,
+                    )
+                } else {
+                    let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                    (
+                        self.transfer_owned_opaque_value(&key),
+                        RuntimeFn::MapSetIndexInt64,
+                    )
+                };
+                let value = self.load_word(args[1], ScalarKind::Int64, true)?;
+                self.builder.call(self.runtime[entry], &[map, key, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -17239,6 +18008,32 @@ impl<'a> FunctionCompiler<'a> {
                 let result = self.emit_collection_operation(call, set, Some(value.values[0]), None);
                 self.store_receiver_back(receiver_place, &object)?;
                 self.release_opaque_handle(result);
+                Ok(unit_value(&mut *self.builder))
+            }
+            SetOp::Union
+            | SetOp::Intersection
+            | SetOp::Difference
+            | SetOp::SymmetricDifference
+            | SetOp::IsSubset
+            | SetOp::IsSuperset
+            | SetOp::IsDisjoint => {
+                // The other set is read where it lies.
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let result = self.emit_collection_operation(call, set, Some(other.values[0]), None);
+                if matches!(op, SetOp::IsSubset | SetOp::IsSuperset | SetOp::IsDisjoint) {
+                    let boxed = self.owned_opaque_result(vec![result], Type::named("bool"));
+                    return self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool));
+                }
+                Ok(self.owned_opaque_result(vec![result], set_ty))
+            }
+            SetOp::Update => {
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let other = self.transfer_owned_opaque_value(&other);
+                let result = self.emit_collection_operation(call, set, Some(other), None);
+                self.release_opaque_handle(result);
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             SetOp::Clear => {
@@ -18027,6 +18822,9 @@ impl<'a> FunctionCompiler<'a> {
             "direct backend does not know class `{}`",
             class_name
         ))?;
+        if let Some(built) = self.construct_handle_class(fields, target_ty)? {
+            return Ok(built);
+        }
         if let Some(built) = self.construct_class_in_place(class_name, fields, target_ty, &class)? {
             return Ok(built);
         }
@@ -18085,6 +18883,11 @@ impl<'a> FunctionCompiler<'a> {
             spawn_span,
             target,
         } = task;
+        if mode.recover {
+            if let Some(result) = self.compile_recovered_call(function, args, target, None)? {
+                return Ok(result);
+            }
+        }
         let function_value = self.load_operand(function)?;
         let function_value = self.ensure_opaque(function_value)?;
         let function_params =
@@ -18160,9 +18963,14 @@ impl<'a> FunctionCompiler<'a> {
                 .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
             self.tag_raw_opaque_runtime_type(raw, &expected[index])?;
         }
-        let returns_handle_value = self
-            .builder
-            .iconst(types::I64, if mode.returns_handle { 1 } else { 0 });
+        let returns_handle_value = self.builder.iconst(
+            types::I64,
+            if mode.recover {
+                aura_runtime::native_runtime::DIRECT_START_RECOVERS
+            } else {
+                i64::from(mode.returns_handle)
+            },
+        );
         let result_is_copy_value = self
             .builder
             .iconst(types::I64, if mode.result_is_copy { 1 } else { 0 });
@@ -18180,9 +18988,14 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.iconst(types::I64, 0),
             ),
         };
-        let group = self.load_operand(task_group)?;
-        let group = self.ensure_opaque(group)?;
-        let task_group_value = group.values[0];
+        let task_group_value = if mode.recover {
+            // A recovered call starts no task, so it has no group.
+            self.builder.iconst(types::I64, 0)
+        } else {
+            let group = self.load_operand(task_group)?;
+            let group = self.ensure_opaque(group)?;
+            group.values[0]
+        };
         let current_function_name = self.current_function_name.clone();
         let current_function_path = self.current_function_path.clone();
         let (parent_function_ptr, parent_function_len) =
@@ -18233,6 +19046,180 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(unit_value(&mut *self.builder))
             }
         }
+    }
+
+    /// A `control.recover` call of a named function, made as an ordinary
+    /// call on this stack (ADR-0104). The runtime gives the callee a frame
+    /// stack and a ledger of its own between `RecoverBegin` and
+    /// `RecoverEnd`, and a trap inside it comes back out of `_setjmp` a
+    /// second time. `None` for a call this path does not cover, which the
+    /// caller then makes through the runtime: a closure or stored target,
+    /// arguments left to defaults or passed by name, a value that owns
+    /// handles inline, or a target without `_setjmp`.
+    fn compile_recovered_call(
+        &mut self,
+        function: &Operand,
+        args: &[MirArg],
+        target: &DirectType,
+        success_slot: Option<Var>,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Operand::Function { name, .. } = function else {
+            return Ok(None);
+        };
+        let checked_body = self
+            .recovery_refs
+            .get(name)
+            .copied()
+            .filter(|_| success_slot.is_some());
+        if !cfg!(unix) && checked_body.is_none() {
+            return Ok(None);
+        }
+        let DirectType::Opaque(result_type) = target else {
+            return Ok(None);
+        };
+        let Some(func_ref) = self.function_refs.get(name.as_str()).copied() else {
+            return Ok(None);
+        };
+        let expected = self
+            .function_param_types
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_default();
+        // A concrete opaque box can move between ledgers. Embedded handles and
+        // generic results require the runtime call path to transfer or adapt
+        // the payload before it becomes the successful Result.
+        let plain = |ty: &DirectType| match ty {
+            DirectType::Opaque(ty) => !crate::sema::has_unresolved_type_params(ty),
+            _ => !layout_owns_handles(ty),
+        };
+        if args.len() != expected.len()
+            || args
+                .iter()
+                .any(|arg| arg.name.is_some() || arg.writeback_place.is_some())
+            || !expected.iter().all(plain)
+            || !plain(&self.call_result_type(name)?)
+            || self
+                .function_writeback_types
+                .get(name.as_str())
+                .is_some_and(|types| !types.is_empty())
+        {
+            return Ok(None);
+        }
+        // The arguments the callee borrows are released here after it
+        // returns. The others it consumes.
+        let kept = self
+            .borrowing
+            .get(name.as_str())
+            .map(|callee| callee.params.clone())
+            .unwrap_or_default();
+        let mut words = Vec::new();
+        let mut handles = Vec::new();
+        let mut borrowed = Vec::new();
+        for (index, (arg, expected)) in args.iter().zip(&expected).enumerate() {
+            let loaded = self.load_operand_for_target(&arg.value, expected)?;
+            let value = self.coerce_value(loaded, expected)?;
+            if matches!(value.ty, DirectType::Opaque(_)) {
+                let handle = self.transfer_opaque_arg(&value);
+                handles.push(handle);
+                if kept.get(index) == Some(&MirReceiverKind::Borrow) {
+                    borrowed.push(handle);
+                }
+                words.push(handle);
+            } else {
+                words.extend(value.values.iter().copied());
+            }
+        }
+        if let (Some(callee), Some(slot)) = (checked_body, success_slot) {
+            let call = self.builder.call(callee, &words);
+            self.builder.def_var(slot, call.results[0]);
+            return Ok(Some(
+                self.owned_opaque_result(vec![call.results[1]], result_type.clone()),
+            ));
+        }
+        let slot = self.builder.create_sized_stack_slot(
+            aura_runtime::native_runtime::DIRECT_RECOVER_JUMP_BUFFER_BYTES,
+            4,
+        );
+        let buffer = self.builder.stack_addr(types::I64, slot, 0);
+        let address = self.builder.func_addr(types::I64, func_ref);
+        let signature = self.builder.signature_of(func_ref);
+        let begun = self
+            .builder
+            .call(self.runtime[RuntimeFn::RecoverBegin], &[buffer, address]);
+        let callee = begun.results[0];
+        for handle in &handles {
+            self.builder
+                .call(self.runtime[RuntimeFn::RecoverAdopt], &[*handle]);
+        }
+        let set_jump = declare_runtime_function(
+            self.builder.module(),
+            crate::runtime_abi::RECOVER_SET_JUMP,
+            &[types::I64],
+            Some(types::I32),
+        )?;
+        let set_jump = self.builder.import_function(set_jump);
+        let resumed = self.builder.call(set_jump, &[buffer]);
+        let trapped = self
+            .builder
+            .icmp_imm(IntCC::NotEqual, resumed.results[0], 0);
+        let call_block = self.builder.create_block();
+        let trap_block = self.builder.create_block();
+        let done = self.builder.create_block();
+        let result = self.builder.append_block_param(done, types::I64);
+        self.builder.brif(trapped, trap_block, &[], call_block, &[]);
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        let call = self.builder.call_indirect(signature, callee, &words);
+        for handle in borrowed {
+            self.release_opaque_handle(handle);
+        }
+        let (returned, _) = self.split_call_results(name, call.results)?;
+        // The box the function returned moves to this function's ledger
+        // as the call ends, and the `Result` is built here like any other.
+        let moved = if matches!(returned.ty, DirectType::Opaque(_)) {
+            returned.values[0]
+        } else {
+            self.builder.iconst(types::I64, 0)
+        };
+        self.builder
+            .call(self.runtime[RuntimeFn::RecoverEnd], &[moved]);
+        self.mark_temporary_opaque_owned(&returned);
+        if let Some(slot) = success_slot {
+            self.builder.def_var(slot, returned.values[0]);
+            let null = self.builder.iconst(types::I64, 0);
+            self.builder.jump(done, &[null]);
+        } else {
+            let ok = match self.construct_variant_in_place_from_values(
+                result_type,
+                "Ok",
+                std::slice::from_ref(&returned),
+            )? {
+                Some(ok) => ok,
+                None => self.compile_enum_variant_from_values(
+                    "Result",
+                    "Ok",
+                    vec![returned],
+                    result_type.clone(),
+                )?,
+            };
+            self.clear_temporary_opaque_owned(&ok);
+            self.builder.jump(done, &[ok.values[0]]);
+        }
+
+        self.builder.switch_to_block(trap_block);
+        self.builder.seal_block(trap_block);
+        self.builder.set_cold_block(trap_block);
+        let err = self
+            .builder
+            .call(self.runtime[RuntimeFn::RecoverTrapped], &[]);
+        self.builder.jump(done, &[err.results[0]]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        Ok(Some(
+            self.owned_opaque_result(vec![result], result_type.clone()),
+        ))
     }
 
     fn value_matches_type(
@@ -18627,6 +19614,106 @@ fn small_leaf(function: &MirFunction) -> bool {
             .map(|block| block.instructions.len())
             .sum::<usize>()
             <= LEAF_INLINE_INSTRUCTIONS
+}
+
+/// A recovered entry can return an error directly if every instruction
+/// outside a failed check is a total scalar operation. A failed check has a
+/// literal or scalar-formatted message and only renders scalar operands for the richer diagnostic
+/// of an uncaught check. Calls, cleanup, loops and implicit traps keep their
+/// full recovery boundary.
+fn checked_scalar_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    let scalar = |ty: &Type| matches!(direct_type(ty, classes), Some(DirectType::Scalar(_)));
+    if !small_leaf(function)
+        || function.receiver.is_some()
+        || takes_mutable(function)
+        || !scalar(&function.return_type)
+        || !function.params.iter().all(|param| scalar(&param.ty))
+    {
+        return false;
+    }
+    let local_scalar = |place: &str| {
+        function
+            .local_types
+            .iter()
+            .any(|local| local.name == place && scalar(&local.ty))
+            || function
+                .params
+                .iter()
+                .any(|param| param.name == place && scalar(&param.ty))
+    };
+    let plain = |operand: &Operand| match operand {
+        Operand::Place(place) | Operand::MovePlace(place) => local_scalar(place),
+        Operand::Int(_) | Operand::Float(_) | Operand::Bool(_) | Operand::Unit => true,
+        _ => false,
+    };
+    function.blocks.iter().all(|block| {
+        if let Terminator::AssertFail { message, .. } = &block.terminator {
+            let has_message = match message {
+                None | Some(Operand::String(_)) => true,
+                Some(Operand::Place(name) | Operand::MovePlace(name)) => {
+                    block.instructions.iter().any(|instruction| {
+                        matches!(instruction, Instruction::Assign {
+                            target,
+                            value: Rvalue::FormatString { .. },
+                        } if target == name)
+                    })
+                }
+                _ => false,
+            };
+            return has_message
+                && block
+                    .instructions
+                    .iter()
+                    .all(|instruction| match instruction {
+                        Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                        Instruction::Assign {
+                            target,
+                            value: Rvalue::Use(operand),
+                        } => local_scalar(target) && plain(operand),
+                        Instruction::Assign {
+                            value: Rvalue::FormatString { parts },
+                            ..
+                        } => parts.iter().all(|part| match part {
+                            crate::mir::MirFormatPart::Literal(_) => true,
+                            crate::mir::MirFormatPart::Value(value)
+                            | crate::mir::MirFormatPart::Int64(value) => plain(value),
+                            _ => false,
+                        }),
+                        _ => false,
+                    });
+        }
+        let total = block
+            .instructions
+            .iter()
+            .all(|instruction| match instruction {
+                Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                Instruction::Assign { target, value } if local_scalar(target) => match value {
+                    Rvalue::Use(value) => plain(value),
+                    Rvalue::Unary {
+                        value,
+                        trap: crate::mir::ArithmeticTrap::None,
+                        ..
+                    } => plain(value),
+                    Rvalue::Binary {
+                        left,
+                        right,
+                        trap: crate::mir::ArithmeticTrap::None,
+                        ..
+                    } => plain(left) && plain(right),
+                    _ => false,
+                },
+                _ => false,
+            });
+        total
+            && match &block.terminator {
+                Terminator::Return(value)
+                | Terminator::Branch {
+                    condition: value, ..
+                } => plain(value),
+                Terminator::Goto(_) => true,
+                _ => false,
+            }
+    })
 }
 
 /// Reading a numeric member of a C union borrows the receiver's bytes.
@@ -19132,6 +20219,34 @@ fn emit_call_safepoint(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable
     let interval = builder.iconst(types::I64, DIRECT_CALL_SAFEPOINT_INTERVAL as i64);
     builder.store(header, interval, stack, layout.call_fuel_offset);
     builder.call(runtime[RuntimeFn::YieldNow], &[]);
+    builder.jump(done, &[]);
+
+    builder.seal_block(done);
+    builder.switch_to_block(done);
+    done
+}
+
+/// Traps when the machine stack has less than the task's reserve left. A
+/// call chain grows without bound only through a function on a call cycle,
+/// so the entries of those functions are where the stack is checked. The
+/// address of a slot of this frame stands for the stack pointer; the frame
+/// stack holds the lowest address it may have, or 0 when the task's stack
+/// is not known. Returns the block the code continues in.
+fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) -> Blk {
+    let layout = frame_stack_layout();
+    let header = MemFlags::trusted_in(AliasClass::FrameHeader);
+    let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
+    let slot = builder.create_sized_stack_slot(8, 3);
+    let stack_pointer = builder.stack_addr(types::I64, slot, 0);
+    let limit = builder.load(types::I64, header, stack, layout.stack_limit_offset);
+    let exhausted = builder.icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
+    let (fast_block, slow_block, done) = emit_frame_branch(builder, exhausted);
+
+    builder.switch_to_block(fast_block);
+    builder.jump(done, &[]);
+
+    builder.switch_to_block(slow_block);
+    builder.call(runtime[RuntimeFn::StackExhausted], &[]);
     builder.jump(done, &[]);
 
     builder.seal_block(done);
@@ -20157,8 +21272,7 @@ fn direct_ffi_type_for_source(
 fn layout_owns_handles(ty: &DirectType) -> bool {
     match ty {
         DirectType::Opaque(_) | DirectType::Callable(_) => true,
-        DirectType::Union(union) => union.owns_handles(),
-        DirectType::Scalar(_) | DirectType::PlainClass(_) => false,
+        other => other.owned_union().is_some(),
     }
 }
 
@@ -20199,7 +21313,18 @@ fn direct_type_inner(
                         matches!(candidate, Type::Named(name, _) if classes.contains_key(name))
                     })
                     .unwrap_or_else(|| member.clone());
-                members.push(direct_type_inner(&resolved, classes, visiting)?);
+                let layout = direct_type_inner(&resolved, classes, visiting)?;
+                // A union payload holds at most one layer of ownership
+                // tags. Box a number at this boundary and recover its
+                // private storage words on the next concrete read.
+                let layout = if matches!(&layout, DirectType::PlainClass(_))
+                    && layout.owned_union().is_some()
+                {
+                    DirectType::Opaque(resolved)
+                } else {
+                    layout
+                };
+                members.push(layout);
             }
             Some(DirectType::Union(DirectUnionType::new(ty.clone(), members)))
         }
@@ -20220,7 +21345,11 @@ fn direct_type_inner(
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }
         Type::Named(name, args)
-            if args.is_empty() && (name == "random.Rng" || name == "iter.GeneratorHandle") =>
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "random.Rng" | "iter.GeneratorHandle" | "collections.__Store"
+                ) =>
         {
             Some(DirectType::Opaque(Type::named(name)))
         }
@@ -20235,12 +21364,12 @@ fn direct_type_inner(
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     };
-                    let owns_handles = match &field_ty {
-                        DirectType::Opaque(_) | DirectType::Callable(_) => true,
-                        DirectType::Union(union) => union.owns_handles(),
-                        _ => false,
-                    };
-                    if owns_handles {
+                    let numeric_storage =
+                        matches!(name.as_str(), "numbers.BigInt" | "numbers.Decimal")
+                            && class.fields.len() == 1
+                            && field.name == "storage"
+                            && matches!(field_ty, DirectType::Union(_));
+                    if layout_owns_handles(&field_ty) && !numeric_storage {
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     }
@@ -21188,8 +22317,15 @@ fn collect_task_start_targets(
                 continue;
             }
             for instruction in &block.instructions {
+                // A recovered call runs in its caller's task, so it alone
+                // gives a loop nothing to yield to.
                 if let Instruction::Assign {
-                    value: Rvalue::StartTask { function, .. },
+                    value:
+                        Rvalue::StartTask {
+                            recover: false,
+                            function,
+                            ..
+                        },
                     ..
                 } = instruction
                 {
@@ -21244,10 +22380,14 @@ mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
+#[path = "native_codegen_ordered.rs"]
+mod ordered;
 #[path = "native_codegen_plain.rs"]
 mod plain;
 #[path = "native_codegen_shapes.rs"]
 mod shapes;
+#[path = "native_codegen_sync.rs"]
+mod sync;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
@@ -21272,6 +22412,6 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
         ty,
         Type::Named(name, args)
             if args.is_empty()
-                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration")
+                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }

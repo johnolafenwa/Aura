@@ -50,7 +50,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Closures And Method Values
 
-- Closures are contextually typed `lambda parameters: expression` expressions.
+- A closure can use a contextually typed lambda expression or a local `def` with a written signature and a statement body.
 - Without a capture list, Copy values copy and owned non-Copy values move when the closure is created.
 - An exhaustive capture list may have shared, mutable, and owned entries. Shared-loan use is repeatable. Mutable-loan use is repeatable through a mutable closure place. Consuming owned-capture use is single-use.
 - A by-value closure is Transfer only when every capture is Transfer. A loan closure is never Transfer.
@@ -73,13 +73,13 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Foreign Functions
 
-- Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
+- A package enables the foreign function interface with `allow_ffi = true` in its manifest.
 - Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to elements of lists or Arrays, C structs with scalar or fixed-size array fields, C unions, pointer-length text and byte views, NUL-terminated `cstr` text, and opaque handles. A named top-level callback accepts scalars, pointers to one scalar, and `cstr` parameters.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
 - An extern parameter or result may be `Handle | None` or `cstr | None`, marshalled as one nullable C pointer.
-- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, C unions, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
+- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, assignment to C union members, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
 - FFI is an unsafe native boundary. It is not a memory safety promise for a false declaration or a misbehaving C implementation.
 
 ### Comprehensions
@@ -96,7 +96,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
+- `text[index]` reads one character of a `str`. Slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays

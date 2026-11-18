@@ -2163,6 +2163,9 @@ impl Parser {
     }
 
     fn parse_stmt_inner(&mut self) -> Result<Stmt> {
+        if self.at_simple(&TokenKind::KwDef) {
+            return self.parse_local_function();
+        }
         if let Some(kind) = self.at_contract_clause() {
             return Err(misplaced_contract_error(self.current_span(), kind));
         }
@@ -3096,6 +3099,7 @@ impl Parser {
             | TokenKind::BoolLiteral(_)
             | TokenKind::StringLiteral(_)
             | TokenKind::FStringLiteral(_)
+            | TokenKind::BytesLiteral(_)
             | TokenKind::KwNot
             | TokenKind::KwTry
             | TokenKind::KwMatch
@@ -3631,13 +3635,7 @@ impl Parser {
         }
     }
 
-    fn parse_lambda(&mut self) -> Result<Expr> {
-        let token = self.bump();
-        debug_assert!(matches!(
-            token.kind,
-            TokenKind::Identifier(ref name) if name == "lambda"
-        ));
-
+    fn parse_closure_captures(&mut self) -> Result<Option<Vec<LambdaCapture>>> {
         let captures = if self.eat_simple(&TokenKind::LBracket).is_some() {
             let mut captures = Vec::new();
             if self.eat_simple(&TokenKind::RBracket).is_none() {
@@ -3675,6 +3673,91 @@ impl Parser {
         } else {
             None
         };
+
+        Ok(captures)
+    }
+
+    fn parse_local_function(&mut self) -> Result<Stmt> {
+        let span = self.expect_keyword(TokenKind::KwDef)?.span;
+        let name_span = self.current_span();
+        let name = self.expect_identifier()?;
+        let captures = self.parse_closure_captures()?;
+        self.expect_simple(TokenKind::LParen)?;
+        let (_, params) = self.parse_params(false)?;
+        self.expect_simple(TokenKind::RParen)?;
+        if let Some(param) = params.iter().find(|param| param.default.is_some()) {
+            return Err(parse_error(
+                param.span,
+                "local function parameters cannot have defaults",
+            ));
+        }
+        if !self.at_simple(&TokenKind::Arrow) {
+            return Err(parse_error(
+                span,
+                "a local function needs a written return type",
+            ));
+        }
+        let (result, view) = self.parse_return_annotation(span)?;
+        if view.is_some() {
+            return Err(parse_error(span, "a local function cannot return a view"));
+        }
+        self.expect_simple(TokenKind::Colon)?;
+        self.expect_newline()?;
+        let old_view_return = std::mem::replace(&mut self.current_function_returns_view, false);
+        let old_ghosts = std::mem::take(&mut self.ghost_locals);
+        let body = self.parse_block();
+        self.current_function_returns_view = old_view_return;
+        self.ghost_locals = old_ghosts;
+        let statements = body?;
+        let signature = TypeRef::function_with_params(
+            params
+                .iter()
+                .map(|param| FunctionTypeParam {
+                    name: Some(param.name.clone()),
+                    mode: param.mode,
+                    ty: param.ty.clone(),
+                    keyword_only: param.keyword_only,
+                    has_default: false,
+                    span: param.span,
+                })
+                .collect(),
+            result,
+            span,
+        );
+        let params = params
+            .into_iter()
+            .map(|param| LambdaParam {
+                name: param.name,
+                mode: param.mode,
+                keyword_only: param.keyword_only,
+                span: param.span,
+            })
+            .collect();
+        Ok(Stmt::Assign(AssignStmt {
+            mutable: false,
+            op: None,
+            span: name_span,
+            target: AssignTarget::Name(name.clone()),
+            annotation: Some(signature),
+            value: Expr {
+                span,
+                kind: ExprKind::Lambda {
+                    captures,
+                    params,
+                    body: crate::ast::ClosureBody::Function { name, statements },
+                },
+            },
+        }))
+    }
+
+    fn parse_lambda(&mut self) -> Result<Expr> {
+        let token = self.bump();
+        debug_assert!(matches!(
+            token.kind,
+            TokenKind::Identifier(ref name) if name == "lambda"
+        ));
+
+        let captures = self.parse_closure_captures()?;
 
         let mut params: Vec<LambdaParam> = Vec::new();
         let mut keyword_only = false;
@@ -3758,7 +3841,7 @@ impl Parser {
             kind: ExprKind::Lambda {
                 captures,
                 params,
-                body: Box::new(body),
+                body: crate::ast::ClosureBody::Expression(Box::new(body)),
             },
             span: token.span,
         })
@@ -4301,6 +4384,7 @@ impl Parser {
                 kind: ExprKind::FString(self.parse_format_parts(&value, token.span)?),
                 span: token.span,
             }),
+            TokenKind::BytesLiteral(value) => Ok(bytes_literal_expr(&value, token.span)),
             TokenKind::LParen => {
                 if self.at_simple(&TokenKind::RParen) {
                     return Err(parse_error(
@@ -5705,7 +5789,9 @@ fn offset_expr_span(expr: &mut Expr, line: usize, column_offset: usize) {
                 param.span.line = line;
                 param.span.column += column_offset;
             }
-            offset_expr_span(body, line, column_offset);
+            if let crate::ast::ClosureBody::Expression(value) = body {
+                offset_expr_span(value, line, column_offset);
+            }
         }
         ExprKind::Membership {
             value,
@@ -6004,6 +6090,48 @@ fn single_axis_slice(object: Expr, slice: ArrayAxisSlice<'_>) -> Expr {
                 argument(step.clone()),
             ],
         },
+        span,
+    }
+}
+
+/// The expression a byte-string literal stands for, a fresh `list[uint8]`.
+/// ASCII bytes are the UTF-8 bytes of the same text, so the literal is
+/// `"...".to_bytes()`, one copy. Any other literal is the list of its bytes,
+/// each written as `N as uint8`.
+fn bytes_literal_expr(bytes: &[u8], span: Span) -> Expr {
+    if let Some(text) = std::str::from_utf8(bytes).ok().filter(|_| bytes.is_ascii()) {
+        return Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(Expr {
+                            kind: ExprKind::String(text.to_string()),
+                            span,
+                        }),
+                        field: "to_bytes".to_string(),
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+    }
+    let elements = bytes
+        .iter()
+        .map(|byte| Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(Expr {
+                    kind: ExprKind::Int(u128::from(*byte)),
+                    span,
+                }),
+                ty: TypeRef::named("uint8", Vec::new(), false, span),
+            },
+            span,
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::List(elements),
         span,
     }
 }

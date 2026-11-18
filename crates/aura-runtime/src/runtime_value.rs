@@ -20,7 +20,7 @@ use std::process::{
 };
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
@@ -75,8 +75,12 @@ pub mod host_builtins;
 pub mod http_client;
 #[path = "image_host.rs"]
 pub mod image_host;
+#[path = "ordered_collections.rs"]
+pub mod ordered_collections;
 #[path = "regex_host.rs"]
 pub mod regex_host;
+#[path = "sync_host.rs"]
+pub mod sync_host;
 #[path = "tensor_host.rs"]
 pub mod tensor_host;
 #[path = "time_host.rs"]
@@ -84,12 +88,14 @@ pub mod time_host;
 
 pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
 pub use generator::{
-    generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
-    DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
+    generator_yield, run_isolated, running_generator_depth, without_generator_drop_close,
+    GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
+    DIRECT_RECOVER_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
 pub use http_client::HttpResponseValue;
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
+pub use sync_host::SyncValue;
 pub use tensor_host::{TensorDevice, TensorValue};
 
 type HttpHeaders = Vec<(String, String)>;
@@ -340,6 +346,8 @@ pub enum Value {
     HttpExchange(HttpExchangeValue),
     HttpResponse(HttpResponseValue),
     Tensor(TensorValue),
+    /// A `sync.Cell` or `sync.Atom`: state several tasks share.
+    Sync(SyncValue),
     WebSocketListener(WebSocketListenerValue),
     WebSocket(WebSocketValue),
     ProcessChild(ProcessChildValue),
@@ -352,6 +360,7 @@ pub enum Value {
     TlsStream(TlsStreamValue),
     /// A generator frame (Batch 9). Not Transfer and not cloneable.
     Generator(GeneratorValue),
+    CollectionStore(ordered_collections::Store),
     /// A trait object of the interpreter: a value together with the type it
     /// had where it was converted. Generated code keeps the value in its own
     /// box instead and never builds this.
@@ -1105,6 +1114,23 @@ pub use crate::native_runtime::TypedFields;
 pub enum InstanceFields {
     Map(BTreeMap<String, Value>),
     Typed(TypedFields),
+    /// Recovered failure details are formatted when Aura first reads a field.
+    Recovered(Arc<RecoveredTrapFields>),
+}
+
+/// An immutable snapshot of the failed call. Copies share the snapshot until
+/// their first write, when they become ordinary independent field maps.
+pub struct RecoveredTrapFields {
+    fields: LazyLock<BTreeMap<String, Value>, TrapFieldInitializer>,
+}
+
+// Only a program that constructs a Trap needs to link its diagnostic formatter.
+type TrapFieldInitializer = Box<dyn FnOnce() -> BTreeMap<String, Value> + Send + Sync>;
+
+impl RecoveredTrapFields {
+    fn map(&self) -> &BTreeMap<String, Value> {
+        &self.fields
+    }
 }
 
 impl Default for InstanceFields {
@@ -1171,7 +1197,7 @@ impl InstanceFields {
     pub fn typed(&self) -> Option<&TypedFields> {
         match self {
             Self::Typed(typed) => Some(typed),
-            Self::Map(_) => None,
+            Self::Map(_) | Self::Recovered(_) => None,
         }
     }
 
@@ -1181,6 +1207,7 @@ impl InstanceFields {
     pub fn map(&self) -> &BTreeMap<String, Value> {
         match self {
             Self::Map(fields) => fields,
+            Self::Recovered(details) => details.map(),
             Self::Typed(typed) => panic!(
                 "instance of `{}` keeps its fields in its layout",
                 typed.layout().class_name()
@@ -1192,19 +1219,23 @@ impl InstanceFields {
     /// fields there. Generated code then reads the instance through the
     /// runtime, so only paths that are rare take it.
     pub fn map_mut(&mut self) -> &mut BTreeMap<String, Value> {
+        if let Self::Recovered(details) = self {
+            *self = Self::Map(details.map().clone());
+        }
         if let Self::Typed(typed) = self {
             let typed = std::mem::replace(typed, TypedFields::new(typed.layout()));
             *self = Self::Map(typed.into_map());
         }
         match self {
             Self::Map(fields) => fields,
-            Self::Typed(_) => unreachable!("the layout was turned into a map"),
+            Self::Typed(_) | Self::Recovered(_) => unreachable!("the layout was turned into a map"),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             Self::Map(fields) => fields.len(),
+            Self::Recovered(details) => details.map().len(),
             Self::Typed(typed) => typed.len(),
         }
     }
@@ -1216,6 +1247,7 @@ impl InstanceFields {
     pub fn contains_key(&self, name: &str) -> bool {
         match self {
             Self::Map(fields) => fields.contains_key(name),
+            Self::Recovered(details) => details.map().contains_key(name),
             Self::Typed(typed) => typed.contains_key(name),
         }
     }
@@ -1223,6 +1255,7 @@ impl InstanceFields {
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         match self {
             Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
+            Self::Recovered(details) => details.map().get(name).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(name),
         }
     }
@@ -1230,6 +1263,7 @@ impl InstanceFields {
     pub fn iter(&self) -> InstanceFieldIter<'_> {
         match self {
             Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
+            Self::Recovered(details) => InstanceFieldIter::Map(details.map().iter()),
             Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
         }
     }
@@ -1238,6 +1272,7 @@ impl InstanceFields {
     pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
         match self {
             Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
+            Self::Recovered(details) => Box::new(details.map().keys().map(String::as_str)),
             Self::Typed(typed) => Box::new(typed.keys()),
         }
     }
@@ -1260,6 +1295,10 @@ impl InstanceFields {
                 Ok(())
             }
             Self::Typed(typed) => typed.insert(name, value),
+            Self::Recovered(_) => {
+                self.map_mut().insert(name.to_string(), value);
+                Ok(())
+            }
         }
     }
 
@@ -1267,6 +1306,7 @@ impl InstanceFields {
         match self {
             Self::Map(fields) => fields.remove(name),
             Self::Typed(typed) => typed.remove(name),
+            Self::Recovered(_) => self.map_mut().remove(name),
         }
     }
 }
@@ -4611,6 +4651,10 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
             | Value::Unit
             | Value::String(_)
             | Value::Duration(_)
+            | Value::Instance(InstanceValue {
+                fields: InstanceFields::Recovered(_),
+                ..
+            })
     )
 }
 
@@ -4943,6 +4987,11 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                             entries: entries.into(),
                         }))
                     }
+                }
+                Value::Instance(instance)
+                    if matches!(instance.fields, InstanceFields::Recovered(_)) =>
+                {
+                    Some(Value::Instance(instance.clone()))
                 }
                 // An instance kept in its layout copies its block, as it
                 // does at the top.
@@ -6444,6 +6493,8 @@ struct LightweightTaskContext {
     /// queue operation after the first skips the registry's lock. The weak
     /// reference keeps the queue's address from being reused.
     registered_queue_roles: RefCell<Vec<(Weak<ChannelState>, bool)>>,
+    /// The `sync` cells this task holds.
+    sync_holder: sync_host::HolderState,
 }
 
 /// How many queue roles a task remembers. A task that uses more queues
@@ -6562,6 +6613,49 @@ impl Drop for TaskStackBoundsGuard {
 
 fn enter_task_stack_bounds(bounds: TaskStackBounds) -> TaskStackBoundsGuard {
     TaskStackBoundsGuard(CURRENT_TASK_STACK_BOUNDS.with(|current| current.replace(Some(bounds))))
+}
+
+/// Keeps a thread's own stack declared as the stack its code runs on, until
+/// dropped.
+pub struct ThreadStackBounds(#[allow(dead_code)] TaskStackBoundsGuard);
+
+/// Bytes at the low end of a thread stack that [`enter_thread_stack_bounds`]
+/// leaves out: the guard pages, and what the thread used before the call.
+const THREAD_STACK_MARGIN: usize = 64 * 1024;
+
+/// Declares the stack of the calling thread, which was created with
+/// `stack_size` bytes, as the stack its code runs on, so code that runs
+/// outside any task can still tell how much stack is left. Call it near the
+/// top of the thread.
+pub fn enter_thread_stack_bounds(stack_size: usize) -> ThreadStackBounds {
+    let marker = 0u8;
+    let base = std::ptr::addr_of!(marker) as usize;
+    let usable_limit = base
+        .saturating_sub(stack_size)
+        .saturating_add(THREAD_STACK_MARGIN)
+        .min(base);
+    ThreadStackBounds(enter_task_stack_bounds(TaskStackBounds {
+        usable_limit,
+        base,
+    }))
+}
+
+/// Declares a stack whose writable part ends at `floor`, until the guard
+/// drops, so a test can make the running stack look exhausted.
+#[cfg(test)]
+pub(crate) fn enter_stack_floor_for_test(floor: usize) -> ThreadStackBounds {
+    ThreadStackBounds(enter_task_stack_bounds(TaskStackBounds {
+        usable_limit: floor,
+        base: usize::MAX,
+    }))
+}
+
+/// The lowest writable address of the coroutine stack this thread runs on,
+/// or `None` outside a task.
+pub(crate) fn current_task_stack_floor() -> Option<usize> {
+    CURRENT_TASK_STACK_BOUNDS
+        .with(|bounds| bounds.get())
+        .map(|bounds| bounds.usable_limit)
 }
 
 /// Writable bytes of the running lightweight task's coroutine stack that
@@ -6718,7 +6812,21 @@ struct LightweightWorkerCoordinator {
 const LIGHTWEIGHT_TASK_STACK_SIZE: usize = 768 * 1024;
 /// Stack reserved for the root task that executes the program entry; it is
 /// mapped lazily, so the reservation costs only address space.
-pub const ROOT_LIGHTWEIGHT_TASK_STACK_SIZE: usize = 16 * 1024 * 1024;
+pub const ROOT_LIGHTWEIGHT_TASK_STACK_SIZE: usize = 64 * 1024 * 1024;
+
+static ROOT_TASK_STACK_SIZE: AtomicUsize = AtomicUsize::new(ROOT_LIGHTWEIGHT_TASK_STACK_SIZE);
+
+/// Sets the stack every later root task of this process reserves. The MIR
+/// interpreter asks for more than the default, because one Aura call takes
+/// far more of its stack than a compiled call does.
+pub fn set_root_task_stack_size(bytes: usize) {
+    ROOT_TASK_STACK_SIZE.store(bytes, Ordering::Relaxed);
+}
+
+/// The stack a root task reserves.
+pub fn root_task_stack_size() -> usize {
+    ROOT_TASK_STACK_SIZE.load(Ordering::Relaxed)
+}
 #[cfg(test)]
 thread_local! {
     static FAIL_NEXT_LIGHTWEIGHT_TASK_STACK_ALLOCATION: Cell<bool> = const { Cell::new(false) };
@@ -7135,6 +7243,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::Map(_) => "dict".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Rng(_) => "random.Rng".to_string(),
+            Value::CollectionStore(_) => "collections.__Store".to_string(),
             Value::Generator(_) => "iter.GeneratorHandle".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
@@ -7159,6 +7268,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::HttpExchange(_) => "net.HttpExchange".to_string(),
             Value::HttpResponse(_) => "http.Stream".to_string(),
             Value::Tensor(_) => "tensor.Node".to_string(),
+            Value::Sync(handle) => handle.type_name().to_string(),
             Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
             Value::WebSocket(_) => "net.WebSocket".to_string(),
             Value::ProcessChild(_) => "process.Child".to_string(),
@@ -9180,7 +9290,18 @@ where
     }
 }
 
+/// Installed by the first generated call that establishes a recovery boundary.
+/// Programs without one can discard the native trap-to-result implementation.
+pub(crate) static DIRECT_RECOVERY_EXIT: OnceLock<fn()> = OnceLock::new();
+
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
+    // An exit inside a call that `control.recover` runs in generated code
+    // stops at that call. This returns only when the exit goes further.
+    if matches!(wait, TaskYield::Exit) {
+        if let Some(stop) = DIRECT_RECOVERY_EXIT.get() {
+            stop();
+        }
+    }
     // A wait inside a generator body goes to the context that resumed it.
     let wait = match generator::generator_wait(wait) {
         Ok(reason) => return reason,
@@ -9244,6 +9365,38 @@ fn yield_after_receive(channel: &ChannelValue) {
 
 pub fn yield_now_with_runtime_scheduler() {
     let _ = yield_now_current_lightweight_task();
+}
+
+/// The result a task recorded just before it handed the scheduler its
+/// exit, taken where `control.recover` stops the exit (ADR-0104).
+pub struct PendingTaskExit(TaskExecutionResult);
+
+impl PendingTaskExit {
+    /// Takes the exit the running task just recorded, if it recorded one.
+    pub fn take() -> Option<Self> {
+        CURRENT_LIGHTWEIGHT_TASK_EXIT
+            .with(|slot| slot.borrow_mut().take())
+            .map(Self)
+    }
+
+    /// The trap, when the task was exiting because it failed. Any other
+    /// exit, such as cancellation, comes back unchanged.
+    pub fn into_trap(self) -> std::result::Result<Diagnostic, Self> {
+        match self.0 {
+            TaskExecutionResult::Ready(Err(trap)) => Ok(trap),
+            other => Err(Self(other)),
+        }
+    }
+
+    /// Records the exit again, for the code that is about to hand it on.
+    pub fn restore(self) {
+        CURRENT_LIGHTWEIGHT_TASK_EXIT.with(|slot| *slot.borrow_mut() = Some(self.0));
+    }
+
+    /// Lets the exit go on to the enclosing context.
+    pub fn resume(self) -> ! {
+        exit_current_lightweight_task(self.0)
+    }
 }
 
 fn exit_current_lightweight_task(result: TaskExecutionResult) -> ! {
@@ -9965,6 +10118,7 @@ impl LightweightTaskScheduler {
             cancellation: request.cancellation,
             task_state: Arc::downgrade(&request.state),
             registered_queue_roles: RefCell::new(Vec::new()),
+            sync_holder: sync_host::HolderState::default(),
         });
         let stack_bounds = task_stack_bounds(&request.stack.stack);
         let stack_size = request.stack.size;
@@ -10141,11 +10295,13 @@ impl LightweightTaskScheduler {
                 // context is still active and may synchronously start owned
                 // child work. Admit those requests before retiring the parent.
                 self.drain_spawn_requests();
+                sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
             CoroutineResult::Return(result) => {
                 record.context.yielder.set(std::ptr::null());
+                sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
@@ -10843,7 +10999,7 @@ fn run_lightweight_root_task_on_workers_with_faults(
     // stack.
     let (root, request) = prepare_lightweight_task(
         None,
-        Some(ROOT_LIGHTWEIGHT_TASK_STACK_SIZE),
+        Some(root_task_stack_size()),
         true,
         entry,
         forced_exit_cleanup,
@@ -11133,9 +11289,14 @@ impl Clone for Value {
             Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
             Self::Function(value) => Self::Function(value.clone()),
             Self::Unit => Self::Unit,
+            Self::CollectionStore(state) => Self::CollectionStore(state.clone()),
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => {
-                representation_stats::note_cloned_elements(value.fields.len());
+                // Cloning an immutable Trap shares its snapshot. Counting
+                // its fields would format the diagnostic without a reader.
+                if !matches!(value.fields, InstanceFields::Recovered(_)) {
+                    representation_stats::note_cloned_elements(value.fields.len());
+                }
                 Self::Instance(value.clone())
             }
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),
@@ -11156,6 +11317,7 @@ impl Clone for Value {
             Self::HttpExchange(value) => Self::HttpExchange(value.clone()),
             Self::HttpResponse(value) => Self::HttpResponse(value.clone()),
             Self::Tensor(value) => Self::Tensor(value.clone()),
+            Self::Sync(value) => Self::Sync(value.clone()),
             Self::WebSocketListener(value) => Self::WebSocketListener(value.clone()),
             Self::WebSocket(value) => Self::WebSocket(value.clone()),
             Self::ProcessChild(value) => Self::ProcessChild(value.clone()),
@@ -11184,6 +11346,7 @@ impl PartialEq for Value {
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
             (Value::Rng(left), Value::Rng(right)) => left == right,
+            (Value::CollectionStore(left), Value::CollectionStore(right)) => left == right,
             (Value::Generator(left), Value::Generator(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
@@ -11203,6 +11366,7 @@ impl PartialEq for Value {
             (Value::HttpExchange(left), Value::HttpExchange(right)) => left == right,
             (Value::HttpResponse(left), Value::HttpResponse(right)) => left == right,
             (Value::Tensor(left), Value::Tensor(right)) => left == right,
+            (Value::Sync(left), Value::Sync(right)) => left == right,
             (Value::WebSocketListener(left), Value::WebSocketListener(right)) => left == right,
             (Value::WebSocket(left), Value::WebSocket(right)) => left == right,
             (Value::ProcessChild(left), Value::ProcessChild(right)) => left == right,
@@ -11403,6 +11567,7 @@ impl Value {
                         }
                         Value::Duration(value) => rendered.push_str(&render_duration(*value)),
                         Value::Rng(_) => rendered.push_str("<rng>"),
+                        Value::CollectionStore(_) => rendered.push_str("<collection storage>"),
                         Value::Generator(_) => rendered.push_str("<generator>"),
                         Value::Range(range) => {
                             if range.step == 1 {
@@ -11443,6 +11608,7 @@ impl Value {
                         Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
                         Value::HttpResponse(_) => rendered.push_str("<http-stream>"),
                         Value::Tensor(_) => rendered.push_str("<tensor-node>"),
+                        Value::Sync(_) => rendered.push_str("<sync-handle>"),
                         Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
                         Value::WebSocket(_) => rendered.push_str("<websocket>"),
                         Value::ProcessChild(_) => rendered.push_str("<process-child>"),
@@ -11458,6 +11624,10 @@ impl Value {
                         Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
                         Value::Instance(instance) => {
                             let class = nominal_runtime_base_name(&instance.class_name);
+                            if sync_host::is_handle_class(class) {
+                                rendered.push_str("<sync-handle>");
+                                continue;
+                            }
                             rendered.push_str(class);
                             rendered.push('(');
                             actions.push(RenderAction::Static(")"));
@@ -18490,6 +18660,11 @@ pub fn recv_for_task_group_iteration(
             return RecvValueResult::Cancelled;
         }
         if group.all_registered_tasks_completed() {
+            // The last producer may have sent between the empty receive
+            // above and its completion. Drain its final items first.
+            if channel.has_pending_values() {
+                continue;
+            }
             return RecvValueResult::Closed;
         }
         let wait_cancellation = cancellation.merged(&group.queue_iteration_signal());
@@ -18621,6 +18796,72 @@ pub fn task_group_cleanup_should_cancel(
             return false;
         }
     }
+}
+
+/// The runtime name of the class `Trap` of the builtin `control` module.
+pub const RECOVERED_TRAP_CLASS: &str = "control.Trap";
+
+/// The `control.Trap` that `control.recover` returns for `trap`
+/// (ADR-0104): its code, message, path, line, column, and call chain,
+/// innermost first. The fields are those `std/control.au` declares.
+pub fn recovered_trap_value(trap: Diagnostic) -> Value {
+    deferred_recovered_trap_value(move || trap)
+}
+
+pub(crate) fn deferred_recovered_trap_value(
+    diagnostic: impl FnOnce() -> Diagnostic + Send + Sync + 'static,
+) -> Value {
+    Value::Instance(InstanceValue {
+        class_name: RuntimeName::from_static(RECOVERED_TRAP_CLASS),
+        fields: InstanceFields::Recovered(Arc::new(RecoveredTrapFields {
+            fields: LazyLock::new(Box::new(move || recovered_trap_fields(diagnostic()))),
+        })),
+    })
+}
+
+fn recovered_trap_fields(mut trap: Diagnostic) -> BTreeMap<String, Value> {
+    let path = trap
+        .call_frames
+        .first_mut()
+        .and_then(|frame| frame.span.path.take())
+        .or_else(|| trap.render_path.take())
+        .unwrap_or_default();
+    let (line, column) = trap.span.map_or((0, 0), |span| {
+        (span.line as i64, span.written().column as i64)
+    });
+    let gap = trap.omitted_call_frames;
+    let mut frames = Vec::with_capacity(trap.call_frames.len() + usize::from(gap.is_some()));
+    for (index, frame) in trap.call_frames.iter().enumerate() {
+        if let Some((before, omitted)) = gap {
+            if index == before && omitted > 0 {
+                frames.push(Value::string(format!("... {omitted} more calls ...")));
+            }
+        }
+        frames.push(Value::string(format!(
+            "{} at {}:{}",
+            frame.function,
+            frame.span.start.line,
+            frame.span.start.written().column
+        )));
+    }
+    BTreeMap::from([
+        ("code".to_string(), Value::string(trap.code)),
+        ("message".to_string(), Value::string(trap.message)),
+        ("path".to_string(), Value::string(path)),
+        ("line".to_string(), Value::Int(IntegerValue::from_i64(line))),
+        (
+            "column".to_string(),
+            Value::Int(IntegerValue::from_i64(column)),
+        ),
+        (
+            "frames".to_string(),
+            Value::Vec(VecValue {
+                element_type: SharedType::named("str"),
+                elements: frames.into(),
+                str_view: Default::default(),
+            }),
+        ),
+    ])
 }
 
 pub fn result_ok(value: Value) -> Value {

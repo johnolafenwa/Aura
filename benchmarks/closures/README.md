@@ -36,3 +36,44 @@ On this shared worker, scheduling affected individual wall times. A separate run
 The Rust programs use `Box<dyn Fn>` and `Box<dyn FnMut>`. The
 last two cases include optimizer decisions about inlining and
 allocation. Their timings describe the entire loop.
+
+## Direct local calls
+
+`bash benchmarks/closures/run.sh local [seed [count]]` compares a named
+local function and a typed Aura lambda with a Rust capturing closure and
+a Python nested function. The runner passes the same seed and count to
+each program at runtime. Parsing happens before the loop timer starts.
+The default seed is 7 and the default count is 48,000,000. All four loops
+print checksum 473,089. With seed 113 and count 541, all four print 870,476.
+
+On November 18, three runs of the default command on a shared Intel Xeon
+Platinum 8573C gave these median loop times. The compiler at `5c3f5c9a`
+kept the known invoke target across iterations and addressed inline
+captures relative to their callable.
+
+| Aura local function | Aura lambda | Rust 1.95.0 | Python 3.12.14 |
+| ---: | ---: | ---: | ---: |
+| 386 ms | 388 ms | 296 ms | 18,443 ms |
+
+A separate five-run comparison rotated the four executables on one logical
+CPU. Each read the seed and count from its command line before calling the
+timed local function. Median process CPU times were 177.462 ms before
+the compiler changes, 110.552 ms after them, 70.705 ms for Rust, and
+8,274.847 ms for Python.
+
+### Earlier measurements with fixed Aura inputs
+
+In three rotating runs on the same logical CPU, native code from `d1d76285`
+took a median of 220 ms for the local function and 150 ms for the lambda.
+Rust 1.95.0 took 80 ms and Python 3.12.14 took 10,872 ms. The local function
+took 2.75 times the Rust wall time on this shared worker.
+
+On the Linux worker above, five runs of native code from `d1d76285`
+gave a median of 448 ms for the local function and 487 ms for the lambda.
+The debug-built compiler emitted optimized native code. At that revision both
+invoke adapters had the same arithmetic and control flow, including the checked
+multiply and add and their cold error paths. Callgrind measured 27.64 and
+28.00 instructions per call respectively, subtracting a 16,000-call run
+from a 32,000-call run of each form. Keeping a recursive name in
+a runtime slot had previously forced a frame on every successful call,
+with respective medians of 1,079 and 459 ms.

@@ -1,0 +1,59 @@
+from collections import Deque, Heap, SortedMap, SortedSet
+
+
+def returned(queue: own Deque[str]) -> Deque[str]:
+    return queue
+
+
+def main():
+    mut work = Deque[str]()
+    work.push_back("c")
+    work.push_front("b")
+    work.push_front("a")
+    print(work.front())
+    print(work.back())
+    print(work[1])
+    print(work.pop_front())
+    print(work.pop_back())
+    for entry in work:
+        print(entry)
+
+    mut single = Deque[str]()
+    single.push_back("one")
+    print(returned(single)[-1])
+
+    mut priorities = Heap[int64].from_list([8, 2, 5, 2])
+    priorities.push(1)
+    print(priorities.peek())
+    print(priorities.pop())
+    print(priorities.into_sorted())
+    mut largest = Heap[int64].max()
+    largest.push(1)
+    largest.push(9)
+    largest.push(2)
+    print(largest.peek())
+    print(largest.into_sorted())
+
+    mut names = SortedMap[int64, str]()
+    names.set(30, "thirty")
+    names.set(10, "ten")
+    names.set(20, "twenty")
+    names.set(20, "updated")
+    print(names.get(20))
+    print(names.floor(19))
+    print(names.ceiling(19))
+    print(names.range(10, 30))
+    print(names.remove(10))
+    print(names.contains(10))
+    for key, value in names:
+        print(f"{key} {value}")
+
+    mut seen = SortedSet[int64]()
+    for key in [4, 2, 3, 4]:
+        seen.add(key)
+    print(seen.first())
+    print(seen.last())
+    print(seen.range(2, 4))
+    print(seen.remove(3))
+    for key in seen:
+        print(key)

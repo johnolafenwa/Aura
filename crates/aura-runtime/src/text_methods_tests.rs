@@ -45,3 +45,43 @@ fn characters_convert_between_strings_and_scalar_values() {
         assert!(error.message.contains(&code.to_string()));
     }
 }
+
+#[test]
+fn indexed_characters_use_inline_text_storage() {
+    for (source, ascii, index, expected) in [("abc", true, -1, "c"), ("a😀z", false, 1, "😀")] {
+        let Value::String(character) = super::char_at(source, ascii, index).unwrap() else {
+            panic!("indexing a string yields a string");
+        };
+        assert_eq!(character.as_str(), expected);
+        assert_eq!(character.capacity(), crate::text::INLINE_CAPACITY);
+    }
+}
+
+#[test]
+fn char_at_counts_characters_from_either_end() {
+    for (text, ascii) in [("héllo", false), ("hello", true), ("hello", false)] {
+        let first = super::char_at(text, ascii, 0).expect("index 0");
+        assert_eq!(first, Value::string("h"));
+        let last = super::char_at(text, ascii, -1).expect("index -1");
+        assert_eq!(last, Value::string("o"));
+        let second = super::char_at(text, ascii, -4).expect("index -4");
+        assert_eq!(
+            second,
+            Value::string(text.chars().nth(1).unwrap().to_string())
+        );
+        for index in [5, -6, i64::MAX, i64::MIN] {
+            let error = super::char_at(text, ascii, index).expect_err("out of range");
+            assert_eq!(error.code, "AU4003");
+            assert_eq!(
+                error.message,
+                format!("str index {index} is out of range for a string of 5 characters")
+            );
+        }
+    }
+    assert_eq!(
+        evaluate_text_method("char_at", "日本語", None, 1).expect("char_at succeeds"),
+        Value::string("本")
+    );
+    let empty = super::char_at("", true, 0).expect_err("empty text has no character");
+    assert!(empty.message.contains("a string of 0 characters"));
+}

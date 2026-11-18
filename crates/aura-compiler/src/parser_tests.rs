@@ -266,7 +266,12 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
 fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let lambda = parse_expression("lambda value, own text, mut output: output")
         .expect("lambda with all supported parameter modes should parse");
-    let ExprKind::Lambda { params, body, .. } = lambda.kind else {
+    let ExprKind::Lambda {
+        params,
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = lambda.kind
+    else {
         panic!("expected lambda expression");
     };
     assert!(matches!(
@@ -297,7 +302,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let no_params = parse_expression("lambda: 42").expect("zero-parameter lambda should parse");
     assert!(matches!(
         no_params.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params.is_empty() && matches!(body.kind, ExprKind::Int(42))
     ));
 
@@ -305,7 +310,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
         .expect("contextual identifier parameter should parse");
     assert!(matches!(
         contextual_name.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params[0].name == "from"
                 && matches!(body.kind, ExprKind::Name(ref name) if name == "from")
     ));
@@ -317,7 +322,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("conditional expression should remain inside the lambda body");
     assert!(matches!(
         conditional_body.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Conditional { .. })
     ));
 
@@ -334,7 +339,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("lambda bodies should permit nested lambdas");
     assert!(matches!(
         nested.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Lambda { .. })
     ));
 
@@ -1116,7 +1121,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
         [ComprehensionClause {
             iterable:
                 Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 },
             ..
@@ -1135,7 +1140,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
             if matches!(
                 filters.as_slice(),
                 [Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 }] if matches!(
                     params.as_slice(),
@@ -3474,7 +3479,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     assert_eq!(args[0].span, Span::new(1, 64));
     let ExprKind::Lambda {
         params: lambda_params,
-        body,
+        body: crate::ast::ClosureBody::Expression(body),
         ..
     } = &args[0].value.kind
     else {
@@ -6094,4 +6099,102 @@ fn export_c_marks_an_ordinary_function_and_is_a_word_only_before_an_abi() {
         let error = crate::parse_source(source).expect_err("the declaration is malformed");
         assert!(error.message.contains(expected), "{source}: {error:?}");
     }
+}
+
+#[test]
+fn local_function_signatures_and_statement_bodies_are_preserved() {
+    let Item::Function(outer) = parse_item_from(
+        "def outer() -> None:\n    def update[mut total](value: own str, *, delta: int64) -> int64:\n        total += delta\n        return total\n",
+    ).expect("local function with a capture and two statements") else { panic!("function") };
+    let [Stmt::Assign(binding)] = outer.body.as_slice() else {
+        panic!("local declaration")
+    };
+    assert!(!binding.mutable);
+    let ExprKind::Lambda {
+        captures: Some(captures),
+        params,
+        body: crate::ast::ClosureBody::Function { name, statements },
+    } = &binding.value.kind
+    else {
+        panic!("closure body")
+    };
+    assert_eq!(name, "update");
+    assert_eq!(captures[0].name, "total");
+    assert_eq!(captures[0].mode, ParamMode::BorrowMut);
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(matches!(
+        statements.as_slice(),
+        [Stmt::Assign(_), Stmt::Return(_)]
+    ));
+    let TypeRefKind::Function {
+        params,
+        view_return,
+        ..
+    } = &binding.annotation.as_ref().unwrap().kind
+    else {
+        panic!("written function signature")
+    };
+    assert_eq!(params[0].name.as_deref(), Some("value"));
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(view_return.is_none());
+}
+
+#[test]
+fn local_function_signatures_require_a_result_and_exclude_defaults_and_views() {
+    for (header, message) in [
+        ("def inner(x: int64):", "needs a written return type"),
+        ("def inner(x: int64 = 1) -> int64:", "cannot have defaults"),
+        (
+            "def inner(x: int64) -> view int64 from x:",
+            "cannot return a view",
+        ),
+    ] {
+        let source = format!("def outer() -> None:\n    {header}\n        return x\n");
+        let error = parse_item_from(&source).expect_err(&source);
+        assert_eq!(error.code, "AU1101");
+        assert!(error.message.contains(message), "{error:?}");
+    }
+}
+
+#[test]
+fn byte_strings_parse_to_a_byte_list_expression() {
+    let ascii = parse_stmt_from("data = b\"hi\"\n").expect("an ASCII byte string parses");
+    let Stmt::Assign(assign) = ascii else {
+        panic!("expected an assignment");
+    };
+    // ASCII bytes are the UTF-8 bytes of the same text.
+    let ExprKind::Call { callee, args } = &assign.value.kind else {
+        panic!("expected a call, found {:?}", assign.value.kind);
+    };
+    assert!(args.is_empty());
+    let ExprKind::Member { object, field } = &callee.kind else {
+        panic!("expected a member");
+    };
+    assert_eq!(field, "to_bytes");
+    assert!(matches!(&object.kind, ExprKind::String(text) if text == "hi"));
+
+    let binary = parse_stmt_from("data = b\"\\xff\\x00a\"\n").expect("escaped bytes parse");
+    let Stmt::Assign(assign) = binary else {
+        panic!("expected an assignment");
+    };
+    let ExprKind::List(elements) = &assign.value.kind else {
+        panic!("expected a list, found {:?}", assign.value.kind);
+    };
+    let bytes = elements
+        .iter()
+        .map(|element| match &element.kind {
+            ExprKind::Cast { expr, .. } => match expr.kind {
+                ExprKind::Int(byte) => byte,
+                _ => panic!("expected an integer"),
+            },
+            other => panic!("expected a cast, found {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bytes, [255, 0, 97]);
+
+    // A byte string starts an expression statement and an argument.
+    parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
+    parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
 }

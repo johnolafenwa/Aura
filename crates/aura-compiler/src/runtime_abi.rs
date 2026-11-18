@@ -11,6 +11,11 @@ pub(crate) enum AbiType {
     F64,
 }
 
+/// The C library function generated code calls to mark where a recovered
+/// call resumes when it traps (ADR-0104). It is not a runtime helper: the
+/// code generator declares it `returns_twice`.
+pub(crate) const RECOVER_SET_JUMP: &str = "_setjmp";
+
 macro_rules! runtime_functions {
     ($( $variant:ident => ($symbol:literal, [$($param:ident),* $(,)?], $result:expr) ),+ $(,)?) => {
         /// One helper exported by the direct runtime.
@@ -58,6 +63,13 @@ runtime_functions! {
     FrameStack => ("aura_direct_frame_stack", [], Some(I64)),
     EnterCall => ("aura_direct_enter_frame", [I64], None),
     ExitCall => ("aura_direct_exit_call", [], None),
+    StackExhausted => ("aura_direct_stack_exhausted", [], None),
+    RecoverAssertion => ("aura_direct_recover_assertion_cell", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    RecoverFormattedAssertion => ("aura_direct_recover_formatted_assertion", [I64, I64, I64, I64, I64], Some(I64)),
+    RecoverBegin => ("aura_direct_recover_begin", [I64, I64], Some(I64)),
+    RecoverAdopt => ("aura_direct_recover_adopt", [I64], None),
+    RecoverEnd => ("aura_direct_recover_end", [I64], Some(I64)),
+    RecoverTrapped => ("aura_direct_recover_trapped", [], Some(I64)),
     SetReturnedViewProjection => ("aura_direct_set_returned_view_projection", [I64, I64], None),
     TakeReturnedViewProjection => ("aura_direct_take_returned_view_projection", [I64, I64], Some(I64)),
     PushReturnedViewSelector => ("aura_direct_push_returned_view_selector", [I64], None),
@@ -132,6 +144,8 @@ runtime_functions! {
     StringStripSuffix => ("aura_direct_string_strip_suffix", [I64, I64], Some(I64)),
     StringTrim => ("aura_direct_string_trim", [I64], Some(I64)),
     StringJoin => ("aura_direct_string_join", [I64, I64], Some(I64)),
+    StringScalarAt => ("aura_direct_string_scalar_at", [I64, I64], Some(I64)),
+    TextCodec => ("aura_direct_text_codec", [I64, I64, I64], Some(I64)),
     StringTextMethod => ("aura_direct_string_text_method", [I64, I64, I64, I64], Some(I64)),
     StringifyValue => ("aura_direct_stringify_value", [I64], Some(I64)),
     RegisterDisplay => ("aura_direct_register_display", [I64, I64, I64], None),
@@ -294,6 +308,10 @@ runtime_functions! {
     MapShadowAt => ("aura_direct_map_shadow_at", [I64, I64], Some(I64)),
     MapGetInt64Shadow => ("aura_direct_map_get_int64_shadow", [I64, I64], Some(I64)),
     EndShadow => ("aura_direct_end_shadow", [I64], None),
+    OrderedLocalWords => ("aura_direct_ordered_local_words", [I64, I64], Some(I64)),
+    OrderedLocalStep => ("aura_direct_ordered_local_step", [I64, I64, I64], Some(I64)),
+    OrderedI64 => ("aura_direct_ordered_i64", [I64, I64, I64, I64], Some(I64)),
+    OrderedI64Lookup => ("aura_direct_ordered_i64_lookup", [I64, I64, I64, I64], Some(I64)),
     LookupPayload => ("aura_direct_lookup_payload", [I64], Some(I64)),
     MapSetInPlace => ("aura_direct_map_set_in_place", [I64, I64, I64], Some(I64)),
     MapLiteralEntry => ("aura_direct_map_literal_entry", [I64, I64, I64], None),
@@ -311,6 +329,7 @@ runtime_functions! {
     MapSetIndexInPlace => ("aura_direct_map_set_index_in_place", [I64, I64, I64, I64, I64], Some(I64)),
     MapSetIndexInt64 => ("aura_direct_map_set_index_int64", [I64, I64, I64], None),
     MapSetIndexInt64Key => ("aura_direct_map_set_index_int64_key", [I64, I64, I64], None),
+    MapSetIndexInt64Pair => ("aura_direct_map_set_index_int64_pair", [I64, I64, I64], None),
     ValueSlotPushScalar => ("aura_direct_value_slot_push_scalar", [I64, I64, I64], None),
     SetEmpty => ("aura_direct_set_empty", [], Some(I64)),
     SetLen => ("aura_direct_set_len", [I64], Some(I64)),
@@ -422,6 +441,17 @@ runtime_functions! {
     FfiReleaseCallbackText => ("aura_direct_ffi_release_callback_text", [I64], None),
     FfiCallbackCheck => ("aura_direct_ffi_callback_check", [], None),
     MonotonicTimeMs => ("aura_direct_monotonic_time_ms", [], Some(I64)),
+    MathInteger => ("aura_direct_math_integer", [I64, I64, I64], Some(I64)),
+    BigAddWords => ("aura_direct_big_add_words", [I64, I64], Some(I64)),
+    SmallPowMod => ("aura_direct_small_pow_mod", [I64, I64, I64], Some(I64)),
+    SmallDecimalBinary => ("aura_direct_small_decimal_binary", [I64, I64, I64, I64, I64, I64], Some(I64)),
+    SyncAtom => ("aura_direct_sync_atom", [I64, I64, I64, I64], Some(I64)),
+    SyncMapGetWord => ("aura_direct_sync_map_get_word", [I64, I64, I64], Some(I64)),
+    SyncMapGetInt64 => ("aura_direct_sync_map_get_int64", [I64, I64], Some(I64)),
+    SyncCellTake => ("aura_direct_sync_cell_take", [I64], Some(I64)),
+    SyncCellPut => ("aura_direct_sync_cell_put", [I64, I64], None),
+    SyncCellTakeWord => ("aura_direct_sync_cell_take_word", [I64, I64], Some(I64)),
+    SyncCellPutWord => ("aura_direct_sync_cell_put_word", [I64, I64, I64], None),
     RegexScalar => ("aura_direct_regex_scalar", [I64, I64, I64], Some(I64)),
     RegexSearch => ("aura_direct_regex_search", [I64, I64, I64], Some(I64)),
     RegexReplace => ("aura_direct_regex_replace", [I64, I64, I64, I64], Some(I64)),

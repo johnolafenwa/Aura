@@ -34,6 +34,60 @@ const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.a
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn recover_preserves_caught_values_call_frames_cleanup_and_cancellation() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+    for case in [
+        "control_recover_scalar_results",
+        "control_recover_call_chains",
+        "control_recover_cleanup",
+        "control_recover_generator_cleanup",
+        "control_recover_tasks",
+        "control_recover_cancellation",
+    ] {
+        let path = fixtures.join(format!("{case}.au"));
+        let output = run_path(&path).unwrap_or_else(|error| panic!("{case}: {error}"));
+        let expected = fs::read_to_string(path.with_extension("stdout")).expect("expected output");
+        assert_eq!(output.stdout, expected, "{case}");
+    }
+}
+
+#[test]
+fn trap_unwinds_the_inner_and_outer_managers_without_hiding_the_body_failure() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/control_recover_generator_cleanup.au");
+    let module = lower_path_to_mir(&path).expect("the fixture should lower");
+    let trap = crate::run_mir_entry(&module, Some("broken"), None, Vec::new())
+        .expect_err("calling the failing function outside recovery propagates its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "primary failure");
+    assert_eq!(
+        trap.notes,
+        [
+            "`Sink.__exit__` also failed during cleanup: inner",
+            "`Sink.__exit__` also failed during cleanup: outer",
+        ]
+    );
+}
+
+#[test]
+fn recover_rejects_invalid_targets_and_arguments() {
+    for (case, code) in [
+        ("argument_move", "AU3001"),
+        ("file_result", "AU3008"),
+        ("missing_target", "AU2004"),
+        ("mut_parameter", "AU3002"),
+        ("named_target", "AU2004"),
+        ("type_args", "AU2004"),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/check-fail/control_recover_{case}.au"
+        ));
+        let error = check_path(&fixture).expect_err(case);
+        assert_eq!(error.code, code, "{case}: {error:?}");
+    }
+}
+
+#[test]
 fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
     assert_eq!(
         sha256_hex(b""),
@@ -2291,19 +2345,40 @@ fn control_flow_example_runs() {
 }
 
 #[test]
-fn mir_runtime_reports_recursion_limit_before_overflowing_the_host_stack() {
-    let source = include_str!("../../../test_edge/test_recursive_medium.au");
-    let source = source.to_string();
-    let handle = thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || run_source(&source))
-        .expect("recursion test thread should spawn");
-    let error = handle
-        .join()
-        .expect("recursion test thread should join")
-        .expect_err("medium recursion should diagnose before stack overflow");
-    assert!(error.message.contains("maximum call depth of"));
-    assert!(error.message.contains("count_down"));
+fn mir_runtime_runs_recursion_deeper_than_the_old_call_limit() {
+    // 400 nested calls, which the 256-call limit used to reject. An
+    // unoptimized interpreter spends close to 200 KiB of stack on each.
+    let source = "def count_down(n: int32) -> int32:\n    if n <= 0:\n        return 0\n    return count_down(n=n - 1)\n\ndef main() -> int32:\n    print(count_down(n=400))\n    return 0\n";
+    let output = run_source(source).expect("400 nested calls fit the entry stack");
+    assert_eq!(output.stdout, "0\n");
+}
+
+#[test]
+fn mir_runtime_reports_unbounded_recursion_before_overflowing_the_host_stack() {
+    let source = "def count_down(n: int64) -> int64:\n    return count_down(n=n + 1)\n\ndef main() -> int32:\n    print(count_down(n=0))\n    return 0\n";
+    let error = run_source(source).expect_err("unbounded recursion ends with a diagnostic");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "call stack exhausted while calling `count_down`"
+    );
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.contains("start_with_stack")),
+        "{error:?}"
+    );
+    // The chain keeps both ends and counts the middle.
+    let (before, omitted) = error
+        .omitted_call_frames
+        .expect("a chain this deep leaves calls out");
+    assert_eq!(before, 128);
+    assert!(omitted > 0);
+    assert_eq!(error.call_frames.len(), 256);
+    assert_eq!(error.call_frames.last().unwrap().function, "main");
+    let rendered = error.render_with_source("recursion.au", source);
+    assert!(rendered.contains("more calls ..."), "{rendered}");
 }
 
 #[test]
@@ -3363,8 +3438,11 @@ def main() -> int32:
 #[test]
 fn cancellation_wakes_sleep_tasks_promptly() {
     let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def sleeper(started: Queue[str], finished: Queue[str]) -> None:
     _ = started.put("sleep")
     sleep({blocked_sleep_ms}ms)
@@ -3383,33 +3461,34 @@ def wait_for_one(queue: Queue[str]):
 
 def main() -> int32:
     started = Queue[str]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         finished = Queue[str]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"sleep cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_sleep_ms = blocked_sleep.as_millis()
+        blocked_sleep_ms = blocked_sleep.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("sleep cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "sleep cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
 fn cancellation_wakes_queue_wait_tasks_promptly() {
     let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
     _ = started.put("wait")
     while not cancelled():
@@ -3439,26 +3518,24 @@ def main() -> int32:
     started = Queue[str]()
     finished = Queue[str]()
     jobs = Queue[int32]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
     wait_for_one(finished)
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"queue cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_wait_ms = blocked_wait.as_millis()
+        blocked_wait_ms = blocked_wait.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("queue-wait cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "queue wait cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
@@ -4455,4 +4532,59 @@ fn a_for_invariant_that_ignores_the_target_is_checked_when_the_loop_runs_out() {
     ))
     .expect("target invariants hold in the body");
     assert_eq!(output.stdout, "6\n");
+}
+
+#[test]
+fn ordered_collections_use_their_declared_order_and_own_elements() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.stdout"),
+        ),
+    ] {
+        assert_eq!(
+            run_source(source)
+                .expect("ordered collection fixture should run")
+                .stdout,
+            expected
+        );
+    }
+    for source in [
+        include_str!("../tests/fixtures/check-fail/ordered_heap_requires_order.au"),
+        include_str!("../tests/fixtures/check-fail/sorted_key_requires_order.au"),
+    ] {
+        let error = check_source(source).expect_err("unordered keys should be rejected");
+        assert!(error.message.contains("does not implement trait `Ord["));
+    }
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_lookup_owns_clone.au"
+    ))
+    .expect_err("reading a retained non-cloneable RNG must fail");
+    assert_eq!(error.code, "AU3007");
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_is_private.au"
+    ))
+    .expect_err("the type-erased collection storage must be private");
+    assert!(error.message.contains("private"));
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_type_is_private.au"
+    ))
+    .expect_err("the store definition is internal even in a type annotation");
+    assert!(error.message.contains("collections.__Store"));
 }

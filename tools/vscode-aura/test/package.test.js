@@ -176,6 +176,23 @@ test("f-string interpolations are code, so editor suggestions fire inside braces
   }
 });
 
+test("extension grammar scopes byte strings and leaves the name b alone", async () => {
+  const tokenized = await tokenizeAura(
+    'data = b"GET\\r\\n\\xff" + b\'x\'\nb = 1\nrb = b\nname = "b"\n'
+  );
+  const first = scopesAt(tokenized, 0, "GET", 0);
+  assert.ok(first.includes("string.quoted.binary.double.aura"));
+  assert.ok(
+    scopesAt(tokenized, 0, "\\xff", 0).includes("constant.character.escape.aura")
+  );
+  assert.ok(scopesAt(tokenized, 0, "x", 1).includes("string.quoted.binary.single.aura"));
+  for (const line of [1, 2]) {
+    const scopes = scopesAt(tokenized, line, "b", 0);
+    assert.ok(!scopes.some((scope) => scope.startsWith("string.")), `line ${line}`);
+  }
+  assert.ok(scopesAt(tokenized, 3, "b", 0).includes("string.quoted.double.aura"));
+});
+
 test("extension grammar and snippets cover Aura string forms", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(
@@ -186,6 +203,8 @@ test("extension grammar and snippets cover Aura string forms", () => {
   assert.ok(names.includes("string.quoted.triple.single.aura"));
   assert.ok(names.includes("string.quoted.raw.double.aura"));
   assert.ok(names.includes("string.quoted.raw.single.aura"));
+  assert.ok(names.includes("string.quoted.binary.double.aura"));
+  assert.ok(names.includes("string.quoted.binary.single.aura"));
   const fstring = grammar.repository.strings.patterns.find(
     (pattern) => pattern.name === "string.interpolated.double.aura"
   );
@@ -852,4 +871,15 @@ test("grammar marks dyn before a trait name and leaves a variable named dyn alon
   assert.ok(scopesAt(tokenized, 1, "as").includes("keyword.control.aura"));
   assert.equal(scopesAt(tokenized, 2, "dyn").includes("storage.modifier.dyn.aura"), false);
   assert.equal(scopesAt(tokenized, 3, "dyn").includes("storage.modifier.dyn.aura"), false);
+});
+
+test("local function capture lists have a declaration scope", () => {
+  const grammar = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "syntaxes", "aura.tmLanguage.json"), "utf8"));
+  const rule = grammar.repository.declarations.patterns.find(
+    (pattern) => pattern.name === "meta.definition.function.captures.aura"
+  );
+  assert.ok(rule);
+  assert.deepEqual(new RegExp(rule.begin).exec("    def add[mut total](amount: int64)")?.slice(1),
+    ["def", "add"]);
+  assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });

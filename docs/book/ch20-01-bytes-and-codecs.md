@@ -63,9 +63,10 @@ exactly that: an invalid sequence starts at byte 3. A program that reads
 bytes from a socket or a file and needs text has to decide what to do in
 that case, and Aura makes the decision visible.
 
-Neither conversion takes an encoding argument. Aura 0.16 converts to and
-from UTF-8 and nothing else. Text in Latin-1 or UTF-16 has to be transcoded
-before it reaches `str.from_bytes`.
+When you know a file uses Latin-1, call `bytes.decode(raw, "latin-1")` and
+match on the result to get its text. To write that text as UTF-16, use
+`bytes.encode(text, "utf-16")`. The [bytes manual](/manual/bytes#text-encodings)
+lists the supported encodings and the errors each call can return.
 
 ## Hexadecimal and base64
 

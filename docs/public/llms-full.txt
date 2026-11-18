@@ -1587,6 +1587,7 @@ maintained surface by area and states how it may change.
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
   integers at a raw address.
+- [Numbers Module](/manual/numbers) covers arbitrary-size integers, exact decimal arithmetic, and complex numbers.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1612,6 +1613,7 @@ maintained surface by area and states how it may change.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,
   cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
   `wait_all`, and scheduler-aware waits.
+- [Sync Module](/manual/sync) covers mutexes, atomic counters and flags, and shared maps.
 - [I/O Module](/manual/io): standard input and output, and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, line
   and chunk reads, scoped file cleanup, and byte and text limits.
@@ -1765,6 +1767,7 @@ safety boundary, diagnostics, and backend rules.
 | `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
 | `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
 | `str.chars` | `chars() -> list[str]` | Each Unicode scalar value as a one-character string, in order. An empty string gives an empty list. |
+| `str.char_at`, `text[index]` | `char_at(index: int64) -> str` | The character at a position, as a one-character string. A negative index counts from the end. Traps with `AU4003` outside the string. Constant time for ASCII text. |
 | `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
 | `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
 | `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
@@ -1818,6 +1821,12 @@ ownership, diagnostics, and backend behavior.
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 
+## Numbers
+
+`numbers.BigInt`, `numbers.Decimal`, and `numbers.Complex` provide arbitrary-size
+integers, exact decimal arithmetic, and complex numbers. The module also exports
+`factorial` and the decimal rounding modes. [Numbers Module](/manual/numbers)
+
 ## Math
 
 Every argument is exactly `float64`. The module performs no implicit numeric
@@ -1841,6 +1850,21 @@ evaluation-order, diagnostic, and backend rules.
 | `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi. |
+| `math.asin`, `math.acos`, `math.atan` | `(value: float64) -> float64` | Inverse sine, cosine, and tangent, in radians. `asin` and `acos` trap with `AU4001` outside `[-1, 1]`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle of the point `(x, y)` in `[-pi, pi]`. |
+| `math.sinh`, `math.cosh`, `math.tanh` | `(value: float64) -> float64` | Hyperbolic functions. |
+| `math.asinh`, `math.acosh`, `math.atanh` | `(value: float64) -> float64` | Inverse hyperbolic functions. |
+| `math.sqrt`, `math.cbrt` | `(value: float64) -> float64` | Square and cube root. `sqrt` of a negative value traps with `AU4001`. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | Length of the vector `(x, y)`. |
+| `math.expm1`, `math.log1p` | `(value: float64) -> float64` | `exp(value) - 1` and `log(1 + value)`, accurate near zero. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign of `sign`. |
+| `math.degrees`, `math.radians` | `(value: float64) -> float64` | Angle conversion. |
+| `math.is_nan`, `math.is_inf`, `math.is_finite` | `(value: float64) -> bool` | Classification of a value. |
+| `math.gcd`, `math.lcm` | `(left: int64, right: int64) -> int64` | Greatest common divisor and least common multiple, never negative. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | Integer square root, rounded down. |
+| `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
+| `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
 ## Memory
 
@@ -1909,6 +1933,8 @@ authentication with HMAC-SHA256.
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
 | `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | Fresh raw 32-byte RFC 2104 HMAC with SHA-256. The key may have any length. |
 | `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | Byte equality in time that does not depend on where the lists differ. Use it to compare signatures. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | The text in a named encoding: UTF-8, UTF-16, UTF-32, Latin-1, ASCII, or Windows-1252. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | Strict decoding from a named encoding, with the offset of the first invalid byte on failure. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
@@ -2070,7 +2096,9 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 ## Collections
 
-[Collections](/manual/collections) covers ownership and iteration.
+[Collections](/manual/collections) covers ownership and iteration. The
+[`collections` module](/manual/collections#the-collections-module) exports
+`Deque[T]`, `Heap[T]`, `SortedMap[K, V]` and `SortedSet[T]`.
 
 ### list[T]
 
@@ -2143,6 +2171,12 @@ zone, RFC 3339 text, the pattern directives, and limits.
 | `set.add` | `add(value: own T) -> None` | Moves `value` into the set. |
 | `set.remove` | `remove(value: T) -> None` | Removes an equal value. A missing value traps with `AU4008`. |
 | `set.discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
+| `set.union`, `left \| right` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the ones only `other` has. |
+| `set.intersection`, `left & right` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` also has. |
+| `set.difference`, `left - right` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` lacks. |
+| `set.symmetric_difference`, `left ^ right` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements in exactly one of the two sets. |
+| `set.is_subset`, `set.is_superset`, `set.is_disjoint` | `(other: set[T]) -> bool` | Whether every element of one set is in the other, or none is. |
+| `set.update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver. |
 | `set.clear` | `clear() -> None` | Removes all values. |
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -2182,6 +2216,18 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 The two stack-size methods are provisional. Their 256 KiB minimum is for tasks
 whose shallow stack use you have measured. It is not the default.
+
+### Shared State
+
+| Type | Operations |
+| --- | --- |
+| `sync.Mutex[T]` | `lock`, `replace`, `set`, `is_poisoned` |
+| `sync.AtomicInt` | `load`, `store`, `add`, `swap`, `compare_and_set` |
+| `sync.AtomicBool` | `load`, `store`, `swap`, `compare_and_set` |
+| `sync.Map[K, V]` | `get`, `set`, `remove`, `contains`, `len`, `clear`, `snapshot` |
+
+Copying one of these handles lets another task reach the same state.
+The [Sync Module](/manual/sync) lists signatures and locking rules.
 
 ## I/O And Filesystem
 
@@ -2251,6 +2297,8 @@ whose shallow stack use you have measured. It is not the default.
 | `metrics.increment` | `(name: str, value: int64) -> None` |
 | `metrics.get` | `(name: str) -> int64` |
 | `metrics.reset` | `() -> None` |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | `code`, `message`, `path`, `line`, `column`, `frames` and `describe()`. See [Recovering From Traps](/manual/failure-recovery). |
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters. A missing name reads as zero.
@@ -2575,13 +2623,13 @@ Aura has no assertion-stripping mode, optimization flag, environment switch, or 
 
 Message contents are kept exactly. The human diagnostic renderer adds its normal `error[AU4001]` prefix and source context. When the condition qualifies for introspection, it also adds the bounded operand notes.
 
-Assertion failure ends the current Aura execution path. It is not a catchable exception. Use `Result` for recoverable validation.
+A failed assertion ends the current call. An enclosing `control.recover`
+returns its diagnostic in `Err`. Use `Result` for expected validation
+failures. See [Recovering From Traps](/manual/failure-recovery).
 
 ## Status
 
 Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.16 includes the bounded two-operand diagnostic.
-
-Aura 0.16 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.
 
@@ -2594,8 +2642,9 @@ base64 codecs, SHA-256 hashing, and HMAC-SHA256 message authentication.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
-and SHA-256 live in the built-in `bytes` module.
+A byte string, `b"..."`, is a literal of that type. UTF-8 conversion is a pair
+of `str` methods. Other text encodings, byte search, hexadecimal, base64, and
+SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -2603,6 +2652,8 @@ and SHA-256 live in the built-in `bytes` module.
 | --- | --- | --- |
 | `str.to_bytes` | `to_bytes() -> list[uint8]` | A fresh list holding the exact UTF-8 encoding of the receiver. |
 | `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | A fresh str when `bytes` is valid UTF-8, otherwise a typed error. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | A fresh list holding `text` in the named encoding. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | A fresh str when `value` is valid in the named encoding, otherwise a typed error. |
 | `bytes.hex_encode` | `hex_encode(value: list[uint8]) -> str` | Lowercase hexadecimal, two ASCII digits per byte. |
 | `bytes.hex_decode` | `hex_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict hexadecimal decoding. |
 | `bytes.base64_encode` | `base64_encode(value: list[uint8]) -> str` | RFC 4648 standard-alphabet base64 with canonical padding. |
@@ -2623,8 +2674,86 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.16 accepts no encoding
-argument on either conversion.
+`to_bytes` and `from_bytes` are always UTF-8 and take no encoding argument.
+For another encoding use `bytes.encode` and `bytes.decode`, described under
+[Text Encodings](#text-encodings).
+
+## Byte Strings
+
+A byte string is a literal of type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b"\x89PNG"
+    quote = b'say "hi"'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+    print(len(quote))
+```
+
+- The body holds printable ASCII characters. Each is its ASCII byte.
+- The escapes are those of an ordinary string except `\u{...}`: `\n`, `\t`,
+  `\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. In a byte string `\xHH` is the
+  byte `HH`, for every value from `00` to `ff`.
+- A character outside ASCII, a `\u{...}` escape, and a triple-quoted byte
+  string are lexical errors, `AU1001`. Write a non-ASCII character as its
+  bytes, or use `"é".to_bytes()`.
+- There is no raw byte string and no byte f-string.
+
+Each evaluation produces a fresh list, as a list literal does, so a byte
+string bound with `mut` can be appended to.
+
+## Text Encodings
+
+`bytes.encode` and `bytes.decode` convert between `str` and bytes in a named
+encoding:
+
+<<< ../../examples/bytes/byte_strings_and_encodings.au{aura}
+
+This program prints:
+
+```text
+16
+true
+00ff
+utf-8: 636166c3a9
+latin-1: 636166e9
+utf-16-le: 630061006600e900
+ascii: cannot hold character 3
+no encoding named ebcdic
+“quoted”
+```
+
+| Name | Encoding |
+| --- | --- |
+| `utf-8` | UTF-8, the same bytes as `to_bytes`. |
+| `utf-8-sig` | UTF-8 with a byte-order mark. Encoding writes the mark. Decoding strips one if present. |
+| `utf-16` | UTF-16. Encoding writes a byte-order mark and little-endian units. Decoding reads the order from the mark, and little-endian when there is none. |
+| `utf-16-le`, `utf-16-be` | UTF-16 in a fixed byte order. No mark is written, and none is stripped. |
+| `utf-32` | UTF-32, with the same mark rules as `utf-16`. |
+| `utf-32-le`, `utf-32-be` | UTF-32 in a fixed byte order. |
+| `latin-1` | ISO-8859-1. Byte `HH` is the character `U+00HH`. |
+| `ascii` | Seven-bit ASCII. |
+| `windows-1252` | The Windows Western European code page. |
+
+A name is compared without regard to letter case, and `-`, `_`, and spaces
+are ignored, so `"UTF-16"`, `"utf_16"`, and `"utf16"` are one encoding.
+
+`bytes.EncodingError` has three variants:
+
+| Variant | Meaning |
+| --- | --- |
+| `Unknown(name: str)` | No encoding has this name. |
+| `Invalid(index: int64)` | Decoding failed. `index` is the offset of the first byte that is not valid. |
+| `Unencodable(index: int64)` | Encoding failed. `index` is the position, in characters, of the first character the encoding cannot hold. |
+
+Decoding is strict. There is no replacement character and no option to skip
+invalid input. A truncated UTF-16 or UTF-32 unit, an unpaired surrogate, a
+value above `U+10FFFF`, a byte above `7f` in ASCII, and one of the five
+unassigned Windows-1252 bytes are all `Invalid`.
 
 ## Example
 
@@ -2809,10 +2938,12 @@ those uses.
 
 ## Grammar
 
-This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
-method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.16 has no byte-string
-literal.
+The byte-string token is defined in
+[Lexical Structure](/manual/lexical-structure#byte-string-literals). It is a
+primary expression of type `list[uint8]`. The rest of this surface adds no
+grammar: `list[uint8]`, `import bytes`, associated calls, method calls, module
+calls, named arguments, and `Result` patterns use the ordinary forms defined
+elsewhere in this Manual.
 
 ## Typing Rules
 
@@ -2835,8 +2966,9 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.16
-signature. Ordinary argument checking rejects it.
+`to_bytes` and `from_bytes` take no `encoding` argument. Ordinary argument
+checking rejects one. `bytes.EncodingError` is not a Copy enum, because
+`Unknown` holds a `str`.
 
 A source module you write whose last path component is `bytes` does not get
 this API. The built-in behavior belongs only to the `bytes` module that the
@@ -2927,14 +3059,14 @@ the host.
 
 Aura 0.16 does not provide:
 
-- other text encodings
+- text encodings other than those listed under [Text Encodings](#text-encodings)
+- decoding that replaces or skips invalid input
+- raw, triple-quoted, or formatted byte strings
 - URL-safe or unpadded base64
 - streaming codecs or incremental hashing
 - password hashing, or a hash other than SHA-256
 - a separate mutable byte buffer type
 - implicit text conversion
-
-The reserved `encoding` parameter is not implemented.
 
 ## Status
 
@@ -4515,7 +4647,7 @@ Design record:
 
 # Closures
 
-A closure is a small callable value with an expression body, written `lambda parameters: expression`. Parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
+A closure is a callable value that can capture its surroundings. Write a lambda for an expression body or declare a local function for a statement body. Lambda parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
 
 ```aura
 def main():
@@ -4540,6 +4672,35 @@ This prints `42`, `12`, `6`, `6`, and `owned` on separate lines:
 - `factor` is copied into `scale`.
 - `name` moves into a read-only closure that can be called repeatedly.
 - `token` moves into a consuming closure that is called once.
+
+## Local Functions
+
+A `def` inside a function binds its name in the current block. Its
+parameters and result have written types. Bare, `mut`, `own` and
+keyword-only parameters work as in a module function. Each declaration
+captures the values it uses when control reaches it. A declaration may
+spell an exhaustive capture list after its name.
+
+```aura
+def main() -> None:
+    mut total = 2
+    def add[mut total](*, amount: int64) -> None:
+        total += amount
+    add(amount=5)
+    print(total)
+```
+
+An owned local function can be returned or stored in a matching
+`Callable` type. A local function that captures a loan stays in its
+declaring block. A capture-free local function can be used as a thin
+function value. The declaration binds an immutable name, including
+when calling the closure updates its private state.
+
+A local function with shared captures can call itself with the same
+environment. To recurse with mutable state, pass the state as a `mut`
+parameter. Define mutually recursive functions at module scope.
+Defaults, type parameters, decorators, contracts, `view` results and
+`yield` belong to module functions or methods.
 
 ## Grammar
 
@@ -4950,8 +5111,8 @@ A `from self` result has no value type. A bound method that returns a view of it
 
 ### Language Limits
 
-- Closures are expression-only and contextually typed.
-- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
+- Lambdas have one expression and obtain their parameter types from context. A local `def` has a written signature and a statement body.
+- Both forms exclude parameter defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, and lifetime-bearing structural callable types.
 - Owned callable storage holds owned captures only. Loan captures stay in local loan closures.
 - A stored callable may return a view of one explicit parameter, but never of a captured receiver.
 - Explicit capture lists accept local identifiers. Project a field into a named view before capturing it.
@@ -5304,7 +5465,8 @@ A one-colon slice returns a fresh owned list:
 - The slice copies Copy elements and clones clone-safe non-Copy elements.
 
 `str` slicing uses the same position rules, counts Unicode scalar values, and
-returns a fresh valid UTF-8 `str`. You cannot index a `str` with an integer.
+returns a fresh valid UTF-8 `str`. A single integer index selects one Unicode
+scalar. See [String Indexes](/manual/expressions#string-indexes).
 
 ### Stable Sorting
 
@@ -5525,6 +5687,14 @@ so they take time proportional to the set's size.
 | `remove` | `remove(value: T) -> None` | Removes an equal value. Traps with `AU4008` when the value is absent. |
 | `discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
 | `copy` | `copy() -> set[T]` | Returns independent owned storage. Requires clone-safe `T`. |
+| `union` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the elements only `other` has. Also written `left \| right`. |
+| `intersection` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that are also in `other`. Also written `left & right`. |
+| `difference` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that are not in `other`. Also written `left - right`. |
+| `symmetric_difference` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements only the receiver has, then the elements only `other` has. Also written `left ^ right`. |
+| `is_subset` | `is_subset(other: set[T]) -> bool` | `true` when every element of the receiver is in `other`. |
+| `is_superset` | `is_superset(other: set[T]) -> bool` | `true` when every element of `other` is in the receiver. |
+| `is_disjoint` | `is_disjoint(other: set[T]) -> bool` | `true` when the two sets share no element. |
+| `update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver, after its own, skipping the ones it already has. |
 | `clear` | `clear() -> None` | Removes all values. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` values. |
 | `with_capacity` | `set[T].with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -5542,6 +5712,41 @@ def main():
 
 A non-empty set prints as `{first, second}` in its iteration order. An empty
 set prints as `set()`.
+
+### Set Algebra
+
+Two sets of the same element type combine with methods or with operators.
+Both operands are only read, and the result is a new set:
+
+<<< ../../examples/collections/set_algebra.au{aura}
+
+This program prints:
+
+```text
+either: ada, grace, linus, margaret
+both: grace
+backend only: ada, linus
+one team: ada, linus, margaret
+either: ada, grace, linus, margaret
+false
+true
+true
+5
+```
+
+- `|`, `&`, `-`, and `^` are `union`, `intersection`, `difference`, and
+  `symmetric_difference`. They keep their ordinary precedence, so `a | b & c`
+  is `a | (b & c)`. The compound forms `|=`, `&=`, `-=`, and `^=` assign the
+  result back.
+- The four that build a set copy elements, so `T` must be clone-safe, as for
+  `copy`. `update` moves elements and has no such requirement.
+- A result keeps the order the table states. `intersection` and `difference`
+  look up each element of the receiver in `other`, so they take time
+  proportional to the receiver's size. `is_disjoint` looks up each element of
+  the smaller set in the larger.
+- Sets of different element types do not combine. That is `AU2002`.
+- There are no comparison operators for subsets. Use `is_subset` and
+  `is_superset`.
 
 ## Equality, Copying, And Capacity
 
@@ -5697,12 +5902,11 @@ analysis and the language server use the same builtin signatures.
 These are not available:
 
 - mutable set iteration and direct dictionary iteration
-- set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
 - slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
-- integer indexing of `str`
+- a double-ended queue, a heap, and sorted maps and sets
 
 Set order is not part of the API contract. Allocation is limited by host
 resources and the runtime's size caps.
@@ -5712,6 +5916,70 @@ resources and the runtime's size caps.
 The collection contract on this page is the Aura 0.16 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).
+
+## The collections module
+
+Import `Deque`, `Heap`, `SortedMap`, or `SortedSet` from `collections`.
+Each type owns its elements. Methods that return `Lookup.Found` or an owned
+snapshot of retained elements require clone-safe elements in the result.
+`Lookup.Missing` represents absence even when a collection can store `None`.
+
+<<< ../../examples/collections/delivery_queue.au{aura}
+
+### Deque
+
+A `Deque[T]()` keeps insertion order. Pushes and pops at either end take
+amortized constant time. Reading by position takes constant time plus the
+cost of cloning the element. A negative position counts from the back.
+
+| Operation | Result |
+| --- | --- |
+| `push_front(value)`, `push_back(value)` | Moves a value into the chosen end. |
+| `pop_front()`, `pop_back()` | Moves a value out of the chosen end. An empty deque traps. |
+| `front()`, `back()`, `get(index)` | Returns `Lookup[T]` with a cloned value when present. |
+| `queue[index]`, `at(index)` | Returns a cloned `T`. An invalid position traps. |
+| `len()`, `clear()` | Reads the number of values or removes them all. |
+
+A `for` loop consumes a deque from front to back. Use `for item in mut queue`
+to stop early and keep the rest.
+
+### Heap
+
+`Heap[T]()` pops the least element first. `Heap[T].max()` pops the greatest
+first. The element type implements `Ord[T]`. Equal priorities have no stable
+order.
+
+| Operation | Result |
+| --- | --- |
+| `Heap[T].from_list(items)` | Consumes the list and builds a min-heap in linear time. |
+| `push(value)`, `pop()` | Inserts or removes one value in logarithmic time. Popping an empty heap traps. |
+| `peek()` | Returns `Lookup[T]` with a clone of the next value, or `Missing`. |
+| `len()` | Returns the number of values. |
+| `into_sorted()` | Consumes the heap and returns a list in pop order. |
+
+### SortedMap and SortedSet
+
+`SortedMap[K, V]()` and `SortedSet[T]()` keep their keys in ascending order.
+The key type implements `Ord` against itself. Its comparisons must give a
+consistent order. Keys compare equal when neither precedes the other.
+Inserting a value for an equal map key updates the value in place. Floating
+point keys put NaN after all numbers. All NaNs occupy the same position.
+
+| Operation | Map | Set |
+| --- | --- | --- |
+| Insert | `set(key, value)` | `add(key)` |
+| Read | `get(key) -> Lookup[V]` | `get(key) -> Lookup[T]` |
+| Test membership | `contains(key) -> bool` | `contains(key) -> bool` |
+| Remove | `remove(key) -> Lookup[V]` | `remove(key) -> bool` |
+| Count | `len() -> int64` | `len() -> int64` |
+| Smallest or greatest | `first()`, `last() -> Lookup[(K, V)]` | `first()`, `last() -> Lookup[T]` |
+| Greatest key at or below a key | `floor(key) -> Lookup[(K, V)]` | `floor(key) -> Lookup[T]` |
+| Smallest key at or above a key | `ceiling(key) -> Lookup[(K, V)]` | `ceiling(key) -> Lookup[T]` |
+| Snapshot in key order | `range(low, high) -> list[(K, V)]` | `range(low, high) -> list[T]` |
+
+Ranges include the lower bound and exclude the upper bound. Equal or reversed
+bounds give an empty list. Lookup, insertion and removal take logarithmic time.
+A `for` loop consumes the map or set and visits every entry in ascending order.
 
 ## Source: docs/manual/concurrency.md
 
@@ -5915,8 +6183,8 @@ every Aura call:
   guard page, not from the start of the mapping. The guard page never counts
   as usable space.
 - A call that would leave less than the interpreter's headroom reserve traps
-  with `AU4005` ("task stack exhausted while calling ..."). The message names
-  the callee and the writable bytes that remain. The trap happens before any
+  with `AU4005` ("call stack exhausted while calling ..."). The message names
+  the callee. The trap happens before any
   frame can reach the guard page, so the task reports a diagnostic instead of
   faulting.
 - The reserve exceeds the stack that one interpreter call transition uses.
@@ -5924,18 +6192,22 @@ every Aura call:
   build keeps 128 KiB in reserve. A debug-assertion build keeps 224 KiB,
   because an unoptimized interpreter spends roughly 170-190 KiB of stack per
   Aura call.
-- Both reserves stay below the first-call headroom of the 256 KiB minimum, so
-  that minimum can always run one call. How many nested calls a given capacity
-  holds beyond that also depends on the build profile.
+- A function that can register a `with` exit may need another call's worth of
+  stack before it starts. Its `close` or `__exit__` can then run while the
+  frame that opened the resource is still unwinding. The exit method uses the
+  ordinary safety reserve. A 256 KiB task can run a simple entry function.
+  A task that opens resources or makes nested calls can need more stack.
 
-The root task that runs the program entry reserves a lazily mapped 16 MiB
-coroutine stack and is probed the same way. Deep root recursion reports either
-`AU4005` or the 256-call depth diagnostic, depending on the per-call cost.
-Both are diagnostics, not faults. A program that starts no task runs its entry
-on the 64 MiB runtime thread, where only the depth limit applies.
+The root task that runs the program entry is probed the same way on its own
+stack: 256 MiB under `aura run` and 64 MiB in a built program, both reserved
+and committed as they are touched. Deep recursion there reports `AU4005`, a
+diagnostic and not a fault.
 
-The direct backend has only its 256-call depth guard. It performs no headroom
-probe and never reports the `AU4005` stack-exhaustion diagnostic.
+A built program makes the same check at the entry of every function that can
+call itself, directly or through other functions, and reports the same
+`AU4005`. No count limits nested calls on either backend.
+[Recovering From Traps](/manual/failure-recovery#call-depth) has the measured
+depths.
 
 ### Scope Exit
 
@@ -6308,14 +6580,13 @@ program-output order are not specified.
 - Selection creates no helper tasks, does not migrate the selecting task, and
   adds no periodic scheduler tick.
 
-**Cross-worker communication.** Queue and Task handles are the maintained way
-for tasks on different workers to communicate. Their runtime state is
-synchronized, so a Queue operation or task completion can wake a task pinned
-elsewhere. Every other captured argument and task result must be owned
-`Transfer` data, which keeps a share-nothing boundary. Live host resources and
-capability views stay on their owning task. Cancellation and diagnostic state
-stay isolated per task. Running or trapping on one worker does not replace
-another task's current cancellation or diagnostic context.
+**Cross-worker communication.** Queue and Task handles let workers send
+values and observe completion. A worker can also copy a mutex, atomic, or
+map handle to change shared state. Each lock protects its guarded value,
+and each atomic operation is a single step. Other captured values and
+results cross as owned `Transfer` data. Live host resources, capability
+views, cancellation state and diagnostic state stay with their task.
+See [Sync Module](/manual/sync).
 
 **Nested groups.** A running child may create a nested `TaskGroup`, start
 grandchildren, and immediately wait on their returned handles, on both
@@ -6468,7 +6739,9 @@ worker-index or affinity-introspection API.
 **Stacks and depth.** Ordinary lightweight tasks request 768 KiB of writable
 coroutine stack. An explicit request is limited to 64 MiB. Requests are
 page-rounded and guard-protected. The MIR and direct entry thread reserves
-64 MiB. Nested Aura calls stop at 256 frames.
+64 MiB for a built program and 256 MiB under `aura run`. Nested Aura calls
+stop with `AU4005` when the stack they run on is exhausted
+([Call Depth](/manual/failure-recovery#call-depth)).
 
 **Blocking-I/O pool.** The process-wide pool works as follows:
 
@@ -6520,8 +6793,7 @@ These features are implemented:
 
 Task execution is multicore. Queue and Task handle state is safe across
 workers, and a task body stays on the worker that first runs it on both
-backends. Speedup depends on the workload. The share-nothing `Transfer`
-boundary holds while Queue and Task handles communicate between workers.
+backends. Speedup depends on the workload. The `Transfer` boundary permits shared state through synchronized handles.
 
 The `Transfer` contract covers structural checks for task captures, task
 results, and Queue payloads, plus static repeatable or single-consumer task
@@ -6642,6 +6914,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, `float_shortest_roundtrip_printing`, and `float32_rendering` fixtures |
 | Decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | [Math Module](/manual/math) scalar constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; compiler-bridge coverage; and the forced MIR/direct parity matrix |
+| Arbitrary-size integer arithmetic, decimal normalization and rounding, and complex arithmetic | The `numbers_values` fixture exercises both execution engines, including an optional result, list storage and task transfer. Runtime tests cover signed magnitudes and halfway rounding. |
 | Power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
 | Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and `match_expression_class_variant_pattern` fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
@@ -7527,7 +7800,9 @@ and TOML metadata, counters, and structured events.
 
 ## Retry
 
-Import `control` for the eager retry helper:
+Import `control` for the eager retry helper. To run a function once and
+inspect a trap, use `control.recover`. [Recovering From Traps](/manual/failure-recovery)
+covers the call and its diagnostic fields.
 
 | API | Signature |
 | --- | --- |
@@ -7791,8 +8066,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numbers And Durations
 
-- Integers are fixed-width.
-- Aura has no arbitrary-precision integer, implicit width promotion, rotate operator, literal suffix, hexadecimal floating literal, or distinct unsigned-right-shift operator.
+- Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
+- Integer operations require explicit width conversion. Rotate operators, literal suffixes, hexadecimal floating literals and a distinct unsigned-right-shift operator are outside the current syntax.
 - Power is builtin-only.
 - `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
@@ -7818,9 +8093,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Ordinary and triple-quoted strings may use single or double quotes. F-strings use double quotes.
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
-- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. `text[index]` and `char_at(index)` read one character by scalar position, in constant time for ASCII text and by a scan otherwise. A `str` cannot be changed through an index. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
+- `list[uint8]` is the bytes type, and a byte string `b"..."` is a literal of it. Text conversion is explicit: UTF-8 through `to_bytes` and `from_bytes`, and UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252 through `bytes.encode` and `bytes.decode`. Other text encodings, lossy decoding with a replacement character, triple-quoted and raw byte strings, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -7870,7 +8145,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice assignment to a list or `str` is a reserved `AU2005` form.
-- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, grapheme slicing and indexing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms
@@ -7914,6 +8189,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Tasks
 
+- A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
+- Each shared-map method is a single operation. Use `sync.Mutex[dict[K, V]]` to protect a sequence of reads and writes.
+
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own` target parameters. `mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form. Use `TaskGroup`.
 
@@ -7954,8 +8232,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact `int64` requests from 256 KiB through 64 MiB inclusive.
 - Accepted requests are rounded up to the host page size and guard-protected. Smaller and larger requests are rejected, not clamped.
 - The stack override API is provisional.
-- The MIR and direct runtime entry thread reserves 64 MiB. Maintained execution paths stop with a recursion-depth diagnostic after 256 nested Aura calls.
-- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. The direct backend has only the depth limit.
+- The program's first task has a 64 MiB stack in a built program and 256 MiB under `aura run`. No count limits nested calls: a call that would not fit on the running stack traps with `AU4005` ([Call Depth](/manual/failure-recovery#call-depth)). `aura run` reaches a much smaller depth than a built program, because one interpreted call costs about 11 KiB of stack.
+- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. A built program checks at the entry of every function that can call itself.
 - The 256 KiB lower bound is an opt-in minimum for measured shallow tasks, not a generally safe default. The complete compiled Aura HTTP example faulted when 256 KiB was the global default and succeeded with a 512 KiB default.
 - An isolated runtime protocol round trip succeeds with 256 KiB callers because it excludes compiled language-execution frames. It proves the service offload boundary, not a 256 KiB whole-program default.
 
@@ -9004,12 +9282,16 @@ Aura never clamps the request or silently substitutes the default.
 
 On the MIR backend, an Aura call traps with `AU4005` when it would leave less
 than the interpreter's headroom reserve on the running task's writable
-coroutine stack. The message reads "task stack exhausted while calling ...". It
-names the callee and the writable bytes that remain. The guard page below the
+coroutine stack. The guard page below the
 requested capacity does not count toward that headroom. The reserve is 128 KiB
-in an optimized interpreter build and 224 KiB in a debug-assertion build. The
-direct backend performs no headroom probe and has only its 256-call depth
-limit.
+in an optimized interpreter build and 224 KiB in a debug-assertion build.
+
+A built program traps with `AU4005` at the entry of a function that can call
+itself when less than 128 KiB of the running stack remains. The message on
+both backends reads "call stack exhausted while calling ..." and names the
+callee. No count limits nested calls.
+[Call Depth](/manual/failure-recovery#call-depth) specifies the rule and how
+long call chains are shortened in the diagnostic.
 
 **Runtime configuration.** `AU4006` reports invalid process runtime
 configuration. `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
@@ -10138,7 +10420,7 @@ A call evaluates and binds its arguments, then transfers control to the target b
 
 `return view [mut] place` hands one checked loan to the caller instead. The declaration's `from` slot fixes the loan's origin. The caller continues the exact selected projection with no unlock and relock, and no clone. Every other callee loan ends before control returns. A trap before the handoff transfers no loan.
 
-Each recursive Aura call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aura calls with a source diagnostic, so the host stack does not overflow.
+No count limits nested Aura calls. A call that would not fit on the stack it runs on traps with `AU4005`, so the host stack does not overflow. [Call Depth](/manual/failure-recovery#call-depth) specifies the check and the stack sizes.
 
 ## Loan Lifetime And Cleanup
 
@@ -10935,6 +11217,7 @@ change these operators, because built-in rules come first.
 | `/` | Same floating-point type |
 | unary `-` | Same numeric type |
 | `&`, `\|`, `^`, unary `~` | Same exact integer type |
+| `\|`, `&`, `-`, `^` on two `set[T]` | `set[T]`, see [Set Algebra](/manual/collections#set-algebra) |
 | `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types, two Duration values, or two `str` values |
@@ -10982,6 +11265,10 @@ from finite inputs fails with `AU4002`.
 Bitwise operators use each integer's fixed declared width. `&`, `|`, and `^`
 combine corresponding bits. `~` flips every bit. Binary operands must have
 the same exact concrete integer type.
+
+Between two sets of one element type, `|`, `&`, `^`, and `-` are the set
+methods `union`, `intersection`, `symmetric_difference`, and `difference`.
+See [Set Algebra](/manual/collections#set-algebra).
 
 A shift's count has the same exact type as the shifted value, and it must
 satisfy `0 <= count < width`. Signed right shift is arithmetic. Unsigned right
@@ -11397,9 +11684,9 @@ its own axis.
 
 ### String Indexes
 
-Integer indexing on `str` is unavailable. Use a slice to select a substring,
-or the string methods for whole-string operations. Exact UTF-8 conversion is
-available through `text.to_bytes()` and `str.from_bytes(bytes=...)`.
+`text[index]` returns a one-character `str`. Positions count Unicode scalar
+values from zero. A negative index counts from the end, and an index outside
+the string traps with `AU4003`. For the UTF-8 bytes, use `text.to_bytes()`.
 
 ## Slicing
 
@@ -11457,7 +11744,15 @@ not count UTF-8 bytes or grapheme clusters. Finding scalar boundaries scans
 the source, so str slicing is O(n). When the text before the end is ASCII,
 each scalar is one byte, so the scan only checks those bytes and decodes no
 character. Other text is decoded once. The result is a newly allocated, valid
-UTF-8 str. Integer `string[index]` is unavailable.
+UTF-8 str.
+
+`string[index]` with one integer reads the character at that position as a
+one-character `str`. It is the method call `string.char_at(index)`: positions
+count Unicode scalar values, a negative index counts from the end, and an
+index outside the string traps with `AU4003`. Reading from ASCII text takes
+constant time. Other text is scanned to the position, so a loop over every
+character of non-ASCII text should use `for letter in text.chars()`. A `str`
+is not a place: `string[index] = value` is `AU2003`.
 
 ### Array Slices
 
@@ -11979,6 +12274,217 @@ Design record:
 [ADR-0047](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md),
 [ADR-0048](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md).
 
+## Source: docs/manual/failure-recovery.md
+
+# Recovering From Traps
+
+A trap is a failure nobody planned for: an index out of bounds, a failed
+`assert`, an integer overflow, a division by zero, an exhausted call stack.
+A trap ends the task unless a recovery call contains it. This page covers the two ways a program
+keeps going after one, and the rule that bounds how deeply calls may nest.
+
+Errors a program expects are not traps. They are `Result` values, and `try`
+or `?` passes them along. See
+[Enums And Pattern Matching](/manual/enums-and-match).
+
+## `control.recover`
+
+```aura
+import control
+
+def parse(text: str) -> int64:
+    assert len(text) > 0, "empty input"
+    return len(text)
+
+def main() -> None:
+    match control.recover(parse, ""):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.describe())
+```
+
+```text
+error[AU4001]: empty input (parse.au:4:5)
+```
+
+| API | Signature |
+| --- | --- |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | class with public fields `code: str`, `message: str`, `path: str`, `line: int64`, `column: int64`, `frames: list[str]` |
+| `Trap.describe` | `describe(self) -> str` |
+
+`control.recover(function, arguments...)` calls `function(arguments...)` and
+waits for it to end. `T` is the function's return type. The result is `Ok`
+with the return value, or `Err` with the trap that ended the call.
+
+Aura has no exceptions. There is no `raise` and no `try`/`except`, and a trap
+cannot carry a value of the program's choosing. `control.recover` is a
+boundary: the place where a program decides that a defect ends one unit of
+work and not the whole task.
+
+### The Trap Value
+
+| Field | Meaning |
+| --- | --- |
+| `code` | The diagnostic code, such as `AU4003`. [Diagnostics](/manual/diagnostics) lists them. |
+| `message` | The diagnostic's message without the code. |
+| `path` | The source file of the innermost call, or `""` when it is not known. |
+| `line`, `column` | The position of the operation that trapped, from 1, or 0 when it is not known. |
+| `frames` | The calls that were active inside the recovered call, innermost first, each written `function at line:column` with the position of the function's definition. |
+
+`describe()` returns one line: `error[CODE]: message (path:line:column)`.
+
+`frames` never names a call outside the recovered function. A chain deeper
+than 256 calls keeps its 128 innermost and 128 outermost calls, with one entry
+of the form `... N more calls ...` between them.
+
+If an Aura callback traps during a foreign call, C finishes the call
+before an enclosing `control.recover` returns the trap. A callback can
+also call `control.recover` itself, handle the trap, and return to C.
+
+### Typing Rules
+
+The function and its arguments follow the rules of `TaskGroup.start`
+([Concurrency](/manual/concurrency)), and the checker reports the same
+diagnostics for both:
+
+- The function is a named function, a lambda or closure, or a stored
+  `TaskCallable`.
+- Every argument type and the return type implement `Transfer`.
+- A parameter cannot be `mut`.
+- Arguments bind by position or by name, and a default fills an omitted one.
+
+`control.recover` takes no explicit type arguments. `recover` is not a
+function value: it can be called, and it cannot be stored or passed.
+
+### Ownership
+
+A non-Copy argument moves into the call, exactly as it moves into a started
+task. A Copy argument is copied. A closure's captures move with the closure.
+A failed call leaves its external effects in place. For example, text it
+printed stays on stdout and values sent to a queue stay sent.
+
+When the call traps, everything it owned is released, including the
+arguments. A caller that needs a value afterwards passes a copy, such as
+`text.clone()` or `items.copy()`.
+
+These rules are what make recovery safe. The caller never holds a view or a
+half-written value that the failed call was in the middle of changing.
+
+### Runtime Semantics
+
+On a trap inside the call:
+
+1. The `with` exits registered inside the call run, innermost first, as they
+   do when a task fails. An exit that fails adds a note to the trap.
+2. Every value the call owned is released.
+3. The trap becomes the `Err` value, and the caller continues.
+
+The caller's own calls, `with` scopes and values are untouched.
+
+The call runs to its end before `control.recover` returns. It runs in the
+calling task: it starts no task, needs no `TaskGroup`, and blocking
+operations inside it suspend the calling task as usual.
+
+The callee observes the calling task's cancellation. A cancellation-aware
+operation can return a value such as `QueueReceive.Cancelled`, which the
+callee can handle. An actual task exit propagates through the recovery
+call. The same applies to `sys.exit`.
+
+A call may itself call `control.recover`. Each recovery returns the traps of
+its own call.
+
+A trap inside a task the call started is that task's failure, reported by its
+`TaskGroup` under the usual rules. It becomes the recovered call's trap only
+when the group's scope exit raises it there.
+
+If a callee traps while holding a `sync.Mutex`, later attempts to acquire
+that mutex report `AU4001`. Locks that its caller already held stay valid.
+See [Sync Module](./sync.md).
+
+### Tasks Or `control.recover`
+
+A started task already contains a trap: `task.result()` returns
+`TaskResult.Error(message)` and the parent continues. Use a task when the
+work should run concurrently, needs a timeout, or should be cancellable.
+Use `control.recover` when the work should run here and now. It costs far
+less than a task, and it reports the code, position and call chain, where
+`TaskResult.Error` carries only the message.
+
+### Limits
+
+- A generator cannot be passed in or returned, because a generator is not
+  `Transfer`.
+- In a built program a named function called with positional arguments runs
+  on the caller's stack. A closure, a stored `TaskCallable`, a call with named
+  or default arguments, and every call on Windows run on a 16 MiB stack of
+  their own. The stack is reserved, and a page costs memory once it is
+  touched.
+- A freestanding build rejects `control.recover` (`AU2052`).
+- `aura verify` proves the function's `requires` at the call and knows
+  nothing about the `Result` it returns.
+
+## Call Depth
+
+Stack space bounds nested calls. A
+call that would not fit traps:
+
+```text
+error[AU4005]: call stack exhausted while calling `walk`
+ --> tree.au:1:1
+  = note: Aura call chain (innermost first): walk at 1:1 -> walk at 1:1 -> ... 23,480 more calls ... -> walk at 1:1 -> main at 9:1
+  = help: the calls are nested too deeply for this task's stack; a task started with `start_with_stack` gets a larger one
+```
+
+It is an ordinary trap: `with` exits run, a task that hits it fails alone,
+and `control.recover` returns it.
+
+| Where the calls run | Stack | Nested calls of a small function |
+| --- | --- | --- |
+| The program's first task, built program | 64 MiB | about 2,000,000 |
+| The program's first task, `aura run` | 256 MiB | about 20,000 |
+| A started task | 768 KiB by default, or the size given to `start_with_stack` | about 20,000 built, about 60 under `aura run` |
+| Inside `control.recover` | the caller's stack, or 16 MiB of its own (see Limits above) | the caller's remaining depth, or about 500,000 |
+
+The counts are measurements of a one-argument function on x86-64 Linux, not
+guarantees. A call's cost depends on its locals, and under `aura run` on how
+the interpreter itself was built. Stacks are reserved, not committed.
+
+A built program checks the stack at the entry of every function that can
+call itself, directly or through other functions. Other functions pay
+nothing. `aura run` checks at every call.
+
+### Call Chains In Diagnostics
+
+A trap keeps at most the 128 innermost and the 128 outermost active calls.
+The rendered chain shows 8 from each end. Structured output
+(`--format json`) lists the kept calls in `call_frames` and adds
+`call_frames_omitted`, the number of calls left out of the middle, when it is
+not zero.
+
+## Diagnostics
+
+| Code | Condition |
+| --- | --- |
+| `AU2002` | An argument does not match the function's parameter, or the function is not callable. |
+| `AU2004` | `control.recover` was given explicit type arguments. |
+| `AU3001` | The caller reuses an owned argument after moving it into the call. |
+| `AU3002` | The target takes a `mut` parameter. |
+| `AU3008` | An argument, capture or return type cannot cross a task boundary. |
+| `AU2052` | A freestanding build calls `control.recover`. |
+| `AU4005` | A call would not fit on the stack, or the stack for a recovered call cannot be allocated. |
+
+## Backend Support
+
+`control.recover` and the stack rule behave the same under `aura run` and in
+built programs. The measured depths differ, as the table above shows.
+
+## Status
+
+See the Unreleased section of the changelog for availability. ADR-0104 records the recovery design and ADR-0105
+the call depth rule.
+
 ## Source: docs/manual/ffi.md
 
 # Foreign Function Interface (FFI)
@@ -12396,14 +12902,14 @@ def main() -> int32:
 | `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
 | `-> Name` | `struct name` | | the struct comes back by value |
 
-- **Fields.** A field is a scalar of the [Scalars](#scalars) table,
-  another `extern "C"` class, which is held inline as a nested struct, or
-  an [array](#array-fields) of either. Any other field type is `AU2002`.
+- **Fields.** A field is a [scalar](#scalars), a C struct or [union](#unions),
+  or a fixed-size [array](#array-fields) of values with those layouts.
+  Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** In Aura code the class is a `copy class`, unless
-  it holds an array field. Construct it with keyword arguments, read and
-  assign its fields, and keep it in a list or another class. It has no C
-  identity until it crosses.
+- **An ordinary value.** A struct is Copy when each field is a scalar or
+  another Copy struct. A struct that contains an array or a union moves on
+  assignment. Construct it with keyword arguments, read and assign its fields,
+  and keep it in a list or another class. It has no C identity until it crosses.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -12428,8 +12934,8 @@ the stack, as each convention requires.
 #### Array Fields
 
 A field of type `array[T, N]` is laid out as `T name[N]`: `N` elements in a
-row, with the alignment of one. `T` is a scalar, an `extern "C"` class, or
-another array. `N` is a whole number from 1 to 1048576, written in the
+row with the alignment of `T`. An element can be a scalar, a C struct or
+union, or another array. `N` is a whole number from 1 to 1048576, written in the
 source.
 
 ```aura fragment
@@ -13491,7 +13997,7 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 # Functions
 
-Functions are module-level declarations introduced by `def`. A function's callable contract applies at every call site. It fixes:
+Use `def` to declare a module-level function or a [local function](/manual/closures#local-functions). A function's callable contract applies at every call site. It fixes:
 
 - the parameter names, passing modes, and types
 - the generic parameters and their bounds
@@ -13507,7 +14013,7 @@ def add(left: int32, right: int32) -> int32:
 
 ## Signatures And Return Types
 
-Every ordinary parameter has an explicit type. The return annotation is optional, and omitting it is exactly the same as writing `-> None`. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
+Every ordinary parameter has an explicit type. A module-level function or method may omit its return annotation, which means `-> None`. A local function must spell out its return type. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
 
 A plain triple-quoted string as the first statement of the body is the function's docstring. It documents parameters under an `Args:` heading and does not run. See [Docstrings And API Docs](/manual/docstrings).
 
@@ -14033,7 +14539,7 @@ Aura checks them every time the function runs. See
 
 ## `main`
 
-In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:
+When the entry module has no executable top-level statements, its module-level `main` function is the entrypoint. Its only valid signatures are:
 
 ```aura
 def main() -> int32:
@@ -14047,11 +14553,11 @@ def main():
 
 `main` takes no parameters and returns exactly `int32` or `None`. A returned `int32` becomes the requested host exit status. `None` means success. An imported function named `main` stays an ordinary imported function. A file cannot combine a local `main` with executable top-level statements.
 
-[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the 256-call runtime depth limit.
+[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the call depth rule.
 
 ## Grammar
 
-[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Ordinary functions are module items. Nested function declarations are not accepted. [Closures](/manual/closures) specifies expression lambdas.
+[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Module functions are items. A local `def` binds a closure in the enclosing function. A lambda creates a closure in an expression. [Closures](/manual/closures)
 
 ## Typing Rules
 
@@ -14103,11 +14609,11 @@ Runtime diagnostics:
 
 | Code | Meaning |
 | --- | --- |
-| `AU4001` | Call-depth or general call trap. |
+| `AU4001` | General call trap. |
 | `AU4002` | Arithmetic overflow or underflow in a callee. |
 | `AU4003` | Bounds or lookup violation in a callee. |
 | `AU4004` | Zero divisor in a callee. |
-| `AU4005` | Trapping resource or I/O failure in a callee. |
+| `AU4005` | A call exhausts the stack, or a resource or I/O operation fails in a callee. |
 
 A callee's `AU4002`, `AU4003`, `AU4004`, or `AU4005` keeps the same typed Aura call frames and task ancestry on mid-level intermediate representation (MIR) execution and on direct-native execution.
 
@@ -14122,16 +14628,15 @@ Aura has none of these:
 - trait-object function interactions
 - Aura variadic functions
 - overloads
-- nested functions
 - mutable-parameter task targets
 
-[Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
+Written function types express bare shared, `mut`, and `own` parameter contracts. Local functions use those same parameter modes. [Closures](/manual/closures)
 
-Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
+Nested calls are limited by the stack they run on ([Call Depth](/manual/failure-recovery#call-depth)). The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 
-The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. By-value expression closures are implemented.
+The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. Lambdas and local functions support captures.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 
@@ -15477,7 +15982,7 @@ The lexer produces two kinds of tokens used here:
 
 - Layout tokens: `NEWLINE`, `INDENT`, `DEDENT`, and `EOF`.
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
-  `FSTRING`, and `BOOLEAN`, described below.
+  `BYTES`, `FSTRING`, and `BOOLEAN`, described below.
 
 Every comma-separated list that a production closes with `)`, `]`, or `}`
 accepts one optional `","` before that closing delimiter. The productions
@@ -15593,8 +16098,13 @@ whitespace.
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters are preserved. A raw string
 cannot span a physical line or end in an odd run of backslashes. Raw triple
-strings, raw f-strings, and byte strings are not tokens. There is no separate
+strings and raw f-strings are not tokens. There is no separate
 character-literal token.
+
+`BYTES` is a byte string: lowercase `b` immediately followed by one single or
+double quote, a body of printable ASCII characters and the ordinary escapes
+without `\u{...}`, and the matching quote. It is single-line. In it `\xHH` is
+one byte.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Literal braces work
@@ -15745,6 +16255,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], extern-aggregate-declaration
     | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
@@ -15755,12 +16266,24 @@ type-alias-declaration
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type,
+      "(", [ parameter-list ], ")", "->", type, [ "symbol", STRING ],
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+extern-aggregate-declaration
+    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+      INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
+
+extern-member
+    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    | "pass", NEWLINE ;
+
+extern-field-type
+    = type
+    | "array", "[", extern-field-type, ",", INTEGER, "]" ;
 
 export-function-declaration
     = "export", STRING, function-declaration ;
@@ -15769,9 +16292,9 @@ contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
-Item declarations are module-level. They are not statements and cannot appear
-inside function or control-flow suites. `public` is not allowed on an
-implementation block.
+Item declarations appear at module level. A `def` inside a function introduces
+a local closure using the statement grammar below. `public` is not allowed on
+an implementation block.
 
 A type alias is recognized contextually. A module-level line that reads
 `type`, an identifier, optional bounded type parameters, and `=` declares a
@@ -15779,11 +16302,12 @@ transparent alias for the written target type. The target may use the alias's
 own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
-Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic. An extern function's optional
-indented block holds only `requires` and `ensures` clauses, its trusted
-contract. `symbol` and `drop` are words only in these clauses.
-[FFI](/manual/ffi) restricts their parameter modes and types.
+Extern declarations require the ABI string `"C"` and take no type parameters.
+An extern function's optional block holds only `requires` and `ensures`
+clauses, its trusted contract. The contextual words `symbol` and `drop`
+name the C symbol and the handle's release function respectively. A C struct
+or union needs at least one field with a C layout. [FFI](/manual/ffi) gives
+the field types, array lengths and call signatures that can cross the boundary.
 
 `export` is a word only when a string follows it at the start of a
 module-level declaration. The string must be exactly `"C"`. The function has
@@ -15873,7 +16397,7 @@ A function type spells a complete callable contract, for example
 
 A literal or expression after `=` in a type is rejected with `AU1101`.
 
-The same `*` boundary rule applies to declaration and lambda parameter lists.
+The same `*` boundary rule applies to declaration and lambda parameter lists. A local function requires a type for each parameter and a written result type. Local-function parameters take no defaults.
 A list has at most one `*`, it must be followed by at least one named
 parameter, and it adds no variadics.
 
@@ -16127,7 +16651,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = assignment-statement
+    = local-function-statement
+    | assignment-statement
     | view-statement
     | return-statement
     | assert-statement
@@ -16142,6 +16667,10 @@ statement
     | expression-statement ;
 
 statement-end = NEWLINE | DEDENT | EOF ;
+
+local-function-statement
+    = "def", identifier, [ lambda-capture-list ], "(", [ parameter-list ], ")",
+      "->", type, ":", NEWLINE, suite ;
 
 assignment-statement
     = [ "mut" ], assignment-target,
@@ -16534,6 +17063,7 @@ primary-expression
     | FLOAT
     | BOOLEAN
     | STRING
+    | BYTES
     | FSTRING
     | parenthesized-expression
     | list-literal
@@ -17203,8 +17733,10 @@ A decoded image has the channels its file has:
 A file's header can claim any size, so a few bytes can ask for gigabytes.
 The module reads the size from the header and refuses a larger image with
 `image.Error.TooLarge` before it decodes anything. `read` and `decode` allow
-268,435,456 pixels. When files come from outside the program, pass the
-largest image the program is prepared to hold to `decode_up_to`:
+268,435,456 pixels. A JPEG can be up to 65,535 pixels wide or tall. For
+example, a 20,000 by 1 image counts as 20,000 pixels. When files come
+from outside the program, pass the largest image the program is prepared
+to hold to `decode_up_to`:
 
 ```aura
 import fs
@@ -17255,9 +17787,10 @@ made for PNG. Use them when speed matters more than size.
 **JPEG** is smaller and loses detail. `quality` runs from `1`, the smallest
 file, to `100`, the closest to the original. JPEG holds gray and colour
 only. An image with alpha is `image.Error.Unsupported`: call `to_rgb()` or
-`to_gray()` first, which states that the alpha is dropped. Colour is stored
-at half resolution in both directions, as most JPEG files are. A side longer
-than 65,535 pixels is `image.Error.Unsupported`.
+`to_gray()` first, which states that the alpha is dropped. JPEG stores
+brightness at full resolution and averages the colour of each 2 by 2 group
+of pixels (4:2:0 sampling). A side longer than 65,535 pixels is
+`image.Error.Unsupported`.
 
 **PPM** is uncompressed and trivial to parse, which makes it useful for
 tests and for tools that read nothing else. An image with alpha is
@@ -18717,11 +19250,35 @@ pattern = r'\d+\.\d+'
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters remain. A raw string cannot end in
 an odd run of backslashes or contain a physical newline. Raw triple strings
-and byte strings are unavailable.
+are unavailable.
 
 Every string literal has type `str`. See [Types](/manual/types) for ownership
 and [Execution Model](/manual/execution-model#evaluation-order) for expression
 evaluation order.
+
+## Byte String Literals
+
+A lowercase `b` immediately followed by a single or double quote starts a
+byte string. It is single-line and has type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b'\x89PNG'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+```
+
+The body holds printable ASCII characters and these escapes: `\n`, `\t`,
+`\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. Each ASCII character is its byte,
+and `\xHH` is the byte `HH`. A character outside ASCII, a `\u{...}` escape,
+an unknown escape, a missing closing quote, and three quotes after the `b`
+are lexical errors. `b` not followed by a quote is an ordinary identifier.
+
+See [Bytes](/manual/bytes#byte-strings) for the value a byte string
+produces.
 
 ## F-Strings
 
@@ -18902,7 +19459,7 @@ These forms are unavailable:
 
 - raw triple strings
 - raw f-strings
-- byte strings
+- raw, triple-quoted, and formatted byte strings
 - single-quoted f-strings
 - block comments
 - semicolons
@@ -18915,10 +19472,12 @@ Design record: [ADR-0025, newline continuation and delimited layout](https://git
 
 # Math Module
 
-The `math` module provides exact binary64 constants and scalar `float64`
-functions for rounding, powers, exponentials, logarithms, and trigonometry.
-Every function input is `float64`. The module performs no implicit numeric
-conversion.
+The `math` module provides exact binary64 constants, scalar `float64`
+functions for rounding, powers, roots, exponentials, logarithms, and
+trigonometry with its inverse and hyperbolic forms, and exact `int64`
+functions such as `gcd` and `factorial`. A function takes `float64`
+arguments unless its signature says `int64`. The module performs no implicit
+numeric conversion.
 
 ## Public API
 
@@ -18928,6 +19487,7 @@ conversion.
 | `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
 | `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
 | `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi, bits `0x401921fb54442d18`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
 | `math.trunc` | `trunc(value: float64) -> int64` | The integer left after dropping the fractional part, rounding toward zero. |
@@ -18939,6 +19499,33 @@ conversion.
 | `math.sin` | `sin(value: float64) -> float64` | Binary64 sine of an angle in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine of an angle in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent of an angle in radians. |
+| `math.asin` | `asin(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose sine is `value`. |
+| `math.acos` | `acos(value: float64) -> float64` | The angle in `[0, pi]` whose cosine is `value`. |
+| `math.atan` | `atan(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose tangent is `value`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle in `[-pi, pi]` of the point `(x, y)`, with the quadrant taken from both signs. |
+| `math.sinh` | `sinh(value: float64) -> float64` | Hyperbolic sine. |
+| `math.cosh` | `cosh(value: float64) -> float64` | Hyperbolic cosine. |
+| `math.tanh` | `tanh(value: float64) -> float64` | Hyperbolic tangent. |
+| `math.asinh` | `asinh(value: float64) -> float64` | Inverse hyperbolic sine. |
+| `math.acosh` | `acosh(value: float64) -> float64` | Inverse hyperbolic cosine, for `value >= 1`. |
+| `math.atanh` | `atanh(value: float64) -> float64` | Inverse hyperbolic tangent, for `-1 < value < 1`. |
+| `math.sqrt` | `sqrt(value: float64) -> float64` | Correctly rounded square root. |
+| `math.cbrt` | `cbrt(value: float64) -> float64` | Cube root. Defined for negative values. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | `sqrt(x*x + y*y)` without overflow in the squares. |
+| `math.expm1` | `expm1(value: float64) -> float64` | `exp(value) - 1`, accurate for small `value`. |
+| `math.log1p` | `log1p(value: float64) -> float64` | `log(1 + value)`, accurate for small `value`. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign bit of `sign`. |
+| `math.degrees` | `degrees(value: float64) -> float64` | Radians to degrees. |
+| `math.radians` | `radians(value: float64) -> float64` | Degrees to radians. |
+| `math.is_nan` | `is_nan(value: float64) -> bool` | `true` for NaN. |
+| `math.is_inf` | `is_inf(value: float64) -> bool` | `true` for either infinity. |
+| `math.is_finite` | `is_finite(value: float64) -> bool` | `true` for a value that is neither NaN nor infinite. |
+| `math.gcd` | `gcd(left: int64, right: int64) -> int64` | Greatest common divisor, never negative. `gcd(0, 0)` is `0`. |
+| `math.lcm` | `lcm(left: int64, right: int64) -> int64` | Least common multiple, never negative. Zero when either argument is zero. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | The greatest integer whose square is at most `value`. |
+| `math.factorial` | `factorial(value: int64) -> int64` | `value!`. Fits `int64` up to `factorial(20)`. |
+| `math.comb` | `comb(count: int64, chosen: int64) -> int64` | The number of ways to choose `chosen` of `count` items without order. Zero when `chosen > count`. |
+| `math.perm` | `perm(count: int64, chosen: int64) -> int64` | The number of ordered arrangements of `chosen` of `count` items. Zero when `chosen > count`. |
 
 ## Example
 
@@ -18966,6 +19553,26 @@ NaN
 
 The same program is maintained as `examples/numbers/scalar_math.au`.
 
+The inverse functions and the integer functions:
+
+<<< ../../examples/numbers/angles_and_integers.au{aura}
+
+This program prints:
+
+```text
+5.0
+53
+30
+true
+true
+12
+12
+31622
+3628800
+2598960
+20
+```
+
 ## IEEE-754, Domain, And Overflow Policy
 
 This table is normative for every maintained backend. `log*` means `log`,
@@ -18990,6 +19597,16 @@ This table is normative for every maintained backend. `log*` means `log`,
 | `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
 | `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
 | Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
+| Any `float64` function below with a NaN argument | NaN. |
+| `sqrt(x)` for `x < 0.0`, including `-inf`. `sqrt(-0.0)` is `-0.0` | `AU4001` domain error. |
+| `asin(x)` or `acos(x)` for `x` outside `[-1, 1]` | `AU4001` domain error. |
+| `acosh(x)` for `x < 1.0` | `AU4001` domain error. |
+| `atanh(x)` for `x <= -1.0` or `x >= 1.0` | `AU4001` domain error. |
+| `log1p(x)` for `x <= -1.0` | `AU4001` domain error. |
+| `sinh`, `cosh`, `expm1`, `hypot`, or `degrees` of finite input whose result overflows | `AU4002`. |
+| `atan`, `atan2`, `tanh`, `asinh`, `cbrt`, `copysign`, `radians`, and the three predicates | Defined for every input. |
+| `isqrt`, `factorial`, `comb`, or `perm` with a negative argument | `AU4001` domain error. |
+| `gcd`, `lcm`, `factorial`, `comb`, or `perm` whose exact result does not fit `int64` | `AU4002`. `gcd` overflows only when the answer is 2^63. |
 | Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
 
 For the negative-base `pow` rule, an exponent is integral when its binary64
@@ -19011,13 +19628,15 @@ defined in this Manual.
 
 ## Typing Rules
 
-The four constants have type `float64` and the exact bit patterns in
+The five constants have type `float64` and the exact bit patterns in
 [Public API](#public-api). You can read them qualified, or import them directly
 with ordinary import aliases.
 
-Every function parameter is `float64`. `floor`, `ceil`, and `trunc` return
-`int64`. Every other function returns `float64`. A value of any other numeric
-type needs an explicit conversion before the call. The normal checks on
+`gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and `perm` take and return
+`int64`. Every other function parameter is `float64`. `floor`, `ceil`, and
+`trunc` return `int64`, the three `is_` predicates return `bool`, and every
+other function returns `float64`. A value of any other numeric type needs an
+explicit conversion before the call. The normal checks on
 argument count, argument names, and exact types apply.
 
 The module namespace contains every constant and function in the Public API
@@ -19059,7 +19678,7 @@ call produces no value.
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown module member. |
-| `AU2002` | An argument whose type is not exactly `float64`. |
+| `AU2002` | An argument whose type is not exactly the parameter's type, `float64` or `int64`. |
 | `AU2004` | Invalid argument binding, such as a wrong argument count or name. |
 | `AU4001` | A domain error listed in the policy table. |
 | `AU4002` | Finite overflow, or a rounding result that does not fit in `int64`. |
@@ -19073,9 +19692,11 @@ use the same host math library for finite results.
 
 ## Limits And Implementation-Defined Behavior
 
-The module covers scalar `float64` only. It has no complex, decimal,
-arbitrary-precision, vectorized, combinatorial, or random operations. The
-logarithm functions take one value and have no alternate-base form.
+The module covers scalar `float64` and `int64` only. It has no `float32`
+forms. For complex, decimal, and arbitrary-size integer arithmetic, use
+the [Numbers Module](/manual/numbers). The integer functions do not widen: a result outside `int64` is
+`AU4002`. The logarithm functions take one value and have no alternate-base
+form.
 
 The final bits of finite transcendental results can differ across target and
 libm pairs. The host's rendering around an `AU4001` or `AU4002` failure
@@ -19083,7 +19704,8 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.16 on both the MIR and direct
+`tau` and the functions from `asin` to `perm` in the Public API table are new
+after Aura 0.16. Everything on this page is implemented on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
@@ -19336,7 +19958,7 @@ A function body starts with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.16 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
+A local `def` introduces an immutable function name in its enclosing block. Its parameters and locals belong to a new function scope. Classes, enums, and traits are declared at module level or as members of declarations that permit them. See [Closures](/manual/closures).
 
 ## Local Bindings
 
@@ -19543,7 +20165,7 @@ Name, visibility, trait, module, and scope resolution happen in the compiler fro
 ## Limits And Implementation-Defined Behavior
 
 - Local declarations and comprehension targets cannot shadow visible locals in the positions listed above.
-- Items cannot be nested in function suites.
+- A local `def` binds its name in the enclosing block. Other module items cannot be nested in a function suite.
 - Wildcard imports, relative-dot imports, and imported top-level execution are unavailable.
 - Import aliases follow the ordinary no-collision and visibility rules.
 
@@ -19562,7 +20184,7 @@ Implemented:
 - comprehension scopes
 - the entry-module top-level scope described above
 
-Unavailable: dynamic names, reflection-based lookup, nested items, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
+Unavailable: dynamic names, reflection-based lookup, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
 
 Design record: `architecture_docs/decisions/0037-expression-closures-and-value-capture.md`.
 
@@ -19944,6 +20566,91 @@ The fixed resource caps are an accepted design decision. So is the policy for in
 These are known current limitations: the repeated-header representation, the missing close operation on WebSocket listeners, incomplete WebSocket cancellation, and discarded WebSocket close errors. The protocol surface is exactly the API on this page.
 
 Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0019: Duration conversion and timer policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md).
+
+## Source: docs/manual/numbers.md
+
+# Numbers Module
+
+Import `numbers` for arbitrary-size integers, exact decimal arithmetic, and
+complex arithmetic. Convert values explicitly before combining them. A
+literal such as `3` has type `int64`.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+## BigInt
+
+`BigInt.from_int(n)` takes an `int64`. `BigInt.parse(text)` reads a signed
+decimal integer and returns `BigInt | None`. For another base, pass a radix
+from 2 through 36 to `BigInt.parse_radix(text, radix)`. Digits may include
+upper- or lowercase letters. Omit any base prefix.
+`BigInt.from_float(x)` truncates a finite `float64` toward zero and returns
+`None` for infinity or NaN.
+
+| Operation | Result |
+| --- | --- |
+| `a + b`, `a - b`, `a * b`, `-a` | Exact integer arithmetic. |
+| `a // b`, `a % b`, `a.divmod(b)` | Floor quotient, remainder with the sign of the divisor, or both. |
+| `a.pow(exponent)`, `a.pow_mod(exponent, modulus)` | Integer power with a nonnegative `int64` exponent, or modular power with `BigInt` arguments. |
+| `a.gcd(b)`, `a.lcm(b)`, `a.sqrt()` | Nonnegative greatest common divisor, least common multiple, or floor square root. |
+| `a.bit_and(b)`, `a.bit_or(b)`, `a.bit_xor(b)` | Bitwise arithmetic with a two's-complement interpretation for negative integers. |
+| `a.shift_left(count)`, `a.shift_right(count)` | Shift by a nonnegative `int64`. Right shift rounds toward negative infinity. |
+| `a.bit_length()`, `a.is_even()`, `a.sign()`, `a.is_zero()` | Magnitude bits, parity, sign from -1 to 1, or zero test. |
+| `a.compare(b)`, `a.abs()`, `a.copy()` | Ordering from -1 to 1, absolute value, or a separate equal value. |
+| `a.to_int()`, `a.to_float()`, `a.to_radix(radix)` | `int64 | None`, nearest `float64`, or signed text in the chosen radix. |
+| `numbers.factorial(n)` | The factorial of a nonnegative `int64`, returned as a `BigInt`. |
+
+Use `str(a)` for decimal text and the usual comparison operators for two
+`BigInt` values.
+
+## Decimal
+
+A `Decimal` holds an integer coefficient times ten raised to a signed
+exponent. `Decimal.from_parts(BigInt.from_int(1995), -2)` represents 19.95
+exactly. `from_int` and `from_big` lift integers. `Decimal.parse(text)`
+accepts a sign, decimal point, and optional exponent and returns
+`Decimal | None`. `Decimal.from_float(x)` preserves the exact binary value
+of a finite float. To represent a price, start with decimal text or integer
+parts.
+
+Addition, subtraction, multiplication and nonnegative integer powers are
+exact. The runtime removes trailing zeros from the coefficient, so equal
+values compare equal independent of the input scale. Zero has exponent
+zero. `a.coefficient()` and `a.exponent()` expose these normalized parts.
+
+| Operation | Result |
+| --- | --- |
+| `a / b` | Quotient rounded to 28 significant digits, with ties to even. |
+| `a.divide(b, digits, rounding)` | Quotient rounded to the requested number of significant digits. |
+| `a.round(places, rounding)` | Rounds to decimal places. Negative places round to tens, hundreds, and beyond. |
+| `a.sqrt(digits)`, `a.pow(exponent)` | Positive square root rounded to significant digits, or exact nonnegative integer power. |
+| `a.to_big(rounding)`, `a.trunc()`, `a.floor()`, `a.ceil()` | An integer rounded in the requested direction. |
+| `a.to_plain()`, `a.to_fixed(places)` | Unscaled display text, or fixed-point text rounded half to even with exactly the requested decimal places. |
+| `a.to_float()`, `str(a)` | A `float64` or a decimal string which may use exponent notation. |
+| `a.compare(b)`, `a.abs()`, `a.copy()`, `a.sign()`, `a.is_zero()` | Ordering, absolute value, a separate equal value, sign, or zero test. |
+
+`Rounding.HalfEven` chooses the nearest value and sends a tie to the even
+last digit. `HalfUp` sends a tie away from zero and `HalfDown` toward zero.
+`Up` and `Down` always round away from or toward zero. `Floor` and
+`Ceiling` round toward negative and positive infinity. Decimal arithmetic
+uses the precision and rounding mode of the particular operation.
+
+## Complex
+
+`Complex(re=x, im=y)` stores two `float64` components. Both fields are
+public. Use `+`, `-`, `*`, `/`, unary `-`, and equality on complex values.
+`from_polar(radius, angle)` takes an angle in radians. `abs()` returns the
+magnitude and `arg()` the angle. `conj()` negates the imaginary component.
+`exp()`, `log()`, `sqrt()`, and `pow(exponent)` calculate complex functions
+using the principal branch. `is_finite()` tests both components.
+
+## Limits
+
+Invalid text gives `None`. An invalid arithmetic argument such as a zero
+integer divisor or a negative factorial gives `AU4001`. Decimal division and
+square root accept 1 to 1,000,000 significant digits. A normalized decimal
+exponent must lie between −2⁶² and 2⁶² inclusive. An exponent outside that
+range traps with `AU4002`. A requested power, shift, factorial or decimal
+scale which exceeds the runtime's construction limit traps with `AU4005`.
 
 ## Source: docs/manual/numeric-arrays.md
 
@@ -24963,6 +25670,7 @@ Aura 0.16 has these statements:
 - binding and assignment
 - local `view` bindings
 - expression statements
+- local `def`
 - `return`
 - `assert`
 - `if` / `elif` / `else`
@@ -24971,7 +25679,7 @@ Aura 0.16 has these statements:
 - `with`
 - `break`, `continue`, and `pass`
 
-Class, enum, function, trait, and implementation declarations are items, not statements. Items appear only at module level. Declaration members such as fields, enum variants, and methods appear only in the item bodies that permit them. Aura does not support nested functions, classes, enums, traits, or implementations.
+A local `def` binds a closure in the enclosing block. Its parameters, result type, captures, and statement body are described in [Closures](/manual/closures). Class, enum, trait, and implementation declarations live at module level. Fields, variants, and methods live in the item bodies that permit them.
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 
@@ -25811,7 +26519,7 @@ Every implemented statement form uses the same checker and MIR lowering for MIR 
 - Loops have no `else` clause.
 - Statement match arms cannot be inline.
 - A statement can span physical lines only inside an open `(`, `[`, or `{`. Backslash continuation is not available.
-- Items cannot nest inside suites.
+- A function suite may contain a local `def`. Class, enum, and trait declarations require module scope.
 - Range iteration yields copy `int64` values and accepts only the bare form, as described above.
 
 No statement evaluation order is implementation-defined.
@@ -25820,7 +26528,7 @@ No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression statements, `return`, `assert`, conditionals, loops, `match`, scoped cleanup, `pass`, imports, and top-level execution in entry modules are implemented as described. Tuple targets for assignment and loops are implemented.
 
-Class and collection destructuring, loop `else`, exception statements, `raise`, `async`, and nested declarations are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
+Class and collection destructuring, loop `else`, exception statements, `raise`, and `async` are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
 
 Design record: the loop ownership modes are those accepted in ADR-0006. One-time iterable selection is the accepted ADR-0017 rule. Tuple assignment and loop targets follow Accepted ADR-0026.
 
@@ -26372,7 +27080,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Closures And Method Values
 
-- Closures are contextually typed `lambda parameters: expression` expressions.
+- A closure can use a contextually typed lambda expression or a local `def` with a written signature and a statement body.
 - Without a capture list, Copy values copy and owned non-Copy values move when the closure is created.
 - An exhaustive capture list may have shared, mutable, and owned entries. Shared-loan use is repeatable. Mutable-loan use is repeatable through a mutable closure place. Consuming owned-capture use is single-use.
 - A by-value closure is Transfer only when every capture is Transfer. A loan closure is never Transfer.
@@ -26395,13 +27103,13 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Foreign Functions
 
-- Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
+- A package enables the foreign function interface with `allow_ffi = true` in its manifest.
 - Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to elements of lists or Arrays, C structs with scalar or fixed-size array fields, C unions, pointer-length text and byte views, NUL-terminated `cstr` text, and opaque handles. A named top-level callback accepts scalars, pointers to one scalar, and `cstr` parameters.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
 - An extern parameter or result may be `Handle | None` or `cstr | None`, marshalled as one nullable C pointer.
-- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, C unions, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
+- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, assignment to C union members, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
 - FFI is an unsafe native boundary. It is not a memory safety promise for a false declaration or a misbehaving C implementation.
 
 ### Comprehensions
@@ -26418,7 +27126,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
+- `text[index]` reads one character of a `str`. Slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
@@ -26556,6 +27264,226 @@ See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned tool
 - [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
 - [ADR-0047: Integer literal bases, bitwise operators, and shifts](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md)
 - [ADR-0048: Power, rounding, divmod, and the math module](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md)
+
+## Source: docs/manual/sync.md
+
+# Sync Module
+
+The `sync` module holds the values several tasks can change: a lock around
+a value, atomic integers and booleans, and a shared map. Everything else
+in Aura has one owner, and module constants never change, so these four
+types are how tasks share state.
+
+```aura
+import sync
+```
+
+Every type here is a Copy handle, as a `Queue[T]` is. Copying a handle
+copies a reference to the same shared state, not the state. A handle is
+`Transfer`, so it can be a task argument, a `Queue` item, a field of a
+class, or a module constant. Printing a handle shows `<sync-handle>`.
+Read the value through its methods or inside a lock block to display it.
+
+## Public API
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `sync.Mutex[T]` | `Mutex[T](value: own T)` | A lock that guards `value`. `T` must be `Transfer`. |
+| `Mutex.lock` | `lock(self) -> sync.Locked[T]` | The `with` item that holds the lock for a block. |
+| `Mutex.replace` | `replace(self, value: own T) -> T` | Stores `value` and returns the value it replaces, as one step. |
+| `Mutex.set` | `set(self, value: own T) -> None` | Stores `value` and drops the value it replaces. |
+| `Mutex.is_poisoned` | `is_poisoned(self) -> bool` | Whether a task failed while it held the lock. |
+| `sync.AtomicInt` | `AtomicInt(value: int64)` | An `int64` changed in single atomic steps. |
+| `AtomicInt.load` | `load(self) -> int64` | The value now. |
+| `AtomicInt.store` | `store(self, value: int64) -> None` | Replaces the value. |
+| `AtomicInt.add` | `add(self, delta: int64) -> int64` | Adds `delta` and returns the new value. |
+| `AtomicInt.swap` | `swap(self, value: int64) -> int64` | Stores `value` and returns the value it replaces. |
+| `AtomicInt.compare_and_set` | `compare_and_set(self, expected: int64, new: int64) -> bool` | Stores `new` if the value is `expected`, and says whether it did. |
+| `sync.AtomicBool` | `AtomicBool(value: bool)` | A `bool` changed in single atomic steps. |
+| `AtomicBool.load` | `load(self) -> bool` | The value now. |
+| `AtomicBool.store` | `store(self, value: bool) -> None` | Replaces the value. |
+| `AtomicBool.swap` | `swap(self, value: bool) -> bool` | Stores `value` and returns the value it replaces. |
+| `AtomicBool.compare_and_set` | `compare_and_set(self, expected: bool, new: bool) -> bool` | Stores `new` if the value is `expected`, and says whether it did. |
+| `sync.Map[K, V]` | `Map[K, V]()` | An empty shared map. `K` and `V` must be `Transfer`. |
+| `Map.get` | `get(self, key: K) -> Lookup[V]` | `Lookup.Found` with a copy of the value, or `Lookup.Missing`. |
+| `Map.set` | `set(self, key: own K, value: own V) -> None` | Stores `value` for `key`. |
+| `Map.remove` | `remove(self, key: K) -> Lookup[V]` | Removes the entry and returns its value, or `Lookup.Missing`. |
+| `Map.contains` | `contains(self, key: K) -> bool` | Whether `key` has an entry. |
+| `Map.len` | `len(self) -> int64` | The number of entries. |
+| `Map.clear` | `clear(self) -> None` | Removes every entry. |
+| `Map.snapshot` | `snapshot(self) -> dict[K, V]` | A copy of the whole map at one instant. |
+
+## Example
+
+<<< ../../examples/concurrency/shared_state.au{aura}
+
+It prints:
+
+```text
+400
+400
+81
+10
+11400
+```
+
+## Mutex
+
+`sync.Mutex[T](value)` guards one value of any `Transfer` type. The only
+way to reach the value is a `with` block:
+
+```aura fragment
+hits = sync.Mutex[dict[str, int64]](dict[str, int64]())
+
+with table = hits.lock():
+    table["home"] = 1
+```
+
+The block waits until no other task holds the lock. Inside it, the item
+name is a mutable view of the guarded value: the body reads it, assigns to
+it, and calls its methods as it would with a `mut` local. The view cannot
+be stored, returned, or passed to a task, so no reference to the value
+outlives the block. Every way out of the block releases the lock: the end
+of the body, `return`, `break`, `continue`, and `try`.
+
+A value computed inside the block leaves it as an owned value:
+
+```aura fragment
+mut count = 0
+with table = hits.lock():
+    count = table.len()
+```
+
+`replace` and `set` change the whole value in one step without a block.
+
+### Waiting
+
+A task that finds the lock held waits without holding its worker thread,
+so other tasks on that worker keep running. A holder may sleep, do I/O, or
+wait on a `Queue` inside the block. Tasks that wait for one lock are not
+served in arrival order.
+
+Waiting for a lock is not a cancellation point. `lock()` returns only
+with the lock held, and a cancelled task sees its cancellation at the next
+operation that reports one.
+
+### Locking Twice
+
+A mutex is not reentrant. A task that enters a `with` block for a mutex it
+already holds traps with `AU4001` instead of waiting for itself forever.
+`replace` and `set` take the lock too, so they trap inside a block that
+holds the same mutex.
+
+Two tasks that take two locks in opposite orders can each wait for the
+other. Take locks in one order everywhere. The runtime reports the group
+as deadlocked when every task in it waits and none can run.
+
+### Poisoning
+
+A task that traps while it holds a lock leaves the guarded value half
+changed, and the value is lost with the task. The mutex is then poisoned:
+every later `lock()`, `replace`, and `set` traps with `AU4001`, and tasks
+already waiting for the lock trap the same way. `is_poisoned()` reports
+the state without trapping.
+
+A trap caught by `control.recover` poisons a mutex the recovered call
+still holds. A mutex the caller already held stays available to that caller.
+
+### Generators
+
+A generator that yields inside a lock block keeps the lock until the
+consumer asks for the next item or closes the generator. Prefer to copy
+what the generator needs out of the block first.
+
+## Atomics
+
+`sync.AtomicInt` and `sync.AtomicBool` change in single steps that no
+other task can observe halfway, with no lock. Use them for counters,
+flags, and identifiers:
+
+```aura fragment
+REQUESTS = sync.AtomicInt(0)
+
+def serve() -> None:
+    _ = REQUESTS.add(1)
+```
+
+`add` returns the new value. An addition that overflows `int64` traps with
+`AU4002`, as `+` does. The stored value has wrapped by the time the trap
+is raised.
+
+`compare_and_set(expected, new)` is the step other lock-free updates are
+built from: it stores `new` only if the value is still `expected`.
+
+Every operation is sequentially consistent: all tasks agree on one order
+of all atomic steps.
+
+## Map
+
+`sync.Map[K, V]` is a dictionary that tasks use at once. Each call locks
+the map for its own duration and hands back owned values, so each call is
+one atomic step and no reference to an entry leaves the map. `get` and
+`snapshot` copy the values they return.
+
+Two calls are two steps. Another task may change the map between a `get`
+and the `set` that follows it:
+
+```aura fragment
+match cache.get(key):
+    case Lookup.Found(value):
+        return value
+    case Lookup.Missing:
+        value = compute(key)
+        cache.set(key, value)   # another task may have set it meanwhile
+        return value
+```
+
+That is the right shape for a cache, where computing a value twice is
+harmless. A change that must read and write as one step uses a
+`sync.Mutex[dict[K, V]]` and one `with` block.
+
+## Module Constants
+
+A module constant may hold a handle. The constant itself never changes,
+and the state it reaches does:
+
+```aura fragment
+CACHE = sync.Map[str, str]()
+NEXT_ID = sync.AtomicInt(1)
+```
+
+Every task in the program reaches the same map and the same counter
+through these names.
+
+## Typing Rules
+
+- `sync.Mutex[T]` and `sync.Map[K, V]` require `Transfer` type arguments,
+  because the guarded values cross between tasks.
+- Every handle type is Copy and `Transfer`, whatever its type arguments.
+- The item of `with name = mutex.lock():` has type `view mut T`.
+- `sync.Locked[T]` is useful only as a `with` item. The item form
+  `with mutex.lock() as name:` is accepted too.
+
+## Verification
+
+`aura verify` treats the value a lock block sees, and the result of every
+atomic and map operation, as an unknown value of its type. Another task
+may have changed it, so a fact proved about the value in one block does
+not hold in the next.
+
+## Backend Support
+
+`aura run` and `aura build` both support every operation on every
+platform the runtime supports. A freestanding build has no tasks and no
+`sync` module.
+
+## Limits
+
+- There is no reader-writer lock, no condition variable, no `try_lock`,
+  and no lock timeout. A `Queue` wakes a waiting task.
+- A lock cannot be handed to another task while it is held.
+- `sync.Map` has no call that updates one entry in place. Use a
+  `sync.Mutex[dict[K, V]]` for that.
 
 ## Source: docs/manual/tensors.md
 
@@ -27760,7 +28688,7 @@ A bare `value: str` parameter grants shared access. Bare parameters grant shared
 
 `<`, `<=`, `>`, and `>=` order two `str` values by their UTF-8 bytes, which is the order of their Unicode scalar values. `list[str]` sorts by the same order.
 
-Aura has no distinct character type and no integer str indexing. A character is a one-character `str`: `text.chars()` returns them in order, `ord(letter)` gives a one-character string's Unicode scalar value as an `int64`, and `chr(code)` turns a scalar value back into a string. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
+Aura has no distinct character type. A character is a one-character `str`: `text[index]` and `text.char_at(index)` return the character at a position, `text.chars()` returns them all in order, `ord(letter)` gives a one-character string's Unicode scalar value as an `int64`, and `chr(code)` turns a scalar value back into a string. A str index counts Unicode scalar values like `len`, accepts a negative position counted from the end, and traps with `AU4003` outside the string. It takes constant time for ASCII text and time proportional to the position otherwise. A `str` cannot be changed through an index. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
 
 ## Copy And Move Categories
 
@@ -31038,6 +31966,22 @@ does, the fix is one conversion, which we'll see shortly. Function calls
 follow the same rule: passing an `int32` to a parameter declared as `int64` is
 an error (`AU2002`), not a widening.
 
+## Exact Numbers
+
+Suppose we sell three tickets at 19.95 each. We can keep the price exact
+from the input through the receipt by storing 1995 cents and a decimal
+exponent of −2. The program also computes a factorial larger than an
+`int64` and squares the imaginary unit.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+`Decimal.from_parts` reads those digits as 19.95. We convert the quantity
+with `Decimal.from_int(3)` so both sides of the multiplication have the
+same type. The multiplication preserves the exact value and `to_fixed(2)`
+writes `59.85` on the receipt. For a large integer read from a file, we
+can use `BigInt.parse(text)` and match on the result before computing with
+it. [Numbers Module](/manual/numbers)
+
 ## Booleans
 
 The `bool` type has two values, `true` and `false`. They are lowercase, and
@@ -31173,27 +32117,28 @@ NAÏVE
 `len()` counts characters (strictly, Unicode scalar values), and
 `byte_len()` counts the bytes of the UTF-8 encoding, where `ï` takes two. A
 slice like `word[0:2]` counts in characters too, and gives you a new string.
-What you can't do is index a string with a single number:
+A single number in the brackets gives you one character:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "naïve"
     print(word[0])
+    print(word[2])
+    print(word[-1])
 ```
 
 ```console
 $ aura run src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+n
+ï
+e
 ```
 
 Aura has no separate character type. A one-character piece of text is still
-a `str`, and you get one with a slice, `word[0:1]`, as the word counter did.
-Leaving out single-number indexing keeps you from writing code that looks
-like it takes constant time but has to scan the string from the start, which
+a `str`, so `word[2]` is the string `"ï"`. A negative position counts from
+the end, and a position past either end stops the program with a trap. One
+thing to know about cost: finding the nth character of text that isn't plain
+ASCII means scanning from the start, which
 any UTF-8 string has to do to find the nth character. When you really want
 every character, `word.chars()` gives them to you as a list in one pass;
 Chapter 8 shows it along with `ord` and `chr`.
@@ -38171,27 +39116,29 @@ because a slice that asks for nine characters of a four-character word
 usually means the program's idea of the text is wrong, and silently
 returning less hides that.
 
-## No indexing by position
+## One character at a time
 
-If you try to take one character with an index, as you might in Python, the
-compiler stops you:
+An index with one number gives you one character, as a string of length one:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "café"
     print(word[0])
+    print(word[-1])
 ```
 
 ```console
-$ aura check src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+$ aura run src/main.au
+c
+é
 ```
 
-and a `for` loop over a string isn't available either:
+Positions count scalars, as `len()` and slices do, and a negative position
+counts from the end. A position outside the string traps, like a slice that
+goes too far. You can read through an index but not write: a string is
+changed by building a new one.
+
+A `for` loop over a string isn't available:
 
 ```aura check-fail:AU2999
 def main():
@@ -38212,10 +39159,11 @@ error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `it
 This trips up everyone coming from Python, so let's be clear about why it
 happens. Aura has no character type: a single letter is a `str` of length
 one. Finding the scalar at position `n` in UTF-8 means walking from the
-start, so if a string could be indexed or iterated one position at a time, a
-loop like this would quietly turn a linear algorithm into a quadratic one.
-Aura would rather make you ask for the characters explicitly, so the cost is
-visible. You ask with `chars()`, which walks the string once and gives back a
+start, unless the text is plain ASCII, where Aura jumps straight to it. So
+`word[i]` inside a loop over every position is fine for ASCII text and
+quietly quadratic for anything else. When you want every character, ask for
+them all at once and the cost is one pass.
+You ask with `chars()`, which walks the string once and gives back a
 `list[str]` of one-character strings. `ord` turns one of them into its
 Unicode scalar value, and `chr` goes the other way:
 
@@ -38247,7 +39195,7 @@ scalar, stops the program with a trap.
 In practice, most text processing doesn't need single characters at all. You
 want words, fields, lines, and prefixes, and the methods in the rest of this
 section work on those directly. When you need one character from a known
-position, a slice such as `word[0:1]` gives it to you as a one-character
+position, an index such as `word[0]` gives it to you as a one-character
 `str` without building the whole list.
 
 ## Searching
@@ -38905,11 +39853,39 @@ Sets currently iterate in the order values were added, but that order isn't
 part of the contract, so if you need a particular order, sort:
 `sorted(struggling)` gives you a sorted list.
 
-You may be used to Python's set operators, `a | b` for union and `a & b` for
-intersection. Aura doesn't have them yet; `|` on two sets is an `AU2003`
-error, because the compiler only knows `|` as a bitwise operator on integers.
-For now, a comprehension or a short loop does the job, and comprehensions are
-where we're going next.
+Two sets of the same element type combine the way they do in Python.
+`a | b` is the union, `a & b` the intersection, `a - b` the values of `a`
+that `b` lacks, and `a ^ b` the values in exactly one of them. Each has a
+method that says the same thing in words, and there are three questions you
+can ask about a pair of sets:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    passed: set[str] = {"Grace", "Alan", "Ada"}
+    submitted: set[str] = {"Ada", "Linus", "Grace"}
+
+    print(sorted(passed & submitted))
+    print(sorted(submitted - passed))
+    print(sorted(passed.union(submitted)))
+    print(passed.is_subset(submitted))
+    print(passed.is_disjoint({"Margaret"}))
+```
+
+```console
+$ aura run src/main.au
+[Ada, Grace]
+[Linus]
+[Ada, Alan, Grace, Linus]
+false
+true
+```
+
+Neither operand is changed or used up: each operator builds a new set. To
+pour one set into another instead, `passed.update(other)` moves the values
+of `other` into a set declared with `mut`. Subsets are asked about by name,
+with `is_subset` and `is_superset`; there is no `<=` for sets.
 
 ## Choosing a collection
 
@@ -38924,6 +39900,30 @@ In the next section we'll stop writing so many loops. Comprehensions build a
 list, a set, or a dictionary from another collection in one expression, and a
 handful of builtins compute sums, minimums, and sorted copies without a loop
 at all.
+
+## Visiting entries in key order
+
+Suppose we list delivery stops by their scheduled minute. A driver asks
+which stops fall in the first twenty minutes. We can keep the schedule in a
+`SortedMap` and read that interval in order.
+
+```aura
+from collections import SortedMap
+
+def main():
+    mut stops = SortedMap[int64, str]()
+    stops.set(15, "bridge")
+    stops.set(5, "station")
+    stops.set(30, "museum")
+    for minute, place in own stops.range(0, 20):
+        print(f"{minute} {place}")
+```
+
+This prints `5 station` followed by `15 bridge`. The range includes minute
+zero and ends just before minute twenty. When we only care whether a stop
+exists, a `SortedSet` holds the keys alone. The same module provides a
+`Deque` for taking work from either end and a `Heap` for taking the least
+or greatest value first. [Collections](/manual/collections#the-collections-module)
 
 ## Source: docs/book/ch08-04-comprehensions-and-builtins.md
 
@@ -41041,12 +42041,12 @@ raise, without reading every function it calls.
 
 Aura splits failures into two kinds and gives each its own mechanism. A failure
 that means the program itself is wrong, such as an index out of range or a
-broken invariant, is a *trap*: the current task stops at once, cleanup runs,
-and the diagnostic points at the line that failed. A failure that a working
+broken invariant, is a *trap*. Cleanup runs and the diagnostic points at the
+line that failed. A trap ends the task unless a caller used
+`control.recover` to contain it. A failure that a working
 program should expect, such as bad input or a missing file, is a value. The
 function returns a `Result`, its signature says so, and the compiler makes the
-caller decide what to do with it. There is no third route. Aura has no
-exceptions, no `raise`, and no way to catch a trap.
+caller decide what to do with it.
 
 In this chapter we'll write a small loader for a settings file made of `key =
 value` lines. The first version trusts its input and traps when the input is
@@ -41145,13 +42145,13 @@ workers -> 4
 1
 ```
 
-The final `1` comes from `echo $?`. A trapped program always exits with status
-1, so a shell script or a CI job knows that something went wrong.
+The final `1` comes from `echo $?`. An unhandled trap in the main task
+gives the program exit status 1, so a shell script can detect the failure.
 
 ## What traps
 
 Index errors aren't the only failures that trap. Every one of the following
-stops the task with a diagnostic, and none of them can be ignored by accident.
+produces a diagnostic. An unhandled trap ends the current task.
 
 Integer arithmetic is checked. If a result doesn't fit its type, Aura traps
 with `AU4002` instead of wrapping around:
@@ -41293,7 +42293,7 @@ world, as we'll see in [To trap or not to trap](/book/ch09-03-to-trap-or-not).
 
 ## What happens when a task traps
 
-A trap stops the task it happens in. It doesn't stop instantly, though: before
+By default a trap stops the task it happens in. It doesn't stop instantly, though: before
 the task ends, Aura runs any cleanup that the task had registered with `with`.
 Here's a lock file that has to be removed however the block ends:
 
@@ -41377,45 +42377,37 @@ The second task trapped on the same `parts[1]` as before. Its trap became a
 `TaskResult.Error` value in `main`, and `main` carried on. This is how a server
 keeps running when one request handler hits a bug: the handler's task is the
 unit that fails. Don't worry about the task group syntax yet; [Chapter
-15](/book/ch15-00-concurrency) builds it up properly. The point here is the
-boundary. A trap always ends a whole task, and the only place you can observe
-it is from outside that task.
+15](/book/ch15-00-concurrency) explains how tasks work together.
 
-## No catching
+## Recovering a call
 
-If you've written Python, you may be reaching for `try` and `except` to wrap
-`parse_line` and recover from the bad line. Aura doesn't have them, and the
-compiler tells you so:
+Suppose our loader calls a parser supplied by a plug-in. We want to record
+which lines the parser failed on and keep reading. We can give the parser
+one line at a time with `control.recover`. Let's reuse the first version of
+`parse_line` so we can see what happens to its indexing trap.
 
-```aura check-fail:AU2005
-def parse_port(text: str) -> int64:
-    try:
-        return int(text)
-    except ValueError:
-        return 8080
-```
+<<< ../../examples/error_handling/recover.au{aura}
 
 ```console
-$ aura check src/main.au
-error[AU2005]: `try`/`except` is not supported; use `Result` with `match` today
- --> src/main.au:2:5
-  |
-2 |     try:
-  |     ^
+$ aura run examples/error_handling/recover.au
+port -> 9000
+skipping verbose (AU4003)
+workers -> 4
 ```
 
-There is no way, inside a task, to catch a trap and continue. Aura does this
-deliberately. A trap means the program reached a state its author didn't plan
-for. Code that catches every failure and carries on tends to carry on with
-half-updated data, and the real bug shows up later somewhere unrelated. By
-making traps uncatchable, Aura guarantees that when one happens you see it, at
-the line where it happened, with the values that caused it.
+We pass the function itself, then the arguments it will receive. The loop
+borrows each line, so we clone the string to give the parser an owned copy.
+`control.recover` runs it in the current task. When the parser returns its
+pair, we receive `Ok(pair)`. When the missing equals sign leads it past the
+end of the list, cleanup runs inside the call and we receive `Err(trap)`.
+Our loop can inspect the code, message, location and call chain before
+moving on to the next line. An earlier print or write still happened.
 
-That leaves our settings loader in an awkward spot. A line without `=` isn't a
-bug in our program. It's a mistake in a file that some person wrote, and a good
-loader should report it politely and keep its own state intact. For failures
-like that, Aura has a second mechanism, and it's the subject of the next
-section.
+If we own the parser, a line without an equals sign is something we can
+detect and explain to the person who wrote the file. In the next section
+we'll give our parser a return type that says exactly what can go wrong.
+The [Manual](/manual/failure-recovery) has the rules for passing values
+across a recovery call.
 
 ## Source: docs/book/ch09-02-recoverable-errors.md
 
@@ -41989,7 +42981,7 @@ section.
 
 # To trap or not to trap
 
-You now have two ways for a function to fail. It can trap, which ends the task
+You now have two ways for a function to fail. It can trap, which ends the current call
 with a diagnostic, or it can return `Result.Err`, which hands the problem to
 its caller. Neither is better in general. Each one makes a different promise,
 and choosing well is mostly a matter of asking one question about the failure:
@@ -42146,11 +43138,10 @@ gives you the list of places to decide.
 Tests are the third place, and there trapping is the whole mechanism. A failed
 `assert` in a test is how the test reports failure, as [Chapter
 11](/book/ch11-00-testing) shows. Tests also push in the other direction,
-though. Aura's test runner has no way to say "this case should trap", because
-nothing in Aura can catch a trap. A function that returns `Result.Err` for bad
-input can be tested directly: call it and match on the error. That makes
-`Result` the easier design to test, which is one more reason to use it at your
-program's edges.
+though. When a trap is part of the contract, a test can call the function
+through `control.recover` and assert on the diagnostic code in the `Err`
+arm. For an expected error, call the function directly and match on its
+`Result`. That lets the test use the same error type as the caller.
 
 ## A few rules of thumb
 
@@ -42195,10 +43186,10 @@ next reader that ignoring the error was a decision, not an oversight.
 
 ## Summary
 
-Aura gives failures two shapes. A trap stops the current task at the line that
-failed, runs cleanup, and reports a diagnostic with a code, the values
-involved, and the call chain. Traps can't be caught, which keeps bugs from
-hiding. A `Result[T, E]` is an ordinary value that carries either a success or
+At a trap, Aura runs cleanup and reports a diagnostic with the code,
+location and call chain. The task ends unless a call to `control.recover`
+contains the failure. A `Result[T, E]` is an ordinary value that carries
+either a success or
 an error. The compiler makes you look inside it before using the success,
 `match` makes you handle both cases, and `try` passes an error up to the
 caller, changing its type only through a `From` conversion you wrote. A small
@@ -47775,6 +48766,34 @@ Named functions like these are *thin* function values: a pointer to code, with
 nothing else attached. They are copy values, so passing one around never moves
 anything, and they can go anywhere a value can go, including across tasks.
 
+## Give A Closure A Statement Body
+
+Suppose we want a counter that keeps its current value between calls. We
+can give the update a name and a body with two statements.
+
+```aura
+def counter(start: int64) -> Callable[mut def() -> int64]:
+    mut count = start
+    def bump() -> int64:
+        count += 1
+        return count
+    return bump
+
+def main() -> None:
+    mut next = counter(10)
+    print(next())
+    print(next())
+```
+
+We get `11` and then `12`. The declaration of `bump` captures the
+current value of `count`. The assignment updates that capture each time
+we call the function. Its return type records that a call needs mutable
+access. The caller provides that access with `mut next`.
+
+We can use an ordinary `return` anywhere in a local function. It returns
+to the caller of that function. A local function can also call itself
+when its captures are shared or it has no captures.
+
 ## Capturing the limit
 
 `is_slow` has its limit, 100, written into its body. In a real tool the limit
@@ -50225,10 +51244,9 @@ third by the type system. Every task starts inside a `TaskGroup`, and a task
 group is a resource managed by `with`, exactly like the files and scratch
 managers of [Chapter 14](/book/ch14-00-resources-and-cleanup). When the block
 ends, the group waits for its tasks. So a task can't outlive the block that
-started it, and a failure in a task always has somewhere to go. Tasks don't
-share mutable data at all: they exchange owned values through typed queues, and
-the compiler checks that everything crossing from one task to another is safe to
-move.
+started it, and a failure in a task always has somewhere to go. Tasks can exchange owned values through typed queues. When they share a value
+they can change, a handle from the `sync` module coordinates access. The
+compiler checks that each value can cross the task boundary.
 
 If you've used Python, you have probably met two older models. Threads from the
 `threading` module can be started anywhere and run until they finish, and the
@@ -50739,10 +51757,10 @@ environment variable), and each task is pinned to one worker for its whole life.
 There is no global interpreter lock, so two CPU-bound tasks can use two cores at
 once, unlike two Python threads.
 
-Parallel execution is exactly when shared mutable data becomes dangerous, so
-Aura doesn't allow it. Everything passed to a task, and everything a task
-returns, must be `Transfer`: a value that can be moved to another worker and
-used there without anyone else holding on to it. The compiler works out which
+Everything passed to a task, and everything a task returns, must be
+`Transfer`. This means a value can safely cross to another worker. For an
+ordinary mutable value, the worker gets its own storage. A synchronized
+handle can reach data that several workers use at once. The compiler works out which
 types are `Transfer` from their structure. Numbers, strings, lists and
 dictionaries of transferable values, and your own classes and enums built from
 them all qualify. A live host resource doesn't, because an open file handle
@@ -50786,11 +51804,35 @@ transferable types may implement `Job`. A `dyn Job` can then go to a task or
 through a queue like any other owned value. A generic function asks for the
 same thing with a bound, `def send[T: Transfer](value: own T)`.
 
-Two kinds of handle are the exception that makes communication possible. A
-`Queue` handle and a `Task` handle can be passed to any task, because their
-internal state is synchronized by the runtime. Everything else moves as owned,
-unshared data. That's the whole model: tasks share nothing except the channels
-between them.
+Queue and task handles let us send work and receive results. To count items
+as several tasks finish them, we can also pass a handle from the `sync` module.
+
+### Counting from two tasks
+
+```aura
+import sync
+
+def record(counter: sync.AtomicInt):
+    _ = counter.add(1)
+
+def main():
+    completed = sync.AtomicInt(0)
+    with workers = TaskGroup():
+        workers.start_soon(record, completed)
+        workers.start_soon(record, completed)
+    print(completed.load())
+```
+
+This prints `2`. Each worker gets a copy of the handle. Both copies reach
+the same counter, and `add` reads and increments it in one step. The end
+of the task group waits for both workers before we read the total.
+
+When several fields must change together, we can put a record in a
+`sync.Mutex` and update it inside `with record = stats.lock():`. The
+next task to take that lock sees all the changes. If a holder traps,
+the next attempt to enter the lock reports `AU4001`. We can also use
+`sync.Map` when one dictionary operation at a time is enough. The
+[shared-state example](/manual/sync#example) uses all three kinds of handle.
 
 ### A result can be observed once
 
@@ -52036,10 +53078,10 @@ Concurrency in Aura is structured. A task is started by a `TaskGroup`, a group
 is a resource managed by `with`, and a group's exit waits for every task it
 started, so no task outlives its block. The compiler keeps the group from
 escaping that block, and a failure in a task always reaches either the code that
-reads its result or the block that owns it. Tasks share nothing except the
-channels between them: arguments and results move into and out of tasks, queues
-move owned values from one task to another, and the compiler checks that
-everything crossing those boundaries is `Transfer`.
+reads its result or the block that owns it. Arguments and results move into and out of tasks. Queues move owned values
+between workers, and handles from `sync` give workers coordinated access to
+shared state. The compiler checks that everything crossing those boundaries
+is `Transfer`.
 
 You can now start tasks with `start` and `start_soon`, wait for them with
 `result`, `wait_all`, and `wait_any`, pass work through bounded and unbounded
@@ -56557,12 +57599,11 @@ Aura passes the address of a C copy of `now`, and when the call returns,
 `const struct timespec *` for a struct the function only reads. Declare that
 as `mut` too, and pass a `mut` variable.
 
-On the Aura side there is nothing foreign about these values. An
-`extern "C"` class is a `copy class`: we build one with keyword arguments,
-read its fields, copy it by assignment, and keep it in a list. What it gives
-up is everything a C struct does not have. It has no methods, no field
-defaults, and no type parameters, and each field is a scalar or another
-`extern "C"` class, which C would hold inline as a nested struct.
+Our `Timespec` has only scalar fields, so assignment copies it. We can
+build one with keyword arguments, read its fields, and keep it in a list.
+C lays out nested structs inline. If a field contains a fixed-size array or
+a union, even inside a nested struct, assignment moves the value. An
+`extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
@@ -59120,9 +60161,10 @@ exactly that: an invalid sequence starts at byte 3. A program that reads
 bytes from a socket or a file and needs text has to decide what to do in
 that case, and Aura makes the decision visible.
 
-Neither conversion takes an encoding argument. Aura 0.16 converts to and
-from UTF-8 and nothing else. Text in Latin-1 or UTF-16 has to be transcoded
-before it reaches `str.from_bytes`.
+When you know a file uses Latin-1, call `bytes.decode(raw, "latin-1")` and
+match on the result to get its text. To write that text as UTF-16, use
+`bytes.encode(text, "utf-16")`. The [bytes manual](/manual/bytes#text-encodings)
+lists the supported encodings and the errors each call can return.
 
 ## Hexadecimal and base64
 
@@ -66447,7 +67489,7 @@ evaluation rules.
 | Operator | Meaning | Example |
 | --- | --- | --- |
 | `+` | addition, string concatenation, `Duration` sum | `total + 1`, `"ab" + "cd"`, `2s + 500ms` |
-| `-` | subtraction, and unary negation | `end - start`, `-offset` |
+| `-` | subtraction, unary negation, and the difference of two sets | `end - start`, `-offset` |
 | `*` | multiplication, `Duration` times `int64` | `width * height`, `100ms * 3` |
 | `/` | true division, floating-point types only | `7.0 / 2.0` |
 | `//` | floor division | `7 // 2` |
@@ -66532,9 +67574,9 @@ values and has the lowest precedence of all.
 
 | Operator | Meaning |
 | --- | --- |
-| `&` | bitwise and |
-| `\|` | bitwise or; also the union type operator, as in `str \| None` |
-| `^` | bitwise exclusive or |
+| `&` | bitwise and; intersection of two sets |
+| `\|` | bitwise or; union of two sets; also the union type operator, as in `str \| None` |
+| `^` | bitwise exclusive or; symmetric difference of two sets |
 | `~` | bitwise not (unary) |
 | `<<`, `>>` | shift left, shift right |
 
@@ -66640,6 +67682,15 @@ so that the first week with Aura is less of a negotiation with the compiler.
 
 If you have read the book from the start, you have already met all of these.
 Treat this as the cheat sheet you hand a Python colleague.
+
+## Python Numeric Types
+
+When a Python integer grows beyond 64 bits, its storage grows with it. In
+Aura we choose `numbers.BigInt` for that range. For prices we use
+`numbers.Decimal.parse("19.95")` and match the result, or construct the
+value from a coefficient and exponent. We pass precision and rounding to
+individual operations. For Python's `1j`, write
+`numbers.Complex(re=0.0, im=1.0)`. [Numbers Module](/manual/numbers)
 
 ## Scripts and `main`
 
@@ -66835,11 +67886,12 @@ see every place it happens.
 `is None` and `is not None`. The compiler narrows the type after the test, so
 there is no `Optional` unwrapping to do by hand.
 
-Some failures are not recoverable values: an index out of range, a failed
-`assert`, integer overflow, division by zero. Those *trap*, stopping the task
-with an `AU40xx` diagnostic and an Aura call chain, much like an uncaught
-exception would. The difference is that you cannot catch a trap, so it is
-reserved for bugs, not for conditions a program should handle.
+An index out of range, a failed `assert`, integer overflow and division by
+zero each raise a *trap*. A trap ends the task by default and reports an
+`AU40xx` diagnostic with a call chain. At a plug-in or request boundary
+we can use `control.recover(function, arguments...)`. It runs the function
+in the current task and returns either its value in `Ok` or its diagnostic
+in `Err`. [Chapter 9](/book/ch09-01-traps) builds a working example.
 
 ## Classes, without inheritance
 
@@ -66897,9 +67949,10 @@ hierarchies in Python, you may not miss it.
 
 ## Strings
 
-`str` is Unicode, and `len(text)` counts Unicode scalar values. Strings are
-not indexable: `text[0]` is an error, but slices such as `text[1:4]` work and
-return a new string. Most methods have the names you expect, and a few have
+`str` is Unicode, and `len(text)` counts Unicode scalar values. `text[0]`
+and `text[-1]` give one character as a string, and slices such as
+`text[1:4]` return a new string. A byte string, `b"..."`, is a
+`list[uint8]`. Most methods have the names you expect, and a few have
 Aura names:
 
 | Python | Aura |

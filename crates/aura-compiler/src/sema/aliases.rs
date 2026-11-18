@@ -424,10 +424,13 @@ impl<'a> AliasValidator<'a> {
                 }
                 self.expr(expr)?;
             }
+            ExprKind::Lambda { body, .. } => match body {
+                crate::ast::ClosureBody::Expression(value) => self.expr(value)?,
+                crate::ast::ClosureBody::Function { statements, .. } => self.stmts(statements)?,
+            },
             ExprKind::Unary { expr, .. }
             | ExprKind::Try(expr)
             | ExprKind::Group(expr)
-            | ExprKind::Lambda { body: expr, .. }
             | ExprKind::Member { object: expr, .. }
             | ExprKind::IsNone { value: expr, .. } => self.expr(expr)?,
             ExprKind::Binary { left, right, .. }

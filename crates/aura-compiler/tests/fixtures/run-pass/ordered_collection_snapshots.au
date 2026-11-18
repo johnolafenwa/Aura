@@ -1,0 +1,90 @@
+from collections import Deque, SortedMap
+import random
+
+
+class Box:
+    map: SortedMap[int64, int64]
+
+
+def replace(map: mut SortedMap[int64, int64]):
+    map.set(5, 40)
+
+
+def main():
+    mut queue = Deque[str]()
+    queue.push_back("left")
+    mut queues: list[Deque[str]] = []
+    queues.append(queue)
+    match own queues.get(0):
+        case Found(snapshot):
+            mut local = snapshot
+            local.push_back("right")
+            print(local.pop_back())
+        case _:
+            assert false
+    for item in queues.pop():
+        print(item)
+
+    mut source = SortedMap[int64, list[int64]]()
+    source.set(7, [1, 2])
+    mut tables: list[SortedMap[int64, list[int64]]] = []
+    tables.append(source)
+    match own tables.get(0):
+        case Found(snapshot):
+            mut local = snapshot
+            local.set(7, [3])
+            local.set(8, [4])
+            print(local.range(7, 9))
+        case _:
+            assert false
+    original = tables.pop()
+    print(original.get(7))
+    print(original.contains(8))
+
+    mut streams = SortedMap[int64, random.Rng]()
+    streams.set(1, random.Rng(42))
+    streams.set(2, random.Rng(7))
+    mut expected = random.Rng(42)
+    match own streams.remove(1):
+        case Found(value):
+            mut stream = value
+            print(stream.next_float() == expected.next_float())
+        case _:
+            assert false
+    mut rest = random.Rng(7)
+    for key, value in streams:
+        mut stream = value
+        print(key)
+        print(stream.next_float() == rest.next_float())
+
+    mut numbers = SortedMap[int64, int64]()
+    numbers.set(4, 12)
+    mut maps: list[SortedMap[int64, int64]] = []
+    maps.append(numbers)
+    match own maps.get(0):
+        case Found(snapshot):
+            mut changed = snapshot
+            changed.set(4, 19)
+            print(changed.get(4))
+        case _:
+            assert false
+    print(maps.pop().get(4))
+
+    mut boxed = Box(map=SortedMap[int64, int64]())
+    replace(boxed.map)
+    boxed.map.set(value=41, key=6)
+    print(boxed.map.range(5, 7))
+
+    mut events = Deque[int64]()
+    events.push_back(14)
+    mut lists: list[Deque[int64]] = []
+    lists.append(events)
+    match own lists.get(0):
+        case Found(snapshot):
+            mut later = snapshot
+            later.push_front(23)
+            print(later.pop_front())
+        case _:
+            assert false
+    mut first = lists.pop()
+    print(first.pop_back())

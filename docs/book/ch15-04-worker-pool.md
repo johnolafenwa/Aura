@@ -337,10 +337,10 @@ Concurrency in Aura is structured. A task is started by a `TaskGroup`, a group
 is a resource managed by `with`, and a group's exit waits for every task it
 started, so no task outlives its block. The compiler keeps the group from
 escaping that block, and a failure in a task always reaches either the code that
-reads its result or the block that owns it. Tasks share nothing except the
-channels between them: arguments and results move into and out of tasks, queues
-move owned values from one task to another, and the compiler checks that
-everything crossing those boundaries is `Transfer`.
+reads its result or the block that owns it. Arguments and results move into and out of tasks. Queues move owned values
+between workers, and handles from `sync` give workers coordinated access to
+shared state. The compiler checks that everything crossing those boundaries
+is `Transfer`.
 
 You can now start tasks with `start` and `start_soon`, wait for them with
 `result`, `wait_all`, and `wait_any`, pass work through bounded and unbounded

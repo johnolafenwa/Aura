@@ -516,6 +516,56 @@ def main() -> int32:
 }
 
 #[test]
+fn recover_analysis_reports_its_signature_and_the_selected_targets_result() {
+    let members = complete_source(
+        "import control\n\ndef main():\n    control.\n",
+        3,
+        12,
+        Some('.'),
+    )
+    .expect("control module completion");
+    let recover = members
+        .iter()
+        .find(|entry| entry.name == "recover")
+        .expect("recover completion");
+    assert_eq!(
+        recover.detail,
+        "recover(function, arguments...) -> Result[T, control.Trap]"
+    );
+
+    let analysis = analyze_source(
+        r#"import control
+type Work = TaskCallable[def() -> int64]
+def named() -> bool:
+    return true
+def main():
+    flag = control.recover(named)
+    number = control.recover(Work(lambda: 7))
+    print(flag)
+    print(number)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for expected in [
+        "function recover(function, arguments...) -> Result[T, control.Trap]",
+        "binding flag: Result[bool, control.Trap]",
+        "binding number: Result[int64, control.Trap]",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|item| item.hover.contains(expected)),
+            "missing hover for {expected}"
+        );
+    }
+}
+
+#[test]
 fn math_analysis_completes_and_hovers_the_exact_public_surface() {
     let member_source = "import math\n\ndef main():\n    math.\n";
     let completions = complete_source(member_source, 3, 9, Some('.'))
@@ -528,7 +578,44 @@ fn math_analysis_completes_and_hovers_the_exact_public_surface() {
     assert_eq!(
         names,
         std::collections::BTreeSet::from([
-            "ceil", "cos", "exp", "floor", "log", "log10", "log2", "pow", "sin", "tan", "trunc",
+            "acos",
+            "acosh",
+            "asin",
+            "asinh",
+            "atan",
+            "atan2",
+            "atanh",
+            "cbrt",
+            "ceil",
+            "comb",
+            "copysign",
+            "cos",
+            "cosh",
+            "degrees",
+            "exp",
+            "expm1",
+            "factorial",
+            "floor",
+            "gcd",
+            "hypot",
+            "is_finite",
+            "is_inf",
+            "is_nan",
+            "isqrt",
+            "lcm",
+            "log",
+            "log10",
+            "log1p",
+            "log2",
+            "perm",
+            "pow",
+            "radians",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "trunc",
         ])
     );
     let pow = completions
@@ -4505,6 +4592,16 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
             }),
             &scope,
         ),
+        Some(Type::named("str"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::Bool(true))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            }),
+            &scope,
+        ),
         None
     );
     assert_eq!(
@@ -6145,6 +6242,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     let class_info = ClassInfo {
         module_name: "<test>".to_string(),
         is_builtin: false,
+        is_builtin_source: false,
         decl: ClassDecl {
             public: true,
             copy: false,
@@ -8420,7 +8518,11 @@ fn lambda_scope_navigation_follows_every_expression_container_to_its_structural_
         panic!("expected callback assignment");
     };
     let mut lambda = assign.value.clone();
-    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+    let ExprKind::Lambda {
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = &mut lambda.kind
+    else {
         panic!("expected checked lambda expression");
     };
     body.span = Span::new(9, 1);
@@ -8654,7 +8756,11 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
         panic!("expected callback assignment");
     };
     let mut lambda = assign.value.clone();
-    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+    let ExprKind::Lambda {
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = &mut lambda.kind
+    else {
         panic!("expected checked lambda expression");
     };
     body.span = Span::new(9, 1);

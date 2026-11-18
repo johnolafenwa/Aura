@@ -1,0 +1,6 @@
+import random
+import sync
+
+def main():
+    guard = sync.Mutex[random.Rng](random.Rng(1))
+    print(guard.is_poisoned())

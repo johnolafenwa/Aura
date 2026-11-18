@@ -244,6 +244,18 @@ fn reduction_element_type(ty: &Type) -> Option<Type> {
     }
 }
 
+/// One task start as written: `group.start(target, args...)` and its
+/// variants, or `control.recover(target, args...)`, which has no group.
+struct TaskStartCall<'a> {
+    group: Option<&'a Expr>,
+    stack_size: Option<&'a Expr>,
+    target: &'a Expr,
+    target_args: &'a [Argument],
+    returns_handle: bool,
+    callee_span: crate::diag::Span,
+    span: crate::diag::Span,
+}
+
 fn grouped_specialization(callee: &Expr) -> Option<&Expr> {
     let ExprKind::Group(inner) = &callee.kind else {
         return None;
@@ -1203,6 +1215,12 @@ pub enum Rvalue {
         from: Option<String>,
     },
     StartTask {
+        /// True for `control.recover` (ADR-0104): the function runs to its
+        /// end before this instruction completes, and the value is a
+        /// `Result` that holds its return value or the parts of its trap.
+        /// `task_group` is unit and no task is started.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        recover: bool,
         returns_handle: bool,
         result_is_copy: bool,
         stack_size: Option<Operand>,
@@ -4808,38 +4826,22 @@ fn rebase_callable_rvalue(
         Rvalue::StartTask {
             returns_handle: true,
             function: started,
+            recover,
             ..
         } => {
-            let return_type = match started {
-                Operand::Function { name, .. } => context
-                    .functions
-                    .get(name.as_str())
-                    .map(|callee| callee.return_type.clone()),
-                Operand::Place(place) | Operand::MovePlace(place) => state
-                    .authoritative_callables
-                    .get(place)
-                    .and_then(|callable| match &callable.signature {
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
-                            Some((**return_type).clone())
-                        }
-                        // A stored `TaskCallable` target carries its result
-                        // contract in the erased signature (Q21); a callable
-                        // result keeps its identity through the task handle
-                        // exactly like a named or closure target's result.
-                        Type::Callable(callable) => Some(callable.return_type.clone()),
-                        _ => None,
-                    }),
-                _ => None,
-            };
-            return_type
+            callable_operand_result_type(started, state)
                 .map(|ty| {
-                    callable_identities_in_type(&ty, context)
+                    callable_identities_in_type(ty, context)
                         .into_iter()
                         .map(|(suffix, callable)| {
-                            (
-                                format!("{target}.{TASK_RESULT_PROJECTION}{suffix}"),
-                                callable,
-                            )
+                            // Recovery returns Result immediately. A task handle
+                            // exposes the same return contract when it is joined.
+                            let place = if *recover {
+                                format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ok_0{suffix}")
+                            } else {
+                                format!("{target}.{TASK_RESULT_PROJECTION}{suffix}")
+                            };
+                            (place, callable)
                         })
                         .collect()
                 })
@@ -5001,6 +5003,25 @@ fn callable_identities_in_type(
     out
 }
 
+/// The result of the validated, specialized function operand or stored callable.
+fn callable_operand_result_type<'a>(
+    operand: &'a Operand,
+    state: &'a ValidatedLoanState,
+) -> Option<&'a Type> {
+    let signature = match operand {
+        Operand::Function { signature, .. } => signature.as_ref(),
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            &state.authoritative_callables.get(place)?.signature
+        }
+        _ => return None,
+    };
+    match signature {
+        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => Some(return_type),
+        Type::Callable(callable) => Some(&callable.return_type),
+        _ => None,
+    }
+}
+
 /// The identities a call result carries: the callee's declared return
 /// contract, resolved structurally. Container member calls are handled by
 /// [`rebase_container_result_callables`]; user method calls resolve through
@@ -5064,23 +5085,7 @@ fn call_result_callable_identities(
                 callee.return_type.clone()
             }
         }),
-        CallTarget::Value(operand) => {
-            let signature = match operand {
-                Operand::Function { signature, .. } => Some((**signature).clone()),
-                Operand::Place(place) | Operand::MovePlace(place) => state
-                    .authoritative_callables
-                    .get(place)
-                    .map(|callable| callable.signature.clone()),
-                _ => None,
-            };
-            signature.and_then(|signature| match signature {
-                Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
-                    Some((*return_type).clone())
-                }
-                Type::Callable(callable) => Some(callable.return_type.clone()),
-                _ => None,
-            })
-        }
+        CallTarget::Value(operand) => callable_operand_result_type(operand, state).cloned(),
         CallTarget::Member { .. } | CallTarget::TraitMember { .. } | CallTarget::Runtime { .. } => {
             let Some(MemberCallParts {
                 object,
@@ -10892,7 +10897,11 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     push_imported_module_functions(program, &mut functions, &mut seen_function_names);
 
     let mut classes = Vec::new();
-    for class in program.classes.values() {
+    for class in program
+        .classes
+        .values()
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         let fields = class
             .decl
@@ -11125,6 +11134,12 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
 /// The class is asked about with its own type parameters as arguments, so
 /// a generic class is not Copy here.
 fn mir_class_is_copy(program: &Program, name: &str, class: &crate::sema::ClassInfo) -> bool {
+    // A generic class whose fields store none of its type parameters is
+    // Copy for every argument, and its values still take the generic
+    // path here, which drops them.
+    if !class.decl.type_params.is_empty() {
+        return false;
+    }
     let ty = Type::Named(
         name.to_string(),
         class
@@ -11300,7 +11315,12 @@ fn push_imported_module_classes_from_namespace(
         .all_classes
         .values()
         .filter(|class| class.module_name == namespace.path);
-    for class in namespace.classes.values().chain(private_classes) {
+    for class in namespace
+        .classes
+        .values()
+        .chain(private_classes)
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         if !seen_class_names.insert(class_name.clone()) {
             continue;
@@ -12337,6 +12357,8 @@ struct Lowerer<'a> {
     /// The MIR name of the function whose arguments are being lowered next,
     /// so an omitted default calls that function's generated default helper.
     default_helper_owner: Option<String>,
+    /// A local function's lexical name and the shared captures forwarded by direct recursion.
+    recursive_local: Option<(String, ClosureInfo)>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -12355,6 +12377,9 @@ struct Lowerer<'a> {
     /// Exit result shape of each active `with` place whose action is a
     /// manager `__exit__`, keyed by the place in `with_stack`.
     manager_exits: BTreeMap<String, ManagerExitResult>,
+    /// The underlying `sync.Cell` of each active lock item, keyed by the
+    /// place in `with_stack`, which holds the guarded value.
+    lock_exits: BTreeMap<String, String>,
     match_writeback_stack: Vec<MatchWritebackState>,
     local_types: std::collections::BTreeMap<String, Type>,
     /// Original type-parameter identity for roots whose projection-summary
@@ -12617,6 +12642,7 @@ impl<'a> Lowerer<'a> {
             function_name,
             module_name,
             default_helper_owner: None,
+            recursive_local: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -12635,6 +12661,7 @@ impl<'a> Lowerer<'a> {
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
             manager_exits: BTreeMap::new(),
+            lock_exits: BTreeMap::new(),
             match_writeback_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
             specialized_bound_roots: BTreeMap::new(),
@@ -13137,6 +13164,20 @@ impl<'a> Lowerer<'a> {
             .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))
     }
 
+    /// A library module can call its private host functions through the self
+    /// import used to check its source. External callers use its exports.
+    fn module_function<'n>(
+        &self,
+        namespace: &'n ModuleNamespace,
+        name: &str,
+    ) -> Option<&'n crate::sema::FunctionInfo> {
+        if namespace.path == self.module_name {
+            namespace.all_functions.get(name)
+        } else {
+            namespace.functions.get(name)
+        }
+    }
+
     fn current_module_namespace(&self) -> Option<&ModuleNamespace> {
         if self.module_name == self.program.module_name {
             None
@@ -13426,7 +13467,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         params: &[crate::ast::LambdaParam],
-        body: &Expr,
+        body: &crate::ast::ClosureBody,
     ) -> Operand {
         let info = self
             .closure_info_at(expr.span)
@@ -13498,12 +13539,22 @@ impl<'a> Lowerer<'a> {
         // The body is lowered as a `return` statement, so the hidden loans
         // its expression takes (`lambda: items[0].area()` lends `items[0]`
         // to the call) end before the function returns.
-        let stmt = Stmt::Return(crate::ast::ReturnStmt {
-            value: Some(body.clone()),
-            view: None,
-            span: body.span,
-        });
-        lowerer.lower_stmts(std::slice::from_ref(&stmt));
+        match body {
+            crate::ast::ClosureBody::Expression(expr) => {
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some((**expr).clone()),
+                    view: None,
+                    span: expr.span,
+                });
+                lowerer.lower_stmts(std::slice::from_ref(&stmt));
+            }
+            crate::ast::ClosureBody::Function { name, statements } => {
+                if !params.iter().any(|param| param.name == *name) {
+                    lowerer.recursive_local = Some((name.clone(), info.clone()));
+                }
+                lowerer.lower_stmts(statements);
+            }
+        }
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
@@ -14862,7 +14913,7 @@ impl<'a> Lowerer<'a> {
                         target: return_place,
                         value: Rvalue::Use(value),
                     });
-                    self.emit_cleanup_range(cleanup_depth, true);
+                    self.emit_cleanup_range(cleanup_depth, true, 0);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
@@ -14874,7 +14925,7 @@ impl<'a> Lowerer<'a> {
                         });
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
-                    self.emit_cleanup_range(0, true);
+                    self.emit_cleanup_range(0, true, 0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -14907,7 +14958,7 @@ impl<'a> Lowerer<'a> {
                 let loan_depth = loop_labels.loan_depth;
                 let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
-                self.emit_cleanup_range(cleanup_depth, true);
+                self.emit_cleanup_range(cleanup_depth, true, loan_depth);
                 self.terminate(Terminator::Goto(continue_label));
                 false
             }
@@ -14923,7 +14974,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = loop_labels.loan_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
-        self.emit_cleanup_range(cleanup_depth, true);
+        self.emit_cleanup_range(cleanup_depth, true, loan_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -17680,10 +17731,10 @@ impl<'a> Lowerer<'a> {
             .collect::<BTreeSet<_>>();
         let unmatched_cleanup =
             (!ending_loans.is_empty()).then(|| self.new_block("match_no_arm_cleanup"));
-        // A checked match is exhaustive, so no value reaches the end of the
-        // arm tests. An initializer states this explicitly: definite
-        // initialization proves its object complete only along the arms.
-        let unmatched = if self.initializer_self {
+        // Initializers need the impossible path for definite initialization.
+        // Checked union matches cover every tag, so this path must not invent
+        // a default return for a function whose arms all return a value.
+        let unmatched = if self.initializer_self || matches!(scrutinee_ty, Some(Type::Union(_))) {
             self.new_block("match_unmatched")
         } else {
             after_block
@@ -21753,6 +21804,15 @@ impl<'a> Lowerer<'a> {
                 // it early is safe: a successful `try` falls through to the
                 // arm's own writeback, which stores the same or a newer value.
                 self.emit_active_match_writebacks();
+                let value = if self
+                    .with_stack
+                    .iter()
+                    .any(|place| self.lock_exits.contains_key(place))
+                {
+                    self.emit_locked_try_error_edge(value, inner, expr)
+                } else {
+                    value
+                };
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -21773,6 +21833,34 @@ impl<'a> Lowerer<'a> {
                 }
                 if let Some(list) = self.lower_list_binary(expr, *op, left, right) {
                     return list;
+                }
+                if let Some(method) = self
+                    .infer_expr_type(left)
+                    .zip(self.infer_expr_type(right))
+                    .and_then(|(left_ty, right_ty)| {
+                        crate::call::set_binary_method(*op, &left_ty, &right_ty)
+                    })
+                {
+                    // `left | right` on sets is the member call
+                    // `left.union(right)`, and so on for `&`, `-`, and `^`.
+                    let call = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(Expr {
+                                kind: ExprKind::Member {
+                                    object: left.clone(),
+                                    field: method.to_string(),
+                                },
+                                span: expr.span,
+                            }),
+                            args: vec![Argument {
+                                name: None,
+                                value: (**right).clone(),
+                                span: right.span,
+                            }],
+                        },
+                        span: expr.span,
+                    };
+                    return self.lower_expr(&call);
                 }
                 if let Some((trait_name, field)) =
                     self.operator_trait_member_for_binary(*op, left, right)
@@ -21942,6 +22030,22 @@ impl<'a> Lowerer<'a> {
                 // type arguments.
                 if self.bound_method_info_at(object).is_some() {
                     return self.lower_expr(object);
+                }
+                if let Some(Type::Named(name, _)) = self.infer_expr_type(object) {
+                    let method = if name == "str" {
+                        Some("char_at")
+                    } else if self
+                        .resolve_class_info(&name)
+                        .is_some_and(crate::sema::ClassInfo::is_deque)
+                    {
+                        Some("at")
+                    } else {
+                        None
+                    };
+                    if let Some(method) = method {
+                        return self
+                            .lower_expr(&Expr::indexed_member(object, index, method, expr.span));
+                    }
                 }
                 if let Some(value) = self.lower_element_read_beside_loans(expr) {
                     return value;
@@ -22777,6 +22881,85 @@ impl<'a> Lowerer<'a> {
     /// and scheduler operations used by handwritten Aura code. The runtime
     /// adapters here validate only the host timer boundary and checked
     /// backoff doubling; callbacks never cross a second host ABI.
+    /// Lowers a task start, or a `control.recover` call when the call has
+    /// no group, into `result`.
+    fn lower_task_start(&mut self, call: TaskStartCall<'_>, result: &str) {
+        let target = self
+            .resolve_task_start_target(call.target)
+            .expect("task-group start should lower from a supported callable target");
+        let target = self.specialize_task_start_target(target, call.target_args, call.callee_span);
+        let function_type = target.function_type();
+        let function = match target.function_name.as_ref() {
+            Some(name) => Operand::Function {
+                name: name.clone(),
+                signature: Box::new(function_type.clone()),
+            },
+            None => {
+                // A factory-produced or otherwise stored task
+                // target already carries TaskCallable storage and
+                // its Transfer proof. Preserve that representation
+                // until StartTask consumes it; the thin function
+                // contract is only a contextual type for a lambda
+                // or thin function value.
+                let source_expected = match self.infer_expr_type(call.target) {
+                    Some(actual @ Type::Callable(_)) => actual,
+                    _ => function_type,
+                };
+                self.lower_expr_at_sequence_point(call.target, Some(&source_expected))
+            }
+        };
+        let group = match call.group {
+            Some(group) => self.lower_expr_at_sequence_point(group, None),
+            None => Operand::Unit,
+        };
+        let stack_size = call.stack_size.map(|stack_size| {
+            self.lower_expr_at_sequence_point(stack_size, Some(&Type::named("int64")))
+        });
+        // A task capture outlives this call expression. Copy values are
+        // snapshotted and non-copy values are transferred into the task,
+        // regardless of whether the eventual target parameter is a shared
+        // borrow or an owning parameter.
+        let capture_contracts = target
+            .param_contracts
+            .iter()
+            .cloned()
+            .map(|mut param| {
+                param.passing = ReceiverKind::Value;
+                param
+            })
+            .collect::<Vec<_>>();
+        let lowered_args =
+            self.lower_function_value_args(call.target_args, &capture_contracts, call.callee_span);
+        self.emit(Instruction::Assign {
+            target: result.to_owned(),
+            value: Rvalue::StartTask {
+                recover: call.group.is_none(),
+                returns_handle: call.returns_handle,
+                result_is_copy: type_is_copy_in_program(&target.return_type, self.program),
+                stack_size,
+                task_group: group,
+                function,
+                args: lowered_args,
+                span: call.span,
+            },
+        });
+    }
+
+    /// Which half of a `control.recover` call `callee` names, with the
+    /// expression that names the module.
+    fn control_recover_callee<'e>(&self, callee: &'e Expr) -> Option<(&'e Expr, bool)> {
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        let raw = match field.as_str() {
+            crate::sema::recover::RECOVER => false,
+            crate::sema::recover::RECOVER_RAW => true,
+            _ => return None,
+        };
+        (self.infer_module_path(object).as_deref() == Some(crate::sema::recover::MODULE))
+            .then_some((&**object, raw))
+    }
+
     fn lower_control_retry_call(
         &mut self,
         expr: &Expr,
@@ -25799,6 +25982,14 @@ impl<'a> Lowerer<'a> {
             .then(|| crate::sema::substitute_type(returned, &substitutions))
     }
 
+    /// The enclosing local function's environment is passed directly on a
+    /// recursive call. Its name never occupies a local slot.
+    fn recursive_local_call(&self, callee: &Expr) -> Option<&ClosureInfo> {
+        let (name, info) = self.recursive_local.as_ref()?;
+        matches!(&grouped_mir_expr(callee).kind, ExprKind::Name(called) if called == name)
+            .then_some(info)
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -25806,6 +25997,28 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(info) = self.recursive_local_call(callee).cloned() {
+            let mut forwarded = info
+                .captures
+                .iter()
+                .map(|capture| MirArg {
+                    name: None,
+                    value: Operand::Place(self.render_local_name(&capture.name)),
+                    writeback_place: None,
+                })
+                .collect::<Vec<_>>();
+            forwarded.extend(self.lower_function_value_args(args, &info.params, callee.span));
+            let target = self.new_typed_temp(info.return_type);
+            self.emit(Instruction::Assign {
+                target: target.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(self.function_name.to_string()),
+                    args: forwarded,
+                    type_args: Default::default(),
+                },
+            });
+            return Operand::Place(target);
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.infer_expr_type(object).is_some_and(
                 |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
@@ -25897,6 +26110,25 @@ impl<'a> Lowerer<'a> {
         }
         if let Some(value) = self.lower_type_param_associated_call(expr, callee, args) {
             return value;
+        }
+        if self.control_recover_callee(callee).is_some() {
+            // The runtime builds the whole `Result[T, control.Trap]`, so
+            // the call is one instruction. Its type is the type of the two
+            // calls the checker read it as (see `sema::recover`).
+            let temp = self.new_temp_for_expr(expr);
+            self.lower_task_start(
+                TaskStartCall {
+                    group: None,
+                    stack_size: None,
+                    target: &args[0].value,
+                    target_args: &args[1..],
+                    returns_handle: true,
+                    callee_span: callee.span,
+                    span: expr.span,
+                },
+                &temp,
+            );
+            return Operand::Place(temp);
         }
         let temp = expected
             .cloned()
@@ -26034,10 +26266,6 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                if class.initializer().is_some() {
-                    self.lower_initializer_call(&class, name, args, callee.span, &temp);
-                    return Operand::Place(temp);
-                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -26052,6 +26280,17 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => std::collections::HashMap::new(),
                 };
+                if class.initializer().is_some() {
+                    self.lower_initializer_call(
+                        &class,
+                        name,
+                        args,
+                        callee.span,
+                        &temp,
+                        &substitutions,
+                    );
+                    return Operand::Place(temp);
+                }
                 let field_names = class
                     .decl
                     .fields
@@ -26471,7 +26710,7 @@ impl<'a> Lowerer<'a> {
                             });
                             return Operand::Place(temp);
                         }
-                        if let Some(function) = namespace.functions.get(field).cloned() {
+                        if let Some(function) = self.module_function(namespace, field).cloned() {
                             if module_path == "control" && field == "retry" {
                                 self.lower_control_retry_call(
                                     expr,
@@ -26535,16 +26774,6 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
-                            if class.initializer().is_some() {
-                                self.lower_initializer_call(
-                                    &class,
-                                    field,
-                                    args,
-                                    callee.span,
-                                    &temp,
-                                );
-                                return Operand::Place(temp);
-                            }
                             let runtime_class_name = mir_runtime_class_name(self.program, &class);
                             let qualified_class_name = format!("{}.{}", module_path, field);
                             let constructor_type = expected
@@ -26568,6 +26797,17 @@ impl<'a> Lowerer<'a> {
                                 }
                                 _ => std::collections::HashMap::new(),
                             };
+                            if class.initializer().is_some() {
+                                self.lower_initializer_call(
+                                    &class,
+                                    field,
+                                    args,
+                                    callee.span,
+                                    &temp,
+                                    &substitutions,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let field_names = class
                                 .decl
                                 .fields
@@ -26680,80 +26920,18 @@ impl<'a> Lowerer<'a> {
                 ) {
                     let has_stack_override =
                         matches!(field.as_str(), "start_with_stack" | "start_soon_with_stack");
-                    let target_index = usize::from(has_stack_override);
-                    let first_target_arg = target_index + 1;
-                    let target = self
-                        .resolve_task_start_target(&args[target_index].value)
-                        .expect("task-group start should lower from a supported callable target");
-                    let target = self.specialize_task_start_target(
-                        target,
-                        &args[first_target_arg..],
-                        callee.span,
-                    );
-                    let function_type = target.function_type();
-                    let function = match target.function_name.as_ref() {
-                        Some(name) => Operand::Function {
-                            name: name.clone(),
-                            signature: Box::new(function_type.clone()),
-                        },
-                        None => {
-                            // A factory-produced or otherwise stored task
-                            // target already carries TaskCallable storage and
-                            // its Transfer proof. Preserve that representation
-                            // until StartTask consumes it; the thin function
-                            // contract is only a contextual type for a lambda
-                            // or thin function value.
-                            let source_expected =
-                                match self.infer_expr_type(&args[target_index].value) {
-                                    Some(actual @ Type::Callable(_)) => actual,
-                                    _ => function_type,
-                                };
-                            self.lower_expr_at_sequence_point(
-                                &args[target_index].value,
-                                Some(&source_expected),
-                            )
-                        }
-                    };
-                    let group = self.lower_expr_at_sequence_point(object, None);
-                    let stack_size = has_stack_override.then(|| {
-                        self.lower_expr_at_sequence_point(
-                            &args[0].value,
-                            Some(&Type::named("int64")),
-                        )
-                    });
-                    // A task capture outlives this call expression. Copy values are
-                    // snapshotted and non-copy values are transferred into the task,
-                    // regardless of whether the eventual target parameter is a shared
-                    // borrow or an owning parameter.
-                    let capture_contracts = target
-                        .param_contracts
-                        .iter()
-                        .cloned()
-                        .map(|mut param| {
-                            param.passing = ReceiverKind::Value;
-                            param
-                        })
-                        .collect::<Vec<_>>();
-                    let lowered_args = self.lower_function_value_args(
-                        &args[first_target_arg..],
-                        &capture_contracts,
-                        callee.span,
-                    );
-                    self.emit(Instruction::Assign {
-                        target: temp.clone(),
-                        value: Rvalue::StartTask {
+                    self.lower_task_start(
+                        TaskStartCall {
+                            group: Some(object),
+                            stack_size: has_stack_override.then(|| &args[0].value),
+                            target: &args[usize::from(has_stack_override)].value,
+                            target_args: &args[usize::from(has_stack_override) + 1..],
                             returns_handle: matches!(field.as_str(), "start" | "start_with_stack"),
-                            result_is_copy: type_is_copy_in_program(
-                                &target.return_type,
-                                self.program,
-                            ),
-                            stack_size,
-                            task_group: group,
-                            function,
-                            args: lowered_args,
+                            callee_span: callee.span,
                             span: expr.span,
                         },
-                    });
+                        &temp,
+                    );
                     return Operand::Place(temp);
                 }
 
@@ -28113,15 +28291,32 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         span: Span,
         target: &str,
+        substitutions: &HashMap<String, Type>,
     ) {
         let initializer = class
             .initializer()
             .expect("an initializer call lowers only for a class with `__init__`");
-        let lowered_args = self.lower_user_args(
+        let expected_param_types = (!substitutions.is_empty()).then(|| {
+            initializer
+                .signature
+                .params
+                .iter()
+                .zip(&initializer.decl.params)
+                .map(|(ty, param)| {
+                    if crate::sema::has_unresolved_type_params(ty) {
+                        substitute_type(ty, substitutions)
+                    } else {
+                        self.lower_type_ref_with_provenance(&param.ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let lowered_args = self.lower_user_args_with_types(
             &format!("class `{surface_name}`"),
             &initializer.decl.params,
             args,
             span,
+            expected_param_types.as_deref(),
             Some(&initializer.signature.param_passings),
         );
         self.emit(Instruction::Assign {
@@ -29138,6 +29333,9 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(info) = self.recursive_local_call(callee) {
+                return Some(info.return_type.clone());
+            }
             if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
                 return Some(alias_ty);
             }
@@ -29164,6 +29362,21 @@ impl<'a> Lowerer<'a> {
             }
             if let Some(ty) = self.type_param_associated_call_type(expr) {
                 return Some(ty);
+            }
+            match self.control_recover_callee(callee) {
+                Some((module, false)) => {
+                    return self.infer_expr_type(&crate::sema::recover::desugar_recover_call(
+                        module, args, expr.span,
+                    ));
+                }
+                Some((_, true)) => {
+                    let (target, target_args) = args.split_first()?;
+                    let target = self.resolve_task_start_target(&target.value)?;
+                    let target =
+                        self.specialize_task_start_target(target, target_args, callee.span);
+                    return Some(crate::sema::recover::raw_result_type(target.return_type));
+                }
+                None => {}
             }
             match self.curried_callee_hint(callee, args, None) {
                 Some(Type::Callable(callable)) => return Some(callable.return_type),
@@ -29628,7 +29841,7 @@ impl<'a> Lowerer<'a> {
                                 if let Some(child) = namespace.modules.get(field) {
                                     return Some(Type::Module(child.path.clone()));
                                 }
-                                if let Some(function) = namespace.functions.get(field) {
+                                if let Some(function) = self.module_function(namespace, field) {
                                     let substitutions = if let Some(type_args) = explicit_type_args
                                     {
                                         substitutions_from_decl_type_args(
@@ -30046,6 +30259,16 @@ impl<'a> Lowerer<'a> {
                 }
                 match self.infer_expr_type(object)? {
                     Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
+                    Type::Named(name, args) if name == "str" && args.is_empty() => {
+                        Some(Type::Named(name, args))
+                    }
+                    Type::Named(name, args)
+                        if self
+                            .resolve_class_info(&name)
+                            .is_some_and(crate::sema::ClassInfo::is_deque) =>
+                    {
+                        args.first().cloned()
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -30086,6 +30309,9 @@ impl<'a> Lowerer<'a> {
                 let right_ty = self.infer_expr_type(right)?;
                 let (left_ty, right_ty) =
                     adjusted_binary_operand_types(left, left_ty, right, right_ty);
+                if crate::call::set_binary_method(*op, &left_ty, &right_ty).is_some() {
+                    return Some(left_ty);
+                }
                 if let Some(list_ty) = list_binary_result_type(*op, &left_ty, &right_ty) {
                     return Some(list_ty);
                 }
@@ -30311,10 +30537,24 @@ impl<'a> Lowerer<'a> {
         actual: &Type,
         bound: &TraitBound,
     ) -> Option<std::collections::HashMap<String, Type>> {
-        if trait_impl.trait_name != bound.trait_name
-            || trait_impl.trait_args.len() != bound.trait_args.len()
-        {
+        if trait_impl.trait_args.len() != bound.trait_args.len() {
             return None;
+        }
+        if trait_impl.trait_name != bound.trait_name {
+            // Exported bounds name their defining module. Resolve the impl's
+            // local spelling there, including imports and aliases. A same-name
+            // trait declared elsewhere must not satisfy this bound.
+            let (module, name) = bound.trait_name.rsplit_once('.')?;
+            let info = if trait_impl.module_name == self.program.module_name {
+                self.program.traits.get(&trait_impl.trait_name)
+            } else {
+                self.module_namespace(&trait_impl.module_name)?
+                    .all_traits
+                    .get(&trait_impl.trait_name)
+            }?;
+            if info.module_name != module || info.decl.name != name {
+                return None;
+            }
         }
         let mut type_params = BTreeSet::new();
         collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
@@ -31093,17 +31333,90 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
-    fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {
-        let places = self.with_stack[depth..].to_vec();
-        for place in places.into_iter().rev() {
+    /// A successful `try` leaves every holder in place. On its error edge,
+    /// publish locked values and run intervening managers in exit order.
+    /// Registered managers discard a secondary Result.Err during propagation.
+    fn emit_locked_try_error_edge(&mut self, value: Operand, inner: &Expr, expr: &Expr) -> Operand {
+        let source = self.new_temp_for_expr(inner);
+        self.emit(Instruction::Assign {
+            target: source.clone(),
+            value: Rvalue::Use(value),
+        });
+        let error = self.new_block("locked_try_error");
+        let ok = self.new_block("locked_try_ok");
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(source.clone()),
+            arms: vec![MirMatchArm {
+                enum_name: Some("Result".to_string()),
+                variant_name: Some("Err".to_string()),
+                wildcard: false,
+                label: self.label(error),
+            }],
+            otherwise: self.label(ok),
+        });
+        self.switch_to(error);
+        self.emit_loan_cleanup_from(0, None);
+        for place in self.with_stack.clone().into_iter().rev() {
+            if self.lock_exits.contains_key(&place) {
+                self.emit_with_exit(place, true);
+            } else {
+                self.emit(Instruction::PopCleanup {
+                    place,
+                    cancel_before_cleanup: true,
+                    run: true,
+                });
+            }
+        }
+        // Preserve the ordinary From conversion and the frame's release list.
+        let never = self.new_temp_for_expr(expr);
+        self.emit(Instruction::Assign {
+            target: never,
+            value: Rvalue::Try {
+                value: Operand::MovePlace(source.clone()),
+                releases_on_error: Vec::new(),
+                from: None,
+            },
+        });
+        self.terminate(Terminator::Unreachable);
+        self.switch_to(ok);
+        Operand::MovePlace(source)
+    }
+
+    fn emit_cleanup_range(
+        &mut self,
+        depth: usize,
+        cancel_before_cleanup: bool,
+        ended_loan_depth: usize,
+    ) {
+        // A fallible manager exit may itself propagate an error. During its
+        // lowering only the outer, still-active managers and loans remain.
+        let ended_scopes = self.loan_scopes.split_off(ended_loan_depth);
+        let original_stack = self.with_stack.clone();
+        while self.with_stack.len() > depth {
+            let place = self.with_stack.pop().expect("active manager");
             self.emit_with_exit(place, cancel_before_cleanup);
         }
+        self.with_stack = original_stack;
+        self.loan_scopes.extend(ended_scopes);
     }
 
     /// Leaves one `with` item on a normal exit path. A manager's action is
     /// popped without running, then `__exit__` is called explicitly so a
     /// `Result` exit propagates its error as `try` would (checkpoint F5).
     fn emit_with_exit(&mut self, place: String, cancel_before_cleanup: bool) {
+        if let Some(handle) = self.lock_exits.get(&place).cloned() {
+            // A lock item registered no cleanup. Leaving moves the guarded
+            // value back into its cell, which releases the lock.
+            let ignored = self.new_typed_temp(Type::Unit);
+            self.emit(Instruction::Assign {
+                target: ignored,
+                value: Self::lock_call(
+                    "sync::__aura_cell_put",
+                    [Operand::Place(handle), Operand::MovePlace(place)],
+                ),
+            });
+            return;
+        }
         let Some(exit_result) = self.manager_exits.get(&place).copied() else {
             self.emit(Instruction::PopCleanup {
                 place,
@@ -31127,6 +31440,46 @@ impl<'a> Lowerer<'a> {
         }
         let value = self.lower_expr(&exit_call);
         self.emit(Instruction::Eval { value });
+    }
+
+    /// The standard Mutex.lock method only wraps the same cell. For every
+    /// other expression evaluate the manager itself once, including user calls.
+    fn mutex_lock_receiver<'b>(&self, manager: &'b Expr) -> Option<&'b Expr> {
+        let ExprKind::Call { callee, args, .. } = &manager.kind else {
+            return None;
+        };
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        if field != "lock" || !args.is_empty() {
+            return None;
+        }
+        let Type::Named(name, _) = self.infer_expr_type(object)? else {
+            return None;
+        };
+        let class = self.resolve_class_info(&name)?;
+        (class.module_name == "sync" && class.decl.name == "Mutex").then_some(object)
+    }
+
+    fn lock_call(name: &str, operands: impl IntoIterator<Item = Operand>) -> Rvalue {
+        let builtin =
+            crate::runtime_ops::HostBuiltin::from_name(name).expect("a sync host operation");
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Host(builtin),
+                receiver: None,
+                receiver_place: None,
+            },
+            args: operands
+                .into_iter()
+                .map(|value| MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                })
+                .collect(),
+            type_args: BTreeMap::new(),
+        }
     }
 
     /// Lowers one `with` item (checkpoint F1-F5). A multi-item header was
@@ -31166,29 +31519,72 @@ impl<'a> Lowerer<'a> {
         });
         // The `as` name is bound in the body's scope.
         self.binding_blocks.push(BindingBlock::default());
-        // A view-returning `__enter__` keeps the manager in a hidden managed
-        // place, a fresh temporary that source code cannot name (F4).
-        let place = if matches!(
-            shape.as_ref().map(|shape| &shape.entry),
-            Some(crate::sema::ManagerEntry::View { .. })
-        ) {
-            match manager_ty.clone() {
-                Some(ty) => self.new_typed_temp(ty),
-                None => self.new_temp(),
-            }
-        } else {
-            self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
+        let lock_payload = match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { payload }) => Some(payload.clone()),
+            _ => None,
         };
-        let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
-        self.emit(Instruction::Assign {
-            target: place.clone(),
-            value: Rvalue::Use(value),
-        });
-
         let span = with_stmt.span;
+        let place = if let Some(payload) = lock_payload {
+            // Keep the cell even when the source variable is reassigned in the body.
+            let handle = self.new_typed_temp(Type::named("sync.Cell"));
+            let source = self
+                .mutex_lock_receiver(&with_stmt.value)
+                .unwrap_or(&with_stmt.value);
+            let cell = Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(source.clone()),
+                    field: "cell".to_string(),
+                },
+                span,
+            };
+            let value = self.lower_expr(&cell);
+            self.emit(Instruction::Assign {
+                target: handle.clone(),
+                value: Rvalue::Use(value),
+            });
+            let held = self.new_typed_temp(payload);
+            self.emit(Instruction::Assign {
+                target: held.clone(),
+                value: Self::lock_call("sync::__aura_cell_take", [Operand::Place(handle.clone())]),
+            });
+            self.lock_exits.insert(held.clone(), handle);
+            held
+        } else {
+            // A view-returning entry keeps its manager in a hidden place.
+            let place = if matches!(
+                shape.as_ref().map(|shape| &shape.entry),
+                Some(crate::sema::ManagerEntry::View { .. })
+            ) {
+                self.new_typed_temp(manager_ty.clone().expect("a typed view manager"))
+            } else {
+                self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
+            };
+            let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(value),
+            });
+            place
+        };
         let mut entry_loan = None;
         self.loan_scopes.push(Vec::new());
         match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { .. }) => {
+                let view = Stmt::View(crate::ast::ViewStmt {
+                    name: with_stmt.binding.clone(),
+                    mutable: true,
+                    source: Expr {
+                        kind: ExprKind::Name(place.clone()),
+                        span,
+                    },
+                    span,
+                });
+                self.lower_stmt(&view, &BTreeSet::new());
+                entry_loan = self
+                    .loan_scopes
+                    .last()
+                    .and_then(|scope| scope.last().cloned());
+            }
             Some(crate::sema::ManagerEntry::Unit) => {
                 let entry = crate::sema::manager_method_call(&place, "__enter__", span);
                 let value = self.lower_expr(&entry);
@@ -31221,11 +31617,13 @@ impl<'a> Lowerer<'a> {
         if let CleanupAction::ManagerExit { exit_result } = &action {
             self.manager_exits.insert(place.clone(), *exit_result);
         }
-        self.emit(Instruction::PushCleanup {
-            place: place.clone(),
-            action,
-            callee: None,
-        });
+        if !self.lock_exits.contains_key(&place) {
+            self.emit(Instruction::PushCleanup {
+                place: place.clone(),
+                action,
+                callee: None,
+            });
+        }
         self.with_stack.push(place.clone());
         let mut body_endings = ending_loans
             .iter()
@@ -31255,6 +31653,7 @@ impl<'a> Lowerer<'a> {
             self.emit_with_exit(place.clone(), false);
         }
         self.manager_exits.remove(&place);
+        self.lock_exits.remove(&place);
         self.end_binding_block();
         !self.current_terminated()
     }
@@ -31533,12 +31932,18 @@ fn tuple_target_ranges(elements: &[BindingTarget], arity: usize) -> Vec<std::ops
     crate::ast::rest_element_ranges(&is_rest, arity).expect("checked tuple targets fit their value")
 }
 
-fn is_builtin_class(class: &crate::sema::ClassInfo) -> bool {
-    class.is_builtin
+/// These declarations give the checker a type for each opaque runtime handle.
+/// Emitting an empty MIR record for one would give it a zero-field layout.
+fn is_sync_host_handle(class: &crate::sema::ClassInfo) -> bool {
+    class.is_builtin && class.module_name == "sync"
+}
+
+fn mir_class_has_local_name(program: &Program, class: &crate::sema::ClassInfo) -> bool {
+    !is_sync_host_handle(class) && (class.is_builtin || class.module_name == program.module_name)
 }
 
 fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         class.decl.name.clone()
     } else {
         format!("{}.{}", class.module_name, class.decl.name)
@@ -31590,7 +31995,13 @@ fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -
     let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
     if matches!(
         qualified_name.as_str(),
-        "io.Error" | "process.Error" | "bytes.Error" | "gzip.Error" | "json.Value" | "json.Error"
+        "io.Error"
+            | "process.Error"
+            | "bytes.Error"
+            | "bytes.EncodingError"
+            | "gzip.Error"
+            | "json.Value"
+            | "json.Error"
     ) {
         return qualified_name;
     }
@@ -31616,7 +32027,7 @@ fn mir_class_method_name(
     class: &crate::sema::ClassInfo,
     method_name: &str,
 ) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         format!("{}.{}", class.decl.name, method_name)
     } else {
         format!("{}::{}.{}", class.module_name, class.decl.name, method_name)
@@ -31632,7 +32043,7 @@ fn mir_class_type_name(
         .builtin_constructor()
         .map(|constructor| constructor.qualified_name().to_string())
         .unwrap_or_else(|| {
-            if class.module_name == program.module_name || is_builtin_class(class) {
+            if mir_class_has_local_name(program, class) {
                 fallback.to_string()
             } else {
                 format!("{}.{}", class.module_name, class.decl.name)

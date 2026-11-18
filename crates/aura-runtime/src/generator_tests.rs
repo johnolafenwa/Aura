@@ -28,6 +28,51 @@ fn counting(n: i64, log: Rc<RefCell<Vec<String>>>) -> GeneratorValue {
 }
 
 #[test]
+fn isolated_recovery_releases_abandoned_work_if_its_stack_cannot_start() {
+    use super::{run_isolated, IsolatedFailure, DIRECT_RECOVER_STACK_BYTES};
+
+    let abandoned = std::cell::Cell::new(0);
+    crate::runtime_value::fail_next_lightweight_task_stack_allocation();
+    let result = run_isolated(
+        || panic!("a body without a stack must not start"),
+        DIRECT_RECOVER_STACK_BYTES,
+        || abandoned.set(abandoned.get() + 1),
+    );
+    let Err(IsolatedFailure::Trap(diagnostic)) = result else {
+        panic!("expected a stack allocation diagnostic");
+    };
+    assert_eq!(diagnostic.code, "AU4005");
+    assert!(diagnostic
+        .message
+        .contains("cannot allocate a stack for `control.recover`"));
+    assert_eq!(abandoned.get(), 1);
+    assert_eq!(super::running_generator_depth(), 0);
+}
+
+#[test]
+fn isolated_recovery_diagnoses_an_unmatched_yield_and_restores_the_outer_stack() {
+    use super::{run_isolated, IsolatedFailure, DIRECT_RECOVER_STACK_BYTES};
+
+    let abandoned = std::cell::Cell::new(0);
+    let result = run_isolated(
+        || {
+            assert_eq!(super::running_generator_depth(), 1);
+            generator_yield(int(9))?;
+            panic!("an unmatched yield should abandon the recovered body");
+        },
+        DIRECT_RECOVER_STACK_BYTES,
+        || abandoned.set(abandoned.get() + 1),
+    );
+    let Err(IsolatedFailure::Trap(diagnostic)) = result else {
+        panic!("expected an unmatched yield diagnostic");
+    };
+    assert_eq!(diagnostic.code, "AU4010");
+    assert!(diagnostic.message.contains("outside a generator body"));
+    assert_eq!(abandoned.get(), 1);
+    assert_eq!(super::running_generator_depth(), 0);
+}
+
+#[test]
 fn a_generator_runs_lazily_to_each_yield_and_then_ends() {
     let log = Rc::new(RefCell::new(Vec::new()));
     let generator = counting(2, log.clone());

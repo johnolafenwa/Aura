@@ -1,0 +1,16 @@
+[package]
+name = "aura-numbers-comparison"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "numbers"
+path = "numbers.rs"
+
+[dependencies]
+num-bigint = "0.5"
+num-complex = "0.4"
+rust_decimal = { version = "1", default-features = false }

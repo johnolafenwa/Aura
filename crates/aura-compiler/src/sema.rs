@@ -43,6 +43,7 @@ mod places;
 use places::{PlacePath, PlaceProjection, ProjectionPath};
 mod loans;
 pub(crate) mod lookup;
+pub(crate) mod recover;
 #[cfg(test)]
 use loans::block_end_span;
 use loans::{
@@ -86,7 +87,6 @@ pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
-    ManagerShape,
 };
 mod patterns;
 mod structural_patterns;
@@ -1420,6 +1420,12 @@ fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalFunctionBinding {
+    Declaration,
+    RecursiveCall,
+}
+
 #[derive(Clone)]
 struct LocalBinding {
     ty: Type,
@@ -1450,6 +1456,7 @@ struct LocalBinding {
     /// mutable-call closure category, so mutable access to these places is
     /// rejected even when the outer binding was declared `mut`.
     captured: bool,
+    local_function: Option<LocalFunctionBinding>,
     /// Present only for an explicit ADR-0038 view binding. Match and loop
     /// borrows continue to use the older provenance fields without becoming
     /// first-class views.
@@ -1463,6 +1470,34 @@ struct LocalBinding {
     /// Facts invalidated by a later mutation, retained so a stale member use
     /// reports AU2014 with the test and invalidation spans.
     stale_narrowing: BTreeMap<ProjectionPath, StaleNarrowing>,
+}
+
+impl LocalBinding {
+    fn local_function(ty: Type) -> Self {
+        Self {
+            ty,
+            assignable: false,
+            mutable_place: false,
+            managed_resource: false,
+            passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrowed_at: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
+            shared_match_scrutinee: None,
+            moved: false,
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
+            captured: false,
+            local_function: Some(LocalFunctionBinding::RecursiveCall),
+            view: None,
+            closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1640,6 +1675,10 @@ struct FunctionChecker<'a> {
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
+    /// Captures a local function has moved on a returning branch. A
+    /// returned branch does not otherwise contribute its move state to
+    /// the statements that follow it.
+    local_return_moves: Option<Rc<RefCell<BTreeSet<String>>>>,
     closure_owner: ClosureOwner,
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
@@ -2849,6 +2888,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
+            local_return_moves: None,
             closure_owner: ClosureOwner::TopLevel,
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2894,6 +2934,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -2943,6 +2984,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -2988,6 +3030,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3033,6 +3076,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3060,10 +3104,11 @@ impl<'a> FunctionChecker<'a> {
 
     /// Whether this checker is checking a class initializer's body.
     fn checks_initializer(&self) -> bool {
-        matches!(
-            &self.closure_owner,
-            ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
-        )
+        self.local_return_moves.is_none()
+            && matches!(
+                &self.closure_owner,
+                ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
+            )
     }
 
     fn with_closure_owner(mut self, owner: ClosureOwner) -> Self {
@@ -3856,6 +3901,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -3989,6 +4035,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -4021,6 +4068,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -4666,6 +4714,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        local_function: None,
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
@@ -5093,6 +5142,7 @@ impl<'a> FunctionChecker<'a> {
                             moved_fields: BTreeMap::new(),
                             frozen_places: BTreeMap::new(),
                             shared_match_places: BTreeMap::new(),
+                            local_function: None,
                             captured: false,
                             view: Some(ViewBinding {
                                 kind,
@@ -5354,6 +5404,17 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(value) = &return_stmt.value {
                             self.consume_value_expr(value, locals)?;
                         }
+                    }
+                    if let Some(moves) = &self.local_return_moves {
+                        moves.borrow_mut().extend(
+                            locals
+                                .iter()
+                                .filter(|(_, binding)| {
+                                    binding.captured
+                                        && (binding.moved || !binding.moved_fields.is_empty())
+                                })
+                                .map(|(name, _)| name.clone()),
+                        );
                     }
                     flow = BlockFlow::AlwaysReturns;
                     break;
@@ -5888,15 +5949,26 @@ impl<'a> FunctionChecker<'a> {
         // The manager then lives in a hidden managed binding that is the
         // view's origin (checkpoint F4), and the body is checked as if it
         // began with `view [mut] name = <hidden>.__enter__()`.
-        let entry_view = match shape.entry {
+        let entry_view = match &shape.entry {
             ManagerEntry::View { mutable } => Some(crate::ast::ViewStmt {
                 name: with_stmt.binding.clone(),
-                mutable,
+                mutable: *mutable,
                 source: manager_method_call(
                     &hidden_manager_binding(with_stmt.span),
                     "__enter__",
                     with_stmt.span,
                 ),
+                span: with_stmt.span,
+            }),
+            // A lock item binds a mutable view of the hidden local that
+            // holds the guarded value while the lock is held.
+            ManagerEntry::Lock { .. } => Some(crate::ast::ViewStmt {
+                name: with_stmt.binding.clone(),
+                mutable: true,
+                source: Expr {
+                    kind: ExprKind::Name(managers::hidden_lock_value_binding(with_stmt.span)),
+                    span: with_stmt.span,
+                },
                 span: with_stmt.span,
             }),
             _ => None,
@@ -5908,31 +5980,36 @@ impl<'a> FunctionChecker<'a> {
         };
 
         let mut body_locals = locals.clone();
-        body_locals.insert(
-            manager_binding,
-            LocalBinding {
-                ty: value_ty,
-                assignable: true,
-                mutable_place: true,
-                managed_resource: true,
-                passing: ReceiverKind::Value,
-                borrow_origin: None,
-                borrowed_at: None,
-                match_borrow_place: None,
-                stale_match_borrow_place: None,
-                shared_match_scrutinee: None,
-                moved: false,
-                moved_at: None,
-                moved_fields: BTreeMap::new(),
-                frozen_places: BTreeMap::new(),
-                shared_match_places: BTreeMap::new(),
-                captured: false,
-                view: None,
-                closure_loans: Vec::new(),
-                narrowed: BTreeMap::new(),
-                stale_narrowing: BTreeMap::new(),
-            },
-        );
+        let managed_local = |ty: Type| LocalBinding {
+            ty,
+            assignable: true,
+            mutable_place: true,
+            managed_resource: true,
+            passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrowed_at: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
+            shared_match_scrutinee: None,
+            moved: false,
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
+            captured: false,
+            local_function: None,
+            view: None,
+            closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
+        };
+        body_locals.insert(manager_binding, managed_local(value_ty));
+        if let ManagerEntry::Lock { payload } = &shape.entry {
+            body_locals.insert(
+                managers::hidden_lock_value_binding(with_stmt.span),
+                managed_local(payload.clone()),
+            );
+        }
         let entered_body;
         let body = if let Some(entry_view) = entry_view {
             entered_body = std::iter::once(Stmt::View(entry_view))
@@ -6077,6 +6154,13 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 value_ty.clone()
+            } else if object_ty == Type::named("str") {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    assign.span,
+                    "a `str` cannot be changed through an index",
+                )
+                .with_help("build a new string, for example from slices: `text[:i] + \"x\" + text[i + 1:]`"));
             } else {
                 return Err(Diagnostic::at(
                     assign.span,
@@ -6476,6 +6560,11 @@ impl<'a> FunctionChecker<'a> {
                 assign.span,
                 locals,
             )?;
+            if existing.captured && existing.assignable && existing.passing == ReceiverKind::Value {
+                self.mutated_captures
+                    .borrow_mut()
+                    .insert(binding_name.clone());
+            }
             if !existing.assignable && !existing.mutable_place {
                 if existing
                     .borrow_origin
@@ -6674,7 +6763,18 @@ impl<'a> FunctionChecker<'a> {
                 ..
             }
         );
-        if contextual_capturing_closure && mutable_repeatable_closure && !assign.mutable {
+        let local_function = matches!(
+            &assign.value.kind,
+            ExprKind::Lambda {
+                body: crate::ast::ClosureBody::Function { .. },
+                ..
+            }
+        );
+        if contextual_capturing_closure
+            && mutable_repeatable_closure
+            && !assign.mutable
+            && !local_function
+        {
             return Err(Diagnostic::coded_at(
                 "AU3003",
                 assign.span,
@@ -6754,6 +6854,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        local_function: None,
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
@@ -6818,6 +6919,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -6847,6 +6949,7 @@ impl<'a> FunctionChecker<'a> {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: local_function.then_some(LocalFunctionBinding::Declaration),
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -7645,6 +7748,311 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Checks the target of a task start and the arguments that follow it,
+    /// `args[target_index..]`: the target is a function, closure, or stored
+    /// task target, every argument and capture is Transfer and moves into
+    /// the child, and so is the result. Returns the child's result type.
+    /// `control.recover` runs its function under the same rules.
+    fn type_check_task_target(
+        &self,
+        args: &[Argument],
+        target_index: usize,
+        span: crate::diag::Span,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<Type> {
+        let required_count = target_index + 1;
+        let callable = match self.resolve_spawn_callable(&args[target_index].value) {
+            Ok(callable) => callable,
+            Err(named_target_error) => {
+                if named_target_error.code == "AU2999"
+                    && named_target_error.message.starts_with("extern function `")
+                {
+                    return Err(named_target_error);
+                }
+                let target_ty = self.type_of_expr(&args[target_index].value, locals)?;
+                let (params, return_type, closure_captures) = match &target_ty {
+                    Type::Function {
+                        params,
+                        return_type,
+                    } => (params.clone(), return_type.clone(), None),
+                    Type::Closure {
+                        params,
+                        return_type,
+                        captures,
+                        ..
+                    } => (
+                        params.as_ref().clone(),
+                        return_type.clone(),
+                        Some(captures.as_slice()),
+                    ),
+                    // A stored target is admitted only as a
+                    // `TaskCallable`, whose packing proved every
+                    // capture Transfer (C8); an ordinary erased
+                    // `Callable` hides its environment.
+                    Type::Callable(callable) => {
+                        if !callable.task {
+                            return Err(Diagnostic::coded_at(
+                                                            "AU3008",
+                                                            args[target_index].span,
+                                                            format!(
+                                                                "task target of type `{target_ty}` hides its environment and is not Transfer"
+                                                            ),
+                                                        )
+                                                        .with_help(
+                                                            "pack the closure as `TaskCallable[...]`, which proves every capture Transfer when it is created",
+                                                        ));
+                        }
+                        (
+                            callable.params.clone(),
+                            Box::new(callable.return_type.clone()),
+                            None,
+                        )
+                    }
+                    _ => return Err(named_target_error),
+                };
+                if let Some(captures) = closure_captures {
+                    if let Some(reason) = self.transfer_failure(&target_ty) {
+                        let target_label = match &args[target_index].value.kind {
+                            ExprKind::Name(name) => {
+                                format!("task target `{name}`")
+                            }
+                            _ => "task closure target".to_string(),
+                        };
+                        let mut diagnostic = Diagnostic::coded_at(
+                            "AU3008",
+                            args[target_index].span,
+                            format!("{target_label} cannot cross a task boundary because {reason}"),
+                        );
+                        if let Some(capture) = captures
+                            .iter()
+                            .find(|capture| self.transfer_failure(&capture.ty).is_some())
+                        {
+                            diagnostic = diagnostic.with_secondary(
+                                capture.span,
+                                format!("capture `{}` is created here", capture.name),
+                            );
+                        }
+                        return Err(diagnostic.with_help(
+                                                    "task closures may capture only owned Transfer data; keep capabilities and host resources on their owning worker",
+                                                ));
+                    }
+                };
+                if let Some(index) = params
+                    .iter()
+                    .position(|param| param.passing == ReceiverKind::BorrowMut)
+                {
+                    return Err(Diagnostic::coded_at(
+                                                "AU3002",
+                                                args[target_index].span,
+                                                format!(
+                                                    "task starting does not support mutable parameter {} on a function value; child tasks cannot write back through the starting call frame",
+                                                    index + 1,
+                                                ),
+                                            ));
+                }
+                let spawn_args = &args[required_count..];
+                let capture_params = params
+                    .iter()
+                    .map(|param| FunctionParamContract {
+                        keyword_only: param.keyword_only,
+                        name: param.name.clone(),
+                        ty: param.ty.clone(),
+                        passing: ReceiverKind::Value,
+                        has_default: param.has_default,
+                    })
+                    .collect::<Vec<_>>();
+                // A view result borrows the child's arguments; the
+                // child's result must be an owned value (C8).
+                if matches!(return_type.as_ref(), Type::ReturnedView(_)) {
+                    return Err(Diagnostic::coded_at(
+                                                "AU3008",
+                                                args[target_index].span,
+                                                format!(
+                                                    "task target of type `{target_ty}` returns a view of its arguments; the child's result must be an owned value"
+                                                ),
+                                            )
+                                            .with_help(
+                                                "return an owned value or a clone from the task target",
+                                            ));
+                }
+                let checked_return = self.type_check_function_value_args(
+                    &capture_params,
+                    &return_type,
+                    spawn_args,
+                    span,
+                    locals,
+                    None,
+                )?;
+                // Bind the supplied arguments to their contract slots
+                // first: a named argument proves Transfer for the slot
+                // it binds, and an omitted default still crosses the
+                // boundary with its declared type.
+                let contract_slots = params
+                    .iter()
+                    .map(|param| {
+                        let slot = if param.has_default {
+                            crate::call::CallableParam::optional(&param.name)
+                        } else {
+                            crate::call::CallableParam::required(&param.name)
+                        };
+                        if param.keyword_only {
+                            slot.keyword_only()
+                        } else {
+                            slot
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let bound_slots = bind_call_arguments(
+                    "function value",
+                    &contract_slots,
+                    spawn_args,
+                    span,
+                    CallConvention::PositionalOrNamed,
+                )?;
+                for (index, (param, argument)) in params.iter().zip(bound_slots).enumerate() {
+                    let label = if param.name.is_empty() {
+                        format!("task argument {} for function value", index + 1)
+                    } else {
+                        format!("task argument `{}`", param.name)
+                    };
+                    let value_span = argument
+                        .map(|argument| argument.span)
+                        .unwrap_or(args[target_index].span);
+                    self.require_transfer(&param.ty, label, value_span)?;
+                }
+                self.require_transfer(
+                    &checked_return,
+                    format!("task result `{checked_return}`"),
+                    args[target_index].span,
+                )?;
+                if closure_captures.is_some() || matches!(target_ty, Type::Callable(_)) {
+                    self.consume_value_expr(&args[target_index].value, locals)?;
+                }
+                return Ok(checked_return);
+            }
+        };
+        self.require_task_startable_function(
+            &callable.display_name,
+            &callable.decl.params,
+            &callable.signature.param_passings,
+            args[target_index].span,
+        )?;
+        let spawn_args = &args[required_count..];
+        for (index, argument) in spawn_args.iter().enumerate() {
+            if self
+                .direct_view_value_kind(&argument.value, locals)?
+                .is_some()
+            {
+                return Err(Diagnostic::coded_at(
+                                            "AU3008",
+                                            argument.span,
+                                            format!(
+                                                "view argument {} cannot cross a task boundary",
+                                                index + 1
+                                            ),
+                                        )
+                                        .with_help(
+                                            "pass an explicit owned copy or clone whose lifetime is independent of the view",
+                                        ));
+            }
+        }
+        if callable.decl.view_return.is_some() {
+            return Err(Diagnostic::coded_at(
+                                        "AU3008",
+                                        args[target_index].span,
+                                        format!(
+                                            "task target `{}` returns a view of its arguments; the child's result must be an owned value",
+                                            callable.display_name
+                                        ),
+                                    )
+                                    .with_secondary(
+                                        callable.decl.return_type.span,
+                                        "task target return type is declared here",
+                                    )
+                                    .with_help(
+                                        "return an owned value or a clone from the task target",
+                                    ));
+        }
+        let capture_passings = vec![ReceiverKind::Value; callable.signature.param_passings.len()];
+        let checked_callable = self.type_check_callable_args_detailed(
+            &callable.display_name,
+            &callable.decl.type_params,
+            &callable.decl.params,
+            &capture_passings,
+            &callable.signature.params,
+            &callable.signature.return_type,
+            &callable.type_param_bounds,
+            &callable.signature.rng_clone_safe_type_params,
+            &callable.signature.array_equality_safe_type_params,
+            spawn_args,
+            span,
+            locals,
+            None,
+            callable.seed_substitutions,
+            ClosureArgumentPolicy::Reject,
+        )?;
+        let transfer_args = bind_call_arguments(
+            &callable.display_name,
+            &callable_params_from_decl(&callable.decl.params),
+            spawn_args,
+            span,
+            CallConvention::PositionalOrNamed,
+        )?;
+        for (index, (argument, param)) in transfer_args
+            .into_iter()
+            .zip(callable.decl.params.iter())
+            .enumerate()
+        {
+            let value_span = argument
+                .map(|argument| argument.span)
+                .or_else(|| param.default.as_ref().map(|default| default.span))
+                .unwrap_or(param.span);
+            if argument.is_some_and(|argument| {
+                self.borrow_call_place(&argument.value)
+                    .and_then(|place| locals.get(&place.root))
+                    .is_some_and(|binding| binding.view.is_some())
+            }) {
+                return Err(Diagnostic::coded_at(
+                                            "AU3008",
+                                            value_span,
+                                            format!(
+                                                "view argument `{}` cannot cross a task boundary",
+                                                param.name
+                                            ),
+                                        )
+                                        .with_help(
+                                            "pass an explicit owned copy or clone whose lifetime is independent of the view",
+                                        ));
+            }
+            let concrete_param = checked_callable.params.get(index).ok_or_else(|| {
+                Diagnostic::at(span, "internal error: task parameter type is missing")
+            })?;
+            self.require_transfer(
+                concrete_param,
+                format!("task argument `{}`", param.name),
+                value_span,
+            )
+            .map_err(|diagnostic| {
+                diagnostic.with_secondary(
+                    param.span,
+                    format!("task parameter `{}` is declared here", param.name),
+                )
+            })?;
+        }
+        self.require_transfer(
+            &checked_callable.return_type,
+            format!("task result `{}`", checked_callable.return_type),
+            args[target_index].span,
+        )
+        .map_err(|diagnostic| {
+            diagnostic.with_secondary(
+                callable.decl.return_type.span,
+                "task target return type is declared here",
+            )
+        })?;
+        Ok(checked_callable.return_type)
+    }
+
     /// Checks one callable value against the owned storage type it packs
     /// into, for the explicit constructor and for a typed destination
     /// (ADR-0115). `actual` is the value's own type and `name` is how
@@ -8190,6 +8598,13 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Name(name) if name == "None" => Ok(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(binding) = locals.get(name) {
+                    if binding.local_function == Some(LocalFunctionBinding::RecursiveCall) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2005",
+                            expr.span,
+                            "a local function can use itself only as the target of a direct call",
+                        ));
+                    }
                     self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                     self.ensure_place_readable(
                         &PlacePath::root(name.clone()),
@@ -9724,6 +10139,14 @@ impl<'a> FunctionChecker<'a> {
                 let element_path = self
                     .member_access_path(expr)
                     .filter(|_| self.member_access_path(object).is_some());
+                // A computed receiver can move an argument. If this index is a
+                // library method call, its ordinary checker must see those
+                // moves exactly once.
+                let before_computed_base = (element_path.is_none()
+                    && self
+                        .module_namespace("collections")
+                        .is_some_and(|module| module.classes.contains_key("Deque")))
+                .then(|| locals.clone());
                 let object_ty = match &element_path {
                     Some(_) => self.type_of_member_object_expr(object, locals)?,
                     None => self.type_of_expr(object, locals)?,
@@ -9801,6 +10224,20 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     return Ok(element_ty);
+                }
+                if matches!(&object_ty, Type::Named(name, _) if self.resolve_class_info(name).is_some_and(ClassInfo::is_deque))
+                {
+                    if let Some(before) = before_computed_base {
+                        *locals = before;
+                    }
+                    let call = Expr::indexed_member(object, index, "at", expr.span);
+                    return self.type_of_expr_hint(&call, locals, expected);
+                }
+                if object_ty == Type::named("str") {
+                    // `text[index]` is `text.char_at(index)`: a fresh
+                    // one-character string, never a place.
+                    self.check_index_domain_type(index, index.span, "str indices", locals)?;
+                    return Ok(object_ty);
                 }
                 if let Some(element_ty) = array_element_type(&object_ty).cloned() {
                     let selects = self.check_array_index_type(index, locals)?;
@@ -10290,6 +10727,11 @@ impl<'a> FunctionChecker<'a> {
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
         }
+        if let Some(method) = crate::call::set_binary_method(op, &left_ty, &right_ty) {
+            // A new set holds copies of elements.
+            self.reject_rng_duplication(&format!("set.{method}"), &left_ty, span)?;
+            return Ok(left_ty);
+        }
         let opaque_operand = if self.is_opaque_handle_type(&left_ty) {
             Some(&left_ty)
         } else if self.is_opaque_handle_type(&right_ty) {
@@ -10377,6 +10819,22 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::at(
                 span,
                 "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division",
+            ));
+        }
+        let is_set =
+            |ty: &Type| matches!(ty, Type::Named(name, args) if name == "set" && args.len() == 1);
+        if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Sub
+        ) && is_set(&left_ty)
+            && is_set(&right_ty)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "set operators need two sets of one element type, found `{left_ty}` and `{right_ty}`"
+                ),
             ));
         }
         if matches!(
@@ -11272,6 +11730,25 @@ impl<'a> FunctionChecker<'a> {
         // Recover the same direct-call specialization only when the indexed
         // object is known to be a returned-view callable; ordinary runtime
         // indexing remains untouched.
+        if let Some(binding) = grouped_name(callee).and_then(|name| locals.get(name)) {
+            if binding.local_function == Some(LocalFunctionBinding::RecursiveCall) {
+                let Type::Function {
+                    params,
+                    return_type,
+                } = binding.ty.clone()
+                else {
+                    unreachable!("a recursive local function has its declared signature");
+                };
+                return self.type_check_function_value_args(
+                    &params,
+                    &return_type,
+                    args,
+                    span,
+                    locals,
+                    expected,
+                );
+            }
+        }
         self.check_recursive_call(callee, args, locals)?;
         let grouped = grouped_expr(callee);
         let mut grouped_specialization_base = None;
@@ -13108,6 +13585,37 @@ impl<'a> FunctionChecker<'a> {
                     let namespace = self.module_namespace(module_path).ok_or_else(|| {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
+                    if namespace.path == recover::MODULE && field == recover::RECOVER {
+                        if explicit_type_args.is_some() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2004",
+                                span,
+                                "`control.recover` takes no type arguments; its result type comes from the function it runs",
+                            ));
+                        }
+                        // The call is two calls the checker already knows
+                        // (see `sema::recover`).
+                        let desugared = recover::desugar_recover_call(object, args, span);
+                        return self.type_of_expr_hint(&desugared, locals, expected);
+                    }
+                    if namespace.path == recover::MODULE && field == recover::RECOVER_RAW {
+                        if args.is_empty() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2004",
+                                span,
+                                "`control.recover` expects a function followed by its arguments",
+                            ));
+                        }
+                        if args[0].name.is_some() {
+                            return Err(Diagnostic::coded_at(
+                                "AU2004",
+                                args[0].span,
+                                "`control.recover` takes the function it runs as its first positional argument",
+                            ));
+                        }
+                        let child_return = self.type_check_task_target(args, 0, span, locals)?;
+                        return Ok(recover::raw_result_type(child_return));
+                    }
                     if let Some(function) = namespace.functions.get(field) {
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
@@ -13175,6 +13683,8 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "HttpExchange")
                                 | ("http", "Stream")
                                 | ("tensor", "Node")
+                                | ("sync", "Cell")
+                                | ("sync", "Atom")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")
@@ -14358,9 +14868,12 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::StringRsplitOnce
                                 | BuiltinMember::StringFind
                                 | BuiltinMember::StringCount
-                                | BuiltinMember::StringRepeat => {
-                                    let expected = if builtin_member == BuiltinMember::StringRepeat
-                                    {
+                                | BuiltinMember::StringRepeat
+                                | BuiltinMember::StringCharAt => {
+                                    let expected = if matches!(
+                                        builtin_member,
+                                        BuiltinMember::StringRepeat | BuiltinMember::StringCharAt
+                                    ) {
                                         Type::named("int64")
                                     } else {
                                         Type::named("str")
@@ -14616,6 +15129,14 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetInsert
                                     | BuiltinMember::SetRemove
                                     | BuiltinMember::SetDiscard
+                                    | BuiltinMember::SetUnion
+                                    | BuiltinMember::SetIntersection
+                                    | BuiltinMember::SetDifference
+                                    | BuiltinMember::SetSymmetricDifference
+                                    | BuiltinMember::SetIsSubset
+                                    | BuiltinMember::SetIsSuperset
+                                    | BuiltinMember::SetIsDisjoint
+                                    | BuiltinMember::SetUpdate
                             ) {
                                 self.require_array_equality_eligible(
                                     &receiver_args[0],
@@ -14665,6 +15186,60 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetClear => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Unit)
+                                }
+                                BuiltinMember::SetUnion
+                                | BuiltinMember::SetIntersection
+                                | BuiltinMember::SetDifference
+                                | BuiltinMember::SetSymmetricDifference
+                                | BuiltinMember::SetIsSubset
+                                | BuiltinMember::SetIsSuperset
+                                | BuiltinMember::SetIsDisjoint
+                                | BuiltinMember::SetUpdate => {
+                                    let updates = builtin_member == BuiltinMember::SetUpdate;
+                                    if updates {
+                                        self.require_mutable_receiver(object, field, span, locals)?;
+                                    }
+                                    let other_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        format!("`{field}` requires an `other` argument"),
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &other_arg.value,
+                                        locals,
+                                        Some(&receiver_ty),
+                                    )?;
+                                    if actual != receiver_ty {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            other_arg.span,
+                                            format!(
+                                                "`{field}` expects `{receiver_ty}`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        other_arg,
+                                        locals,
+                                    )?;
+                                    match builtin_member {
+                                        BuiltinMember::SetUpdate => Ok(Type::Unit),
+                                        BuiltinMember::SetIsSubset
+                                        | BuiltinMember::SetIsSuperset
+                                        | BuiltinMember::SetIsDisjoint => Ok(Type::named("bool")),
+                                        _ => {
+                                            // A new set holds copies of elements.
+                                            self.reject_rng_duplication(
+                                                &format!("set.{field}"),
+                                                &receiver_ty,
+                                                span,
+                                            )?;
+                                            Ok(receiver_ty.clone())
+                                        }
+                                    }
                                 }
                                 BuiltinMember::SetReserve => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
@@ -15063,352 +15638,11 @@ impl<'a> FunctionChecker<'a> {
                                         }
                                     }
                                 }
-                                let callable = match self
-                                    .resolve_spawn_callable(&args[target_index].value)
-                                {
-                                    Ok(callable) => callable,
-                                    Err(named_target_error) => {
-                                        if named_target_error.code == "AU2999"
-                                            && named_target_error
-                                                .message
-                                                .starts_with("extern function `")
-                                        {
-                                            return Err(named_target_error);
-                                        }
-                                        let target_ty =
-                                            self.type_of_expr(&args[target_index].value, locals)?;
-                                        let (params, return_type, closure_captures) =
-                                            match &target_ty {
-                                                Type::Function {
-                                                    params,
-                                                    return_type,
-                                                } => (params.clone(), return_type.clone(), None),
-                                                Type::Closure {
-                                                    params,
-                                                    return_type,
-                                                    captures,
-                                                    ..
-                                                } => (
-                                                    params.as_ref().clone(),
-                                                    return_type.clone(),
-                                                    Some(captures.as_slice()),
-                                                ),
-                                                // A stored target is admitted only as a
-                                                // `TaskCallable`, whose packing proved every
-                                                // capture Transfer (C8); an ordinary erased
-                                                // `Callable` hides its environment.
-                                                Type::Callable(callable) => {
-                                                    if !callable.task {
-                                                        return Err(Diagnostic::coded_at(
-                                                            "AU3008",
-                                                            args[target_index].span,
-                                                            format!(
-                                                                "task target of type `{target_ty}` hides its environment and is not Transfer"
-                                                            ),
-                                                        )
-                                                        .with_help(
-                                                            "pack the closure as `TaskCallable[...]`, which proves every capture Transfer when it is created",
-                                                        ));
-                                                    }
-                                                    (
-                                                        callable.params.clone(),
-                                                        Box::new(callable.return_type.clone()),
-                                                        None,
-                                                    )
-                                                }
-                                                _ => return Err(named_target_error),
-                                            };
-                                        if let Some(captures) = closure_captures {
-                                            if let Some(reason) = self.transfer_failure(&target_ty)
-                                            {
-                                                let target_label =
-                                                    match &args[target_index].value.kind {
-                                                        ExprKind::Name(name) => {
-                                                            format!("task target `{name}`")
-                                                        }
-                                                        _ => "task closure target".to_string(),
-                                                    };
-                                                let mut diagnostic = Diagnostic::coded_at(
-                                                    "AU3008",
-                                                    args[target_index].span,
-                                                    format!(
-                                                        "{target_label} cannot cross a task boundary because {reason}"
-                                                    ),
-                                                );
-                                                if let Some(capture) =
-                                                    captures.iter().find(|capture| {
-                                                        self.transfer_failure(&capture.ty).is_some()
-                                                    })
-                                                {
-                                                    diagnostic = diagnostic.with_secondary(
-                                                        capture.span,
-                                                        format!(
-                                                            "capture `{}` is created here",
-                                                            capture.name
-                                                        ),
-                                                    );
-                                                }
-                                                return Err(diagnostic.with_help(
-                                                    "task closures may capture only owned Transfer data; keep capabilities and host resources on their owning worker",
-                                                ));
-                                            }
-                                        };
-                                        if let Some(index) = params.iter().position(|param| {
-                                            param.passing == ReceiverKind::BorrowMut
-                                        }) {
-                                            return Err(Diagnostic::coded_at(
-                                                "AU3002",
-                                                args[target_index].span,
-                                                format!(
-                                                    "task starting does not support mutable parameter {} on a function value; child tasks cannot write back through the starting call frame",
-                                                    index + 1,
-                                                ),
-                                            ));
-                                        }
-                                        let spawn_args = &args[required_count..];
-                                        let capture_params = params
-                                            .iter()
-                                            .map(|param| FunctionParamContract {
-                                                keyword_only: param.keyword_only,
-                                                name: param.name.clone(),
-                                                ty: param.ty.clone(),
-                                                passing: ReceiverKind::Value,
-                                                has_default: param.has_default,
-                                            })
-                                            .collect::<Vec<_>>();
-                                        // A view result borrows the child's arguments; the
-                                        // child's result must be an owned value (C8).
-                                        if matches!(return_type.as_ref(), Type::ReturnedView(_)) {
-                                            return Err(Diagnostic::coded_at(
-                                                "AU3008",
-                                                args[target_index].span,
-                                                format!(
-                                                    "task target of type `{target_ty}` returns a view of its arguments; the child's result must be an owned value"
-                                                ),
-                                            )
-                                            .with_help(
-                                                "return an owned value or a clone from the task target",
-                                            ));
-                                        }
-                                        let checked_return = self.type_check_function_value_args(
-                                            &capture_params,
-                                            &return_type,
-                                            spawn_args,
-                                            span,
-                                            locals,
-                                            None,
-                                        )?;
-                                        // Bind the supplied arguments to their contract slots
-                                        // first: a named argument proves Transfer for the slot
-                                        // it binds, and an omitted default still crosses the
-                                        // boundary with its declared type.
-                                        let contract_slots = params
-                                            .iter()
-                                            .map(|param| {
-                                                let slot = if param.has_default {
-                                                    crate::call::CallableParam::optional(
-                                                        &param.name,
-                                                    )
-                                                } else {
-                                                    crate::call::CallableParam::required(
-                                                        &param.name,
-                                                    )
-                                                };
-                                                if param.keyword_only {
-                                                    slot.keyword_only()
-                                                } else {
-                                                    slot
-                                                }
-                                            })
-                                            .collect::<Vec<_>>();
-                                        let bound_slots = bind_call_arguments(
-                                            "function value",
-                                            &contract_slots,
-                                            spawn_args,
-                                            span,
-                                            CallConvention::PositionalOrNamed,
-                                        )?;
-                                        for (index, (param, argument)) in
-                                            params.iter().zip(bound_slots).enumerate()
-                                        {
-                                            let label = if param.name.is_empty() {
-                                                format!(
-                                                    "task argument {} for function value",
-                                                    index + 1
-                                                )
-                                            } else {
-                                                format!("task argument `{}`", param.name)
-                                            };
-                                            let value_span = argument
-                                                .map(|argument| argument.span)
-                                                .unwrap_or(args[target_index].span);
-                                            self.require_transfer(&param.ty, label, value_span)?;
-                                        }
-                                        self.require_transfer(
-                                            &checked_return,
-                                            format!("task result `{checked_return}`"),
-                                            args[target_index].span,
-                                        )?;
-                                        if closure_captures.is_some()
-                                            || matches!(target_ty, Type::Callable(_))
-                                        {
-                                            self.consume_value_expr(
-                                                &args[target_index].value,
-                                                locals,
-                                            )?;
-                                        }
-                                        return Ok(
-                                            if matches!(
-                                                field.as_str(),
-                                                "start" | "start_with_stack"
-                                            ) {
-                                                Type::Named(
-                                                    "Task".to_string(),
-                                                    vec![checked_return],
-                                                )
-                                            } else {
-                                                Type::Unit
-                                            },
-                                        );
-                                    }
-                                };
-                                self.require_task_startable_function(
-                                    &callable.display_name,
-                                    &callable.decl.params,
-                                    &callable.signature.param_passings,
-                                    args[target_index].span,
-                                )?;
-                                let spawn_args = &args[required_count..];
-                                for (index, argument) in spawn_args.iter().enumerate() {
-                                    if self
-                                        .direct_view_value_kind(&argument.value, locals)?
-                                        .is_some()
-                                    {
-                                        return Err(Diagnostic::coded_at(
-                                            "AU3008",
-                                            argument.span,
-                                            format!(
-                                                "view argument {} cannot cross a task boundary",
-                                                index + 1
-                                            ),
-                                        )
-                                        .with_help(
-                                            "pass an explicit owned copy or clone whose lifetime is independent of the view",
-                                        ));
-                                    }
-                                }
-                                if callable.decl.view_return.is_some() {
-                                    return Err(Diagnostic::coded_at(
-                                        "AU3008",
-                                        args[target_index].span,
-                                        format!(
-                                            "task target `{}` returns a view of its arguments; the child's result must be an owned value",
-                                            callable.display_name
-                                        ),
-                                    )
-                                    .with_secondary(
-                                        callable.decl.return_type.span,
-                                        "task target return type is declared here",
-                                    )
-                                    .with_help(
-                                        "return an owned value or a clone from the task target",
-                                    ));
-                                }
-                                let capture_passings = vec![
-                                    ReceiverKind::Value;
-                                    callable.signature.param_passings.len()
-                                ];
-                                let checked_callable = self.type_check_callable_args_detailed(
-                                    &callable.display_name,
-                                    &callable.decl.type_params,
-                                    &callable.decl.params,
-                                    &capture_passings,
-                                    &callable.signature.params,
-                                    &callable.signature.return_type,
-                                    &callable.type_param_bounds,
-                                    &callable.signature.rng_clone_safe_type_params,
-                                    &callable.signature.array_equality_safe_type_params,
-                                    spawn_args,
-                                    span,
-                                    locals,
-                                    None,
-                                    callable.seed_substitutions,
-                                    ClosureArgumentPolicy::Reject,
-                                )?;
-                                let transfer_args = bind_call_arguments(
-                                    &callable.display_name,
-                                    &callable_params_from_decl(&callable.decl.params),
-                                    spawn_args,
-                                    span,
-                                    CallConvention::PositionalOrNamed,
-                                )?;
-                                for (index, (argument, param)) in transfer_args
-                                    .into_iter()
-                                    .zip(callable.decl.params.iter())
-                                    .enumerate()
-                                {
-                                    let value_span = argument
-                                        .map(|argument| argument.span)
-                                        .or_else(|| {
-                                            param.default.as_ref().map(|default| default.span)
-                                        })
-                                        .unwrap_or(param.span);
-                                    if argument.is_some_and(|argument| {
-                                        self.borrow_call_place(&argument.value)
-                                            .and_then(|place| locals.get(&place.root))
-                                            .is_some_and(|binding| binding.view.is_some())
-                                    }) {
-                                        return Err(Diagnostic::coded_at(
-                                            "AU3008",
-                                            value_span,
-                                            format!(
-                                                "view argument `{}` cannot cross a task boundary",
-                                                param.name
-                                            ),
-                                        )
-                                        .with_help(
-                                            "pass an explicit owned copy or clone whose lifetime is independent of the view",
-                                        ));
-                                    }
-                                    let concrete_param =
-                                        checked_callable.params.get(index).ok_or_else(|| {
-                                            Diagnostic::at(
-                                                span,
-                                                "internal error: task parameter type is missing",
-                                            )
-                                        })?;
-                                    self.require_transfer(
-                                        concrete_param,
-                                        format!("task argument `{}`", param.name),
-                                        value_span,
-                                    )
-                                    .map_err(|diagnostic| {
-                                        diagnostic.with_secondary(
-                                            param.span,
-                                            format!(
-                                                "task parameter `{}` is declared here",
-                                                param.name
-                                            ),
-                                        )
-                                    })?;
-                                }
-                                self.require_transfer(
-                                    &checked_callable.return_type,
-                                    format!("task result `{}`", checked_callable.return_type),
-                                    args[target_index].span,
-                                )
-                                .map_err(|diagnostic| {
-                                    diagnostic.with_secondary(
-                                        callable.decl.return_type.span,
-                                        "task target return type is declared here",
-                                    )
-                                })?;
+                                let child_return =
+                                    self.type_check_task_target(args, target_index, span, locals)?;
                                 return Ok(
                                     if matches!(field.as_str(), "start" | "start_with_stack") {
-                                        Type::Named(
-                                            "Task".to_string(),
-                                            vec![checked_callable.return_type],
-                                        )
+                                        Type::Named("Task".to_string(), vec![child_return])
                                     } else {
                                         Type::Unit
                                     },
@@ -17379,6 +17613,12 @@ impl<'a> FunctionChecker<'a> {
                         if call_kind == ClosureCallKind::Consuming {
                             self.consume_value_expr(base_callee, locals)?;
                         } else if call_kind == ClosureCallKind::MutableRepeatable
+                            && !grouped_name(base_callee)
+                                .and_then(|name| locals.get(name))
+                                .is_some_and(|binding| {
+                                    binding.local_function
+                                        == Some(LocalFunctionBinding::Declaration)
+                                })
                             && !self.is_mutable_place(base_callee, locals)?
                         {
                             return Err(Diagnostic::coded_at(
