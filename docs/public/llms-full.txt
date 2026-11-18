@@ -12311,10 +12311,11 @@ def main() -> int32:
   that comes back with a byte other than `0` or `1` fails with `AU4001`.
 
 A built program passes the address of the list's own storage, with no copy,
-when the list keeps its elements unboxed. Lists of scalars do. The checker
-rejects a `ptr` to anything but a scalar or an `extern "C"` class with
-`AU2002`, and `own ptr[T]` with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
-form for bytes with a length.
+when the list keeps its elements unboxed. Lists of scalars do. A `ptr[T]`
+parameter accepts fixed-width scalars, `extern "C"` classes and `extern "C"`
+unions as its element type. Other element types produce `AU2002`, and
+`own ptr[T]` produces `AU3004`. `ptr[T]` cannot be a result, and
+`list[uint8]` remains the form for bytes with a length.
 
 `T` is also an `extern "C"` class. A `ptr[Name]` parameter takes a
 `list[Name]` and passes a C array of `struct name`, as a vertex buffer or a
@@ -12518,8 +12519,8 @@ def main() -> int32:
   copy is an [`Array[float32]`](#arrays) or a `ptr[float32]` list, which
   lend their own storage.
 
-`own ptr[Name]` is `AU3004`. A pointer to anything but scalars or an
-`extern "C"` class is `AU2002`.
+`own ptr[Name]` is `AU3004`. Lists of C unions follow the same pointer
+rules as lists of C structs.
 
 #### Unions
 
@@ -12854,7 +12855,7 @@ never appears in source-visible output or diagnostics.
 | Code | Cause |
 | --- | --- |
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field or union member with no C layout. |
+| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr[T]` whose element type is outside the supported fixed-width scalars, C structs, and C unions, and an `extern "C"` class field or union member with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, a function as an extern result, or a `drop` clause that does not name an extern function taking the handle as its one `own` parameter. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
