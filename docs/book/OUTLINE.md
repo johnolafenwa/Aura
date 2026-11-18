@@ -161,6 +161,7 @@ One small tool, `courier`, grows across the sections.
 - 20.3 Regular expressions
 - 20.4 Randomness (seeded and secure)
 - 20.5 Logging, tracing, and metrics
+- 20.6 Images (PNG, JPEG, PPM, thumbnails, arrays for tensors)
 
 ## 21. Tensors
 

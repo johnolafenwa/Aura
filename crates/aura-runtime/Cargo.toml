@@ -20,7 +20,9 @@ httparse = "1"
 libc = "0.2"
 libffi = "5.1.1"
 memchr = "2"
+jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
+png = "0.18.1"
 regex = "1.13.1"
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +34,7 @@ triomphe = { version = "0.1.17", default-features = false }
 tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"
 webpki-roots = "1"
+zune-jpeg = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.1"

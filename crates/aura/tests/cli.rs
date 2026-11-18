@@ -12585,6 +12585,29 @@ fn run_and_direct_backends_run_sign_and_compress_example() {
 }
 
 #[test]
+fn run_and_direct_backends_run_image_thumbnail_example() {
+    let expected = "64x48 channels=3\ntrue\ntrue\n16x12 channels=1\ntrue\ntrue\n[3, 48, 64]\n0.5019608\ntrue\nthe data is not a PNG, JPEG or Netpbm image\nJPEG has no alpha\nmore than 1000 pixels\n";
+    let (_adapted, example) = host_example("examples/io/image_thumbnail.au");
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(&example)
+        .output()
+        .expect("failed to run aura run on image thumbnail example");
+    assert!(
+        output.status.success(),
+        "run should succeed for image thumbnail example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/io/image_thumbnail.au",
+        "image-thumbnail-direct",
+        expected,
+    );
+}
+
+#[test]
 fn run_and_direct_backends_run_regex_log_example() {
     let expected = "true\n3\n[took=120ms, user=7, retries=3]\ntook=120ms at 9..19\n4\ntook\n120\nms\nNone\n9: took=120ms\n20: user=7\n27: retries=3\ncafé up: took:120 user=7 retries=3\ncafé up: 120 7 3\n[café up: ,  ,  , ]\ninvalid pattern\ntrue\n";
     let output = Command::new(aura_bin())

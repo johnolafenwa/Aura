@@ -128,3 +128,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 101. [ADR-0101: `aura build --target` builds programs for other Linux machines](0101-linux-targets-for-aura-build.md) — Accepted; x86-64 and arm64, glibc and static musl, from a Linux host; a musl program links the C library the runtime ships; each target has its own runtime library
 102. [ADR-0102. Shared state handles](0102-shared-state-handles.md) records how tasks share mutexes, atomics, and maps.
 103. [ADR-0103. Lock lowering and native storage](0103-lock-lowering-and-native-storage.md) records how tasks acquire, release, and poison cells.
+114. [ADR-0114: The `image` module](0114-image-module.md) — Accepted; PNG, JPEG and Netpbm into a class of three integers and a `list[uint8]`; codecs in the runtime behind nine host functions; a pixel limit checked before decoding; `Array` forms as the bridge to tensors
