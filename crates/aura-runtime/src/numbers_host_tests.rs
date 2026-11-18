@@ -549,7 +549,7 @@ fn decimal_float_conversions() {
     let to_float = |value: (&str, i64)| {
         host_dec_to_float(args([&dec(value.0, value.1)]), None).expect("a float")
     };
-    assert_eq!(to_float(("314159", -5)), Value::Float(3.14159));
+    assert_eq!(to_float(("324681", -5)), Value::Float(3.24681));
     assert_eq!(to_float(("-1", 400)), Value::Float(f64::NEG_INFINITY));
     assert_eq!(to_float(("1", -400)), Value::Float(0.0));
     assert_eq!(code(host_dec_to_float(Vec::new(), None)), "AU4001");
