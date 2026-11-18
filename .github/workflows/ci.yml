@@ -594,4 +594,7 @@ jobs:
           for ((trial=1; trial<=rounds; trial++)); do
             echo "Trial $trial"
             bash "benchmarks/$SUITE/run.sh" "${args[@]}"
+            if [[ "$SUITE" == closures ]]; then
+              bash benchmarks/closures/run.sh local
+            fi
           done
