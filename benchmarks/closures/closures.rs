@@ -49,7 +49,7 @@ fn list_call(count: i64, reps: i64) {
         if index % 2 == 0 {
             steps.push(make_adder(index));
         } else {
-            steps.push(Box::new(move |value| value ^ index));
+            steps.push(Box::new(move |value| value * 3 + index));
         }
     }
     let mut acc = 0i64;
@@ -70,6 +70,21 @@ fn field_call(calls: i64) {
         acc = (rule.step)(acc + rule.weight) & 1048575;
     }
     report("field_call", calls, start, acc);
+}
+
+fn mutable_list_call(count: i64, reps: i64) {
+    let mut tallies: Vec<Tally> = Vec::new();
+    for _ in 0..count {
+        tallies.push(running_total());
+    }
+    let mut acc = 0i64;
+    let start = Instant::now();
+    for rep in 0..reps {
+        for tally in tallies.iter_mut() {
+            acc = (acc + tally(rep & 7)) & 1048575;
+        }
+    }
+    report("mutable_list_call", count * reps, start, acc);
 }
 
 fn mutable_call(calls: i64) {
@@ -105,6 +120,7 @@ fn argument_call(calls: i64) {
 fn main() {
     list_call(black_box(64), 500_000);
     field_call(black_box(30_000_000));
+    mutable_list_call(black_box(16), 1_000_000);
     mutable_call(black_box(30_000_000));
     create_call(black_box(10_000_000));
     argument_call(black_box(10_000_000));

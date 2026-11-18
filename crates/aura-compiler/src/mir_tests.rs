@@ -16444,6 +16444,70 @@ fn callable_destination_packs_values_at_every_typed_site() {
     );
 }
 
+const STORED_CALLABLE_PROGRAM: &str = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Total:
+    sum: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.sum = self.sum + amount
+        return self.sum
+
+class Board:
+    steps: list[Step]
+    tallies: list[Tally]
+
+    def bump(mut self, amount: int64) -> int64:
+        mut last = 0
+        for tally in mut self.tallies:
+            last = tally(amount)
+        return last
+
+def double(value: int64) -> int64:
+    return value * 2
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+def running_total() -> Tally:
+    total = Total(sum=0)
+    return lambda [own total] amount: total.add(amount)
+
+def main() -> None:
+    mut tallies: list[Tally] = [running_total(), running_total()]
+    mut last = 0
+    for tally in mut tallies:
+        last = tally(3)
+    for tally in mut tallies:
+        last = tally(4)
+    print(last)
+    print(tallies[0](1))
+    mut board = Board(steps=[make_adder(1)], tallies=[running_total()])
+    print(board.bump(4))
+    print(board.bump(4))
+    for tally in mut board.tallies:
+        print(tally(2))
+    print(board.steps[0](1))
+    nested: list[list[Step]] = [[make_adder(1)], [double, make_adder(3)], []]
+    mut total = 0
+    for row in nested:
+        for step in row:
+            total = step(total + 1)
+    print(total)
+    print(nested[1][0](21))
+"#;
+
+#[test]
+fn stored_callables_keep_their_identity_through_loans_and_nested_rows() {
+    // A call through an element loan and a read of a row of a list whose
+    // rows differ in length both pass the MIR validator.
+    let output = crate::run_source(STORED_CALLABLE_PROGRAM)
+        .expect("stored callables are called through loans and nested rows");
+    assert_eq!(output.stdout, "7\n8\n4\n8\n10\n2\n10\n42\n");
+}
+
 #[test]
 fn callable_destination_lowers_to_the_packing_instruction() {
     let module = crate::lower_source_to_mir(CALLABLE_DESTINATION_PROGRAM)
@@ -16476,6 +16540,13 @@ fn callable_destination_lowers_to_the_packing_instruction() {
     assert_eq!(packs("maybe"), 1);
     // A value that is packed already moves without a second packing.
     assert_eq!(packs("apply"), 0);
+}
+
+#[test]
+fn calling_indexed_closures_preserves_field_and_tuple_storage() {
+    let source = include_str!("../tests/fixtures/run-pass/callable_indexed_places.au");
+    let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
+    validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
 }
 
 #[test]

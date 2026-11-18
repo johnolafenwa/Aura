@@ -451,6 +451,65 @@ pub struct OldValue {
 }
 
 impl Expr {
+    /// A bracket followed by a call is parsed as type arguments when its
+    /// contents could name types. For a collection value the same spelling
+    /// selects an element, so reconstruct its ordinary index expression.
+    pub(crate) fn indexed_collection_callee(
+        &self,
+        is_collection: impl FnOnce(&Expr) -> bool,
+    ) -> Option<Expr> {
+        let ExprKind::Specialize { expr, type_args } = &self.kind else {
+            return None;
+        };
+        let [index] = type_args.as_slice() else {
+            return None;
+        };
+        if !is_collection(expr) {
+            return None;
+        }
+        fn index_expression(reference: &TypeRef) -> Option<Expr> {
+            let (path, arguments) = reference.named_parts()?;
+            if reference.indirect {
+                return None;
+            }
+            let mut parts = path.split('.');
+            let name = parts.next()?.to_owned();
+            let span = reference.span;
+            let mut value = Expr {
+                kind: ExprKind::Name(name),
+                span,
+            };
+            for field in parts {
+                value = Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(value),
+                        field: field.to_owned(),
+                    },
+                    span,
+                };
+            }
+            if let [index] = arguments {
+                value = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(value),
+                        index: Box::new(index_expression(index)?),
+                    },
+                    span,
+                };
+            } else if !arguments.is_empty() {
+                return None;
+            }
+            Some(value)
+        }
+        Some(Expr {
+            kind: ExprKind::Index {
+                object: expr.clone(),
+                index: Box::new(index_expression(index)?),
+            },
+            span: self.span,
+        })
+    }
+
     /// Calls `visit` on each direct child expression, in source order.
     pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
         match &mut self.kind {

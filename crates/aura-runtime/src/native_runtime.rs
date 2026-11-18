@@ -69,17 +69,17 @@ use crate::runtime_value::{
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, without_generator_drop_close,
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayCompareOp, ArrayDType, ArrayMaskOp,
     ArrayPairOp, ArrayReduction, ArrayUnaryOp, ArrayValue, CancellationContext, ChannelValue,
-    CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment, DictEntries, EnumVariantValue,
-    FileValue, FloatPowerWidth, FunctionValue, GeneratorHooks, GeneratorValue, HttpListenerValue,
-    InstanceFields, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
-    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
-    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
-    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, SharedType,
-    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TraitObjectValue, TupleValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
-    WebSocketValue, DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD,
-    DIRECT_RUNTIME_TYPE_SEPARATOR,
+    CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment, DictEntries, DirectCallable,
+    EnumVariantValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorHooks, GeneratorValue,
+    HttpListenerValue, InstanceFields, InstanceValue, IntegerArithmeticMode,
+    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
+    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
+    RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
+    SetElements, SetValue, SharedType, TaskCancelledSignal, TaskGroupValue, TaskValue,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TraitObjectValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
+    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -1615,7 +1615,7 @@ impl OpaqueValue {
         // holds its view.
         let view = unsafe { vector.str_view.get_or_create() };
         view.misses += 1;
-        if view.misses.saturating_mul(STR_VIEW_MISSES_PER_ELEMENT) < values.len() {
+        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
             return;
         }
         view.misses = 0;
@@ -1633,6 +1633,42 @@ impl OpaqueValue {
         self.list_elements.set(view.entries.as_ptr() as usize);
         self.list_access
             .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+    }
+
+    /// Records direct-callable addresses after enough reads to pay for a
+    /// traversal. Only a confined list whose elements are whole values may
+    /// use this view. A normal write restores its storage view. A borrowed
+    /// element lives in a list of boxes, which can change independently.
+    fn note_callable_view_miss(&self, vector: &VecValue) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32
+            || self.shared_lock().is_some()
+        {
+            return;
+        }
+        let Some(values) = vector.elements.as_values() else {
+            return;
+        };
+        // SAFETY: the caller has read access and the value is confined to
+        // this thread. Nothing else can hold its cache during this read.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses += 1;
+        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
+            return;
+        }
+        view.misses = 0;
+        view.callables.clear();
+        view.callables.extend(values.iter().map(|value| {
+            match value {
+                Value::Function(function) => function
+                    .direct_callable
+                    .as_ref()
+                    .map_or(0, |callable| Arc::as_ptr(callable) as usize),
+                _ => 0,
+            }
+        }));
+        self.list_elements.set(view.callables.as_ptr() as usize);
+        self.list_access
+            .store(DirectListAccess::Callables as u32, Ordering::Relaxed);
     }
 
     /// The lock of a shared value, or `None` while it is confined.
@@ -1772,7 +1808,11 @@ unsafe fn freeze_direct_value(ptr: *mut OpaqueValue) {
     // the value holds, which a reader may then change, so only views of
     // elements kept in place stay.
     let access = value.list_access.load(Ordering::Relaxed);
-    if access == DirectListAccess::Boxes as u32 || access >= FIRST_CLASS_ACCESS {
+    if access == DirectListAccess::Boxes as u32
+        || access == DirectListAccess::Callables as u32
+        || access == FUNCTION_VIEW_ACCESS
+        || access >= FIRST_CLASS_ACCESS
+    {
         value
             .list_access
             .store(DirectListAccess::None as u32, Ordering::Release);
@@ -2987,7 +3027,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Task(task) => task.set_runtime_type_name(runtime_type_name.to_string()),
         Value::Function(function) => {
             if matches!(parsed, Type::Function { .. } | Type::Closure { .. }) {
-                assign_type(&mut function.signature, parsed);
+                assign_type(&mut Arc::make_mut(function).signature, parsed);
             }
         }
         _ => {}
@@ -3036,6 +3076,16 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room, 0)
         }
+        Value::Function(function) => match &function.direct_callable {
+            Some(callable) => (
+                FUNCTION_VIEW_ACCESS,
+                Arc::as_ptr(callable) as usize,
+                0,
+                0,
+                0,
+            ),
+            None => (DirectListAccess::None as u32, 0, 0, 0, 0),
+        },
         // A strided view has no element address to read in place, so it
         // keeps the `None` access and every read calls the runtime.
         Value::Array(array)
@@ -3101,6 +3151,11 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
 /// scalar at [`crate::json_tape::NODE_SCALAR_OFFSET`]. The code lies
 /// between the list forms and the first plain layout's code.
 pub const JSON_TAPE_ACCESS: u32 = 0xF0;
+
+/// A confined boxed function whose direct callable is owned by that box.
+pub const FUNCTION_VIEW_ACCESS: u32 = 0xF2;
+const _: () =
+    assert!(JSON_TAPE_ACCESS < FUNCTION_VIEW_ACCESS && FUNCTION_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
 
 const _: () = assert!(
     JSON_TAPE_ACCESS > direct_array_access(DirectListAccess::ArrayFloat64, DIRECT_ARRAY_MAX_RANK)
@@ -3171,20 +3226,23 @@ pub enum DirectListAccess {
     /// code lends instead of copying the elements (see
     /// [`aura_direct_vec_lend`]).
     Boxes = 14,
+    /// A confined list of whole values. The table stores the address of
+    /// each element's native callable, or zero when it has none.
+    Callables = 15,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 15,
+    ArrayInt32 = 16,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 16,
+    ArrayInt64 = 17,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 17,
+    ArrayFloat32 = 18,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 18,
+    ArrayFloat64 = 19,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 14;
+    pub const LIST_FORMS: u32 = Self::Callables as u32;
 }
 
 /// The scalar types generated code names to the runtime in one word: the
@@ -3328,9 +3386,9 @@ pub const DIRECT_STR_VIEW_ENTRY_BYTES: i32 = std::mem::size_of::<DirectStrViewEn
 pub const DIRECT_STR_VIEW_PTR_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, ptr) as i32;
 pub const DIRECT_STR_VIEW_LEN_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, len) as i32;
 
-/// A `list[str]` builds its `str` view once its misses times this reach
-/// its length.
-const STR_VIEW_MISSES_PER_ELEMENT: usize = 8;
+/// A string or callable list builds its lookup table once the number of
+/// misses times this factor reaches its length.
+const LIST_VIEW_MISSES_PER_ELEMENT: usize = 8;
 
 /// Where generated code finds the list view in a boxed value. The offsets
 /// hold for one build of the runtime, so the compiler records
@@ -3376,6 +3434,10 @@ impl DirectListLayout {
             DirectListAccess::Uint64 as i64,
             DirectListAccess::Boxes as i64,
             i64::from(DirectListAccess::LIST_FORMS),
+            i64::from(FUNCTION_VIEW_ACCESS),
+            i64::from(DirectCallable::WORDS_OFFSET),
+            i64::from(DirectCallable::ABI_KEY_OFFSET),
+            i64::from(DirectCallable::RELEASED_OFFSET),
             DirectScalarKind::Float32 as i64,
             i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
             i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
@@ -6379,7 +6441,7 @@ pub extern "C-unwind" fn aura_direct_function_value(
             runtime_error("direct runtime received a null function thunk");
         }
         let signature = decoded_function_signature(signature_ptr, signature_len);
-        boxed_value(Value::Function(Box::new(FunctionValue {
+        boxed_value(Value::Function(Arc::new(FunctionValue {
             name: decode_bytes(name_ptr, name_len),
             signature,
             source_path: (path_len > 0).then(|| decode_bytes(path_ptr, path_len)),
@@ -6390,6 +6452,7 @@ pub extern "C-unwind" fn aura_direct_function_value(
             direct_thunk: Some(thunk_ptr),
             direct_default_binder: Some(default_binder_ptr),
             closure_environment: None,
+            direct_callable: None,
         })))
     })
 }
@@ -6416,7 +6479,7 @@ pub extern "C-unwind" fn aura_direct_closure_value(
         let Value::Function(mut function) = function else {
             runtime_error("direct closure construction expected a function value");
         };
-        function.closure_environment = Some(Arc::new(ClosureEnvironment::new(
+        Arc::make_mut(&mut function).closure_environment = Some(Arc::new(ClosureEnvironment::new(
             captures
                 .into_iter()
                 .enumerate()
@@ -6433,6 +6496,223 @@ pub extern "C-unwind" fn aura_direct_closure_value(
         )));
         boxed_value(Value::Function(function))
     })
+}
+
+/// Boxes the captures of an inline callable through the adapter its
+/// descriptor names, which builds a function value with every capture as a
+/// runtime value.
+fn direct_callable_boxed_captures(callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+    let Some(words) = callable.live_words() else {
+        runtime_error("an inline callable was released before its captures were boxed");
+    };
+    // SAFETY: `DirectCallable::new` received a descriptor of compiled code,
+    // whose word at `DESCRIPTOR_BOX_CAPTURES` is `box(callable_ptr)`.
+    let boxed = unsafe {
+        let descriptor = *words as *const u8;
+        let adapter: unsafe extern "C-unwind" fn(*mut i64) -> *mut OpaqueValue =
+            std::mem::transmute(
+                descriptor
+                    .add(DirectCallable::DESCRIPTOR_BOX_CAPTURES)
+                    .cast::<usize>()
+                    .read(),
+            );
+        consume_owned_value(adapter(words))
+    };
+    let Value::Function(function) = boxed else {
+        runtime_error("an inline callable did not box into a function value");
+    };
+    function
+        .closure_environment
+        .as_ref()
+        .and_then(|environment| environment.take_captures())
+        .unwrap_or_default()
+}
+
+/// Makes `function` the boxed form of the inline callable at
+/// `callable_ptr`, whose four words the caller hands over with their
+/// captures. The captures stay in those words. Compiled code that reads the
+/// boxed value back calls through them (see
+/// [`aura_direct_function_callable`]), and runtime code boxes them on first
+/// use.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_closure_value_deferred(
+    function: *mut OpaqueValue,
+    callable_ptr: *const i64,
+    capture_count: i64,
+    abi_key: i64,
+    mutable: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let capture_count = usize::try_from(capture_count)
+            .unwrap_or_else(|_| runtime_error("invalid closure capture count"));
+        if callable_ptr.is_null() {
+            runtime_error("direct runtime received a null inline callable");
+        }
+        let words = unsafe { std::ptr::read(callable_ptr.cast::<[i64; 4]>()) };
+        let function = unsafe { consume_owned_value(function) };
+        let Value::Function(mut function) = function else {
+            runtime_error("direct closure construction expected a function value");
+        };
+        // SAFETY: compiled code passes the words of one of its callables.
+        let callable = Arc::new(unsafe {
+            DirectCallable::new(
+                words,
+                abi_key,
+                mutable != 0,
+                capture_count,
+                direct_callable_boxed_captures,
+            )
+        });
+        let inner = Arc::make_mut(&mut function);
+        if capture_count > 0 {
+            inner.closure_environment = Some(Arc::new(ClosureEnvironment::deferred(Arc::clone(
+                &callable,
+            ))));
+        }
+        inner.direct_callable = Some(callable);
+        boxed_value(Value::Function(function))
+    })
+}
+
+/// The address of the inline callable words inside the boxed function
+/// `function`, for a compiled caller whose contract has the key `abi_key`.
+/// It is 0 when the value holds none for that contract, and the caller
+/// then calls through [`aura_direct_function_call`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_function_callable(
+    function: *mut OpaqueValue,
+    abi_key: i64,
+) -> i64 {
+    unsafe {
+        let header = function.as_ref().unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        if header.list_access.load(Ordering::Relaxed) == FUNCTION_VIEW_ACCESS {
+            // SAFETY: the confined function owns this direct callable. A
+            // replacement refreshes the view, and sharing clears its tag.
+            let callable = &*(header.list_elements.get() as *const DirectCallable);
+            return callable.words_for(abi_key).map_or(0, |words| words as i64);
+        }
+        boxed_callable_words(header, abi_key)
+    }
+}
+
+// Keeping the guarded reads out of line lets a confined hit return without
+// constructing a lock guard or saving the registers used by the slow path.
+#[inline(never)]
+fn boxed_callable_words(header: &OpaqueValue, abi_key: i64) -> i64 {
+    let _access = header.access_unlisted(false);
+    // SAFETY: the box is confined to this thread or the read guard is held.
+    match unsafe { &*header.value.get() } {
+        Value::Function(function) => function
+            .direct_callable
+            .as_ref()
+            .and_then(|callable| callable.words_for(abi_key))
+            .map_or(0, |words| words as i64),
+        _ => 0,
+    }
+}
+
+/// The address of the inline callable words of element `index` of the
+/// list `vec`, for a compiled caller whose contract has the key `abi_key`,
+/// as [`aura_direct_function_callable`] gives it. It is 0 when the list has
+/// no such element or the element holds no words for that contract.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_callable(
+    vec: *mut OpaqueValue,
+    index: i64,
+    abi_key: i64,
+) -> i64 {
+    unsafe {
+        let header = vec.as_ref().unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        if header.list_access.load(Ordering::Relaxed) == DirectListAccess::Callables as u32 {
+            let len = header.list_len.get();
+            // The common nonnegative loop index needs only one bounds
+            // comparison. Negative indices count back from the end.
+            let index = if index < 0 {
+                usize::try_from(index.unsigned_abs())
+                    .ok()
+                    .and_then(|offset| len.checked_sub(offset))
+            } else {
+                usize::try_from(index).ok()
+            };
+            let Some(index) = index.filter(|&index| index < len) else {
+                return 0;
+            };
+            // SAFETY: the tag belongs only to a confined list. Its table
+            // covers `list_len` slots, and the corresponding function in
+            // each slot owns the direct callable until a list write.
+            let entries = header.list_elements.get() as *const usize;
+            let callable = *entries.add(index) as *const DirectCallable;
+            return callable
+                .as_ref()
+                .and_then(|callable| callable.words_for(abi_key))
+                .map_or(0, |words| words as i64);
+        }
+        list_callable_words(header, index, abi_key)
+    }
+}
+
+#[inline(never)]
+fn list_callable_words(header: &OpaqueValue, index: i64, abi_key: i64) -> i64 {
+    // Only scalar and typed lists can have pending native appends, and
+    // neither representation provides a callable.
+    let _access = header.access_unlisted(false);
+    // SAFETY: the box is confined to this thread or the read guard is held.
+    let Value::Vec(vector) = (unsafe { &*header.value.get() }) else {
+        return 0;
+    };
+    let element = normalize_vec_index(index, vector.elements.len())
+        .and_then(|index| vector.elements.value_at(index));
+    let Some(Value::Function(function)) = element else {
+        return 0;
+    };
+    let Some(words) = function
+        .direct_callable
+        .as_ref()
+        .and_then(|callable| callable.words_for(abi_key))
+    else {
+        return 0;
+    };
+    header.note_callable_view_miss(vector);
+    words as i64
+}
+
+/// Copies the inline callable words of element `index` of the list `vec`
+/// to the four words at `dst`, with a reference of their own to each
+/// capture, and returns 1. It returns 0 and writes nothing when the element
+/// keeps no words for the contract with the key `abi_key` or is a Mutable
+/// callable, and the caller then reads the element as a value.
+///
+/// # Safety
+///
+/// `dst` is four writable words.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_callable_copy(
+    vec: *mut OpaqueValue,
+    index: i64,
+    abi_key: i64,
+    dst: *mut i64,
+) -> i64 {
+    unsafe {
+        with_unlisted_value(vec, |value| {
+            let Value::Vec(vector) = value else {
+                return 0;
+            };
+            let element = normalize_vec_index(index, vector.elements.len())
+                .and_then(|index| vector.elements.value_at(index));
+            match element {
+                Some(Value::Function(function)) => function
+                    .direct_callable
+                    .as_ref()
+                    .is_some_and(|callable| callable.copy_shared_into(abi_key, dst))
+                    .into(),
+                _ => 0,
+            }
+        })
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

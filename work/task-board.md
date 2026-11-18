@@ -13,8 +13,17 @@ Last updated: 2026-11-18
   type is expected, and a lambda captures a Copy parameter by value.
 - Verification: the compiler unit tests, the fixture suite and the callable
   integration suites on Linux, on both back ends.
+- Done: direct calls through stored closures. A closure in a field or a
+  list element is called where it is kept, and `benchmarks/closures`
+  compares the calls with Rust and Python.
+- A confined list caches stored callable addresses. Boxed closures own
+  string, nested callable and wide captures independently of their creating
+  task. The complete tool runner and decorated functions free every box.
+- Calls through `self.steps[index]` and tuple positions pass MIR validation.
+  The six release workloads took 0.15 to 2.74 times the Rust wall time.
+  Measurements and checksums are in `benchmarks/closures/README.md`.
 - Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0116), then benchmarks against Rust and Python.
+  statement bodies (ADR-0116).
 
 ## The `image` module (complete)
 
