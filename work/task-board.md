@@ -6,6 +6,8 @@ Last updated: 2026-11-18
 
 - Both backends implement `control.recover` and stack-bounded recursion.
   Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
+  Runtime tests also check portable native recovery, argument ownership,
+  nested cancellation and cleanup when its execution stack is abandoned.
 - A release build measured 1.35 ns per successful scalar call and 104.49 ns
   per caught literal assertion. With an interpolated message the medians
   were 5.53 ns and 781.29 ns. Both variants beat Python and came within
