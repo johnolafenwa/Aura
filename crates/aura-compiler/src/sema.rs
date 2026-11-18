@@ -9819,6 +9819,14 @@ impl<'a> FunctionChecker<'a> {
                 let element_path = self
                     .member_access_path(expr)
                     .filter(|_| self.member_access_path(object).is_some());
+                // A computed receiver can move an argument. If this index is a
+                // library method call, its ordinary checker must see those
+                // moves exactly once.
+                let before_computed_base = (element_path.is_none()
+                    && self
+                        .module_namespace("collections")
+                        .is_some_and(|module| module.classes.contains_key("Deque")))
+                .then(|| locals.clone());
                 let object_ty = match &element_path {
                     Some(_) => self.type_of_member_object_expr(object, locals)?,
                     None => self.type_of_expr(object, locals)?,
@@ -9896,6 +9904,14 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     return Ok(element_ty);
+                }
+                if matches!(&object_ty, Type::Named(name, _) if self.resolve_class_info(name).is_some_and(ClassInfo::is_deque))
+                {
+                    if let Some(before) = before_computed_base {
+                        *locals = before;
+                    }
+                    let call = Expr::indexed_member(object, index, "at", expr.span);
+                    return self.type_of_expr_hint(&call, locals, expected);
                 }
                 if object_ty == Type::named("str") {
                     // `text[index]` is `text.char_at(index)`: a fresh

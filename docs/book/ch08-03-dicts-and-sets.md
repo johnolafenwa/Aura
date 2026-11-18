@@ -417,3 +417,27 @@ In the next section we'll stop writing so many loops. Comprehensions build a
 list, a set, or a dictionary from another collection in one expression, and a
 handful of builtins compute sums, minimums, and sorted copies without a loop
 at all.
+
+## Visiting entries in key order
+
+Suppose we list delivery stops by their scheduled minute. A driver asks
+which stops fall in the first twenty minutes. We can keep the schedule in a
+`SortedMap` and read that interval in order.
+
+```aura
+from collections import SortedMap
+
+def main():
+    mut stops = SortedMap[int64, str]()
+    stops.set(15, "bridge")
+    stops.set(5, "station")
+    stops.set(30, "museum")
+    for minute, place in own stops.range(0, 20):
+        print(f"{minute} {place}")
+```
+
+This prints `5 station` followed by `15 bridge`. The range includes minute
+zero and ends just before minute twenty. When we only care whether a stop
+exists, a `SortedSet` holds the keys alone. The same module provides a
+`Deque` for taking work from either end and a `Heap` for taking the least
+or greatest value first. [Collections](/manual/collections#the-collections-module)

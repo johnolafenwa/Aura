@@ -4446,3 +4446,58 @@ fn a_for_invariant_that_ignores_the_target_is_checked_when_the_loop_runs_out() {
     .expect("target invariants hold in the body");
     assert_eq!(output.stdout, "6\n");
 }
+
+#[test]
+fn ordered_collections_use_their_declared_order_and_own_elements() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.stdout"),
+        ),
+    ] {
+        assert_eq!(
+            run_source(source)
+                .expect("ordered collection fixture should run")
+                .stdout,
+            expected
+        );
+    }
+    for source in [
+        include_str!("../tests/fixtures/check-fail/ordered_heap_requires_order.au"),
+        include_str!("../tests/fixtures/check-fail/sorted_key_requires_order.au"),
+    ] {
+        let error = check_source(source).expect_err("unordered keys should be rejected");
+        assert!(error.message.contains("does not implement trait `Ord["));
+    }
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_lookup_owns_clone.au"
+    ))
+    .expect_err("reading a retained non-cloneable RNG must fail");
+    assert_eq!(error.code, "AU3007");
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_is_private.au"
+    ))
+    .expect_err("the type-erased collection storage must be private");
+    assert!(error.message.contains("private"));
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_type_is_private.au"
+    ))
+    .expect_err("the store definition is internal even in a type annotation");
+    assert!(error.message.contains("collections.__Store"));
+}

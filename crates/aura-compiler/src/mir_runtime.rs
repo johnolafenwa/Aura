@@ -3121,6 +3121,7 @@ impl MirRuntime {
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Rng(_) => Some(Type::named("random.Rng")),
+            Value::CollectionStore(_) => Some(Type::named("collections.__Store")),
             Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
             Value::TraitObject(object) => Some(Type::clone(&object.held)),
             Value::Range(_) => Some(Type::named("Range")),

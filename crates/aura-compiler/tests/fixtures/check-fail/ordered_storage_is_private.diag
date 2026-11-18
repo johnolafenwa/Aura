@@ -1,0 +1,6 @@
+error[AU2001]: item `__aura_new` is private in module `collections`
+ --> crates/aura-compiler/tests/fixtures/check-fail/ordered_storage_is_private.au:5:26
+  |
+5 |     values = collections.__aura_new(3)
+  |                          ^
+  = help: mark `__aura_new` as `public` in `collections` to call it from another module

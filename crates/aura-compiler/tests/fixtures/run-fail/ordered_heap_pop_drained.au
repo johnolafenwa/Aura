@@ -1,0 +1,7 @@
+from collections import Heap
+
+def main():
+    mut seq = Heap[int64]()
+    seq.push(4)
+    seq.pop()
+    print(seq.pop())

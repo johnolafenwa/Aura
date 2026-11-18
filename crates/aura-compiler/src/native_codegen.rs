@@ -2235,6 +2235,15 @@ impl<'a> NativeCodegen<'a> {
             })
             .cloned()
             .collect::<HashSet<_>>();
+        let mut ordered_word_views = HashMap::new();
+        for local in ordered::word_local_roots(function, &self.program_shapes) {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            ordered_word_views.insert(local, variable);
+        }
         let mut key_loops = HashMap::new();
         let mut key_loop_keys = HashMap::new();
         for (list, key_loop) in
@@ -2437,6 +2446,7 @@ impl<'a> NativeCodegen<'a> {
             node_read_maps,
             key_loops,
             key_loop_keys,
+            ordered_word_views,
             lent_entry_copies,
             lent_fused_copies: HashSet::new(),
             shadow_fused_copies: HashSet::new(),
@@ -3986,6 +3996,8 @@ struct FunctionCompiler<'a> {
     key_loops: HashMap<String, (key_loops::KeyLoop, Var, Var)>,
     /// The key local of each of `key_loops`, with its keys copy.
     key_loop_keys: HashMap<String, String>,
+    /// The packed backing of a freshly constructed, unaliased word sequence.
+    ordered_word_views: HashMap<String, Var>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
@@ -4954,6 +4966,15 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
+        // Clear the cached backing when its owning local is initialized or dropped.
+        if let Instruction::Assign { target: place, .. } | Instruction::Release { place } =
+            instruction
+        {
+            if let Some(&cache) = self.ordered_word_views.get(place) {
+                let zero = self.builder.iconst(types::I64, 0);
+                self.builder.def_var(cache, zero);
+            }
+        }
         if !self.element_promotions.is_empty() {
             if let Some(temps) = self
                 .element_promotions
@@ -10394,11 +10415,21 @@ impl<'a> FunctionCompiler<'a> {
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = buffer_call.results[0];
         for (index, loaded) in loaded_args.iter().enumerate() {
+            // The private collection operations consume their store. Keeping a
+            // second reference here would detach its entire snapshot on every
+            // update, even when the source program owns it exclusively.
+            let mode = if name.starts_with("collections::")
+                && builtin.metadata().params[index].passing == ReceiverKind::Value
+                && self.temporary_owns_opaque(loaded)
+            {
+                self.clear_temporary_opaque_owned(loaded);
+                RuntimeFn::ArgBufferStoreOwned
+            } else {
+                RuntimeFn::ArgBufferStore
+            };
             let index = self.builder.iconst(types::I64, index as i64);
-            self.builder.call(
-                self.runtime[RuntimeFn::ArgBufferStore],
-                &[buffer, index, loaded.values[0]],
-            );
+            self.builder
+                .call(self.runtime[mode], &[buffer, index, loaded.values[0]]);
         }
         let entry = self.host_builtin_ref(builtin)?;
         let call = self.builder.call(entry, &[buffer, count]);
@@ -10604,6 +10635,20 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
+        }
+        if let (
+            Operand::Place(place),
+            MemberCallee::Method {
+                dispatch: MethodDispatch::Static { function },
+                ..
+            },
+        ) = (object, callee)
+        {
+            if receiver_place == Some(place.as_str()) {
+                if let Some(result) = self.compile_ordered_i64_method(function, place, args)? {
+                    return Ok(result);
+                }
+            }
         }
         if let MemberCallee::Method { field, dispatch } = callee {
             if let Some(result) =
@@ -13686,6 +13731,52 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+    }
+
+    /// Swaps scalar slots in one unshared list view. A shared backing store,
+    /// non-scalar representation, or invalid index takes the regular swap.
+    fn emit_scalar_list_swap(
+        &mut self,
+        list: Val,
+        first: Val,
+        second: Val,
+        kind: ScalarElement,
+        function: FuncRef,
+    ) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = scalar_list_slot(kind);
+        let slow = self.builder.create_block();
+        let fast = self.builder.create_block();
+        let write = self.builder.create_block();
+        let join = self.builder.create_block();
+        self.emit_list_access_check(list, access, &layout, slow, fast);
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
+        let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
+        let capacity = self
+            .builder
+            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
+        self.builder.brif(writable, write, &[], slow, &[]);
+
+        self.builder.switch_to_block(write);
+        self.builder.seal_block(write);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
+        let left = self.scalar_list_element(elements, left, stride);
+        let right = self.scalar_list_element(elements, right, stride);
+        let a = self.load_scalar_list_element(kind, left);
+        let b = self.load_scalar_list_element(kind, right);
+        self.store_scalar_list_element(kind, b, left);
+        self.store_scalar_list_element(kind, a, right);
+        self.builder.jump(join, &[]);
+
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        self.builder.call(function, &[list, first, second]);
+        self.builder.jump(join, &[]);
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
     }
 
     /// The address of the element at `position` in unboxed storage whose
@@ -17277,7 +17368,11 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Swap => {
                 let first = self.load_word(args[0], int64, false)?;
                 let second = self.load_word(args[1], int64, false)?;
-                self.builder.call(function, &[list, first, second]);
+                if let Some(kind) = ScalarElement::of(&element_ty) {
+                    self.emit_scalar_list_swap(list, first, second, kind, function);
+                } else {
+                    self.builder.call(function, &[list, first, second]);
+                }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -20594,7 +20689,11 @@ fn direct_type_inner(
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }
         Type::Named(name, args)
-            if args.is_empty() && (name == "random.Rng" || name == "iter.GeneratorHandle") =>
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "random.Rng" | "iter.GeneratorHandle" | "collections.__Store"
+                ) =>
         {
             Some(DirectType::Opaque(Type::named(name)))
         }
@@ -21618,6 +21717,8 @@ mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
+#[path = "native_codegen_ordered.rs"]
+mod ordered;
 #[path = "native_codegen_plain.rs"]
 mod plain;
 #[path = "native_codegen_shapes.rs"]

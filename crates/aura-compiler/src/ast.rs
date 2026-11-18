@@ -510,6 +510,27 @@ impl Expr {
         })
     }
 
+    /// The member call used by a read-only subscript on a library type.
+    pub(crate) fn indexed_member(object: &Expr, index: &Expr, method: &str, span: Span) -> Self {
+        Self {
+            kind: ExprKind::Call {
+                callee: Box::new(Self {
+                    kind: ExprKind::Member {
+                        object: Box::new(object.clone()),
+                        field: method.to_string(),
+                    },
+                    span,
+                }),
+                args: vec![Argument {
+                    name: None,
+                    value: index.clone(),
+                    span: index.span,
+                }],
+            },
+            span,
+        }
+    }
+
     /// Calls `visit` on each direct child expression, in source order.
     pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
         match &mut self.kind {

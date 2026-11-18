@@ -1,0 +1,5 @@
+error[AU2002]: type `list[str]` does not implement trait `Ord[list[str]]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/sorted_key_requires_order.au:5:13
+  |
+5 |     table = SortedMap[list[str], int64]()
+  |             ^
