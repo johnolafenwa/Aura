@@ -47,3 +47,16 @@ Compilation and process startup were outside the measured intervals.
 
 Aura finished all six workloads faster than Python. Its longest time
 relative to Rust was 1.46 times Rust’s time, on Fibonacci.
+
+### Fibonacci carry loop
+
+On November 18, the same Xeon ran a separate paired measurement of the
+change in `3d372944`. Each process repeated the full 30,000-term callable
+80 times. The four programs rotated their starting position across 11
+trials. Every process returned the checksum 1666160. Median process CPU
+time per 30,000 terms was 16.754 ms for the previous carry loop, 15.329 ms
+for the new loop, 9.156 ms for Rust and 21.164 ms for Python.
+
+The new loop reads both addends independently and writes the result in
+groups of 16 words. In 15 full six-workload runs, median Fibonacci wall
+time fell from 22.600 ms to 20.358 ms. The six existing checksums matched.
