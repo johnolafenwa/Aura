@@ -19,6 +19,10 @@ Last updated: 2026-11-17
   the set completion list and checking its result and argument types.
 - Four cross-language workloads cover integer math, ASCII indexing, set
   union and UTF-16. The compiler and runtime use a scalar integer math entry.
+- The measured ASCII index and UTF-16 round trip now complete ahead of
+  Python and within the Rust target. The benchmark notes give the source
+  shape, check totals and measurements. Materialized set union remains
+  under performance investigation.
 
 ## Three compiler defects from the book sections (complete)
 

@@ -109,3 +109,12 @@ order, append new right-hand entries in order and preserve either input
 across later writes. Removing slots before union is covered by a runtime
 regression. All 1,321 runtime tests passed across a full run and an isolated
 rerun of the resolver timeout test.
+
+Known encoding names can be resolved at compile time. The native call
+borrows its input and uses the same codec and error definitions as MIR.
+The decoder now walks UTF-16 input in two-byte chunks and handles ASCII
+units directly. Verification checked the byte offset of errors in either
+endianness, every single code unit, every valid surrogate pair, and all
+17 expected lines of the codec program on both backends. The new codec
+uses no additional library. Its UTF-16 workload took 11.432 ms against
+10.341 ms for Rust and 13.882 ms for Python.

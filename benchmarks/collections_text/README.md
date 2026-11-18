@@ -29,3 +29,13 @@ and recorded process CPU time. Per 400,000 reads, the medians were 0.841 ms
 for Aura, 0.971 ms for Rust and 40.755 ms for Python. Aura took 4.490 ms
 when the function received the string as an argument of unknown content.
 All outputs counted the same characters.
+
+## UTF-16 round trip
+
+Nine rotated runs pinned to one CPU compared the original compiler, the
+literal-encoding optimization, and the same optimization with the updated
+UTF-16 decoder. Process CPU time per 4,000 round trips was 18.528 ms for
+the original compiler, 13.506 ms with preselected encoding names, and
+11.432 ms with the updated decoder. Rust took 10.341 ms and Python took
+13.882 ms. The loop did 400,000 round trips per process. All three
+implementations returned the same character count, 89,600,000.
