@@ -1,0 +1,27 @@
+import control
+from iter import Generator
+
+def checked(value: int64) -> int64:
+    assert value >= 0, f"negative {value}"
+    return value
+
+def stream(seed: int64) -> Generator[int64]:
+    for value in [seed, -seed]:
+        match control.recover(checked, value):
+            case Ok(number):
+                yield number
+            case Err(trap):
+                print(trap.code)
+                print(trap.message)
+                print(len(trap.frames))
+                print(trap.frames[0].starts_with("checked at "))
+                yield 0
+
+def worker(seed: int64) -> None:
+    for result in stream(seed):
+        print(result)
+
+def main() -> None:
+    with TaskGroup() as group:
+        group.start(worker, 7)
+    print("done")

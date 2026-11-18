@@ -6863,10 +6863,7 @@ impl MirRuntime {
     /// call chain starts at that function, so a trap it reports names the
     /// calls the recovery covers and nothing outside them.
     fn fork_for_recovered_call(&self) -> MirRuntime {
-        MirRuntime {
-            generator_body: false,
-            ..self.fork_for_generator()
-        }
+        self.fork_for_child(self.cancellation.clone())
     }
 
     /// This runtime's active calls, innermost first, followed by those of

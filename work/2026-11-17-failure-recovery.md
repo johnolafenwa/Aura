@@ -80,3 +80,9 @@ A matched integer from `sync.Map` retains its value when the map changes
 before `control.recover` receives the integer. The combined fixture checks
 missing keys, a negative captured value and zero. MIR and the Linux native
 compiler agree on the error message and both subsequent map reads.
+
+A task and the generators it resumes share the compiled MIR program.
+Each recovered call starts a fresh call stack and uses the current task’s
+cancellation context. A fixture enters a generator from a spawned task,
+recovers a failure inside it, checks that the trace contains only the
+failed function, and resumes the generator to completion.
