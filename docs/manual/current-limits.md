@@ -239,6 +239,13 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower.
 - Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input, not unlimited waits. The exact error classification is fixed by the Duration design record.
 
+### Images
+
+- The `image` module holds 8-bit samples only. A 16-bit PNG or PPM is narrowed as it is read.
+- It reads and writes PNG, JPEG, and the Netpbm family. GIF, BMP, WebP, TIFF, and AVIF are not provided.
+- Metadata, including EXIF orientation and colour profiles, is neither returned nor written.
+- An image is decoded and encoded whole in memory. `image.decode` refuses more than 268,435,456 pixels, and `image.decode_up_to` accepts a limit up to 536,870,911.
+
 ### JSON
 
 - JSON supports the recursive `json.Value` tree, typed `json.Error` parse failures, and deterministic dumps.

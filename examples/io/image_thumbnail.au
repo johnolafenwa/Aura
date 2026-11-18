@@ -1,0 +1,82 @@
+import image
+
+# Draws a small picture, writes it as PNG, JPEG and PPM, reads the files
+# back, makes a thumbnail, and passes the pixels through an Array.
+
+
+def gradient(width: int64, height: int64) -> image.Image:
+    mut picture = image.Image.new(width, height, 3)
+    for y in range(height):
+        for x in range(width):
+            picture.set(x, y, 0, (x * 255 // (width - 1)) as uint8)
+            picture.set(x, y, 1, (y * 255 // (height - 1)) as uint8)
+            picture.set(x, y, 2, 128)
+    return picture
+
+
+def difference(left: image.Image, right: image.Image) -> int64:
+    mut largest = 0
+    for index in range(left.pixels.len()):
+        gap = abs(left.pixels[index] as int64 - right.pixels[index] as int64)
+        largest = max(largest, gap)
+    return largest
+
+
+def run() -> Result[None, image.Error]:
+    picture = gradient(64, 48)
+
+    # PNG keeps every sample.
+    try image.write("/tmp/aura-image-thumbnail-example.png", picture)
+    from_png = try image.read("/tmp/aura-image-thumbnail-example.png")
+    print(f"{from_png.width}x{from_png.height} channels={from_png.channels}")
+    print(from_png.pixels == picture.pixels)
+
+    # JPEG is smaller and close.
+    try image.write("/tmp/aura-image-thumbnail-example.jpg", picture)
+    from_jpeg = try image.read("/tmp/aura-image-thumbnail-example.jpg")
+    print(difference(from_jpeg, picture) < 16)
+
+    # A gray thumbnail as PGM, the gray form of PPM.
+    thumbnail = picture.resize(16, 12).to_gray()
+    try image.write("/tmp/aura-image-thumbnail-example.pgm", thumbnail)
+    from_pgm = try image.read("/tmp/aura-image-thumbnail-example.pgm")
+    print(f"{from_pgm.width}x{from_pgm.height} channels={from_pgm.channels}")
+    print(from_pgm.get(15, 0, 0) > from_pgm.get(0, 0, 0))
+
+    # The header alone gives the size.
+    encoded = try image.encode_png(picture, level=9)
+    found = try image.info(encoded)
+    print(found.format == image.Format.Png and found.width == 64)
+
+    # Samples as numbers from 0 to 1, one plane a channel, and back.
+    planes = picture.to_planes()
+    print(planes.shape())
+    print(planes[2, 0, 0])
+    print(image.Image.from_planes(planes).pixels == picture.pixels)
+
+    # Failures are values.
+    match image.decode([71, 73, 70, 56]):
+        case Result.Err(image.Error.Unsupported(message)):
+            print(message)
+        case _:
+            print("unexpected")
+    match image.encode_jpeg(picture.to_rgba()):
+        case Result.Err(image.Error.Unsupported(_)):
+            print("JPEG has no alpha")
+        case _:
+            print("unexpected")
+    match image.decode_up_to(encoded, 1000):
+        case Result.Err(image.Error.TooLarge(limit_pixels)):
+            print(f"more than {limit_pixels} pixels")
+        case _:
+            print("unexpected")
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(_):
+            print("image example failed")
+            return 1

@@ -26,6 +26,7 @@ pub mod host_io;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod host_tools;
+pub mod image_codec;
 pub mod json_codec;
 pub mod json_tape;
 pub mod list_elements;
