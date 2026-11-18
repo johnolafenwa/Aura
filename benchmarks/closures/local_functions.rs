@@ -1,4 +1,3 @@
-use std::hint::black_box;
 use std::time::Instant;
 
 fn measure_local(seed: i64, count: i64) {
@@ -11,6 +10,10 @@ fn measure_local(seed: i64, count: i64) {
     println!("local {count} {} {result}", start.elapsed().as_millis());
 }
 
-fn main() {
-    measure_local(black_box(7), black_box(48_000_000));
+fn main() -> Result<(), std::num::ParseIntError> {
+    let mut args = std::env::args().skip(1);
+    let seed = args.next().as_deref().unwrap_or("7").parse()?;
+    let count = args.next().as_deref().unwrap_or("48000000").parse()?;
+    measure_local(seed, count);
+    Ok(())
 }
