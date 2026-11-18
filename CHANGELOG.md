@@ -22,8 +22,8 @@ in this file.
 - Compiler: a call through a closure kept in a class field or a list
   element is direct. The stored value keeps the closure's four words, and
   the call reaches them where the field or the list keeps them. A field
-  call costs about 76 instructions where it cost about 8,400, and a `for`
-  loop over a `list[Callable[...]]` about 128 an element. A call of a
+  call takes about 41 instructions on x86-64, and a `for` loop over a
+  shared `list[Callable[...]]` takes about 40 per element. A call of a
   closure with mutable captures no longer asks the runtime for mutable
   sinks its caller never handed over.
 - Fixed: a `for` loop over `mut` elements of a list of Mutable callables,
@@ -33,6 +33,17 @@ in this file.
 - Fixed: a nested list of callables whose rows differ in length, such as
   `[[first], [second, third]]`, was rejected by the MIR validator when a
   row was read. A shorter row no longer poisons the positions it lacks.
+
+- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
+  files into an `image.Image`, whose pixels are a `list[uint8]`.
+  `image.read`, `image.decode`, `image.info`, `image.write`, and the
+  `image.encode_*` functions return `Result` with an `image.Error`, and a
+  damaged or oversized file is never a trap. An image can be resized,
+  cropped, flipped, and converted between gray, RGB, and alpha forms.
+  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
+  `Tensor.from_array`. See the Image Module page of the Manual and
+  section 20.6 of the book (ADR-0114).
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

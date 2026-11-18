@@ -2283,6 +2283,48 @@ fn every_tensor_host_entry_reaches_its_host_function() {
     assert!(reached >= 45, "{reached} tensor entries");
 }
 
+#[test]
+fn every_image_host_entry_reaches_its_host_function() {
+    let mut reached = 0;
+    for (name, entry) in super::HOST_BUILTIN_ENTRIES {
+        if !name.starts_with("image::") {
+            continue;
+        }
+        let entry = *entry;
+        let count = super::dynamic_host_abi(name)
+            .unwrap_or_else(|| panic!("`{name}` has no argument list"))
+            .params
+            .len();
+        // A bool is no argument of an image function, so each one reports
+        // the argument it could not use.
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let arguments: Vec<*mut OpaqueValue> =
+                    (0..count).map(|_| bool_value(true)).collect();
+                let value = direct_host_builtin_call_entry(entry, &arguments);
+                unsafe {
+                    release_value(value);
+                    for argument in arguments {
+                        release_value(argument);
+                    }
+                }
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("an image function rejects bool arguments");
+        assert!(
+            error.message.contains("image"),
+            "`{name}` reported `{}`",
+            error.message
+        );
+        reached += 1;
+    }
+    assert_eq!(
+        reached,
+        crate::runtime_value::image_host::IMAGE_HOST_FUNCTIONS.len()
+    );
+}
+
 fn direct_host_builtin_call_entry(
     entry: extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
     arguments: &[*mut OpaqueValue],
