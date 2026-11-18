@@ -220,21 +220,5 @@ pub unsafe extern "C-unwind" fn aura_direct_ordered_local_step(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ordered_receivers_reject_an_unformatted_trap_without_reading_its_fields() {
-        let mut trap = crate::runtime_value::deferred_recovered_trap_value(|| {
-            panic!("checking a collection receiver formatted its trap")
-        });
-        assert_eq!(
-            field_mut(&mut trap, "store", |_| Ok(())).unwrap_err().code,
-            "AU4001"
-        );
-        assert_eq!(
-            read(&trap, I64Op::MapGet, 0, false).unwrap_err().code,
-            "AU4001"
-        );
-    }
-}
+#[path = "ordered_collections_native_tests.rs"]
+mod tests;
