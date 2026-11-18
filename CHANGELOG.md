@@ -46,6 +46,16 @@ in this file.
 
 - Editor: the VS Code grammar highlights byte strings and their escapes.
 
+- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
+  files into an `image.Image`, whose pixels are a `list[uint8]`.
+  `image.read`, `image.decode`, `image.info`, `image.write`, and the
+  `image.encode_*` functions return `Result` with an `image.Error`, and a
+  damaged or oversized file is never a trap. An image can be resized,
+  cropped, flipped, and converted between gray, RGB, and alpha forms.
+  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
+  `Tensor.from_array`. See the Image Module page of the Manual and
+  section 20.6 of the book (ADR-0114).
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

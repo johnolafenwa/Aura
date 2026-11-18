@@ -99,6 +99,10 @@ These members name the dtype, so they are called on `Tensor[T]` with the
 dtype written: `Tensor[float32].from_array(values, device)`. `E` is the
 element type.
 
+A picture becomes a tensor through an `Array`: `image.Image.to_planes()`
+returns `[channels, height, width]` values from 0 to 1 for `from_array`.
+See the [Image Module](/manual/image#arrays-and-tensors).
+
 | API | Signature | Result |
 | --- | --- | --- |
 | `Tensor[E].from_array` | `from_array(values: Array[E], device: Device) -> Tensor[E]` | A tensor holding a copy of the Array's elements. |

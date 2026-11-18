@@ -142,6 +142,51 @@ fn regex_source_part_adds_the_typed_api_to_the_host_searches() {
 }
 
 #[test]
+fn image_source_part_adds_the_typed_api_to_the_host_codecs() {
+    let host = builtin_module_namespace(&path("image")).expect("image is builtin");
+    let part = source_part("image").expect("image has a source part");
+    for name in part.functions.keys() {
+        assert!(
+            !host.functions.contains_key(name),
+            "source function `{name}` must not shadow a host function"
+        );
+    }
+    let merged = importable_builtin_namespace(&path("image")).expect("image is importable");
+    for name in [
+        "read",
+        "write",
+        "write_as",
+        "decode",
+        "decode_up_to",
+        "info",
+        "encode",
+        "encode_png",
+        "encode_jpeg",
+        "encode_ppm",
+        "format_of",
+        "__aura_decode",
+    ] {
+        assert!(
+            merged.functions.contains_key(name),
+            "missing `image.{name}`"
+        );
+    }
+    for name in ["Image", "Info"] {
+        assert!(merged.classes.contains_key(name), "missing `image.{name}`");
+    }
+    for name in ["Error", "Format", "Filter"] {
+        assert!(merged.enums.contains_key(name), "missing `image.{name}`");
+    }
+    // A program that imports `json` carries nothing of `image`.
+    let parts = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+    let json = builtin_registry(&parts(&["json"]));
+    assert!(!json["image"].classes.contains_key("Image"));
+    let image = builtin_registry(&parts(&["image"]));
+    assert!(image["image"].classes.contains_key("Image"));
+    assert!(!image["tensor"].classes.contains_key("Tensor"));
+}
+
+#[test]
 fn time_source_part_adds_date_time_to_the_host_clocks() {
     let host = builtin_module_namespace(&path("time")).expect("time is builtin");
     let part = source_part("time").expect("time has a source part");
