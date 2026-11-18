@@ -60,6 +60,7 @@ date of that decision, not the state of the implementation today.
 - [26-batch-8-design-checkpoint.md](26-batch-8-design-checkpoint.md): the multicore runtime
 - [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
 - [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
+- [29-ffi-v2-graphics-design-checkpoint.md](29-ffi-v2-graphics-design-checkpoint.md): FFI v2 for graphics libraries and the raylib package
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

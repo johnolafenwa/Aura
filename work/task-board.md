@@ -15,6 +15,24 @@ Last updated: 2026-11-17
   The documentation build and both dependency audits pass with the pinned glob matcher.
 - Left out: 16-bit samples, metadata, other formats, drawing.
 
+## raylib graphics and FFI v2 (in progress)
+
+- Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
+  additions that C graphics libraries need: array fields, unions, and
+  arrays of structs. The design is in
+  `architecture_docs/29-ffi-v2-graphics-design-checkpoint.md`, and the
+  note is `2026-11-16-raylib-and-ffi-v2.md`.
+- Done: step 1, `examples/packages/raylib` on the FFI of 0.16. A generated
+  binding of 556 of raylib 6.0's 600 functions, a brick game, a 3D scene,
+  and a picture program, with acceptance tests on both backends and a CI
+  step that installs raylib and a virtual display.
+- Verification: the three programs run on both backends on x86-64 Linux
+  under Xvfb, and the saved frames were looked at. Not run on macOS,
+  Windows, or arm64 here.
+- Remaining: array fields, unions, arrays of structs, AArch64 struct
+  arguments that overflow the registers, `cstr` in callbacks, SDL2 and
+  GLFW acceptance tests, benchmarks, Manual and book pages, ADRs.
+
 ## Three compiler defects from the book sections (complete)
 
 - Target: John's 2026-11-16 ask to fix the defects the book work found.

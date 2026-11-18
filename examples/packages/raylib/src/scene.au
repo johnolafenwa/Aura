@@ -1,0 +1,89 @@
+"""A 3D scene: a camera that circles a field of cubes under a ring.
+
+Hold the right mouse button and move the mouse to look around. The scroll
+wheel moves the camera closer. Run it from the package directory:
+
+    aura run src/scene.au
+"""
+
+import demo
+import math
+import raylib
+
+SIDE: int64 = 5
+
+
+def height(column: int64, row: int64, time: float64) -> float32:
+    """The height of one column of the field at `time` seconds."""
+    phase = column.to_float() * 0.9 + row.to_float() * 0.6 + time * 2.0
+    return (1.5 + math.sin(phase)) as float32
+
+
+def tint(column: int64, row: int64) -> raylib.Color:
+    return raylib.ColorFromHSV(((column * SIDE + row) * 14) as float32, 0.65, 0.9)
+
+
+def main() -> int32:
+    raylib.SetTraceLogLevel(raylib.LOG_WARNING)
+    raylib.InitWindow(800, 450, "Aura and raylib: a 3D scene")
+    limit = demo.frame_limit()
+    if limit == 0:
+        raylib.SetTargetFPS(60)
+
+    mut camera = raylib.Camera3D(
+        position=raylib.Vector3(x=12.0, y=9.0, z=12.0),
+        target=raylib.Vector3(x=0.0, y=1.0, z=0.0),
+        up=raylib.Vector3(x=0.0, y=1.0, z=0.0),
+        fovy=45.0,
+        projection=raylib.CAMERA_PERSPECTIVE,
+    )
+    ring = raylib.LoadModelFromMesh(raylib.GenMeshTorus(0.2, 4.0, 16, 32))
+    mut frame = 0
+
+    while not demo.finished(frame, limit):
+        time = frame.to_float() / 60.0
+        if raylib.IsMouseButtonDown(raylib.MOUSE_BUTTON_RIGHT):
+            raylib.UpdateCamera(camera, raylib.CAMERA_FREE)
+        else:
+            camera.position.x = (14.0 * math.cos(time * 0.5)) as float32
+            camera.position.z = (14.0 * math.sin(time * 0.5)) as float32
+        camera.fovy = camera.fovy - raylib.GetMouseWheelMove() * 2.0
+
+        raylib.BeginDrawing()
+        raylib.ClearBackground(raylib.RAYWHITE)
+        raylib.BeginMode3D(camera)
+        for column in range(SIDE):
+            for row in range(SIDE):
+                tall = height(column, row, time)
+                center = raylib.Vector3(
+                    x=((column - SIDE // 2) * 2) as float32,
+                    y=tall / 2.0,
+                    z=((row - SIDE // 2) * 2) as float32,
+                )
+                raylib.DrawCube(center, 1.4, tall, 1.4, tint(column, row))
+                raylib.DrawCubeWires(center, 1.4, tall, 1.4, raylib.DARKGRAY)
+        above = raylib.Vector3(x=0.0, y=5.0, z=0.0)
+        raylib.DrawSphere(above, 0.8, raylib.GOLD)
+        raylib.DrawModel(
+            ring,
+            above,
+            (1.0 + 0.2 * math.sin(time * 3.0)) as float32,
+            raylib.MAROON,
+        )
+        raylib.DrawGrid(12, 2.0)
+        raylib.EndMode3D()
+        raylib.DrawText(
+            "right mouse button to look, wheel to zoom",
+            20,
+            14,
+            20,
+            raylib.DARKGRAY,
+        )
+        raylib.EndDrawing()
+        frame = frame + 1
+
+    demo.save_frame()
+    raylib.UnloadModel(ring)
+    raylib.CloseWindow()
+    print(f"drew {frame} frames")
+    return 0
