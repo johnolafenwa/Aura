@@ -681,17 +681,17 @@ impl<T> Large<T> {
 /// COW rules. A write to the result gives it private slots and an index.
 #[derive(Debug)]
 struct UnionEntries<T> {
-    left: Arc<Large<T>>,
-    right: Arc<Large<T>>,
+    left: EntriesArc<Large<T>>,
+    right: EntriesArc<Large<T>>,
     added: Vec<u64>,
     len: usize,
     right_end: usize,
-    materialize: fn(&Self) -> Arc<Large<T>>,
-    realized: OnceLock<Arc<Large<T>>>,
+    materialize: fn(&Self) -> EntriesArc<Large<T>>,
+    realized: OnceLock<EntriesArc<Large<T>>>,
 }
 
 impl<T> UnionEntries<T> {
-    fn realized(&self) -> &Arc<Large<T>> {
+    fn realized(&self) -> &EntriesArc<Large<T>> {
         self.realized.get_or_init(|| (self.materialize)(self))
     }
 
@@ -954,7 +954,9 @@ impl<T> IndexedEntries<T> {
     fn take_realized(&mut self) {
         match &self.storage {
             Storage::Lazy(lazy) => self.storage = lazy.realized().share().into_storage(),
-            Storage::Union(union) => self.storage = Storage::Large(Arc::clone(union.realized())),
+            Storage::Union(union) => {
+                self.storage = Storage::Large(EntriesArc::clone(union.realized()))
+            }
             _ => {}
         }
     }
@@ -964,7 +966,7 @@ impl<T> IndexedEntries<T> {
             Storage::Small(entries) => Eager::Small(entries),
             Storage::Large(large) => Eager::Large(large),
             Storage::Lazy(lazy) => lazy.realized().share(),
-            Storage::Union(union) => Eager::Large(Arc::clone(union.realized())),
+            Storage::Union(union) => Eager::Large(EntriesArc::clone(union.realized())),
         }
     }
 
@@ -1509,7 +1511,7 @@ impl SetElements {
             }
             return result;
         };
-        if Arc::ptr_eq(left, right) {
+        if EntriesArc::ptr_eq(left, right) {
             return self.clone();
         }
 
@@ -1548,12 +1550,12 @@ impl SetElements {
             return self.clone();
         }
         let snapshot = UnionEntries {
-            left: Arc::clone(left),
-            right: Arc::clone(right),
+            left: EntriesArc::clone(left),
+            right: EntriesArc::clone(right),
             added,
             len: self.len() + additional,
             right_end,
-            materialize: |snapshot| Arc::new(snapshot.copy_slots()),
+            materialize: |snapshot| EntriesArc::new(snapshot.copy_slots()),
             realized: OnceLock::new(),
         };
         let storage = if share_right && left.slots.iter().flatten().all(shareable) {
@@ -1563,7 +1565,7 @@ impl SetElements {
             if stored.holes != 0 {
                 stored.pack();
             }
-            Storage::Large(Arc::new(stored))
+            Storage::Large(EntriesArc::new(stored))
         };
         Self { storage }
     }
