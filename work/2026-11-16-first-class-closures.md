@@ -35,11 +35,49 @@ Verification:
 - `examples/basics/stored_closures.au`, the Manual page and book section
   13.1, checked by `scripts/check_doc_examples.py`.
 
+## Stored Call Speed
+
+The benchmark in `benchmarks/closures` showed that a call through a
+closure kept in a class field or a list element took about 8,400
+instructions. Storing boxed the closure into a runtime function value, and
+every call read the box back, copied its name and signature, and went
+through the runtime's boxed call.
+
+Work completed:
+
+- A boxed Shared or Mutable closure keeps its four words
+  (`DirectCallable`), and its captures become runtime values only when
+  runtime code reads them.
+- A function value is shared, not copied, when a container hands it out.
+- A callee that is a field of an instance kept in place, or an element of
+  a list, is called where it is kept. A `for` loop over a list of Shared
+  callables copies each element's words. A call through a loan of a
+  Mutable element reaches the words in the list.
+- The `invoke` adapter claims mutable sinks only when the caller's mask
+  says it handed some over.
+- Two older MIR validator faults found on the way: a nested list of
+  callables whose rows differ in length, and a call through an element
+  loan, `for tally in mut tallies: tally(1)`.
+
+Instructions a call, before and after: a field call 8,400 and 76, a list
+loop 8,400 and 128, a loop over Mutable elements 1,516 and 112, a Mutable
+local 240 and 98. Wall times are in `benchmarks/closures/README.md`.
+
+Verification:
+
+- `cargo test -p aura-compiler --lib` and `cargo test -p aura-runtime
+  --lib`, with new tests for the kept words, the validator cases, and the
+  runtime helpers generated code names.
+- The fixture suite with `run-pass/callable_stored_calls.au` and
+  `run-pass/callable_stored_flows.au`, which both back ends run.
+- The callable, validator, native coverage, parity, cleanup, and
+  representation suites.
+
 ## Follow-up
 
 - Step 2: local `def` statements (ADR-0116).
 - Benchmarks against Rust `Box<dyn Fn>` and Python closures.
-- A Shared callable in a tuple element cannot be called through an index,
-  `pair[0]()`. It reports `AU3005`. Unpack the tuple first.
+- Indexed call regression tests and current benchmark evidence are in
+  `2026-11-17-indexed-closure-calls.md`.
 - A generic function cannot infer its type parameters from a lambda whose
   parameter types depend on them. Write the type arguments.

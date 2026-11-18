@@ -322,7 +322,7 @@ pub enum Value {
     Rng(RngValue),
     Range(RangeValue),
     ModuleNamespace(ModuleNamespaceValue),
-    Function(Box<FunctionValue>),
+    Function(Arc<FunctionValue>),
     Unit,
     FfiHandle(FfiHandleValue),
     Instance(InstanceValue),
@@ -743,6 +743,160 @@ pub struct FunctionValue {
     /// interpreter's internal value snapshots cannot accidentally duplicate a
     /// single-use closure environment.
     pub closure_environment: Option<Arc<ClosureEnvironment>>,
+    /// The inline callable that compiled code boxed into this value.
+    /// Compiled code that reads the value back calls through it directly.
+    pub direct_callable: Option<Arc<DirectCallable>>,
+}
+
+/// An inline callable of compiled code kept inside a boxed function value:
+/// the descriptor word and three environment words, as compiled code holds
+/// them in a local. A compiled caller that reads the boxed value back calls
+/// the descriptor's `invoke` on these words, so the call costs what a call
+/// through a local costs.
+///
+/// The words own their captures. A Shared closure never changes them, so
+/// the boxed captures of the runtime, made on first use, stay equal to
+/// them. A Mutable closure changes them on each call. Its boxed captures
+/// are made from the words when runtime code first needs them, and the
+/// words are released then, so one of the two holds the state at a time.
+// Generated code reads the ABI key and release flag before calling through
+// the environment. Keep this layout stable across compiler and runtime builds.
+#[repr(C)]
+pub struct DirectCallable {
+    words: std::cell::UnsafeCell<[i64; 4]>,
+    abi_key: i64,
+    capture_count: usize,
+    boxed_captures: fn(&DirectCallable) -> Vec<ClosureCaptureValue>,
+    mutable: bool,
+    released: AtomicBool,
+}
+
+// SAFETY: the words are read and written only by the one owner of the
+// boxed value, as the captures of any closure are. A closure crosses a task
+// boundary only when every capture is Transfer.
+unsafe impl Send for DirectCallable {}
+unsafe impl Sync for DirectCallable {}
+
+impl fmt::Debug for DirectCallable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DirectCallable")
+            .field("capture_count", &self.capture_count)
+            .field("mutable", &self.mutable)
+            .finish_non_exhaustive()
+    }
+}
+
+impl DirectCallable {
+    /// Offsets used by generated code while a boxed value owns the callable.
+    /// The runtime checks them in the direct list-layout fingerprint.
+    pub const WORDS_OFFSET: i32 = std::mem::offset_of!(Self, words) as i32;
+    pub const ABI_KEY_OFFSET: i32 = std::mem::offset_of!(Self, abi_key) as i32;
+    pub const RELEASED_OFFSET: i32 = std::mem::offset_of!(Self, released) as i32;
+
+    /// The offset of the `drop` adapter in a callable descriptor.
+    pub const DESCRIPTOR_DROP: usize = 8;
+    /// The offset of the `retain` adapter in a callable descriptor.
+    pub const DESCRIPTOR_RETAIN: usize = 16;
+    /// The offset of the adapter that boxes the words with their captures.
+    pub const DESCRIPTOR_BOX_CAPTURES: usize = 48;
+
+    /// Takes over `words`, which own their captures.
+    ///
+    /// # Safety
+    ///
+    /// `words[0]` is the address of a callable descriptor of compiled code
+    /// and the other words are an environment that descriptor describes.
+    pub unsafe fn new(
+        words: [i64; 4],
+        abi_key: i64,
+        mutable: bool,
+        capture_count: usize,
+        boxed_captures: fn(&DirectCallable) -> Vec<ClosureCaptureValue>,
+    ) -> Self {
+        Self {
+            words: std::cell::UnsafeCell::new(words),
+            abi_key,
+            mutable,
+            capture_count,
+            released: AtomicBool::new(false),
+            boxed_captures,
+        }
+    }
+
+    /// The address of the words, for a compiled caller whose contract has
+    /// the key `abi_key`, or `None` when the words were released or belong
+    /// to another contract.
+    pub fn words_for(&self, abi_key: i64) -> Option<*mut i64> {
+        (self.abi_key == abi_key && !self.released.load(Ordering::Relaxed))
+            .then(|| self.words.get().cast::<i64>())
+    }
+
+    /// Copies the words of a Shared callable to `dst` with a reference of
+    /// their own to each capture, for a compiled caller whose contract has
+    /// the key `abi_key`. A Mutable callable keeps its state in one place
+    /// and is not copied.
+    ///
+    /// # Safety
+    ///
+    /// `dst` is four writable words.
+    pub unsafe fn copy_shared_into(&self, abi_key: i64, dst: *mut i64) -> bool {
+        if self.mutable {
+            return false;
+        }
+        let Some(words) = self.words_for(abi_key) else {
+            return false;
+        };
+        // SAFETY: `new` received a descriptor of compiled code, whose word
+        // at `DESCRIPTOR_RETAIN` is its `retain(callable_ptr)` adapter.
+        unsafe {
+            std::ptr::copy_nonoverlapping(words, dst, 4);
+            let descriptor = *dst as *const u8;
+            let retain: unsafe extern "C-unwind" fn(*mut i64) = std::mem::transmute(
+                descriptor
+                    .add(Self::DESCRIPTOR_RETAIN)
+                    .cast::<usize>()
+                    .read(),
+            );
+            retain(dst);
+        }
+        true
+    }
+
+    /// The address of the words while they are live.
+    pub fn live_words(&self) -> Option<*mut i64> {
+        (!self.released.load(Ordering::Relaxed)).then(|| self.words.get().cast::<i64>())
+    }
+
+    pub fn capture_count(&self) -> usize {
+        self.capture_count
+    }
+
+    pub fn is_mutable(&self) -> bool {
+        self.mutable
+    }
+
+    /// Releases the captures the words own. Later calls do nothing.
+    pub fn release(&self) {
+        if self.released.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let words = self.words.get().cast::<i64>();
+        // SAFETY: `new` received a descriptor of compiled code, whose word
+        // at `DESCRIPTOR_DROP` is its `drop(callable_ptr)` adapter.
+        unsafe {
+            let descriptor = *words as *const u8;
+            let drop_adapter: unsafe extern "C-unwind" fn(*mut i64) =
+                std::mem::transmute(descriptor.add(Self::DESCRIPTOR_DROP).cast::<usize>().read());
+            drop_adapter(words);
+        }
+    }
+}
+
+impl Drop for DirectCallable {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -759,11 +913,21 @@ pub struct ClosureEnvironment {
     captures: Mutex<Option<Vec<ClosureCaptureValue>>>,
     consuming: bool,
     consumed: Mutex<bool>,
+    /// The inline callable whose captures have not been boxed yet.
+    pending: Mutex<Option<Arc<DirectCallable>>>,
 }
 
 impl ClosureEnvironment {
     /// The number of captured values the environment was created with.
     pub fn capture_count(&self) -> usize {
+        if let Some(pending) = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+        {
+            return pending.capture_count();
+        }
         self.captures
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -777,10 +941,55 @@ impl ClosureEnvironment {
             captures: Mutex::new(Some(captures)),
             consuming,
             consumed: Mutex::new(false),
+            pending: Mutex::new(None),
         }
     }
 
+    /// The environment of a repeatable closure that compiled code boxed.
+    /// Its captures stay in the inline callable until runtime code needs
+    /// them as values.
+    pub fn deferred(callable: Arc<DirectCallable>) -> Self {
+        // The boxed captures are counted when they are made.
+        Self {
+            captures: Mutex::new(None),
+            consuming: false,
+            consumed: Mutex::new(false),
+            pending: Mutex::new(Some(callable)),
+        }
+    }
+
+    /// Boxes the captures of a deferred environment. A Mutable closure's
+    /// state moves to the boxed captures, so its inline words are released.
+    fn settle(&self) {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        let Some(callable) = pending else {
+            return;
+        };
+        let captures = (callable.boxed_captures)(&callable);
+        *self
+            .captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(captures);
+        if callable.is_mutable() {
+            callable.release();
+        }
+    }
+
+    /// Takes the captures out, leaving the environment consumed.
+    pub fn take_captures(&self) -> Option<Vec<ClosureCaptureValue>> {
+        self.settle();
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+
     pub fn arguments(&self, function_name: &str) -> Result<Vec<ClosureCaptureValue>> {
+        self.settle();
         let mut captures = self
             .captures
             .lock()
@@ -830,6 +1039,7 @@ impl ClosureEnvironment {
     }
 
     pub fn write_back_mutable(&self, index: usize, value: Value) -> Result<()> {
+        self.settle();
         let mut captures = self
             .captures
             .lock()
@@ -851,6 +1061,7 @@ impl ClosureEnvironment {
     }
 
     pub fn capture_value(&self, index: usize) -> Result<Value> {
+        self.settle();
         let captures = self
             .captures
             .lock()
@@ -1600,8 +1811,8 @@ impl PartialEq for EnumVariantValue {
 pub struct VecValue {
     pub element_type: SharedType,
     pub elements: ListElements,
-    /// Where a `list[str]`'s elements lie, which the native runtime builds
-    /// for generated code. It is not part of the value.
+    /// Native lookup data for strings, callables and borrowed elements.
+    /// Cloning a list starts its lookup cache empty.
     pub str_view: crate::list_elements::StrViewCache,
 }
 
@@ -4455,6 +4666,8 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }
         Value::Tuple(tuple) if tuple.elements.iter().all(is_flat_clone) => return Ok(value.clone()),
         value if is_flat_clone(value) => return Ok(value.clone()),
+        // A function value shares its record and its environment.
+        Value::Function(_) => return Ok(value.clone()),
         // A variant that carries only leaves and shared collections, such
         // as `json.Value.Object(fields)`, copies its payload list and shares
         // the collections' storage.

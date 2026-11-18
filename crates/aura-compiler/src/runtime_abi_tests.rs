@@ -228,7 +228,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // `int64` dict value is stored from its word. An entry loan only
     // borrowers read lends the value in a shadow box, a keys loop walks the
     // entries by slot, and a dict literal is sized once and filled entry by
-    // entry.
+    // entry. A callable element is called, or copied as its inline words,
+    // where the list keeps it.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -251,6 +252,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::SetReturnedViewProjection,
             RuntimeFn::SetNextMutableSinks,
             RuntimeFn::SetNextIndirectMutableSinks,
+            RuntimeFn::VecCallable,
+            RuntimeFn::VecCallableCopy,
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecPushStrLiteral,

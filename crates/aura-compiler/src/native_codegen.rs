@@ -718,9 +718,9 @@ struct NativeCodegen<'a> {
     /// function backend.
     object: Option<Box<dyn ModuleBackend>>,
     functions: HashMap<String, FuncHandle>,
-    /// The frameless second body of each function that has one (see
-    /// `leaf_variant`).
-    leaf_functions: HashMap<String, FuncHandle>,
+    /// Bodies that need no write-through sinks. Leaf bodies also defer their
+    /// frame until an error.
+    sinkless_functions: HashMap<String, FuncHandle>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -990,7 +990,7 @@ impl<'a> NativeCodegen<'a> {
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
-        let mut leaf_functions = HashMap::new();
+        let mut sinkless_functions = HashMap::new();
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1024,25 +1024,27 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
+            let mutable_leaf = leaf_variant(function, &classes);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
                 // through a thunk.
                 if small_leaf(function) {
                     object.mark_inline(func_id);
                 }
-            } else if leaf_variant(function, &classes) {
-                let leaf_id = try_or_string_error!(
-                    object.declare_function(
-                        &mangle_leaf_symbol(&function.name),
-                        Linkage::Local,
-                        &signature
-                    ),
-                    "failed to declare the leaf body of `{}`: {}",
+            } else if mutable_leaf || sinkless_closure(function) {
+                let symbol = if mutable_leaf {
+                    mangle_leaf_symbol(&function.name)
+                } else {
+                    format!("{}__nosinks", mangle_symbol(&function.name))
+                };
+                let sinkless_id = try_or_string_error!(
+                    object.declare_function(&symbol, Linkage::Local, &signature),
+                    "failed to declare the sink-free body of `{}`: {}",
                     function.name
                 );
-                leaf_functions.insert(function.name.clone(), leaf_id);
+                sinkless_functions.insert(function.name.clone(), sinkless_id);
                 if small_leaf(function) {
-                    object.mark_inline(leaf_id);
+                    object.mark_inline(sinkless_id);
                 }
             } else if small_leaf(function) && frameless_leaf(function, &classes) {
                 object.mark_inline(func_id);
@@ -1174,7 +1176,7 @@ impl<'a> NativeCodegen<'a> {
             program_source: program_source.to_string(),
             object: Some(object),
             functions,
-            leaf_functions,
+            sinkless_functions,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1341,17 +1343,101 @@ impl<'a> NativeCodegen<'a> {
             func_id,
             &signature,
             &format!("direct function `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, func_id, false),
+            |codegen, builder| codegen.emit_function(builder, function, func_id, false, None),
         )?;
-        let Some(leaf_id) = self.leaf_functions.get(&function.name).copied() else {
+        let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
             return Ok(());
         };
         self.define_body(
-            leaf_id,
+            sinkless_id,
             &signature,
-            &format!("the leaf body of `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, leaf_id, true),
+            &format!("the sink-free body of `{}`", function.name),
+            |codegen, builder| {
+                if let Some(method) = codegen.forwarded_leaf_method(function) {
+                    return codegen.emit_function(
+                        builder,
+                        method,
+                        sinkless_id,
+                        true,
+                        Some(function),
+                    );
+                }
+                codegen.emit_function(builder, function, sinkless_id, true, None)
+            },
         )
+    }
+
+    /// A closure whose whole body passes its parameters unchanged to a
+    /// leaf method and returns its result. Its sink-free entry may use the
+    /// method body directly, retaining both source frames on a trap.
+    fn forwarded_leaf_method(&self, wrapper: &MirFunction) -> Option<&'a MirFunction> {
+        if !wrapper.name.contains("::__lambda_") || self.debug_info {
+            return None;
+        }
+        let [block] = wrapper.blocks.as_slice() else {
+            return None;
+        };
+        let [Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            object: Operand::Place(object),
+                            receiver_place: Some(place),
+                            dispatch: Some(MethodDispatch::Static { function }),
+                            ..
+                        },
+                    args,
+                    type_args,
+                },
+        }] = block.instructions.as_slice()
+        else {
+            return None;
+        };
+        let (receiver, tail) = wrapper.params.split_first()?;
+        if !matches!(&block.terminator, Terminator::Return(Operand::Place(result)) if result == target)
+            || !type_args.is_empty()
+            || receiver.passing != MirReceiverKind::BorrowMut
+            || receiver.name != *object
+            || object != place
+        {
+            return None;
+        }
+        let method = self
+            .module
+            .functions
+            .iter()
+            .find(|candidate| &candidate.name == function)?;
+        let self_ty = method
+            .local_types
+            .iter()
+            .find(|local| local.name == "self")?;
+        if method.receiver != Some(MirReceiverKind::BorrowMut)
+            || self_ty.ty != receiver.ty
+            || method.return_type != wrapper.return_type
+            || !matches!(
+                direct_type(&receiver.ty, &self.classes),
+                Some(DirectType::PlainClass(_))
+            )
+            || !leaf_body(method, &self.classes)
+            || method.params.len() != tail.len()
+            || args.len() != tail.len()
+        {
+            return None;
+        }
+        args.iter()
+            .zip(tail)
+            .zip(&method.params)
+            .all(|((arg, forwarded), formal)| {
+                arg.name.is_none()
+                    && arg.writeback_place.is_none()
+                    && matches!(&arg.value, Operand::Place(place) if place == &forwarded.name)
+                    && forwarded.ty == formal.ty
+                    && forwarded.passing == formal.passing
+                    && formal.passing != MirReceiverKind::BorrowMut
+            })
+            .then_some(method)
     }
 
     /// The receiver of a call of a method of the receiver's own type that
@@ -1410,12 +1496,36 @@ impl<'a> NativeCodegen<'a> {
             .then_some(object)
     }
 
+    fn frame_descriptor_value(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+        symbol: &str,
+    ) -> std::result::Result<Val, String> {
+        let path = function
+            .source_path
+            .as_deref()
+            .unwrap_or(&self.program_path);
+        let descriptor = declare_frame_descriptor(
+            builder.module(),
+            &mut self.string_data,
+            symbol,
+            function.span,
+            path.as_bytes(),
+            public_direct_function_name(&function.name).as_bytes(),
+        )?;
+        self.frame_descriptors.push(descriptor);
+        let descriptor = builder.import_data(descriptor);
+        Ok(builder.symbol_value(types::I64, descriptor))
+    }
+
     fn emit_function(
         &mut self,
         builder: &mut dyn FunctionBackend,
         function: &MirFunction,
         func_id: FuncHandle,
-        leaf: bool,
+        without_sinks: bool,
+        forwarded_by: Option<&MirFunction>,
     ) -> std::result::Result<(), String> {
         let reachable_blocks = self
             .reachable_blocks
@@ -1447,32 +1557,26 @@ impl<'a> NativeCodegen<'a> {
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
         let runtime_refs = self.runtime.map(|id| builder.import_function(*id));
-        let public_function_name = public_direct_function_name(&function.name);
-        let function_path = function
-            .source_path
-            .as_deref()
-            .unwrap_or(&self.program_path);
         let descriptor = if self.freestanding.is_some() {
-            // A freestanding function keeps no frame record.
             builder.iconst(types::I64, 0)
         } else {
-            let descriptor = declare_frame_descriptor(
-                builder.module(),
-                &mut self.string_data,
-                &format!("aura_frame_{}", func_id.0),
-                function.span,
-                function_path.as_bytes(),
-                public_function_name.as_bytes(),
-            )?;
-            self.frame_descriptors.push(descriptor);
-            let descriptor = builder.import_data(descriptor);
-            builder.symbol_value(types::I64, descriptor)
+            self.frame_descriptor_value(builder, function, &format!("aura_frame_{}", func_id.0))?
         };
+        let forwarding_frame = forwarded_by
+            .map(|outer| {
+                self.frame_descriptor_value(
+                    builder,
+                    outer,
+                    &format!("aura_frame_wrapper_{}", func_id.0),
+                )
+            })
+            .transpose()?;
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let frameless =
-            leaf || self.freestanding.is_some() || frameless_leaf(function, &self.classes);
+        let frameless = self.freestanding.is_some()
+            || frameless_leaf(function, &self.classes)
+            || (without_sinks && leaf_body(function, &self.classes));
         let (mut body, entered_in_runtime) = if frameless {
             (entry, builder.iconst(types::I64, 0))
         } else {
@@ -1700,10 +1804,9 @@ impl<'a> NativeCodegen<'a> {
             }
             call_slot += 1;
         }
-        if self.freestanding.is_some() {
-            // A write-through sink publishes a `mut` argument for the
-            // runtime's trap-time cleanup. A freestanding call only hands
-            // the updated values back.
+        if self.freestanding.is_some() || without_sinks {
+            // The call updates its mutable arguments through its normal
+            // return values. No caller has installed write-through sinks.
             mutable_param_indices.clear();
         }
         // The write-through sink of each mutable parameter. A caller hands
@@ -1763,11 +1866,11 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = builder.import_function(*func_id);
             function_refs.insert(name.clone(), func_ref);
         }
-        let mut leaf_refs = HashMap::new();
-        let mut leaf_functions = self.leaf_functions.iter().collect::<Vec<_>>();
-        leaf_functions.sort_by(|left, right| left.0.cmp(right.0));
-        for (name, func_id) in leaf_functions {
-            leaf_refs.insert(name.clone(), builder.import_function(*func_id));
+        let mut sinkless_refs = HashMap::new();
+        let mut sinkless_functions = self.sinkless_functions.iter().collect::<Vec<_>>();
+        sinkless_functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in sinkless_functions {
+            sinkless_refs.insert(name.clone(), builder.import_function(*func_id));
         }
         let mut function_thunk_refs = HashMap::new();
         let mut function_thunks = self.function_thunks.iter().collect::<Vec<_>>();
@@ -2234,7 +2337,7 @@ impl<'a> NativeCodegen<'a> {
             variable_types,
             next_variable_index: variable_index,
             function_refs,
-            leaf_refs,
+            sinkless_refs,
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -2246,6 +2349,7 @@ impl<'a> NativeCodegen<'a> {
             freestanding: self.freestanding,
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
+            forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
                 && crate::native_backend::joins_lane_checks())
@@ -2273,6 +2377,8 @@ impl<'a> NativeCodegen<'a> {
             field_read_copies: Vec::new(),
             field_read_count: 0,
             lent_places,
+            called_loan_reads: elements::called_loan_reads(function),
+            in_place_callees: HashMap::new(),
             lend_lookup: false,
             lent_elements,
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
@@ -3193,6 +3299,18 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
     }
 }
 
+/// A callee kept in a class field or a list element, as
+/// `FunctionCompiler::stored_callable_plan` finds it.
+struct StoredCallee {
+    alternative: DirectViewAlternative,
+    /// The root and slot of the field that holds the callee or its list.
+    field: Option<(String, classes::ClassSlot)>,
+    /// The selection of a callee that is a list element.
+    selector: Option<DirectElementSelector>,
+    /// The name of the field that holds the callee itself.
+    field_name: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectViewAlternative {
     place: String,
@@ -3623,9 +3741,9 @@ struct FunctionCompiler<'a> {
     variable_types: HashMap<String, DirectType>,
     next_variable_index: usize,
     function_refs: HashMap<String, FuncRef>,
-    /// The frameless second bodies (see `leaf_variant`), which a call with
+    /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
-    leaf_refs: HashMap<String, FuncRef>,
+    sinkless_refs: HashMap<String, FuncRef>,
     function_thunk_refs: HashMap<String, FuncRef>,
     /// The entry code of each callback the module passes to C.
     callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
@@ -3639,6 +3757,8 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The source frame of a closure implemented by its forwarded method.
+    forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
     /// `defers_lane_traps`), or `None` in any other function.
     deferred_traps: Option<Vec<DeferredTrap>>,
@@ -3715,6 +3835,12 @@ struct FunctionCompiler<'a> {
     /// box, or a value's address with its low bit set, so a retain or a
     /// release masks the address out.
     lent_places: HashSet<String>,
+    /// The temporaries a loan read fills only to be called, each with its
+    /// loan. See `elements::called_loan_reads`.
+    called_loan_reads: HashMap<String, String>,
+    /// The temporaries of `called_loan_reads` whose read was left out,
+    /// each with the loan its call goes through.
+    in_place_callees: HashMap<String, String>,
     /// Set while a `get` for a lent slot compiles.
     lend_lookup: bool,
     /// The locals that may hold a list element's own box, lent, each with
@@ -4956,6 +5082,137 @@ impl<'a> FunctionCompiler<'a> {
         Ok(true)
     }
 
+    /// The key of the `invoke` signature of the callable contract
+    /// `signature` (see `callables::contract_abi_key`).
+    fn callable_abi_key(&self, signature: &Type) -> std::result::Result<i64, String> {
+        let (params, return_type) = callables::contract_parts(signature)?;
+        let param_types =
+            function_value_param_types(&params, &self.classes, "indirect-call parameter")?;
+        let mutable_params = params
+            .iter()
+            .map(|param| param.passing == ReceiverKind::BorrowMut)
+            .collect::<Vec<_>>();
+        let return_direct = ensure_direct_type(
+            crate::sema::returned_view_pointee(&return_type),
+            &self.classes,
+            "indirect-call return type",
+        )?;
+        Ok(callables::contract_abi_key(
+            &param_types,
+            &mutable_params,
+            &return_direct,
+        ))
+    }
+
+    /// Lowers a read of a list element into a callable local, such as the
+    /// element a `for` loop over a `list[Callable[...]]` binds. A Shared
+    /// callable that keeps its inline words is copied as those words, so
+    /// the calls that follow are direct. Any other element is read as a
+    /// value. Returns false for any other instruction.
+    fn compile_callable_element_read(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                    receiver: Some(receiver @ Operand::Place(list)),
+                    ..
+                },
+            args,
+            ..
+        } = value
+        else {
+            return Ok(false);
+        };
+        let [index, line, column] = args.as_slice() else {
+            return Ok(false);
+        };
+        if target.contains('.')
+            || list.contains('.')
+            || self.view_places.contains_key(target)
+            || self.view_places.contains_key(list.as_str())
+            || self.lent_elements.contains_key(target)
+        {
+            return Ok(false);
+        }
+        let Some(target_ty) = self.variable_types.get(target).cloned() else {
+            return Ok(false);
+        };
+        let DirectType::Callable(callable) = &target_ty else {
+            return Ok(false);
+        };
+        if !matches!(
+            self.variable_types.get(list.as_str()),
+            Some(DirectType::Opaque(Type::Named(name, args))) if name == "list" && args.len() == 1
+        ) {
+            return Ok(false);
+        }
+        let signature = callable.signature.clone();
+        let abi_key = self.callable_abi_key(&signature)?;
+        let int = DirectType::Scalar(ScalarKind::Int64);
+        let list = self.load_operand(receiver)?.values[0];
+        let mut words = Vec::new();
+        for argument in [index, line, column] {
+            let loaded = self.load_operand_for_target(&argument.value, &int)?;
+            words.push(self.coerce_value(loaded, &int)?.values[0]);
+        }
+        let [index, line, column] = words[..] else {
+            return Err("direct backend expected three list read operands".to_string());
+        };
+        let key = self.builder.iconst(types::I64, abi_key);
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+        let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
+        let copied = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::VecCallableCopy],
+                &[list, index, key, callable_ptr],
+            )
+            .results[0];
+        let boxed_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.brif(copied, join_block, &[], boxed_block, &[]);
+        self.builder.switch_to_block(boxed_block);
+        self.builder.seal_block(boxed_block);
+        let handle = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::VecIndex],
+                &[list, index, line, column],
+            )
+            .results[0];
+        let boxed = self.boxed_callable_words(handle, &signature)?;
+        for (position, word) in boxed.into_iter().enumerate() {
+            self.builder
+                .store(MemFlags::new(), word, callable_ptr, (position as i32) * 8);
+        }
+        self.builder.jump(join_block, &[]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let values = (0..1 + CALLABLE_ENVIRONMENT_WORDS)
+            .map(|position| {
+                self.builder.load(
+                    types::I64,
+                    MemFlags::new(),
+                    callable_ptr,
+                    (position as i32) * 8,
+                )
+            })
+            .collect::<Vec<_>>();
+        let element = ValueRef {
+            values,
+            ty: target_ty,
+        };
+        self.mark_temporary_callable_owned(&element);
+        self.store_place(target, element)?;
+        Ok(true)
+    }
+
     /// Lowers MIR `Retain`: makes the new reference by the value's layout
     /// and keeps it for the consumer that follows. A copy the load already
     /// made is the new reference.
@@ -5147,6 +5404,12 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
             Instruction::Assign { target, value }
                 if self.compile_key_loop_assign(target, value)? => {}
+            Instruction::Assign { target, value }
+                if self.compile_callable_element_read(target, value)? => {}
+            // A callee read from a loan only to be called is called through
+            // the loan, so the read and its release make nothing.
+            Instruction::ReadLoan { target, loan } if self.call_through_loan(target, loan)? => {}
+            Instruction::Release { place } if self.in_place_callees.contains_key(place) => {}
             // A walk by entry makes neither the keys copy nor the key.
             Instruction::Release { place }
                 if self.key_loops.contains_key(place) || self.key_loop_keys.contains_key(place) => {
@@ -7372,6 +7635,10 @@ impl<'a> FunctionCompiler<'a> {
             return;
         }
         if let Some(descriptor) = self.frameless_descriptor {
+            if let Some(outer) = self.forwarding_frame {
+                self.builder
+                    .call(self.runtime[RuntimeFn::EnterCall], &[outer]);
+            }
             self.builder
                 .call(self.runtime[RuntimeFn::EnterCall], &[descriptor]);
         }
@@ -8508,18 +8775,45 @@ impl<'a> FunctionCompiler<'a> {
                 .unwrap_or_default(),
             _ => Vec::new(),
         };
-        let loaded = self.load_operand(function)?;
         let callee_ty = DirectType::Callable(DirectCallableType::new(signature.clone()));
-        let callee = self.coerce_value(loaded, &callee_ty)?;
-        let callee_owned = self.temporary_owns_callable(&callee);
-        let slot = self
-            .builder
-            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
-        let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
-        for (index, word) in callee.values.iter().enumerate() {
-            self.builder
-                .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
-        }
+        // A callee kept in a field or a list element is called where it
+        // lies. Any other callee is loaded into the words of a temporary.
+        let stored = match function {
+            Operand::Place(place) if closure_writebacks.is_empty() => {
+                let abi_key =
+                    callables::contract_abi_key(&param_types, &mutable_params, &return_direct);
+                let through = self.in_place_callees.get(place).cloned();
+                let stored = self.stored_callable_in_place(
+                    through.as_deref().unwrap_or(place),
+                    signature,
+                    abi_key,
+                )?;
+                if through.is_some() && stored.is_none() {
+                    return Err(format!(
+                        "direct backend left out the read of callee `{place}` and cannot call it in place"
+                    ));
+                }
+                stored
+            }
+            _ => None,
+        };
+        let (callee, callee_owned, callee_root, callable_ptr, stored_release) = match stored {
+            Some((callable_ptr, release)) => (None, false, None, callable_ptr, Some(release)),
+            None => {
+                let loaded = self.load_operand(function)?;
+                let callee = self.coerce_value(loaded, &callee_ty)?;
+                let callee_owned = self.temporary_owns_callable(&callee);
+                let slot = self
+                    .builder
+                    .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+                let callable_ptr = self.builder.stack_addr(types::I64, slot, 0);
+                for (index, word) in callee.values.iter().enumerate() {
+                    self.builder
+                        .store(MemFlags::new(), *word, callable_ptr, (index as i32) * 8);
+                }
+                (Some(callee), callee_owned, callee_root, callable_ptr, None)
+            }
+        };
 
         let mut supplied: Vec<Option<Vec<Val>>> = vec![None; params.len()];
         let mut mask_bits = 0i64;
@@ -8567,6 +8861,7 @@ impl<'a> FunctionCompiler<'a> {
                 ));
             }
             self.install_indirect_mutable_sinks(&public_sinks, &capture_sinks)?;
+            mask_bits |= callables::SINKS_HANDED_OVER;
         }
         let mask = self.builder.iconst(types::I64, mask_bits);
         let mut lowered = vec![callable_ptr, mask];
@@ -8576,10 +8871,16 @@ impl<'a> FunctionCompiler<'a> {
                 None => lowered.extend(expected.zero_values(&mut *self.builder)),
             }
         }
+        let descriptor = match &callee {
+            Some(callee) => callee.values[0],
+            None => self
+                .builder
+                .load(types::I64, MemFlags::new(), callable_ptr, 0),
+        };
         let invoke = self.builder.load(
             types::I64,
             MemFlags::new(),
-            callee.values[0],
+            descriptor,
             callables::DESCRIPTOR_INVOKE,
         );
         let invoke_signature = self
@@ -8595,6 +8896,20 @@ impl<'a> FunctionCompiler<'a> {
         let results = inst.results;
         self.release_mutable_sinks(public_sinks.iter().copied());
         self.release_mutable_sinks(capture_sinks.iter().map(|(_, sink)| *sink));
+        if let Some(release) = stored_release {
+            // The copy a callee out of place was called through.
+            let release_block = self.builder.create_block();
+            let done_block = self.builder.create_block();
+            self.builder
+                .brif(release, release_block, &[], done_block, &[]);
+            self.builder.switch_to_block(release_block);
+            self.builder.seal_block(release_block);
+            self.builder
+                .call(self.runtime[RuntimeFn::ReleaseValue], &[release]);
+            self.builder.jump(done_block, &[]);
+            self.builder.switch_to_block(done_block);
+            self.builder.seal_block(done_block);
+        }
 
         // The environment words may have changed (mutated captures), so the
         // callee's words are read back into its local or owned temporary.
@@ -8615,8 +8930,8 @@ impl<'a> FunctionCompiler<'a> {
                     self.builder.def_var(var, word);
                 }
             }
-        } else if callee_owned {
-            self.clear_temporary_callable_owned(&callee);
+        } else if let (true, Some(callee)) = (callee_owned, callee.as_ref()) {
+            self.clear_temporary_callable_owned(callee);
             let refreshed = ValueRef {
                 values: reloaded.clone(),
                 ty: callee_ty.clone(),
@@ -8669,6 +8984,314 @@ impl<'a> FunctionCompiler<'a> {
             self.store_resolved_view_place(writeback.place, value)?;
         }
         self.coerce_value(result, target)
+    }
+
+    /// Whether the callee `place` is one `stored_callable_in_place` reaches
+    /// where a class field or a list element keeps it, with the parts of
+    /// the place that code reads. This emits nothing.
+    fn stored_callable_plan(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<StoredCallee>, String> {
+        let root = place.split('.').next().unwrap_or(place);
+        if self.fused_entry_copies.contains_key(root) {
+            return Ok(None);
+        }
+        let resolved = self.resolve_view_place(place)?;
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return Ok(None);
+        };
+        if !alternative.conditions.is_empty() || !alternative.union_payloads.is_empty() {
+            return Ok(None);
+        }
+        let alternative = alternative.clone();
+        // The instance and slot of the field that holds the callee or its
+        // list.
+        let field = self.boxed_class_place(&alternative.place)?;
+        let selector = match alternative.elements.as_slice() {
+            [] => None,
+            [selector]
+                if selector.projection.is_empty()
+                    && matches!(selector.kind, DirectElementKind::List)
+                    && matches!(
+                        ensure_direct_type(&selector.element_type, &self.classes, "callee"),
+                        Ok(DirectType::Callable(_))
+                    ) =>
+            {
+                Some(selector.clone())
+            }
+            _ => return Ok(None),
+        };
+        let field_name = match (&selector, &field) {
+            (None, Some(_)) => match alternative.place.split_once('.') {
+                Some((_, name)) if !name.contains('.') => Some(name.to_string()),
+                _ => return Ok(None),
+            },
+            (None, None) => return Ok(None),
+            // A list that is neither a local nor a field kept in place
+            // takes the runtime walk.
+            (Some(_), None) if alternative.place.contains('.') => return Ok(None),
+            (Some(_), _) => None,
+        };
+        if selector.is_none()
+            && !matches!(
+                self.type_of_place(&alternative.place),
+                Ok(DirectType::Callable(_))
+            )
+        {
+            return Ok(None);
+        }
+        Ok(Some(StoredCallee {
+            alternative,
+            field,
+            selector,
+            field_name,
+        }))
+    }
+
+    /// Leaves out the read of a callee from the loan `loan` into `target`
+    /// when the call that follows can go through the loan (see
+    /// `elements::called_loan_reads`). Returns false for any other read.
+    fn call_through_loan(&mut self, target: &str, loan: &str) -> std::result::Result<bool, String> {
+        if self.called_loan_reads.get(target).map(String::as_str) != Some(loan)
+            || !matches!(
+                self.variable_types.get(target),
+                Some(DirectType::Callable(_))
+            )
+            || self.stored_callable_plan(loan)?.is_none()
+        {
+            return Ok(false);
+        }
+        self.in_place_callees
+            .insert(target.to_string(), loan.to_string());
+        Ok(true)
+    }
+
+    /// Reads the native callable from a confined function box or a list's
+    /// callable table. The runtime handles shared values and constructs a
+    /// table after repeated reads. A mutable callable can materialize its
+    /// captures while an entry still exists, so its release flag is always
+    /// read before the words are handed to the caller.
+    fn stored_callable_words(&mut self, holder: Val, index: Option<Val>, key: Val) -> Val {
+        use aura_runtime::native_runtime::{
+            direct_list_layout, DirectListAccess, FUNCTION_VIEW_ACCESS,
+        };
+        use aura_runtime::runtime_value::DirectCallable;
+        let layout = direct_list_layout();
+        let fast = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let decode = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(decode, types::I64);
+        self.builder.append_block_param(done, types::I64);
+        let zero = self.builder.iconst(types::I64, 0);
+        let wanted = if index.is_some() {
+            DirectListAccess::Callables as u32
+        } else {
+            FUNCTION_VIEW_ACCESS
+        };
+        let actual = self.emit_list_access(holder, &layout);
+        let cached = self
+            .builder
+            .icmp_imm(IntCC::Equal, actual, i64::from(wanted));
+        self.builder.brif(cached, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let pointer = self.list_view_word(holder, list_snapshots::ViewWord::Elements);
+        if let Some(index) = index {
+            let position = self.emit_list_view_bounds_check(holder, index, &layout, slow);
+            let offset = self.builder.imul_imm(position, 8);
+            let entry = self.builder.element_address(pointer, offset);
+            let callable = self.builder.load(types::I64, MemFlags::trusted(), entry, 0);
+            self.builder
+                .brif(callable, decode, &[callable], done, &[zero]);
+        } else {
+            self.builder.jump(decode, &[pointer]);
+        }
+        self.builder.switch_to_block(decode);
+        self.builder.seal_block(decode);
+        let callable = self.builder.block_params(decode)[0];
+        let actual_key = self.builder.load(
+            types::I64,
+            MemFlags::trusted(),
+            callable,
+            DirectCallable::ABI_KEY_OFFSET,
+        );
+        let same = self.builder.icmp(IntCC::Equal, key, actual_key);
+        let flag = self
+            .builder
+            .iadd_imm(callable, i64::from(DirectCallable::RELEASED_OFFSET));
+        let released = self
+            .builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::AtomicLoad,
+                types::I8,
+                &[flag],
+            )
+            .expect("atomic load returns a word");
+        let live = self.builder.icmp_imm(IntCC::Equal, released, 0);
+        let valid = self.builder.band(same, live);
+        let words = self
+            .builder
+            .iadd_imm(callable, i64::from(DirectCallable::WORDS_OFFSET));
+        let result = self.builder.select(valid, words, zero);
+        self.builder.jump(done, &[result]);
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        let call = match index {
+            Some(index) => self
+                .builder
+                .call(self.runtime[RuntimeFn::VecCallable], &[holder, index, key]),
+            None => self
+                .builder
+                .call(self.runtime[RuntimeFn::FunctionCallable], &[holder, key]),
+        };
+        self.builder.jump(done, &[call.results[0]]);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.block_params(done)[0]
+    }
+
+    /// Reaches the callee `place` where a class field or a list element
+    /// keeps it, with no copy of the stored value. Returns the address of
+    /// four callable words and a handle the caller releases after the call
+    /// (0 for none), or `None` when `place` is not such a place.
+    ///
+    /// The words are those the stored value keeps (see
+    /// `aura_direct_function_callable`). A value that keeps none, such as
+    /// one the interpreter made, is called through its box, and an instance
+    /// or element kept out of place is copied by the runtime first.
+    fn stored_callable_in_place(
+        &mut self,
+        place: &str,
+        signature: &Type,
+        abi_key: i64,
+    ) -> std::result::Result<Option<(Val, Val)>, String> {
+        let Some(StoredCallee {
+            alternative,
+            field,
+            selector,
+            field_name,
+        }) = self.stored_callable_plan(place)?
+        else {
+            return Ok(None);
+        };
+
+        let key = self.builder.iconst(types::I64, abi_key);
+        let zero = self.builder.iconst(types::I64, 0);
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+        let boxed_ptr = self.builder.stack_addr(types::I64, slot, 0);
+        let inline_block = self.builder.create_block();
+        self.builder.append_block_param(inline_block, types::I64);
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder.append_block_param(join_block, types::I64);
+
+        // The handle a field keeps, read in the instance's block.
+        let object = match &field {
+            Some((root, _)) => Some(self.load_root(root)?.values[0]),
+            None => None,
+        };
+        // The list an element is read from, as the runtime walk takes it.
+        let element_root = match &selector {
+            Some(_) => Some(self.load_element_path_root(&alternative.place)?),
+            None => None,
+        };
+        let kept = match (&field, object) {
+            (Some((_, class_slot)), Some(object)) => {
+                let fast_block = self.builder.create_block();
+                let kept_block = self.builder.create_block();
+                self.builder.append_block_param(kept_block, types::I64);
+                self.emit_class_check(object, class_slot.access, slow_block, fast_block);
+                self.builder.switch_to_block(fast_block);
+                self.builder.seal_block(fast_block);
+                let block = self.class_block(object);
+                let handle =
+                    self.builder
+                        .load(types::I64, MemFlags::trusted(), block, class_slot.offset);
+                self.builder
+                    .brif(handle, kept_block, &[handle], slow_block, &[]);
+                self.builder.switch_to_block(kept_block);
+                self.builder.seal_block(kept_block);
+                Some(self.builder.block_params(kept_block)[0])
+            }
+            _ => None,
+        };
+        match (&selector, kept, &element_root) {
+            (Some(selector), kept, Some((collection, projection))) => {
+                // A list in a field is read in the field's box, and a
+                // local list by its handle.
+                let list = match kept {
+                    Some(list) => list,
+                    None if projection.is_empty() => collection.values[0],
+                    None => {
+                        return Err(format!(
+                            "direct backend cannot reach the list of the callee `{place}`"
+                        ));
+                    }
+                };
+                let index = self.builder.use_var(selector.variable);
+                let words = self.stored_callable_words(list, Some(index), key);
+                self.builder
+                    .brif(words, inline_block, &[words], slow_block, &[]);
+            }
+            (None, Some(handle), _) => {
+                let words = self.stored_callable_words(handle, None, key);
+                // A value with no inline words is called through its box,
+                // which the field keeps.
+                let boxed_block = self.builder.create_block();
+                self.builder
+                    .brif(words, inline_block, &[words], boxed_block, &[]);
+                self.builder.switch_to_block(boxed_block);
+                self.builder.seal_block(boxed_block);
+                let words = self.boxed_callable_words(handle, signature)?;
+                for (index, word) in words.into_iter().enumerate() {
+                    self.builder
+                        .store(MemFlags::new(), word, boxed_ptr, (index as i32) * 8);
+                }
+                self.builder.jump(join_block, &[boxed_ptr, zero]);
+            }
+            _ => {
+                return Err(format!("direct backend cannot reach the callee `{place}`"));
+            }
+        }
+
+        self.builder.switch_to_block(inline_block);
+        self.builder.seal_block(inline_block);
+        let words = self.builder.block_params(inline_block)[0];
+        self.builder.jump(join_block, &[words, zero]);
+
+        // Out of place: the runtime copies the stored value into a box.
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let copy = match (&element_root, &field_name, object) {
+            (Some((collection, projection)), _, _) => {
+                self.element_path_load(collection.values[0], projection, &alternative)?
+            }
+            (None, Some(name), Some(object)) => {
+                let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+                let inst = self.builder.call(
+                    self.runtime[RuntimeFn::InstanceGetField],
+                    &[object, name_ptr, name_len],
+                );
+                inst.results[0]
+            }
+            _ => return Err(format!("direct backend cannot copy the callee `{place}`")),
+        };
+        let words = self.boxed_callable_words(copy, signature)?;
+        for (index, word) in words.into_iter().enumerate() {
+            self.builder
+                .store(MemFlags::new(), word, boxed_ptr, (index as i32) * 8);
+        }
+        self.builder.jump(join_block, &[boxed_ptr, copy]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let params = self.builder.block_params(join_block);
+        Ok(Some((params[0], params[1])))
     }
 
     /// Marks a call result or writeback owned by its direct type.
@@ -9947,6 +10570,30 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Whether the loan `loan` lends one callable element of a local list,
+    /// selected by position with no projection or condition.
+    fn unchecked_callable_element(&self, loan: &str) -> bool {
+        let Some(resolved) = self.view_places.get(loan) else {
+            return false;
+        };
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return false;
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return false;
+        };
+        alternative.conditions.is_empty()
+            && alternative.union_payloads.is_empty()
+            && !alternative.place.contains('.')
+            && selector.kind == DirectElementKind::List
+            && selector.projection.is_empty()
+            && matches!(selector.element_type, Type::Callable(_))
+            && matches!(
+                self.variable_types.get(&alternative.place),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == "list"
+            )
+    }
+
     /// The list handle and position words of a lent element.
     fn load_borrowed_list_element(
         &mut self,
@@ -10728,6 +11375,11 @@ impl<'a> FunctionCompiler<'a> {
                 self.runtime[RuntimeFn::VecCheckIndex],
                 &[list, index, line, column],
             );
+            return Ok(());
+        }
+        // An unchecked loan of a callable element of a local list is read
+        // by position when it is called.
+        if !checked && self.unchecked_callable_element(loan) {
             return Ok(());
         }
         // The `contains_key` test the loan's block follows found the entry,
@@ -14745,7 +15397,7 @@ impl<'a> FunctionCompiler<'a> {
         Ok((Some(active), sinks))
     }
 
-    /// The body a direct call of `name` enters: its frameless second body
+    /// The body a direct call of `name` enters: its sink-free second body
     /// when the call hands no sink over and the function has one, and
     /// `framed` otherwise.
     fn sinkless_callee(
@@ -14754,7 +15406,7 @@ impl<'a> FunctionCompiler<'a> {
         framed: FuncRef,
         sinks: &(Option<Val>, Vec<Val>),
     ) -> FuncRef {
-        match (sinks.0, self.leaf_refs.get(name)) {
+        match (sinks.0, self.sinkless_refs.get(name)) {
             (None, Some(leaf)) => *leaf,
             _ => framed,
         }
@@ -17899,6 +18551,13 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
     takes_mutable(function)
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && leaf_body(function, classes)
+}
+
+/// Small closure bodies can forward mutations of an owned environment
+/// directly to another method. When no write-through sink was handed to
+/// the adapter, that method can use its existing sink-free entry as well.
+fn sinkless_closure(function: &MirFunction) -> bool {
+    function.name.contains("::__lambda_") && takes_mutable(function) && small_leaf(function)
 }
 
 /// The scalar fields of the receiver of a method of a class kept in a

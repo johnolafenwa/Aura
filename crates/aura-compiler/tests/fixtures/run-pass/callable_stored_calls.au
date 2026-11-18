@@ -1,0 +1,139 @@
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+type Namer = Callable[def() -> str]
+type Wide = Callable[def(value: int64) -> int64]
+
+
+class Total:
+    sum: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.sum = self.sum + amount
+        return self.sum
+
+
+class Rule:
+    weight: int64
+    step: Step
+
+
+class Counter:
+    label: str
+    tally: Tally
+
+
+class Board:
+    steps: list[Step]
+    tallies: list[Tally]
+
+    def run(self, value: int64) -> int64:
+        mut acc = value
+        for step in self.steps:
+            acc = step(acc)
+        return acc
+
+    def bump(mut self, amount: int64) -> int64:
+        mut last = 0
+        for tally in mut self.tallies:
+            last = tally(amount)
+        return last
+
+
+def double(value: int64) -> int64:
+    return value * 2
+
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+
+def make_wide(a: int64, b: int64, c: int64, d: int64, e: int64) -> Wide:
+    return lambda value: value + a + b * 2 + c * 3 + d * 4 + e * 5
+
+
+def running_total() -> Tally:
+    total = Total(sum=0)
+    return lambda [own total] amount: total.add(amount)
+
+
+def make_namer(name: own str, parts: own list[str]) -> Namer:
+    return lambda [own name, own parts]: f"{name}:{len(parts)}:{parts[0]}"
+
+
+def apply(step: Step, value: int64) -> int64:
+    return step(value)
+
+
+def call_rule(rule: Rule, value: int64) -> int64:
+    return rule.step(value) + rule.weight
+
+
+def call_counter(counter: mut Counter, amount: int64) -> int64:
+    return counter.tally(amount)
+
+
+def main() -> None:
+    rule = Rule(weight=3, step=make_adder(7))
+    print(rule.step(1))
+    print(call_rule(rule, 10))
+    named = Rule(weight=1, step=double)
+    print(named.step(21))
+    print(call_rule(named, 4))
+    wide = Rule(weight=0, step=make_wide(1, 2, 3, 4, 5))
+    print(wide.step(100))
+
+    mut counter = Counter(label="c", tally=running_total())
+    print(counter.tally(5))
+    print(counter.tally(6))
+    print(call_counter(counter, 10))
+    counter.tally = running_total()
+    print(counter.tally(1))
+    print(counter.label)
+
+    mut steps: list[Step] = [make_adder(1), double, make_wide(1, 1, 1, 1, 1), lambda value: value - 3]
+    mut acc = 0
+    for step in steps:
+        acc = step(acc)
+        acc = step(acc)
+    print(acc)
+    print(steps[0](10))
+    print(steps[-1](10))
+    steps.append(make_adder(100))
+    for step in steps:
+        acc = step(acc)
+    print(acc)
+    print(apply(steps.pop(), 1))
+    print(len(steps))
+
+    mut tallies: list[Tally] = [running_total(), running_total()]
+    print(tallies[0](5))
+    print(tallies[0](5))
+    print(tallies[1](1))
+    print(tallies[0](5))
+
+    mut board = Board(steps=[make_adder(2), double], tallies=[running_total()])
+    print(board.run(5))
+    print(board.bump(4))
+    print(board.bump(4))
+    board.steps.append(make_adder(1))
+    print(board.run(5))
+
+    namers: list[Namer] = [make_namer("a", ["x", "y"]), make_namer("b", ["z"])]
+    for namer in namers:
+        print(namer())
+        print(namer())
+    holder: dict[str, Step] = {"add": make_adder(5), "double": double}
+    print(holder["add"](1))
+    print(holder["double"](8))
+    pair: (Step, int64) = (make_adder(9), 1)
+    print(pair[1])
+
+    empty: list[Step] = []
+    for step in empty:
+        print(step(1))
+    nested: list[list[Step]] = [[make_adder(1)], [double, make_adder(3)], []]
+    mut total = 0
+    for row in nested:
+        for step in row:
+            total = step(total + 1)
+    print(total)

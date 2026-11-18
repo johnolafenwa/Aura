@@ -11260,6 +11260,13 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        let indexed = callee.indexed_collection_callee(|object| {
+            self.type_of_expr_without_move_state(object, locals, None)
+                .is_ok_and(|ty| {
+                    vec_element_type(&ty).is_some() || map_key_value_types(&ty).is_some()
+                })
+        });
+        let callee = indexed.as_ref().unwrap_or(callee);
         // The parser preserves `f[T](...)` as `Specialize`, while a grouping
         // boundary necessarily leaves `(f[T])(...)` as `Group(Index(...))`.
         // Recover the same direct-call specialization only when the indexed
@@ -17221,7 +17228,7 @@ impl<'a> FunctionChecker<'a> {
                 ) {
                     return Err(self.unsupported_call_target_diagnostic(callee, span));
                 }
-                // A packed callable stored in a list or dict element is
+                // A packed callable stored in a collection or tuple element is
                 // called through a call-scoped shared read of that element;
                 // no second owner of the environment is created.
                 if let ExprKind::Index { object, index } = &grouped_expr(base_callee).kind {
@@ -17231,10 +17238,16 @@ impl<'a> FunctionChecker<'a> {
                     let element = self
                         .type_of_expr_without_move_state(object, locals, None)
                         .ok()
-                        .and_then(|object_ty| {
-                            vec_element_type(&object_ty).cloned().or_else(|| {
-                                map_key_value_types(&object_ty).map(|(_, value)| value.clone())
-                            })
+                        .and_then(|ty| match &ty {
+                            Type::Tuple(elements) => {
+                                let ExprKind::Int(index) = grouped_expr(index).kind else {
+                                    return None;
+                                };
+                                elements.get(usize::try_from(index).ok()?).cloned()
+                            }
+                            _ => vec_element_type(&ty).cloned().or_else(|| {
+                                map_key_value_types(&ty).map(|(_, value)| value.clone())
+                            }),
                         });
                     if let Some(Type::Callable(callable)) = element {
                         let object_ty = self.type_of_expr(object, locals)?;
@@ -17275,13 +17288,28 @@ impl<'a> FunctionChecker<'a> {
                             }
                             ClosureCallKind::Repeatable => {}
                         }
-                        return self.type_check_function_value_args(
+                        let passing = if callable.call_kind == ClosureCallKind::MutableRepeatable {
+                            ReceiverKind::BorrowMut
+                        } else {
+                            ReceiverKind::Borrow
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Callable(callable.clone()),
+                                passing,
+                                "callable element",
+                            )
+                            .into_iter()
+                            .collect();
+                        return self.type_check_function_value_args_with_receiver(
                             &callable.params,
                             &callable.return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         );
                     }
                 }

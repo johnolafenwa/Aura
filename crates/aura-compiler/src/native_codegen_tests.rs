@@ -17872,3 +17872,96 @@ fn leaf_method_call_fixtures_emit_directly() {
         emit_host_object(&mir).expect("leaf call fixture should emit directly");
     }
 }
+
+#[test]
+fn stored_callables_are_called_where_they_are_kept() {
+    let source = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Rule:
+    weight: int64
+    step: Step
+
+class Board:
+    tallies: list[Tally]
+
+class Count:
+    value: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.value += amount
+        return self.value
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+def counter(start: int64) -> Tally:
+    count = Count(value=start)
+    return lambda [own count] amount: count.add(amount)
+
+def main() -> None:
+    rule = Rule(weight=3, step=make_adder(7))
+    mut acc = rule.step(1)
+    steps: list[Step] = [make_adder(1), make_adder(2)]
+    acc = steps[0](acc)
+    for step in steps:
+        acc = step(acc)
+    mut tallies: list[Tally] = [counter(1)]
+    for tally in mut tallies:
+        acc = tally(acc & 7)
+    mut board = Board(tallies=[counter(2)])
+    for tally in mut board.tallies:
+        acc = tally(acc)
+    print(acc)
+"#;
+    let module = lower_source_to_mir(source).expect("stored callables should lower");
+    let object = emit_unoptimized_object(&module).expect("stored callables should emit");
+    let wrapper = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("counter::__lambda_"))
+        .expect("closure that mutates a capture");
+    let wrapper_symbol = format!("{}__nosinks", super::mangle_symbol(&wrapper.name));
+    let defined = object_defined_aura_functions(&object);
+    assert!(
+        defined.contains(&wrapper_symbol),
+        "{wrapper_symbol} must preserve the caller's sink-free path"
+    );
+    let references = object_function_referenced_symbols(&object, &wrapper_symbol);
+    // The wrapper forwards its receiver and arguments unchanged to a leaf.
+    // Its combined body pushes both source frames only when arithmetic traps.
+    assert!(
+        references
+            .iter()
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")),
+        "{references:?}"
+    );
+    assert!(
+        !references
+            .iter()
+            .any(|name| name.ends_with("aura_direct_frame_stack")),
+        "{references:?}"
+    );
+    let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
+    for runtime_symbol in [
+        // A field's box gives the kept words of its callable.
+        "aura_direct_function_callable",
+        // Reading a Shared element as an owned value copies its words.
+        "aura_direct_vec_callable_copy",
+        // A call through a loan of a Mutable element reaches the words in
+        // the list.
+        "aura_direct_vec_callable",
+    ] {
+        assert!(
+            main_references
+                .iter()
+                .any(|symbol| symbol.ends_with(runtime_symbol)),
+            "a stored callee must be reached through `{runtime_symbol}`: {main_references:?}"
+        );
+    }
+    assert!(
+        object_contains_symbol(&object, "aura_direct_closure_value_deferred"),
+        "the shape's box adapter keeps the inline words"
+    );
+}

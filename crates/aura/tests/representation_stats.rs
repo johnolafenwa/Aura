@@ -387,8 +387,8 @@ fn direct_callable_overflow_allocates_one_block_per_packing() {
 fn direct_callable_boundaries_box_once_each() {
     let (_, direct) = assert_both_backends("repr-callable-boundary", CALLABLE_BOUNDARY, "13\n51\n");
     assert_eq!(
-        direct.closure_environments, 2,
-        "a list store and a task start each box the callable once at the boundary"
+        direct.closure_environments, 1,
+        "a task start boxes the captures once, and a list store keeps the callable's words"
     );
     assert_eq!(direct.callable_overflow_allocations, 0);
 }
@@ -812,4 +812,20 @@ fn direct_typed_layouts_convert_only_at_the_print() {
     );
     assert_eq!(mir.conversions, 0);
     assert_eq!(direct.conversions, 1, "{direct:?}");
+}
+
+#[test]
+fn a_stored_wide_callable_owns_its_captures_as_runtime_values() {
+    let source = r#"type Step = Callable[def(value: int64) -> int64]
+
+def stored(a: int64, b: int64, c: int64, d: int64) -> list[Step]:
+    return [Step(lambda value: value + a + b + c + d)]
+
+def main() -> None:
+    steps = stored(1, 2, 3, 4)
+    print(steps[0](5))
+"#;
+    let (_, direct) = assert_both_backends("repr-stored-wide-callable", source, "15\n");
+    assert_eq!(direct.closure_environments, 1);
+    assert_eq!(direct.callable_overflow_allocations, 1);
 }
