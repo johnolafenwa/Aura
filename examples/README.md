@@ -254,6 +254,7 @@ package authorization.
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
 | `ffi_getpid/` | An FFI package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
 | `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
+| `raylib/` | A binding of the raylib graphics library, generated from raylib's API description: structs by value, `cstr` text, `mut` struct and scalar parameters, and constants. Three programs use it: a brick game with keyboard and mouse input, a 3D scene with a camera and a model, and a picture written to a PNG with no window | `picture.au` prints the size of its image and two colors |
 
 Run commands:
 
@@ -267,6 +268,12 @@ Run commands:
 - `sqlite_notes/`, on a host with the SQLite library and its linker file
   (`libsqlite3-dev` on Debian and Ubuntu, built in on macOS):
   `cargo run -p aura -- run examples/packages/sqlite_notes/src/main.au`
+- `raylib/`, on a host with the raylib library, from the package
+  directory so the picture lands there. Its `README.md` says how to
+  install raylib. `main.au` and `scene.au` open a window:
+  - `cargo run -p aura -- run examples/packages/raylib/src/picture.au`
+  - `cargo run -p aura -- run examples/packages/raylib/src/main.au`
+  - `cargo run -p aura -- run examples/packages/raylib/src/scene.au`
 
 `Aura.toml` also supports git dependencies with `git`, `rev`, `tag`, or
 `branch`. The default branch is `main`. Git dependencies need cached git
