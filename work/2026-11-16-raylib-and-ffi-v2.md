@@ -217,3 +217,19 @@ owned text on its stack. Across the same nine rotating runs this reduced
 the callback from 120.52 to 87.39 ns, against Rust’s 25.54 ns. A native
 allocator probe verified that a 2 KiB input had separate owned storage and
 that both return and unwind freed it.
+
+
+All 35 FFI acceptance cases passed under Xvfb with raylib, SDL2, GLFW and
+SQLite. The scoped callback and ordinary heap callback both released
+partially converted text arguments and ran callback managers before C
+cleanup. Five independent comparison runs measured elapsed callback
+times of 131.43, 44.06 and 1920.14 ns for Aura, Rust and Python ctypes.
+Process CPU time in separate runs was 105.73, 26.80 and 1300.92 ns.
+
+
+A follow-up experiment reused an empty string header on each worker.
+Across 24 alternating pairs, callback medians were 96.44 ns with a
+scoped header and 93.61 ns with a worker header. The latter was faster
+in 15 pairs. The implementation keeps the scoped header and avoids a
+persistent per-worker value. A native C probe ran 1,000 nested
+callback pairs, checking that both strings retained their original bytes.
