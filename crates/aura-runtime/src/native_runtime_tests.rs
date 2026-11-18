@@ -299,6 +299,59 @@ fn recovered_thunk_restores_the_caller_and_releases_arguments_on_success_and_tra
 }
 
 #[test]
+fn recovered_stack_exhaustion_reports_the_frame_the_native_caller_already_entered() {
+    unsafe extern "C-unwind" fn exhaust(_: *const i64, _: usize) -> *mut OpaqueValue {
+        // Recursive generated callers push their frame before invoking the slow check.
+        let descriptor = leaked_frame_descriptor(17, 3, b"recursive.au", b"recurse");
+        unsafe { super::aura_direct_enter_frame(descriptor) };
+        super::aura_direct_stack_exhausted();
+        let _exhausted = exhausted_machine_stack();
+        super::aura_direct_stack_exhausted();
+        panic!("a call with no stack reserve returned");
+    }
+
+    run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let result = call_recovered_thunk(exhaust, &[]);
+            let payload = expect_variant_value(result, "Result", "Err");
+            let [Value::Instance(trap)] = payload.as_slice() else {
+                panic!("recover must return Err(control.Trap)");
+            };
+            assert_eq!(trap.class_name, "control.Trap");
+            let fields = trap.fields.map();
+            assert_eq!(fields["code"], Value::string("AU4005"));
+            assert_eq!(
+                fields["message"],
+                Value::string("call stack exhausted while calling `recurse`")
+            );
+            assert_eq!(fields["path"], Value::string("recursive.au"));
+            assert_eq!(fields["line"], Value::Int(IntegerValue::from_i64(17)));
+            assert_eq!(fields["column"], Value::Int(IntegerValue::from_i64(3)));
+            let Value::Vec(frames) = &fields["frames"] else {
+                panic!("a trap's frames must be a list");
+            };
+            assert_eq!(frames.elements.len(), 1);
+            assert_eq!(
+                frames.elements.get(0).unwrap().as_ref(),
+                &Value::string("recurse at 17:3")
+            );
+            // The restored caller still has its own stack reserve.
+            super::aura_direct_stack_exhausted();
+            Ok(Value::Unit)
+        })
+    })
+    .expect("stack exhaustion stays inside the recovered call");
+}
+
+#[test]
+fn resuming_a_native_recovery_boundary_without_a_pending_trap_fails() {
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_recover_trapped();
+    });
+    assert_eq!(message, "a recovered call resumed without a trap");
+}
+
+#[test]
 fn recovered_thunk_propagates_cancellation_through_an_outer_recovered_call() {
     unsafe extern "C-unwind" fn cancel(_: *const i64, _: usize) -> *mut OpaqueValue {
         crate::runtime_value::cancel_current_lightweight_task_boundary()
