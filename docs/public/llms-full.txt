@@ -1765,6 +1765,7 @@ safety boundary, diagnostics, and backend rules.
 | `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
 | `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
 | `str.chars` | `chars() -> list[str]` | Each Unicode scalar value as a one-character string, in order. An empty string gives an empty list. |
+| `str.char_at`, `text[index]` | `char_at(index: int64) -> str` | The character at a position, as a one-character string. A negative index counts from the end. Traps with `AU4003` outside the string. Constant time for ASCII text. |
 | `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
 | `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
 | `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
@@ -1841,6 +1842,21 @@ evaluation-order, diagnostic, and backend rules.
 | `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi. |
+| `math.asin`, `math.acos`, `math.atan` | `(value: float64) -> float64` | Inverse sine, cosine, and tangent, in radians. `asin` and `acos` trap with `AU4001` outside `[-1, 1]`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle of the point `(x, y)` in `[-pi, pi]`. |
+| `math.sinh`, `math.cosh`, `math.tanh` | `(value: float64) -> float64` | Hyperbolic functions. |
+| `math.asinh`, `math.acosh`, `math.atanh` | `(value: float64) -> float64` | Inverse hyperbolic functions. |
+| `math.sqrt`, `math.cbrt` | `(value: float64) -> float64` | Square and cube root. `sqrt` of a negative value traps with `AU4001`. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | Length of the vector `(x, y)`. |
+| `math.expm1`, `math.log1p` | `(value: float64) -> float64` | `exp(value) - 1` and `log(1 + value)`, accurate near zero. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign of `sign`. |
+| `math.degrees`, `math.radians` | `(value: float64) -> float64` | Angle conversion. |
+| `math.is_nan`, `math.is_inf`, `math.is_finite` | `(value: float64) -> bool` | Classification of a value. |
+| `math.gcd`, `math.lcm` | `(left: int64, right: int64) -> int64` | Greatest common divisor and least common multiple, never negative. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | Integer square root, rounded down. |
+| `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
+| `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
 ## Memory
 
@@ -1909,6 +1925,8 @@ authentication with HMAC-SHA256.
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
 | `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | Fresh raw 32-byte RFC 2104 HMAC with SHA-256. The key may have any length. |
 | `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | Byte equality in time that does not depend on where the lists differ. Use it to compare signatures. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | The text in a named encoding: UTF-8, UTF-16, UTF-32, Latin-1, ASCII, or Windows-1252. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | Strict decoding from a named encoding, with the offset of the first invalid byte on failure. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
@@ -2143,6 +2161,12 @@ zone, RFC 3339 text, the pattern directives, and limits.
 | `set.add` | `add(value: own T) -> None` | Moves `value` into the set. |
 | `set.remove` | `remove(value: T) -> None` | Removes an equal value. A missing value traps with `AU4008`. |
 | `set.discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
+| `set.union`, `left \| right` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the ones only `other` has. |
+| `set.intersection`, `left & right` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` also has. |
+| `set.difference`, `left - right` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` lacks. |
+| `set.symmetric_difference`, `left ^ right` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements in exactly one of the two sets. |
+| `set.is_subset`, `set.is_superset`, `set.is_disjoint` | `(other: set[T]) -> bool` | Whether every element of one set is in the other, or none is. |
+| `set.update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver. |
 | `set.clear` | `clear() -> None` | Removes all values. |
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -2594,8 +2618,9 @@ base64 codecs, SHA-256 hashing, and HMAC-SHA256 message authentication.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
-and SHA-256 live in the built-in `bytes` module.
+A byte string, `b"..."`, is a literal of that type. UTF-8 conversion is a pair
+of `str` methods. Other text encodings, byte search, hexadecimal, base64, and
+SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -2603,6 +2628,8 @@ and SHA-256 live in the built-in `bytes` module.
 | --- | --- | --- |
 | `str.to_bytes` | `to_bytes() -> list[uint8]` | A fresh list holding the exact UTF-8 encoding of the receiver. |
 | `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | A fresh str when `bytes` is valid UTF-8, otherwise a typed error. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | A fresh list holding `text` in the named encoding. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | A fresh str when `value` is valid in the named encoding, otherwise a typed error. |
 | `bytes.hex_encode` | `hex_encode(value: list[uint8]) -> str` | Lowercase hexadecimal, two ASCII digits per byte. |
 | `bytes.hex_decode` | `hex_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict hexadecimal decoding. |
 | `bytes.base64_encode` | `base64_encode(value: list[uint8]) -> str` | RFC 4648 standard-alphabet base64 with canonical padding. |
@@ -2623,8 +2650,86 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.16 accepts no encoding
-argument on either conversion.
+`to_bytes` and `from_bytes` are always UTF-8 and take no encoding argument.
+For another encoding use `bytes.encode` and `bytes.decode`, described under
+[Text Encodings](#text-encodings).
+
+## Byte Strings
+
+A byte string is a literal of type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b"\x89PNG"
+    quote = b'say "hi"'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+    print(len(quote))
+```
+
+- The body holds printable ASCII characters. Each is its ASCII byte.
+- The escapes are those of an ordinary string except `\u{...}`: `\n`, `\t`,
+  `\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. In a byte string `\xHH` is the
+  byte `HH`, for every value from `00` to `ff`.
+- A character outside ASCII, a `\u{...}` escape, and a triple-quoted byte
+  string are lexical errors, `AU1001`. Write a non-ASCII character as its
+  bytes, or use `"é".to_bytes()`.
+- There is no raw byte string and no byte f-string.
+
+Each evaluation produces a fresh list, as a list literal does, so a byte
+string bound with `mut` can be appended to.
+
+## Text Encodings
+
+`bytes.encode` and `bytes.decode` convert between `str` and bytes in a named
+encoding:
+
+<<< ../../examples/bytes/byte_strings_and_encodings.au{aura}
+
+This program prints:
+
+```text
+16
+true
+00ff
+utf-8: 636166c3a9
+latin-1: 636166e9
+utf-16-le: 630061006600e900
+ascii: cannot hold character 3
+no encoding named ebcdic
+“quoted”
+```
+
+| Name | Encoding |
+| --- | --- |
+| `utf-8` | UTF-8, the same bytes as `to_bytes`. |
+| `utf-8-sig` | UTF-8 with a byte-order mark. Encoding writes the mark. Decoding strips one if present. |
+| `utf-16` | UTF-16. Encoding writes a byte-order mark and little-endian units. Decoding reads the order from the mark, and little-endian when there is none. |
+| `utf-16-le`, `utf-16-be` | UTF-16 in a fixed byte order. No mark is written, and none is stripped. |
+| `utf-32` | UTF-32, with the same mark rules as `utf-16`. |
+| `utf-32-le`, `utf-32-be` | UTF-32 in a fixed byte order. |
+| `latin-1` | ISO-8859-1. Byte `HH` is the character `U+00HH`. |
+| `ascii` | Seven-bit ASCII. |
+| `windows-1252` | The Windows Western European code page. |
+
+A name is compared without regard to letter case, and `-`, `_`, and spaces
+are ignored, so `"UTF-16"`, `"utf_16"`, and `"utf16"` are one encoding.
+
+`bytes.EncodingError` has three variants:
+
+| Variant | Meaning |
+| --- | --- |
+| `Unknown(name: str)` | No encoding has this name. |
+| `Invalid(index: int64)` | Decoding failed. `index` is the offset of the first byte that is not valid. |
+| `Unencodable(index: int64)` | Encoding failed. `index` is the position, in characters, of the first character the encoding cannot hold. |
+
+Decoding is strict. There is no replacement character and no option to skip
+invalid input. A truncated UTF-16 or UTF-32 unit, an unpaired surrogate, a
+value above `U+10FFFF`, a byte above `7f` in ASCII, and one of the five
+unassigned Windows-1252 bytes are all `Invalid`.
 
 ## Example
 
@@ -2809,10 +2914,12 @@ those uses.
 
 ## Grammar
 
-This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
-method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.16 has no byte-string
-literal.
+The byte-string token is defined in
+[Lexical Structure](/manual/lexical-structure#byte-string-literals). It is a
+primary expression of type `list[uint8]`. The rest of this surface adds no
+grammar: `list[uint8]`, `import bytes`, associated calls, method calls, module
+calls, named arguments, and `Result` patterns use the ordinary forms defined
+elsewhere in this Manual.
 
 ## Typing Rules
 
@@ -2835,8 +2942,9 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.16
-signature. Ordinary argument checking rejects it.
+`to_bytes` and `from_bytes` take no `encoding` argument. Ordinary argument
+checking rejects one. `bytes.EncodingError` is not a Copy enum, because
+`Unknown` holds a `str`.
 
 A source module you write whose last path component is `bytes` does not get
 this API. The built-in behavior belongs only to the `bytes` module that the
@@ -2927,14 +3035,14 @@ the host.
 
 Aura 0.16 does not provide:
 
-- other text encodings
+- text encodings other than those listed under [Text Encodings](#text-encodings)
+- decoding that replaces or skips invalid input
+- raw, triple-quoted, or formatted byte strings
 - URL-safe or unpadded base64
 - streaming codecs or incremental hashing
 - password hashing, or a hash other than SHA-256
 - a separate mutable byte buffer type
 - implicit text conversion
-
-The reserved `encoding` parameter is not implemented.
 
 ## Status
 
@@ -5554,6 +5662,14 @@ so they take time proportional to the set's size.
 | `remove` | `remove(value: T) -> None` | Removes an equal value. Traps with `AU4008` when the value is absent. |
 | `discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
 | `copy` | `copy() -> set[T]` | Returns independent owned storage. Requires clone-safe `T`. |
+| `union` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the elements only `other` has. Also written `left \| right`. |
+| `intersection` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that are also in `other`. Also written `left & right`. |
+| `difference` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that are not in `other`. Also written `left - right`. |
+| `symmetric_difference` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements only the receiver has, then the elements only `other` has. Also written `left ^ right`. |
+| `is_subset` | `is_subset(other: set[T]) -> bool` | `true` when every element of the receiver is in `other`. |
+| `is_superset` | `is_superset(other: set[T]) -> bool` | `true` when every element of `other` is in the receiver. |
+| `is_disjoint` | `is_disjoint(other: set[T]) -> bool` | `true` when the two sets share no element. |
+| `update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver, after its own, skipping the ones it already has. |
 | `clear` | `clear() -> None` | Removes all values. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` values. |
 | `with_capacity` | `set[T].with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -5571,6 +5687,41 @@ def main():
 
 A non-empty set prints as `{first, second}` in its iteration order. An empty
 set prints as `set()`.
+
+### Set Algebra
+
+Two sets of the same element type combine with methods or with operators.
+Both operands are only read, and the result is a new set:
+
+<<< ../../examples/collections/set_algebra.au{aura}
+
+This program prints:
+
+```text
+either: ada, grace, linus, margaret
+both: grace
+backend only: ada, linus
+one team: ada, linus, margaret
+either: ada, grace, linus, margaret
+false
+true
+true
+5
+```
+
+- `|`, `&`, `-`, and `^` are `union`, `intersection`, `difference`, and
+  `symmetric_difference`. They keep their ordinary precedence, so `a | b & c`
+  is `a | (b & c)`. The compound forms `|=`, `&=`, `-=`, and `^=` assign the
+  result back.
+- The four that build a set copy elements, so `T` must be clone-safe, as for
+  `copy`. `update` moves elements and has no such requirement.
+- A result keeps the order the table states. `intersection` and `difference`
+  look up each element of the receiver in `other`, so they take time
+  proportional to the receiver's size. `is_disjoint` looks up each element of
+  the smaller set in the larger.
+- Sets of different element types do not combine. That is `AU2002`.
+- There are no comparison operators for subsets. Use `is_subset` and
+  `is_superset`.
 
 ## Equality, Copying, And Capacity
 
@@ -5726,12 +5877,11 @@ analysis and the language server use the same builtin signatures.
 These are not available:
 
 - mutable set iteration and direct dictionary iteration
-- set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
 - slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
-- integer indexing of `str`
+- a double-ended queue, a heap, and sorted maps and sets
 
 Set order is not part of the API contract. Allocation is limited by host
 resources and the runtime's size caps.
@@ -7847,9 +7997,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Ordinary and triple-quoted strings may use single or double quotes. F-strings use double quotes.
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
-- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. `text[index]` and `char_at(index)` read one character by scalar position, in constant time for ASCII text and by a scan otherwise. A `str` cannot be changed through an index. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
+- `list[uint8]` is the bytes type, and a byte string `b"..."` is a literal of it. Text conversion is explicit: UTF-8 through `to_bytes` and `from_bytes`, and UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252 through `bytes.encode` and `bytes.decode`. Other text encodings, lossy decoding with a replacement character, triple-quoted and raw byte strings, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -7899,7 +8049,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice assignment to a list or `str` is a reserved `AU2005` form.
-- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, grapheme slicing and indexing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms
@@ -10964,6 +11114,7 @@ change these operators, because built-in rules come first.
 | `/` | Same floating-point type |
 | unary `-` | Same numeric type |
 | `&`, `\|`, `^`, unary `~` | Same exact integer type |
+| `\|`, `&`, `-`, `^` on two `set[T]` | `set[T]`, see [Set Algebra](/manual/collections#set-algebra) |
 | `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types, two Duration values, or two `str` values |
@@ -11011,6 +11162,10 @@ from finite inputs fails with `AU4002`.
 Bitwise operators use each integer's fixed declared width. `&`, `|`, and `^`
 combine corresponding bits. `~` flips every bit. Binary operands must have
 the same exact concrete integer type.
+
+Between two sets of one element type, `|`, `&`, `^`, and `-` are the set
+methods `union`, `intersection`, `symmetric_difference`, and `difference`.
+See [Set Algebra](/manual/collections#set-algebra).
 
 A shift's count has the same exact type as the shifted value, and it must
 satisfy `0 <= count < width`. Signed right shift is arithmetic. Unsigned right
@@ -11486,7 +11641,15 @@ not count UTF-8 bytes or grapheme clusters. Finding scalar boundaries scans
 the source, so str slicing is O(n). When the text before the end is ASCII,
 each scalar is one byte, so the scan only checks those bytes and decodes no
 character. Other text is decoded once. The result is a newly allocated, valid
-UTF-8 str. Integer `string[index]` is unavailable.
+UTF-8 str.
+
+`string[index]` with one integer reads the character at that position as a
+one-character `str`. It is the method call `string.char_at(index)`: positions
+count Unicode scalar values, a negative index counts from the end, and an
+index outside the string traps with `AU4003`. Reading from ASCII text takes
+constant time. Other text is scanned to the position, so a loop over every
+character of non-ASCII text should use `for letter in text.chars()`. A `str`
+is not a place: `string[index] = value` is `AU2003`.
 
 ### Array Slices
 
@@ -15504,7 +15667,7 @@ The lexer produces two kinds of tokens used here:
 
 - Layout tokens: `NEWLINE`, `INDENT`, `DEDENT`, and `EOF`.
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
-  `FSTRING`, and `BOOLEAN`, described below.
+  `BYTES`, `FSTRING`, and `BOOLEAN`, described below.
 
 Every comma-separated list that a production closes with `)`, `]`, or `}`
 accepts one optional `","` before that closing delimiter. The productions
@@ -15620,8 +15783,13 @@ whitespace.
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters are preserved. A raw string
 cannot span a physical line or end in an odd run of backslashes. Raw triple
-strings, raw f-strings, and byte strings are not tokens. There is no separate
+strings and raw f-strings are not tokens. There is no separate
 character-literal token.
+
+`BYTES` is a byte string: lowercase `b` immediately followed by one single or
+double quote, a body of printable ASCII characters and the ordinary escapes
+without `\u{...}`, and the matching quote. It is single-line. In it `\xHH` is
+one byte.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Literal braces work
@@ -16566,6 +16734,7 @@ primary-expression
     | FLOAT
     | BOOLEAN
     | STRING
+    | BYTES
     | FSTRING
     | parenthesized-expression
     | list-literal
@@ -18749,11 +18918,35 @@ pattern = r'\d+\.\d+'
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters remain. A raw string cannot end in
 an odd run of backslashes or contain a physical newline. Raw triple strings
-and byte strings are unavailable.
+are unavailable.
 
 Every string literal has type `str`. See [Types](/manual/types) for ownership
 and [Execution Model](/manual/execution-model#evaluation-order) for expression
 evaluation order.
+
+## Byte String Literals
+
+A lowercase `b` immediately followed by a single or double quote starts a
+byte string. It is single-line and has type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b'\x89PNG'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+```
+
+The body holds printable ASCII characters and these escapes: `\n`, `\t`,
+`\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. Each ASCII character is its byte,
+and `\xHH` is the byte `HH`. A character outside ASCII, a `\u{...}` escape,
+an unknown escape, a missing closing quote, and three quotes after the `b`
+are lexical errors. `b` not followed by a quote is an ordinary identifier.
+
+See [Bytes](/manual/bytes#byte-strings) for the value a byte string
+produces.
 
 ## F-Strings
 
@@ -18934,7 +19127,7 @@ These forms are unavailable:
 
 - raw triple strings
 - raw f-strings
-- byte strings
+- raw, triple-quoted, and formatted byte strings
 - single-quoted f-strings
 - block comments
 - semicolons
@@ -18947,10 +19140,12 @@ Design record: [ADR-0025, newline continuation and delimited layout](https://git
 
 # Math Module
 
-The `math` module provides exact binary64 constants and scalar `float64`
-functions for rounding, powers, exponentials, logarithms, and trigonometry.
-Every function input is `float64`. The module performs no implicit numeric
-conversion.
+The `math` module provides exact binary64 constants, scalar `float64`
+functions for rounding, powers, roots, exponentials, logarithms, and
+trigonometry with its inverse and hyperbolic forms, and exact `int64`
+functions such as `gcd` and `factorial`. A function takes `float64`
+arguments unless its signature says `int64`. The module performs no implicit
+numeric conversion.
 
 ## Public API
 
@@ -18960,6 +19155,7 @@ conversion.
 | `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
 | `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
 | `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi, bits `0x401921fb54442d18`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
 | `math.trunc` | `trunc(value: float64) -> int64` | The integer left after dropping the fractional part, rounding toward zero. |
@@ -18971,6 +19167,33 @@ conversion.
 | `math.sin` | `sin(value: float64) -> float64` | Binary64 sine of an angle in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine of an angle in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent of an angle in radians. |
+| `math.asin` | `asin(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose sine is `value`. |
+| `math.acos` | `acos(value: float64) -> float64` | The angle in `[0, pi]` whose cosine is `value`. |
+| `math.atan` | `atan(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose tangent is `value`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle in `[-pi, pi]` of the point `(x, y)`, with the quadrant taken from both signs. |
+| `math.sinh` | `sinh(value: float64) -> float64` | Hyperbolic sine. |
+| `math.cosh` | `cosh(value: float64) -> float64` | Hyperbolic cosine. |
+| `math.tanh` | `tanh(value: float64) -> float64` | Hyperbolic tangent. |
+| `math.asinh` | `asinh(value: float64) -> float64` | Inverse hyperbolic sine. |
+| `math.acosh` | `acosh(value: float64) -> float64` | Inverse hyperbolic cosine, for `value >= 1`. |
+| `math.atanh` | `atanh(value: float64) -> float64` | Inverse hyperbolic tangent, for `-1 < value < 1`. |
+| `math.sqrt` | `sqrt(value: float64) -> float64` | Correctly rounded square root. |
+| `math.cbrt` | `cbrt(value: float64) -> float64` | Cube root. Defined for negative values. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | `sqrt(x*x + y*y)` without overflow in the squares. |
+| `math.expm1` | `expm1(value: float64) -> float64` | `exp(value) - 1`, accurate for small `value`. |
+| `math.log1p` | `log1p(value: float64) -> float64` | `log(1 + value)`, accurate for small `value`. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign bit of `sign`. |
+| `math.degrees` | `degrees(value: float64) -> float64` | Radians to degrees. |
+| `math.radians` | `radians(value: float64) -> float64` | Degrees to radians. |
+| `math.is_nan` | `is_nan(value: float64) -> bool` | `true` for NaN. |
+| `math.is_inf` | `is_inf(value: float64) -> bool` | `true` for either infinity. |
+| `math.is_finite` | `is_finite(value: float64) -> bool` | `true` for a value that is neither NaN nor infinite. |
+| `math.gcd` | `gcd(left: int64, right: int64) -> int64` | Greatest common divisor, never negative. `gcd(0, 0)` is `0`. |
+| `math.lcm` | `lcm(left: int64, right: int64) -> int64` | Least common multiple, never negative. Zero when either argument is zero. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | The greatest integer whose square is at most `value`. |
+| `math.factorial` | `factorial(value: int64) -> int64` | `value!`. Fits `int64` up to `factorial(20)`. |
+| `math.comb` | `comb(count: int64, chosen: int64) -> int64` | The number of ways to choose `chosen` of `count` items without order. Zero when `chosen > count`. |
+| `math.perm` | `perm(count: int64, chosen: int64) -> int64` | The number of ordered arrangements of `chosen` of `count` items. Zero when `chosen > count`. |
 
 ## Example
 
@@ -18998,6 +19221,26 @@ NaN
 
 The same program is maintained as `examples/numbers/scalar_math.au`.
 
+The inverse functions and the integer functions:
+
+<<< ../../examples/numbers/angles_and_integers.au{aura}
+
+This program prints:
+
+```text
+5.0
+53
+30
+true
+true
+12
+12
+31622
+3628800
+2598960
+20
+```
+
 ## IEEE-754, Domain, And Overflow Policy
 
 This table is normative for every maintained backend. `log*` means `log`,
@@ -19022,6 +19265,16 @@ This table is normative for every maintained backend. `log*` means `log`,
 | `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
 | `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
 | Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
+| Any `float64` function below with a NaN argument | NaN. |
+| `sqrt(x)` for `x < 0.0`, including `-inf`. `sqrt(-0.0)` is `-0.0` | `AU4001` domain error. |
+| `asin(x)` or `acos(x)` for `x` outside `[-1, 1]` | `AU4001` domain error. |
+| `acosh(x)` for `x < 1.0` | `AU4001` domain error. |
+| `atanh(x)` for `x <= -1.0` or `x >= 1.0` | `AU4001` domain error. |
+| `log1p(x)` for `x <= -1.0` | `AU4001` domain error. |
+| `sinh`, `cosh`, `expm1`, `hypot`, or `degrees` of finite input whose result overflows | `AU4002`. |
+| `atan`, `atan2`, `tanh`, `asinh`, `cbrt`, `copysign`, `radians`, and the three predicates | Defined for every input. |
+| `isqrt`, `factorial`, `comb`, or `perm` with a negative argument | `AU4001` domain error. |
+| `gcd`, `lcm`, `factorial`, `comb`, or `perm` whose exact result does not fit `int64` | `AU4002`. `gcd` overflows only when the answer is 2^63. |
 | Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
 
 For the negative-base `pow` rule, an exponent is integral when its binary64
@@ -19043,13 +19296,15 @@ defined in this Manual.
 
 ## Typing Rules
 
-The four constants have type `float64` and the exact bit patterns in
+The five constants have type `float64` and the exact bit patterns in
 [Public API](#public-api). You can read them qualified, or import them directly
 with ordinary import aliases.
 
-Every function parameter is `float64`. `floor`, `ceil`, and `trunc` return
-`int64`. Every other function returns `float64`. A value of any other numeric
-type needs an explicit conversion before the call. The normal checks on
+`gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and `perm` take and return
+`int64`. Every other function parameter is `float64`. `floor`, `ceil`, and
+`trunc` return `int64`, the three `is_` predicates return `bool`, and every
+other function returns `float64`. A value of any other numeric type needs an
+explicit conversion before the call. The normal checks on
 argument count, argument names, and exact types apply.
 
 The module namespace contains every constant and function in the Public API
@@ -19091,7 +19346,7 @@ call produces no value.
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown module member. |
-| `AU2002` | An argument whose type is not exactly `float64`. |
+| `AU2002` | An argument whose type is not exactly the parameter's type, `float64` or `int64`. |
 | `AU2004` | Invalid argument binding, such as a wrong argument count or name. |
 | `AU4001` | A domain error listed in the policy table. |
 | `AU4002` | Finite overflow, or a rounding result that does not fit in `int64`. |
@@ -19105,9 +19360,11 @@ use the same host math library for finite results.
 
 ## Limits And Implementation-Defined Behavior
 
-The module covers scalar `float64` only. It has no complex, decimal,
-arbitrary-precision, vectorized, combinatorial, or random operations. The
-logarithm functions take one value and have no alternate-base form.
+The module covers scalar `float64` and `int64` only. It has no `float32`
+forms and no complex, decimal, arbitrary-precision, vectorized, or random
+operations. The integer functions do not widen: a result outside `int64` is
+`AU4002`. The logarithm functions take one value and have no alternate-base
+form.
 
 The final bits of finite transcendental results can differ across target and
 libm pairs. The host's rendering around an `AU4001` or `AU4002` failure
@@ -19115,7 +19372,8 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.16 on both the MIR and direct
+`tau` and the functions from `asin` to `perm` in the Public API table are new
+after Aura 0.16. Everything on this page is implemented on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
@@ -26451,7 +26709,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
+- `text[index]` reads one character of a `str`. Slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
@@ -27793,7 +28051,7 @@ A bare `value: str` parameter grants shared access. Bare parameters grant shared
 
 `<`, `<=`, `>`, and `>=` order two `str` values by their UTF-8 bytes, which is the order of their Unicode scalar values. `list[str]` sorts by the same order.
 
-Aura has no distinct character type and no integer str indexing. A character is a one-character `str`: `text.chars()` returns them in order, `ord(letter)` gives a one-character string's Unicode scalar value as an `int64`, and `chr(code)` turns a scalar value back into a string. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
+Aura has no distinct character type. A character is a one-character `str`: `text[index]` and `text.char_at(index)` return the character at a position, `text.chars()` returns them all in order, `ord(letter)` gives a one-character string's Unicode scalar value as an `int64`, and `chr(code)` turns a scalar value back into a string. A str index counts Unicode scalar values like `len`, accepts a negative position counted from the end, and traps with `AU4003` outside the string. It takes constant time for ASCII text and time proportional to the position otherwise. A `str` cannot be changed through an index. String slicing accepts `int64` scalar endpoints and runs in O(n) over the source. It returns a fresh owned str. It is not a view or a byte-indexing operation.
 
 ## Copy And Move Categories
 
@@ -31206,27 +31464,28 @@ NAÏVE
 `len()` counts characters (strictly, Unicode scalar values), and
 `byte_len()` counts the bytes of the UTF-8 encoding, where `ï` takes two. A
 slice like `word[0:2]` counts in characters too, and gives you a new string.
-What you can't do is index a string with a single number:
+A single number in the brackets gives you one character:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "naïve"
     print(word[0])
+    print(word[2])
+    print(word[-1])
 ```
 
 ```console
 $ aura run src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+n
+ï
+e
 ```
 
 Aura has no separate character type. A one-character piece of text is still
-a `str`, and you get one with a slice, `word[0:1]`, as the word counter did.
-Leaving out single-number indexing keeps you from writing code that looks
-like it takes constant time but has to scan the string from the start, which
+a `str`, so `word[2]` is the string `"ï"`. A negative position counts from
+the end, and a position past either end stops the program with a trap. One
+thing to know about cost: finding the nth character of text that isn't plain
+ASCII means scanning from the start, which
 any UTF-8 string has to do to find the nth character. When you really want
 every character, `word.chars()` gives them to you as a list in one pass;
 Chapter 8 shows it along with `ord` and `chr`.
@@ -38204,27 +38463,29 @@ because a slice that asks for nine characters of a four-character word
 usually means the program's idea of the text is wrong, and silently
 returning less hides that.
 
-## No indexing by position
+## One character at a time
 
-If you try to take one character with an index, as you might in Python, the
-compiler stops you:
+An index with one number gives you one character, as a string of length one:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "café"
     print(word[0])
+    print(word[-1])
 ```
 
 ```console
-$ aura check src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+$ aura run src/main.au
+c
+é
 ```
 
-and a `for` loop over a string isn't available either:
+Positions count scalars, as `len()` and slices do, and a negative position
+counts from the end. A position outside the string traps, like a slice that
+goes too far. You can read through an index but not write: a string is
+changed by building a new one.
+
+A `for` loop over a string isn't available:
 
 ```aura check-fail:AU2999
 def main():
@@ -38245,10 +38506,11 @@ error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `it
 This trips up everyone coming from Python, so let's be clear about why it
 happens. Aura has no character type: a single letter is a `str` of length
 one. Finding the scalar at position `n` in UTF-8 means walking from the
-start, so if a string could be indexed or iterated one position at a time, a
-loop like this would quietly turn a linear algorithm into a quadratic one.
-Aura would rather make you ask for the characters explicitly, so the cost is
-visible. You ask with `chars()`, which walks the string once and gives back a
+start, unless the text is plain ASCII, where Aura jumps straight to it. So
+`word[i]` inside a loop over every position is fine for ASCII text and
+quietly quadratic for anything else. When you want every character, ask for
+them all at once and the cost is one pass.
+You ask with `chars()`, which walks the string once and gives back a
 `list[str]` of one-character strings. `ord` turns one of them into its
 Unicode scalar value, and `chr` goes the other way:
 
@@ -38280,7 +38542,7 @@ scalar, stops the program with a trap.
 In practice, most text processing doesn't need single characters at all. You
 want words, fields, lines, and prefixes, and the methods in the rest of this
 section work on those directly. When you need one character from a known
-position, a slice such as `word[0:1]` gives it to you as a one-character
+position, an index such as `word[0]` gives it to you as a one-character
 `str` without building the whole list.
 
 ## Searching
@@ -38938,11 +39200,39 @@ Sets currently iterate in the order values were added, but that order isn't
 part of the contract, so if you need a particular order, sort:
 `sorted(struggling)` gives you a sorted list.
 
-You may be used to Python's set operators, `a | b` for union and `a & b` for
-intersection. Aura doesn't have them yet; `|` on two sets is an `AU2003`
-error, because the compiler only knows `|` as a bitwise operator on integers.
-For now, a comprehension or a short loop does the job, and comprehensions are
-where we're going next.
+Two sets of the same element type combine the way they do in Python.
+`a | b` is the union, `a & b` the intersection, `a - b` the values of `a`
+that `b` lacks, and `a ^ b` the values in exactly one of them. Each has a
+method that says the same thing in words, and there are three questions you
+can ask about a pair of sets:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    passed: set[str] = {"Grace", "Alan", "Ada"}
+    submitted: set[str] = {"Ada", "Linus", "Grace"}
+
+    print(sorted(passed & submitted))
+    print(sorted(submitted - passed))
+    print(sorted(passed.union(submitted)))
+    print(passed.is_subset(submitted))
+    print(passed.is_disjoint({"Margaret"}))
+```
+
+```console
+$ aura run src/main.au
+[Ada, Grace]
+[Linus]
+[Ada, Alan, Grace, Linus]
+false
+true
+```
+
+Neither operand is changed or used up: each operator builds a new set. To
+pour one set into another instead, `passed.update(other)` moves the values
+of `other` into a set declared with `mut`. Subsets are asked about by name,
+with `is_subset` and `is_superset`; there is no `<=` for sets.
 
 ## Choosing a collection
 
@@ -66508,7 +66798,7 @@ evaluation rules.
 | Operator | Meaning | Example |
 | --- | --- | --- |
 | `+` | addition, string concatenation, `Duration` sum | `total + 1`, `"ab" + "cd"`, `2s + 500ms` |
-| `-` | subtraction, and unary negation | `end - start`, `-offset` |
+| `-` | subtraction, unary negation, and the difference of two sets | `end - start`, `-offset` |
 | `*` | multiplication, `Duration` times `int64` | `width * height`, `100ms * 3` |
 | `/` | true division, floating-point types only | `7.0 / 2.0` |
 | `//` | floor division | `7 // 2` |
@@ -66593,9 +66883,9 @@ values and has the lowest precedence of all.
 
 | Operator | Meaning |
 | --- | --- |
-| `&` | bitwise and |
-| `\|` | bitwise or; also the union type operator, as in `str \| None` |
-| `^` | bitwise exclusive or |
+| `&` | bitwise and; intersection of two sets |
+| `\|` | bitwise or; union of two sets; also the union type operator, as in `str \| None` |
+| `^` | bitwise exclusive or; symmetric difference of two sets |
 | `~` | bitwise not (unary) |
 | `<<`, `>>` | shift left, shift right |
 
@@ -66958,9 +67248,10 @@ hierarchies in Python, you may not miss it.
 
 ## Strings
 
-`str` is Unicode, and `len(text)` counts Unicode scalar values. Strings are
-not indexable: `text[0]` is an error, but slices such as `text[1:4]` work and
-return a new string. Most methods have the names you expect, and a few have
+`str` is Unicode, and `len(text)` counts Unicode scalar values. `text[0]`
+and `text[-1]` give one character as a string, and slices such as
+`text[1:4]` return a new string. A byte string, `b"..."`, is a
+`list[uint8]`. Most methods have the names you expect, and a few have
 Aura names:
 
 | Python | Aura |

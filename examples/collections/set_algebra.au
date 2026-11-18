@@ -1,0 +1,24 @@
+def show(label: str, names: set[str]) -> None:
+    print(label + ": " + ", ".join(sorted(names)))
+
+
+def main():
+    backend: set[str] = {"ada", "grace", "linus"}
+    frontend: set[str] = {"grace", "margaret"}
+
+    show("either", backend | frontend)
+    show("both", backend & frontend)
+    show("backend only", backend - frontend)
+    show("one team", backend ^ frontend)
+
+    # The methods say the same thing in words.
+    show("either", backend.union(frontend))
+    print(frontend.is_subset(backend))
+    print(backend.is_superset({"ada"}))
+    print(backend.is_disjoint({"margaret"}))
+
+    # `update` moves the other set's elements in.
+    mut everyone = backend.copy()
+    everyone.update(frontend)
+    everyone |= {"barbara"}
+    print(len(everyone))

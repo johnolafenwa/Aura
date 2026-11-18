@@ -2397,6 +2397,33 @@ fn math_namespace() -> ModuleNamespace {
             type_ref("int64", Vec::new()),
         )
     };
+    let binary_float = |name, first, second| {
+        function_info(
+            "math",
+            name,
+            vec![value_param(first, float()), value_param(second, float())],
+            float(),
+        )
+    };
+    let predicate = |name| {
+        function_info(
+            "math",
+            name,
+            vec![value_param("value", float())],
+            type_ref("bool", Vec::new()),
+        )
+    };
+    let integer = |name, params: &[&str]| {
+        function_info(
+            "math",
+            name,
+            params
+                .iter()
+                .map(|param| value_param(param, type_ref("int64", Vec::new())))
+                .collect(),
+            type_ref("int64", Vec::new()),
+        )
+    };
     let mut namespace = function_only_namespace(
         "math",
         vec![
@@ -2419,11 +2446,39 @@ fn math_namespace() -> ModuleNamespace {
             unary_float("sin"),
             unary_float("cos"),
             unary_float("tan"),
+            unary_float("sqrt"),
+            unary_float("cbrt"),
+            unary_float("asin"),
+            unary_float("acos"),
+            unary_float("atan"),
+            unary_float("sinh"),
+            unary_float("cosh"),
+            unary_float("tanh"),
+            unary_float("asinh"),
+            unary_float("acosh"),
+            unary_float("atanh"),
+            unary_float("expm1"),
+            unary_float("log1p"),
+            unary_float("degrees"),
+            unary_float("radians"),
+            binary_float("atan2", "y", "x"),
+            binary_float("hypot", "x", "y"),
+            binary_float("copysign", "magnitude", "sign"),
+            predicate("is_nan"),
+            predicate("is_inf"),
+            predicate("is_finite"),
+            integer("gcd", &["left", "right"]),
+            integer("lcm", &["left", "right"]),
+            integer("isqrt", &["value"]),
+            integer("factorial", &["value"]),
+            integer("comb", &["count", "chosen"]),
+            integer("perm", &["count", "chosen"]),
         ],
     );
     let constants = [
         ("pi", 0x4009_21fb_5444_2d18_u64),
         ("e", 0x4005_bf0a_8b14_5769_u64),
+        ("tau", 0x4019_21fb_5444_2d18_u64),
         ("inf", 0x7ff0_0000_0000_0000_u64),
         ("nan", 0x7ff8_0000_0000_0000_u64),
     ]
@@ -2751,6 +2806,36 @@ fn bytes_error_enum_info() -> EnumInfo {
     )
 }
 
+/// Why `bytes.encode` or `bytes.decode` did not convert.
+fn bytes_encoding_error_enum_info() -> EnumInfo {
+    let named = |name: &str, ty| EnumPayloadFieldDecl {
+        name: Some(name.to_string()),
+        ty,
+        span: builtin_span(),
+    };
+    builtin_enum_info(
+        "bytes",
+        "EncodingError",
+        vec![
+            (
+                "Unknown",
+                vec![named("name", type_ref("str", Vec::new()))],
+                true,
+            ),
+            (
+                "Invalid",
+                vec![named("index", type_ref("int64", Vec::new()))],
+                true,
+            ),
+            (
+                "Unencodable",
+                vec![named("index", type_ref("int64", Vec::new()))],
+                true,
+            ),
+        ],
+    )
+}
+
 fn bytes_namespace() -> ModuleNamespace {
     let bytes_result = || {
         type_ref(
@@ -2824,6 +2909,36 @@ fn bytes_namespace() -> ModuleNamespace {
         ),
         function_info(
             "bytes",
+            "encode",
+            vec![
+                value_param("text", type_ref("str", Vec::new())),
+                value_param("encoding", type_ref("str", Vec::new())),
+            ],
+            type_ref(
+                "Result",
+                vec![
+                    bytes_vec_type_ref(),
+                    type_ref("bytes.EncodingError", Vec::new()),
+                ],
+            ),
+        ),
+        function_info(
+            "bytes",
+            "decode",
+            vec![
+                value_param("value", bytes_vec_type_ref()),
+                value_param("encoding", type_ref("str", Vec::new())),
+            ],
+            type_ref(
+                "Result",
+                vec![
+                    type_ref("str", Vec::new()),
+                    type_ref("bytes.EncodingError", Vec::new()),
+                ],
+            ),
+        ),
+        function_info(
+            "bytes",
             "hmac_sha256",
             vec![
                 value_param("key", bytes_vec_type_ref()),
@@ -2845,7 +2960,11 @@ fn bytes_namespace() -> ModuleNamespace {
     .map(|function| (function.decl.name.clone(), function))
     .collect::<BTreeMap<_, _>>();
     let error = bytes_error_enum_info();
-    let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
+    let encoding_error = bytes_encoding_error_enum_info();
+    let enums = BTreeMap::from([
+        (error.decl.name.clone(), error),
+        (encoding_error.decl.name.clone(), encoding_error),
+    ]);
     ModuleNamespace {
         union_injections: Default::default(),
         narrowed_reads: Default::default(),

@@ -244,6 +244,54 @@
           }
         },
         {
+          "name": "string.quoted.binary.double.aura",
+          "begin": "(?<![A-Za-z0-9_])(b)(\")",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.aura"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.binary.single.aura",
+          "begin": "(?<![A-Za-z0-9_])(b)(')",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.aura"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "'|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.aura",
           "begin": "\"",
           "beginCaptures": {

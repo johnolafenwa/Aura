@@ -362,21 +362,48 @@ fn math_namespace_exposes_the_exact_float64_function_contract() {
     let namespace =
         builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
     let expected = [
-        ("ceil", vec!["value"], Type::named("int64")),
-        ("cos", vec!["value"], Type::named("float64")),
-        ("exp", vec!["value"], Type::named("float64")),
-        ("floor", vec!["value"], Type::named("int64")),
-        ("log", vec!["value"], Type::named("float64")),
-        ("log10", vec!["value"], Type::named("float64")),
-        ("log2", vec!["value"], Type::named("float64")),
-        ("pow", vec!["base", "exponent"], Type::named("float64")),
-        ("sin", vec!["value"], Type::named("float64")),
-        ("tan", vec!["value"], Type::named("float64")),
-        ("trunc", vec!["value"], Type::named("int64")),
+        ("acos", vec!["value"], "float64", "float64"),
+        ("acosh", vec!["value"], "float64", "float64"),
+        ("asin", vec!["value"], "float64", "float64"),
+        ("asinh", vec!["value"], "float64", "float64"),
+        ("atan", vec!["value"], "float64", "float64"),
+        ("atan2", vec!["y", "x"], "float64", "float64"),
+        ("atanh", vec!["value"], "float64", "float64"),
+        ("cbrt", vec!["value"], "float64", "float64"),
+        ("ceil", vec!["value"], "float64", "int64"),
+        ("comb", vec!["count", "chosen"], "int64", "int64"),
+        ("copysign", vec!["magnitude", "sign"], "float64", "float64"),
+        ("cos", vec!["value"], "float64", "float64"),
+        ("cosh", vec!["value"], "float64", "float64"),
+        ("degrees", vec!["value"], "float64", "float64"),
+        ("exp", vec!["value"], "float64", "float64"),
+        ("expm1", vec!["value"], "float64", "float64"),
+        ("factorial", vec!["value"], "int64", "int64"),
+        ("floor", vec!["value"], "float64", "int64"),
+        ("gcd", vec!["left", "right"], "int64", "int64"),
+        ("hypot", vec!["x", "y"], "float64", "float64"),
+        ("is_finite", vec!["value"], "float64", "bool"),
+        ("is_inf", vec!["value"], "float64", "bool"),
+        ("is_nan", vec!["value"], "float64", "bool"),
+        ("isqrt", vec!["value"], "int64", "int64"),
+        ("lcm", vec!["left", "right"], "int64", "int64"),
+        ("log", vec!["value"], "float64", "float64"),
+        ("log10", vec!["value"], "float64", "float64"),
+        ("log1p", vec!["value"], "float64", "float64"),
+        ("log2", vec!["value"], "float64", "float64"),
+        ("perm", vec!["count", "chosen"], "int64", "int64"),
+        ("pow", vec!["base", "exponent"], "float64", "float64"),
+        ("radians", vec!["value"], "float64", "float64"),
+        ("sin", vec!["value"], "float64", "float64"),
+        ("sinh", vec!["value"], "float64", "float64"),
+        ("sqrt", vec!["value"], "float64", "float64"),
+        ("tan", vec!["value"], "float64", "float64"),
+        ("tanh", vec!["value"], "float64", "float64"),
+        ("trunc", vec!["value"], "float64", "int64"),
     ];
 
     assert_eq!(namespace.functions.len(), expected.len());
-    for (name, parameter_names, return_type) in expected {
+    for (name, parameter_names, parameter_type, return_type) in expected {
         let function = namespace
             .functions
             .get(name)
@@ -394,8 +421,8 @@ fn math_namespace_exposes_the_exact_float64_function_contract() {
             .signature
             .params
             .iter()
-            .all(|parameter| *parameter == Type::named("float64")));
-        assert_eq!(function.signature.return_type, return_type);
+            .all(|parameter| *parameter == Type::named(parameter_type)));
+        assert_eq!(function.signature.return_type, Type::named(return_type));
         assert!(host_builtin_metadata(&format!("math::{name}")).is_some());
     }
 }
@@ -409,6 +436,7 @@ fn math_namespace_exposes_exact_generic_float64_constants() {
         ("inf", 0x7ff0_0000_0000_0000_u64),
         ("nan", 0x7ff8_0000_0000_0000_u64),
         ("pi", 0x4009_21fb_5444_2d18_u64),
+        ("tau", 0x4019_21fb_5444_2d18_u64),
     ];
 
     assert_eq!(namespace.constants.len(), expected.len());
@@ -455,6 +483,8 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
             "base64_decode",
             "base64_encode",
             "constant_time_eq",
+            "decode",
+            "encode",
             "ends_with",
             "find",
             "hex_decode",

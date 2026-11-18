@@ -1864,6 +1864,122 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn indexed_ascii_bindings_exclude_writable_and_nonliteral_strings() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_literal_bindings.au");
+    let mir = lower_source_to_mir(source).expect("literal reads and writable strings lower");
+    let literals = |name: &str| {
+        let function = mir.functions.iter().find(|f| f.name == name).unwrap();
+        super::lookups::indexed_ascii_literals(function)
+    };
+    assert_eq!(
+        literals("immutable").get("text").map(String::as_str),
+        Some("abc")
+    );
+    for name in ["mutable", "conditional", "unicode"] {
+        assert!(literals(name).is_empty(), "{name}");
+    }
+    emit_unoptimized_object(&mir).expect("literal reads compile");
+}
+
+#[test]
+fn indexed_text_compares_as_a_unicode_scalar() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
+    let mir = lower_source_to_mir(source).expect("string comparisons lower");
+    let object = emit_unoptimized_object(&mir).expect("string comparisons emit");
+    for name in ["aura_fn_matches", "aura_fn_different"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.contains("aura_direct_string_scalar_at")),
+            "{symbols:?}"
+        );
+        assert!(
+            symbols
+                .iter()
+                .all(|s| !s.contains("aura_direct_string_text_method")),
+            "{symbols:?}"
+        );
+    }
+}
+
+#[test]
+fn known_text_encodings_borrow_one_input_and_dynamic_names_keep_the_host_entry() {
+    let source = r#"
+import bytes
+
+def fixed(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "uTF_16-LE")
+
+def variable(input: list[uint8], name: str) -> Result[str, bytes.EncodingError]:
+    return bytes.decode(input, name)
+
+def unsupported(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "future-codec")
+
+def main() -> None:
+    print(fixed("😀"))
+    print(variable([65], "ascii"))
+    print(unsupported("A"))
+"#;
+    let module = lower_source_to_mir(source).expect("known and variable encodings lower");
+    let object = emit_unoptimized_object(&module).expect("both codec paths compile");
+    let fixed = object_function_referenced_symbols(&object, "aura_fn_fixed");
+    let variable = object_function_referenced_symbols(&object, "aura_fn_variable");
+    let unsupported = object_function_referenced_symbols(&object, "aura_fn_unsupported");
+    assert!(
+        fixed
+            .iter()
+            .any(|name| name.contains("aura_direct_text_codec")),
+        "{fixed:?}"
+    );
+    assert!(
+        fixed.iter().all(|name| !name.contains("arg_buffer")),
+        "{fixed:?}"
+    );
+    assert!(
+        variable
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_decode")),
+        "{variable:?}"
+    );
+    assert!(
+        unsupported
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_encode")),
+        "{unsupported:?}"
+    );
+}
+
+#[test]
+fn integer_math_passes_words_to_the_runtime() {
+    let source = r#"
+import math
+
+def integer_math(value: int64) -> int64:
+    return math.gcd(value, 15) + math.lcm(value, 2) + math.isqrt(value) + math.factorial(value) + math.comb(value, 2) + math.perm(value, 2)
+
+def main() -> None:
+    print(integer_math(4))
+"#;
+    let mir = lower_source_to_mir(source).expect("integer math lowers");
+    let object = emit_unoptimized_object(&mir).expect("integer math compiles");
+    let symbols = object_function_referenced_symbols(&object, "aura_fn_integer_math");
+    assert!(
+        symbols
+            .iter()
+            .any(|name| name.contains("aura_direct_math_integer")),
+        "integer math should accept int64 arguments directly: {symbols:?}"
+    );
+    assert!(
+        symbols
+            .iter()
+            .all(|name| !name.contains("aura_host_math_") && !name.contains("arg_buffer")),
+        "integer math should keep its inputs and outputs in words: {symbols:?}"
+    );
+}
+
+#[test]
 fn direct_monotonic_time_uses_scalar_runtime_abi_without_generic_host_boxing() {
     let source = r#"
 import sys

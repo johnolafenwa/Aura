@@ -1,0 +1,14 @@
+def matches(text: str, index: int64) -> bool:
+    return text[index] == "😀"
+
+def different(text: str, index: int64) -> bool:
+    return "a" != text[index]
+
+def main() -> None:
+    print(matches("a😀z", -2))
+    print(matches("az", 1))
+    print(different("abc", 0))
+    print(different("abcd", -1))
+    text = "🦀"
+    print(text[0] == "")
+    print("🦀🦀" != text[0])

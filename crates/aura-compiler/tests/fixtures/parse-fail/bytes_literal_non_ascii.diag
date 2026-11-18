@@ -1,0 +1,5 @@
+error[AU1001]: a byte string holds ASCII characters and escapes only; write any other byte as `\xNN`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/bytes_literal_non_ascii.au:2:12
+  |
+2 |     data = b"café"
+  |            ^

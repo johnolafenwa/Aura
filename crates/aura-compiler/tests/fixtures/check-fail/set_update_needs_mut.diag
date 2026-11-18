@@ -1,0 +1,6 @@
+error[AU3003]: method `update` requires a mutable receiver
+ --> crates/aura-compiler/tests/fixtures/check-fail/set_update_needs_mut.au:3:13
+  |
+3 |     numbers.update({3})
+  |             ^
+  = help: declare the receiver place with `mut` before calling a mutating method

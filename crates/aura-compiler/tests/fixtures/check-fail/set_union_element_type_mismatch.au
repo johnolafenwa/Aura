@@ -1,0 +1,4 @@
+def main() -> None:
+    numbers: set[int64] = {1, 2}
+    names: set[str] = {"a"}
+    print(len(numbers.union(names)))

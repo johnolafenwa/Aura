@@ -8566,11 +8566,12 @@ impl MirRuntime {
                 Ok(Value::String(text.trim().to_string().into()))
             }
             "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines" | "chars"
-            | "split_whitespace" | "find" | "count" | "repeat" => {
+            | "split_whitespace" | "find" | "count" | "repeat" | "char_at" => {
                 let parameters: &[&str] = match field {
                     "split_once" | "rsplit_once" => &["separator"],
                     "find" | "count" => &["text"],
                     "repeat" => &["count"],
+                    "char_at" => &["index"],
                     _ => &[],
                 };
                 let values = evaluate_named_args(args, env)?;
@@ -8578,6 +8579,9 @@ impl MirRuntime {
                 let (argument, count) = match (field, bound.first()) {
                     ("repeat", Some(argument)) => {
                         (None, expect_i64_value(&argument.value, "str.repeat(...)")?)
+                    }
+                    ("char_at", Some(argument)) => {
+                        (None, expect_i64_value(&argument.value, "str.char_at(...)")?)
                     }
                     (_, Some(argument)) => {
                         let Value::String(argument) = &argument.value else {
@@ -8671,6 +8675,47 @@ impl MirRuntime {
                 };
                 env.write_place(place, Value::Set(updated))?;
                 Ok(Value::Unit)
+            }
+            "union"
+            | "intersection"
+            | "difference"
+            | "symmetric_difference"
+            | "is_subset"
+            | "is_superset"
+            | "is_disjoint"
+            | "update" => {
+                let values = evaluate_named_args(args, env)?;
+                let Value::Set(other) = bind_builtin_args(&["other"], values)?
+                    .into_iter()
+                    .next()
+                    .expect("bound set argument should exist")
+                    .value
+                else {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` requires another `set[T]` value"
+                    )));
+                };
+                if field == "update" {
+                    let mut updated = set;
+                    for element in other.elements.into_vec() {
+                        updated.elements.insert(element);
+                    }
+                    let Some(place) = receiver_place else {
+                        return Err(Diagnostic::new("`update` requires a mutable set place"));
+                    };
+                    env.write_place(place, Value::Set(updated))?;
+                    return Ok(Value::Unit);
+                }
+                use aura_runtime::collection_index::{set_algebra, SetAlgebra};
+                match set_algebra(field, &set.elements, &other.elements)
+                    .expect("the arm names set-algebra methods")
+                {
+                    SetAlgebra::Elements(elements) => Ok(Value::Set(SetValue {
+                        element_type: set.element_type,
+                        elements,
+                    })),
+                    SetAlgebra::Holds(holds) => Ok(Value::Bool(holds)),
+                }
             }
             "clear" => {
                 if !args.is_empty() {

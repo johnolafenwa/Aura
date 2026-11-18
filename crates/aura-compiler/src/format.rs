@@ -223,6 +223,9 @@ impl Scanner<'_> {
         match byte {
             b'"' | b'\'' => (self.string_end(start), Class::Literal),
             b'f' if self.at(start + 1) == b'"' => (self.f_string_end(start + 1), Class::Literal),
+            b'b' if matches!(self.at(start + 1), b'"' | b'\'') => {
+                (self.string_end(start + 1), Class::Literal)
+            }
             b'r' if matches!(self.at(start + 1), b'"' | b'\'') => {
                 (self.raw_string_end(start + 1), Class::Literal)
             }
