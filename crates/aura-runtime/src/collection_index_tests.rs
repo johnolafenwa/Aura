@@ -906,3 +906,94 @@ fn set_relations_hold_for_empty_equal_and_nested_sets() {
     assert!(!algebra_holds("is_disjoint", &[1, 2, 3], &[3]));
     assert!(!algebra_holds("is_disjoint", &[3], &[1, 2, 3]));
 }
+
+#[test]
+fn shared_union_reads_and_writes_preserve_order_and_source_snapshots() {
+    let mut left: SetElements = (0..128).map(|i| int((i * 73) % 128)).collect();
+    let mut right: SetElements = (0..128).map(|i| int(64 + (i * 53) % 128)).collect();
+    for key in [4, 8, 15, 67, 118] {
+        left.remove(&int(key));
+    }
+    for key in [70, 101, 137, 150] {
+        right.remove(&int(key));
+    }
+    let mut expected: Vec<_> = left.iter().cloned().collect();
+    for value in &right {
+        if !expected.contains(value) {
+            expected.push(value.clone());
+        }
+    }
+
+    let mut union = left.union(&right);
+    let snapshot = union.clone();
+    assert_eq!(union.len(), expected.len());
+    assert_eq!(
+        union.iter().collect::<Vec<_>>(),
+        expected.iter().collect::<Vec<_>>()
+    );
+    assert!(union.iter().rev().eq(expected.iter().rev()));
+    assert_eq!(union.first(), expected.first());
+    assert_eq!(union.last(), expected.last());
+    let mut next = union.next_slot(0);
+    for (i, value) in expected.iter().enumerate() {
+        let slot = next.unwrap();
+        assert_eq!(union.slot(slot), Some(value));
+        assert_eq!(union.get(i), Some(value));
+        assert_eq!(union.slot_where(|key| key == value), Some(slot));
+        assert_eq!(union.find(value), Some(value));
+        assert_eq!(union.at_slot(union.position(value).unwrap()), value);
+        next = union.next_slot(slot + 1);
+    }
+    assert_eq!(next, None);
+    assert_eq!(union.get(expected.len()), None);
+    assert!(union.slot(usize::MAX).is_none());
+    assert_eq!(union.next_slot(usize::MAX), None);
+
+    assert!(
+        matches!(&snapshot.storage, Storage::Union(backing) if backing.realized.get().is_none())
+    );
+    left.remove(&int(0));
+    right.remove(&int(190));
+    assert_eq!(union.remove(&int(191)), Some(int(191)));
+    expected.retain(|v| v != &int(191));
+    assert!(union.insert(int(-7)));
+    expected.push(int(-7));
+    assert!(union.iter().eq(&expected));
+    assert!(snapshot.contains_key(&int(0)));
+    assert!(snapshot.contains_key(&int(190)));
+    assert!(snapshot.contains_key(&int(191)));
+    assert!(!snapshot.contains_key(&int(-7)));
+
+    let mut second = snapshot.clone();
+    let shifted = snapshot.get(120).unwrap().clone();
+    assert_eq!(second.shift_remove_index(120), Some(shifted.clone()));
+    assert!(!second.contains_key(&shifted));
+    assert!(snapshot.contains_key(&shifted));
+    assert!(second.union(&union).contains_key(&int(-7)));
+    let dense = snapshot.clone().into_vec();
+    assert!(snapshot.iter().eq(&dense));
+    second.clear();
+    assert!(second.is_empty());
+    assert!(!snapshot.is_empty());
+}
+
+#[test]
+fn union_drops_right_snapshots_with_excluded_owned_payloads() {
+    let record = |n: i64| {
+        Value::Instance(InstanceValue {
+            class_name: "Record".to_string().into(),
+            fields: BTreeMap::from([("key".to_string(), int(n))]).into(),
+        })
+    };
+    // Equal records have distinct owned payloads. The result keeps the
+    // representative on the left and may release the right-hand duplicate
+    // as soon as the input set drops.
+    let left: SetElements = (0..16).map(record).collect();
+    let right: SetElements = (8..24).map(record).collect();
+    let union = left.union(&right);
+    assert!(matches!(union.storage, Storage::Large(_)));
+    drop(right);
+    assert!(union
+        .iter()
+        .eq((0..24).map(record).collect::<Vec<_>>().iter()));
+}
