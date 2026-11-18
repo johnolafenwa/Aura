@@ -75,3 +75,8 @@ records its specialized call signature on the successful Result payload.
 Native recovery uses the generic call boundary when the callee's opaque
 ABI still has type parameters. The named, stored, and generic factories
 each return callable values that produce the same results on both backends.
+
+A matched integer from `sync.Map` retains its value when the map changes
+before `control.recover` receives the integer. The combined fixture checks
+missing keys, a negative captured value and zero. MIR and the Linux native
+compiler agree on the error message and both subsequent map reads.
