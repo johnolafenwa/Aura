@@ -793,6 +793,85 @@ fn scoped_callback_strings_copy_their_input_and_leave_the_scalar_slots_in_place(
 }
 
 #[test]
+fn a_text_callback_can_borrow_its_argument_for_codecs_and_return_an_owned_digest() {
+    use super::super::{
+        aura_direct_arg_buffer_new, aura_direct_arg_buffer_store, aura_host_bytes_base64_decode,
+        aura_host_bytes_base64_encode, aura_host_bytes_hex_decode, aura_host_bytes_hex_encode,
+        aura_host_bytes_sha256, aura_host_bytes_sha256_string, aura_host_str_from_bytes,
+        aura_host_str_to_bytes, value_ref,
+    };
+    use crate::runtime_value::result_ok;
+
+    fn call(
+        builtin: extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+        argument: *mut OpaqueValue,
+    ) -> *mut OpaqueValue {
+        let args = aura_direct_arg_buffer_new(1);
+        aura_direct_arg_buffer_store(args, 0, argument as i64);
+        builtin(args, 1)
+    }
+
+    unsafe extern "C-unwind" fn encode(frame: *mut u64) {
+        let words = unsafe { slice::from_raw_parts_mut(frame, 2) };
+        let text = words[0] as *mut OpaqueValue;
+        let bytes = call(aura_host_str_to_bytes, text);
+        let from_bytes = call(aura_host_str_from_bytes, bytes);
+        assert_eq!(
+            unsafe { value_ref(from_bytes) },
+            result_ok(Value::string("café"))
+        );
+
+        let hex = call(aura_host_bytes_hex_encode, bytes);
+        let base64 = call(aura_host_bytes_base64_encode, bytes);
+        assert_eq!(rendered(hex), "636166c3a9");
+        assert_eq!(rendered(base64), "Y2Fmw6k=");
+        let from_hex = call(aura_host_bytes_hex_decode, hex);
+        let from_base64 = call(aura_host_bytes_base64_decode, base64);
+        let expected = result_ok(unsafe { value_ref(bytes) });
+        assert_eq!(unsafe { value_ref(from_hex) }, expected);
+        assert_eq!(unsafe { value_ref(from_base64) }, expected);
+
+        let text_digest = call(aura_host_bytes_sha256_string, text);
+        let byte_digest = call(aura_host_bytes_sha256, bytes);
+        assert_eq!(unsafe { value_ref(text_digest) }, unsafe {
+            value_ref(byte_digest)
+        });
+        words[1] = call(aura_host_bytes_hex_encode, byte_digest) as u64;
+        for value in [
+            bytes,
+            from_bytes,
+            hex,
+            base64,
+            from_hex,
+            from_base64,
+            text_digest,
+            byte_digest,
+            text,
+        ] {
+            unsafe { aura_direct_release_value(value) };
+        }
+    }
+
+    let mut frame = [c"café".as_ptr() as u64, 0];
+    unsafe {
+        super::aura_direct_ffi_callback_local_text_guard(
+            encode,
+            frame.as_mut_ptr(),
+            1,
+            b"encode".as_ptr(),
+            6,
+        );
+    }
+    super::aura_direct_ffi_callback_check();
+    let digest = frame[1] as *mut OpaqueValue;
+    assert_eq!(
+        rendered(digest),
+        "850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e"
+    );
+    unsafe { aura_direct_release_value(digest) };
+}
+
+#[test]
 fn nested_scoped_callbacks_keep_the_outer_string_until_the_body_returns() {
     unsafe extern "C-unwind" fn compare(frame: *mut u64) {
         let words = unsafe { slice::from_raw_parts_mut(frame, 3) };
