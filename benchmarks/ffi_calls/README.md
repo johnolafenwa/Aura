@@ -145,3 +145,18 @@ array for an exclusively read list reduced the median from 4.54 to
 list when a later operation can escape or change its elements. Invalid
 indices and malformed union bytes produce the same diagnostics and call
 frames as the interpreter.
+
+A second measurement isolated the setup of a scoped callback argument.
+The string has no list or array view, and the last argument can call the
+body directly. Across 24 alternating pairs of full two-million-call
+runs, the original build at `98ffa327` took a median of 97.99 ns per
+callback and the revised build took 89.61 ns of process CPU time. The
+new build won 19 pairs, with a median paired reduction of 9.5%.
+Callgrind measured 613 and 547 instructions per call respectively in a
+separate C harness that validated, copied, inspected and released `café`.
+
+In five rotating comparison runs on the same shared Linux worker, the
+revised callback took 86.31 ns of process CPU time, Rust took 23.81 ns
+and Python ctypes took 1,215.18 ns. Median elapsed time in a separate
+series was 232.07, 57.51 and 3,165.77 ns. The revised callback beat
+Python and exceeded three times the Rust time in both series.
