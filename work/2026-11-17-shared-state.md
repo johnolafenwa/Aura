@@ -105,4 +105,26 @@ callback on its first acquisition. With the same Linux x86-64 compiler,
 source and linker flags, the stripped hello-world executable shrank from
 1,152,776 to 1,140,008 bytes. The native binary size check passed, and
 the linked symbols no longer include the held-cell poison routine or
-the channel registration and send routines.
+the channel registration and send routines. With the final dictionary
+storage change, the same Linux size check passed at 1,144,288 bytes.
+
+## Shared Dictionary Measurements
+
+An earlier release run measured 33.5 ns for an uncontended
+integer lock. Across three runs the guarded dictionary took 284 ms
+against 78 ms in Rust. The four-task cache took 1,115 ms against 218 ms.
+Each run used the same four CPUs and verified the final checksums.
+
+A directly matched integer lookup now copies its payload into the caller
+while the lock is held and records presence independently. This removes
+both heap boxes from the matched path and keeps the result stable across
+a subsequent write. Eager dictionary and set entry buffers now use
+strong-only references for copy-on-write. A unique buffer can apply
+the next update after one reference-count load. A snapshot still retains
+the old entries when the writer detaches.
+
+The final comparison pinned Aura, Rust and CPython to the same four
+CPUs and checked all six workloads. The uncontended integer lock took
+36.5 ns per acquisition and update. The four-task cache took
+1.22 times the Rust time. The full measurements and workload
+checksums are in [the benchmark report](../benchmarks/shared_state/README.md).
