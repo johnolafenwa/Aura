@@ -40,6 +40,7 @@ fn recover_preserves_caught_values_call_frames_cleanup_and_cancellation() {
         "control_recover_scalar_results",
         "control_recover_call_chains",
         "control_recover_cleanup",
+        "control_recover_generator_cleanup",
         "control_recover_tasks",
         "control_recover_cancellation",
     ] {
@@ -48,6 +49,24 @@ fn recover_preserves_caught_values_call_frames_cleanup_and_cancellation() {
         let expected = fs::read_to_string(path.with_extension("stdout")).expect("expected output");
         assert_eq!(output.stdout, expected, "{case}");
     }
+}
+
+#[test]
+fn trap_unwinds_the_inner_and_outer_managers_without_hiding_the_body_failure() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/control_recover_generator_cleanup.au");
+    let module = lower_path_to_mir(&path).expect("the fixture should lower");
+    let trap = crate::run_mir_entry(&module, Some("broken"), None, Vec::new())
+        .expect_err("calling the failing function outside recovery propagates its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "primary failure");
+    assert_eq!(
+        trap.notes,
+        [
+            "`Sink.__exit__` also failed during cleanup: inner",
+            "`Sink.__exit__` also failed during cleanup: outer",
+        ]
+    );
 }
 
 #[test]
