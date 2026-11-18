@@ -5876,9 +5876,11 @@ every Aura call:
   build keeps 128 KiB in reserve. A debug-assertion build keeps 224 KiB,
   because an unoptimized interpreter spends roughly 170-190 KiB of stack per
   Aura call.
-- Both reserves stay below the first-call headroom of the 256 KiB minimum, so
-  that minimum can always run one call. How many nested calls a given capacity
-  holds beyond that also depends on the build profile.
+- A function that can register a `with` exit may need another call's worth of
+  stack before it starts. Its `close` or `__exit__` can then run while the
+  frame that opened the resource is still unwinding. The exit method uses the
+  ordinary safety reserve. A 256 KiB task can run a simple entry function.
+  A task that opens resources or makes nested calls can need more stack.
 
 The root task that runs the program entry is probed the same way on its own
 stack: 256 MiB under `aura run` and 64 MiB in a built program, both reserved

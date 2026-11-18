@@ -2937,6 +2937,7 @@ impl MirRuntime {
             expected_return_type,
             None,
             Some(receiver_ty),
+            false,
         )?;
         if method.receiver == Some(MirReceiverKind::BorrowMut) {
             let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -3482,6 +3483,7 @@ impl MirRuntime {
             expected_return_type,
             None,
             None,
+            false,
         )
     }
 
@@ -3499,9 +3501,11 @@ impl MirRuntime {
             expected_return_type,
             Some(signature),
             None,
+            false,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_function_with_receiver_type(
         &mut self,
         function: &MirFunction,
@@ -3510,6 +3514,7 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
+        registered_exit: bool,
     ) -> Result<CallOutcome> {
         // A returned-view projection belongs to one Aura invocation. In
         // particular, cleanup runs after ReturnLoan and may itself call a
@@ -3524,6 +3529,7 @@ impl MirRuntime {
             expected_return_type,
             concrete_function_type,
             receiver_type,
+            registered_exit,
         );
         // A callee can directly consume a returned view without forwarding
         // it. Discard that unconsumed child token; only ReturnLoan constitutes
@@ -3547,6 +3553,7 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
+        registered_exit: bool,
     ) -> Result<CallOutcome> {
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
@@ -3554,7 +3561,25 @@ impl MirRuntime {
         // Nothing else bounds the depth of calls: a call chain may be as
         // deep as the stack it runs on allows.
         if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
-            if headroom < TASK_STACK_HEADROOM_RESERVE {
+            // A frame that registers an Aura exit must have room to enter the
+            // exit before it releases its own interpreter frames. Keep the
+            // ordinary guard in force for the exit and everything it calls.
+            // A registered exit spends the extra space already set aside.
+            // MIR without resolved cleanup callees can also call Aura code.
+            let needs_exit_space = !registered_exit
+                && headroom < 2 * TASK_STACK_HEADROOM_RESERVE
+                && function.blocks.iter().any(|block| {
+                    block.instructions.iter().any(|instruction| {
+                        matches!(
+                            instruction,
+                            Instruction::PushCleanup {
+                                callee: None | Some(crate::mir::CleanupCallee::Method { .. }),
+                                ..
+                            }
+                        )
+                    })
+                });
+            if headroom < TASK_STACK_HEADROOM_RESERVE || needs_exit_space {
                 return Err(Diagnostic::coded_at(
                     "AU4005",
                     function.span,
@@ -4608,6 +4633,7 @@ impl MirRuntime {
             None,
             None,
             resource_type,
+            true,
         )?;
         if let Some(updated_receiver) = outcome.updated_receiver {
             env.write_place(place, updated_receiver)?;
@@ -6474,6 +6500,7 @@ impl MirRuntime {
                     expected_return_type,
                     None,
                     Some(&resolved_receiver_ty),
+                    false,
                 )?;
                 if method.receiver == Some(MirReceiverKind::BorrowMut) {
                     let updated = outcome.updated_receiver.ok_or_else(|| {

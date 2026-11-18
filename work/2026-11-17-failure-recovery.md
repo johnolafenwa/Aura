@@ -73,3 +73,23 @@ The 3,000-task readiness test exceeded its deadline on macOS and on a
 shared Linux worker. Tasks now share their parent's immutable MIR program
 and function indices. The test samples thread usage while all 3,000 tasks
 are waiting at the readiness barrier.
+
+## Stack space for cleanup methods
+
+The ARM64 Linux and macOS CLI tests found a recursive task that registered a
+`close` method but skipped it when the next call exhausted the stack. The
+interpreter applied the same headroom check to the exit while the frame that
+owned it was still on the stack. Its failed call left the original trap primary.
+
+A function that can register an Aura exit now reserves space to call that
+exit. The registered exit spends that space and keeps the ordinary guard for
+its own execution. On x86-64 Linux, requesting 256 KiB through 1 MiB in
+4 KiB steps exposed a missing close at 105 of 193 sizes in the earlier
+packaged release. The corrected debug interpreter closed every entered scope
+at all 193 sizes for a plain resource, a manager, and an exit that opens
+another resource. At the original 768 KiB it entered and closed four nested
+scopes. The number of frames depends on the build and platform.
+
+On the scoped recovery release at `1dba8ad1`, the same recursive resource
+missed one close at 17 of 33 task stack sizes from 256 to 384 KiB. The
+debug build at `3d2ae363` missed one at five sizes in that range.
