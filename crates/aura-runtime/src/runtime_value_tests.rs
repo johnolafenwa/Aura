@@ -11402,6 +11402,52 @@ fn queue_iteration_wait_wakes_for_unobserved_task_group_failure() {
 }
 
 #[test]
+fn task_group_iteration_receives_the_last_send_before_reporting_completion() {
+    let cancellation = CancellationContext::default();
+    let group = TaskGroupValue::new(&cancellation);
+    let channel = ChannelValue::new();
+    let first = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    wait_task_ready(&first).expect("the first task should finish");
+    group.register_task(first.clone());
+
+    let (release, start) = std::sync::mpsc::channel();
+    let output = channel.clone();
+    let producer = TaskValue::from_handle(thread::spawn(move || {
+        start.recv().expect("release the last producer");
+        output.send(Value::Bool(true)).expect("send the final item");
+        output.close();
+        Ok(Value::Unit)
+    }));
+    group.register_task(producer.clone());
+
+    thread::scope(|scope| {
+        // The reader checks the group after seeing an empty queue. Pause its
+        // first task inspection until the last producer has sent and finished.
+        let first_result = lock_mutex(&first.inner.handle);
+        let reader = scope.spawn(|| recv_for_task_group_iteration(&channel, &cancellation, &group));
+        let deadline = Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_secs(5));
+        while group.inner.tasks.try_lock().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "reader did not inspect the group"
+            );
+            thread::yield_now();
+        }
+        release.send(()).expect("start the final send");
+        wait_task_ready(&producer).expect("the producer should finish");
+        drop(first_result);
+        assert_eq!(
+            reader.join().unwrap(),
+            RecvValueResult::Value(Value::Bool(true))
+        );
+    });
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Closed
+    );
+}
+
+#[test]
 fn phase73_observable_runtime_task_group_cancellation_precedes_empty_completion() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     group.cancel();

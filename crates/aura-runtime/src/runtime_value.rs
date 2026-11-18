@@ -18660,6 +18660,11 @@ pub fn recv_for_task_group_iteration(
             return RecvValueResult::Cancelled;
         }
         if group.all_registered_tasks_completed() {
+            // The last producer may have sent between the empty receive
+            // above and its completion. Drain its final items first.
+            if channel.has_pending_values() {
+                continue;
+            }
             return RecvValueResult::Closed;
         }
         let wait_cancellation = cancellation.merged(&group.queue_iteration_signal());
