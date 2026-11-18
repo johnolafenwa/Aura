@@ -98,3 +98,23 @@ iterations of the same executable. In a separate five-round comparison,
 the prior public loop took 486 ms of process CPU, the new loop took
 418 ms, Rust took 228 ms and Python took 19,113 ms. All four produced
 20,000,000. These CPU measurements exclude time spent waiting to run.
+
+## Combined release at `92535bb9`
+
+The dedicated Linux runner used the same inputs for Aura, Rust and Python.
+The first three timing columns are medians of three runs. A separate
+comparison alternated two Aura releases five times on the same runner.
+Every program produced its expected checksum. Times are in milliseconds.
+[Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497863)
+
+| Workload | Aura | Rust | Python | Paired Aura `5f111af1` | Paired Aura `92535bb9` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `lock` | 78 | 58 | 565 | 80 | 78 |
+| `atomic` | 194 | 160 | 2,829 | 219 | 193 |
+| `dict` | 149 | 55 | 655 | 150 | 149 |
+| `lock_shared` | 411 | 307 | 546 | 780 | 343 |
+| `atomic_shared` | 579 | 419 | 2,719 | 604 | 472 |
+| `cache_shared` | 436 | 504 | 11,473 | 956 | 434 |
+
+The uncontended lock took 19.5 ns per update. The new four-task mutex
+finished sooner in all five pairs, with a median paired reduction of 52.6%.

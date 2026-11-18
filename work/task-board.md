@@ -26,13 +26,11 @@ Last updated: 2026-11-18
 - ADR-0103, the manual and Chapter 15 describe shared state. Runtime,
   verifier, CLI and editor regressions cover lock release, handle transfer
   and the multi-task example.
-- The uncontended integer lock took 36.5 ns per update on four pinned
-  CPUs. Aura finished ahead of CPython on all six workloads on that
-  machine. With backoff before parking, the dedicated integration
-  runner measured 158 / 97 / 822 ms in Aura, Rust and CPython for the
-  four-task mutex. On that runner, the three shared workloads met both
-  speed targets and the uncontended lock and atomic counter exceeded
-  three times the Rust time.
+- The integrated compiler at `92535bb9` finished ahead of Python and within
+  three times Rust on all six shared-state workloads. The uncontended lock
+  took 19.5 ns per update. The four-task mutex took 411 ms in Aura, 307 ms
+  in Rust and 546 ms in Python. Five alternating same-runner trials put
+  the earlier and current Aura mutex medians at 780 and 343 ms.
   [Shared-state measurements](../benchmarks/shared_state/README.md)
 
 - The combined mutex and recovery fixture holds one lock in the caller,
@@ -153,8 +151,8 @@ See `2026-11-17-ordered-collections.md`.
   layout copy directly into a call buffer. C-filled union lists used only
   for numeric member reads can reuse those bytes. A callback that only reads
   its text inputs can hold the owned strings on its stack. In the dedicated
-  run at `1033d521`, text callbacks took 32.32 ns in Aura, 9.62 ns in Rust
-  and 378.27 ns in Python. All four workloads finished ahead of ctypes. The
+  run at `92535bb9`, text callbacks took 29.98 ns in Aura, 9.62 ns in Rust
+  and 377.61 ns in Python. All four workloads finished ahead of ctypes. The
   expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
   GLFW and SQLite.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)

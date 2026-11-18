@@ -112,3 +112,9 @@ compiled Aura benchmark took 45.26 ms with the previous runtime and
 decoded the input once, warmed up the encoder, and timed eight encodes;
 the figures are the medians of nine rounds with the program order rotated.
 The four-strip Aura file was 390,941 bytes and Pillow wrote 390,828 bytes.
+
+On the dedicated Linux runner at `92535bb9`, encoding took 1.9 ms in Aura,
+41.2 ms in Rust and 4.9 ms in Pillow. The files were 390,941, 433,556 and
+390,828 bytes respectively. Decoding took 6.9, 6.9 and 7.2 ms and each
+program produced the same checksum of 120.
+[Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497825)
