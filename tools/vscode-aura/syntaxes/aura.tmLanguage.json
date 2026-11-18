@@ -418,6 +418,29 @@
           }
         },
         {
+          "name": "meta.definition.function.captures.aura",
+          "begin": "^[\\t ]+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\[",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.function.aura"
+            },
+            "2": {
+              "name": "entity.name.function.aura"
+            }
+          },
+          "end": "\\]",
+          "patterns": [
+            {
+              "match": "\\b(mut|own)\\b",
+              "name": "storage.modifier.capture.aura"
+            },
+            {
+              "match": "[A-Za-z_][A-Za-z0-9_]*",
+              "name": "variable.other.capture.aura"
+            }
+          ]
+        },
+        {
           "name": "meta.definition.function.aura",
           "match": "\\bdef\\s+([a-zA-Z_][A-Za-z0-9_]*)",
           "captures": {

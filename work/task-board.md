@@ -22,8 +22,11 @@ Last updated: 2026-11-18
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
   The six release workloads took 0.15 to 2.74 times the Rust wall time.
   Measurements and checksums are in `benchmarks/closures/README.md`.
-- Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0116).
+- Local functions support statement bodies and shared recursion under
+  ADR-0116. See `2026-11-17-local-functions.md` for verification.
+  With the same runtime inputs, the named local function and typed lambda
+  took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
+  18,443 ms for Python.
 
 ## The `image` module (complete)
 

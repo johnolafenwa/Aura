@@ -853,3 +853,14 @@ test("grammar marks dyn before a trait name and leaves a variable named dyn alon
   assert.equal(scopesAt(tokenized, 2, "dyn").includes("storage.modifier.dyn.aura"), false);
   assert.equal(scopesAt(tokenized, 3, "dyn").includes("storage.modifier.dyn.aura"), false);
 });
+
+test("local function capture lists have a declaration scope", () => {
+  const grammar = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "syntaxes", "aura.tmLanguage.json"), "utf8"));
+  const rule = grammar.repository.declarations.patterns.find(
+    (pattern) => pattern.name === "meta.definition.function.captures.aura"
+  );
+  assert.ok(rule);
+  assert.deepEqual(new RegExp(rule.begin).exec("    def add[mut total](amount: int64)")?.slice(1),
+    ["def", "add"]);
+  assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
+});

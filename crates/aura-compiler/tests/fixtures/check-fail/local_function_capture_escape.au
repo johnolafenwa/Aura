@@ -1,0 +1,9 @@
+def source() -> Callable[def() -> int64]:
+    value = 7
+    def read[value]() -> int64:
+        return value
+    return read
+
+
+def main() -> None:
+    print(source()())
