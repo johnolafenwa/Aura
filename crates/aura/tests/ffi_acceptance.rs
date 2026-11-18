@@ -220,6 +220,105 @@ fn maintained_sqlite_example_runs_with_backend_parity() {
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
 }
 
+/// Whether the host C toolchain links the raylib library.
+fn host_links_raylib() -> bool {
+    let scratch = TempPackage::new(false);
+    let c_file = scratch.path.join("probe.c");
+    fs::write(
+        &c_file,
+        "int GetRandomValue(int, int);\nint main(void) { return GetRandomValue(0, 0); }\n",
+    )
+    .expect("the probe source should be writable");
+    Command::new("cc")
+        .arg(&c_file)
+        .arg("-lraylib")
+        .arg("-o")
+        .arg(scratch.path.join("probe"))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Runs the raylib example program `name` on both backends in `directory`,
+/// with `settings` in the environment, and returns what each printed.
+fn run_raylib_example(name: &str, directory: &Path, settings: &[(&str, &str)]) -> (String, String) {
+    let source = repository_root()
+        .join("examples/packages/raylib/src")
+        .join(format!("{name}.au"));
+    let mir = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source)
+        .current_dir(directory)
+        .envs(settings.iter().copied())
+        .output()
+        .expect("the raylib example should start in the interpreter");
+    assert_success(&mir, "raylib example MIR run");
+
+    let binary = directory.join(format!("raylib-{name}-direct"));
+    let build = build_direct(&source, &binary);
+    assert_success(&build, "raylib example direct build");
+    let direct = Command::new(binary)
+        .current_dir(directory)
+        .envs(settings.iter().copied())
+        .output()
+        .expect("the raylib example direct binary should start");
+    assert_success(&direct, "raylib example direct run");
+    (
+        String::from_utf8_lossy(&mir.stdout).into_owned(),
+        String::from_utf8_lossy(&direct.stdout).into_owned(),
+    )
+}
+
+/// Whether `path` holds a PNG image of more than a few bytes.
+fn is_png(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|bytes| bytes.len() > 1000 && bytes.starts_with(b"\x89PNG\r\n"))
+}
+
+#[test]
+fn maintained_raylib_picture_runs_with_backend_parity() {
+    if !host_links_raylib() {
+        eprintln!("the host has no raylib library to link; the example needs one");
+        return;
+    }
+    let scratch = TempPackage::new(false);
+    let expected = "picture.png is 320 by 200\nthe sun is 255, 203, 0\n\
+                    the grass is 0, 117, 44\n";
+    let (mir, direct) = run_raylib_example("picture", &scratch.path, &[]);
+    assert_eq!(mir, expected);
+    assert_eq!(direct, expected);
+    assert!(is_png(&scratch.path.join("picture.png")));
+}
+
+/// The window programs need a display. A Linux host has one when
+/// `DISPLAY` is set, which a virtual display such as Xvfb also does. Any
+/// other host opts in with `AURA_RAYLIB_WINDOW_TESTS=1`.
+fn host_shows_windows() -> bool {
+    std::env::var_os("AURA_RAYLIB_WINDOW_TESTS").is_some()
+        || (cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_some())
+}
+
+#[test]
+fn maintained_raylib_windows_draw_with_backend_parity() {
+    if !host_links_raylib() || !host_shows_windows() {
+        eprintln!("the host has no raylib library or no display; the examples need both");
+        return;
+    }
+    let scratch = TempPackage::new(false);
+    for (name, expected) in [
+        ("main", "score 10 after 90 frames\n"),
+        ("scene", "drew 90 frames\n"),
+    ] {
+        let shot = format!("{name}.png");
+        let settings = [
+            ("RAYLIB_DEMO_FRAMES", "90"),
+            ("RAYLIB_DEMO_SHOT", shot.as_str()),
+        ];
+        let (mir, direct) = run_raylib_example(name, &scratch.path, &settings);
+        assert_eq!(mir, expected, "{name} in the interpreter");
+        assert_eq!(direct, expected, "{name} as a native executable");
+        assert!(is_png(&scratch.path.join(&shot)), "{name} saved no frame");
+    }
+}
+
 #[test]
 fn maintained_getpid_example_runs_with_backend_parity() {
     let package = repository_root().join("examples/packages/ffi_getpid");
