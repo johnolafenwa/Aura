@@ -8992,6 +8992,38 @@ fn build_produces_a_runnable_binary() {
 }
 
 #[test]
+fn a_known_local_callable_keeps_its_invoke_target_across_loop_iterations() {
+    let temp = TempDir::new("aura-known-local-callable");
+    let source = repo_root().join("benchmarks/closures/local_functions.au");
+    let build = Command::new(aura_bin())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(temp.path().join("program"))
+        .arg(source)
+        .env("AURA_CACHE_DIR", temp.path().join("cache"))
+        .env("AURA_DUMP_LLVM_IR", temp.path().join("program"))
+        .output()
+        .expect("build the local function and lambda loops");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let units: Vec<_> = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ll"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect();
+    assert!(!units.is_empty(), "the build should emit optimized IR");
+    for line in units.iter().flat_map(|unit| unit.lines()) {
+        assert!(
+            !(line.contains("call i64 %") && line.contains(", i64 1, i64 ")),
+            "known one-argument callable still dispatches indirectly: {line}"
+        );
+    }
+}
+
+#[test]
 fn counted_loops_over_scalar_lists_build_to_vector_instructions() {
     let temp = TempDir::new("aura-vector-loops");
     let source_path = temp.path().join("app.au");
