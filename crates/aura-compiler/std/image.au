@@ -1,0 +1,339 @@
+# The Aura-source part of the builtin `image` module. The compiler checks
+# this file as module `image` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. An `Image` is three integers
+# and its samples as a `list[uint8]`: row by row from the top, the channels
+# of a pixel next to each other. The codecs and the whole-image operations
+# are host functions that read the samples in place.
+import fs
+import image
+import io
+import path
+
+
+public enum Error:
+    """Why an image could not be read or written."""
+    # The file could not be read or written.
+    Io(error: io.Error)
+    # The bytes are not a complete, well-formed image.
+    InvalidData(message: str)
+    # The image is well formed, but this module does not handle it, or the
+    # format asked for cannot hold it.
+    Unsupported(message: str)
+    # The image has more pixels than the limit the caller allowed.
+    TooLarge(limit_pixels: int64)
+
+
+public enum Format:
+    """A file format the module reads and writes. `Ppm` is the Netpbm
+    family: PBM, PGM and PPM."""
+    Png
+    Jpeg
+    Ppm
+
+
+public enum Filter:
+    """How `resize` computes a pixel from the pixels around it."""
+    # The nearest pixel, unchanged. Keeps hard edges.
+    Nearest
+    # A weighted mean of the pixels around the point. Smooth.
+    Bilinear
+    # A wider weighted mean. Sharper than `Bilinear`, and slower.
+    Bicubic
+
+
+public class Info:
+    """What a file's header says about its image."""
+    public format: Format
+    public width: int64
+    public height: int64
+    public channels: int64
+
+
+public class Image:
+    """A picture as 8-bit samples. `channels` is 1 for gray, 2 for gray and
+    alpha, 3 for red, green, blue, and 4 for red, green, blue, alpha.
+    `pixels` holds `width * height * channels` samples, row by row from the
+    top, so the sample of channel `c` at column `x`, row `y` is
+    `pixels[(y * width + x) * channels + c]`."""
+    public width: int64
+    public height: int64
+    public channels: int64
+    public pixels: list[uint8]
+
+    public def new(width: int64, height: int64, channels: int64) -> Image:
+        """A black image, transparent when it has an alpha channel."""
+        return Image.filled(width, height, channels, 0)
+
+    public def filled(width: int64, height: int64, channels: int64, value: uint8) -> Image:
+        """An image with every sample set to `value`."""
+        assert width >= 1 and height >= 1, "an image needs at least one pixel"
+        assert channels >= 1 and channels <= 4, "an image has 1 to 4 channels"
+        one: list[uint8] = [value]
+        return Image(
+            width=width,
+            height=height,
+            channels=channels,
+            pixels=one * (width * height * channels),
+        )
+
+    public def get(self, x: int64, y: int64, channel: int64) -> uint8:
+        """The sample of `channel` at column `x`, row `y`."""
+        assert x >= 0 and x < self.width and y >= 0 and y < self.height, "the pixel is outside the image"
+        assert channel >= 0 and channel < self.channels, "the image has no such channel"
+        return self.pixels[(y * self.width + x) * self.channels + channel]
+
+    public def set(mut self, x: int64, y: int64, channel: int64, value: uint8) -> None:
+        """Sets the sample of `channel` at column `x`, row `y`."""
+        assert x >= 0 and x < self.width and y >= 0 and y < self.height, "the pixel is outside the image"
+        assert channel >= 0 and channel < self.channels, "the image has no such channel"
+        self.pixels[(y * self.width + x) * self.channels + channel] = value
+
+    public def has_alpha(self) -> bool:
+        """Whether the last channel is alpha."""
+        return self.channels == 2 or self.channels == 4
+
+    def with_channels(self, channels: int64) -> Image:
+        return Image(
+            width=self.width,
+            height=self.height,
+            channels=channels,
+            pixels=image.__aura_convert(self.pixels, self.width, self.height, self.channels, channels),
+        )
+
+    public def to_gray(self) -> Image:
+        """The image as one gray channel. Colour is weighted 0.299 red,
+        0.587 green, 0.114 blue, and alpha is dropped."""
+        return self.with_channels(1)
+
+    public def to_gray_alpha(self) -> Image:
+        """The image as gray and alpha. An image without alpha becomes
+        opaque."""
+        return self.with_channels(2)
+
+    public def to_rgb(self) -> Image:
+        """The image as red, green, blue. Alpha is dropped."""
+        return self.with_channels(3)
+
+    public def to_rgba(self) -> Image:
+        """The image as red, green, blue, alpha. An image without alpha
+        becomes opaque."""
+        return self.with_channels(4)
+
+    public def resize(self, width: int64, height: int64) -> Image:
+        """The image scaled to `width` by `height` with `Filter.Bilinear`."""
+        return self.resize_with(width, height, Filter.Bilinear)
+
+    public def resize_with(self, width: int64, height: int64, filter: Filter) -> Image:
+        """The image scaled to `width` by `height`. When the image shrinks,
+        `Bilinear` and `Bicubic` average over every pixel they cover."""
+        return Image(
+            width=width,
+            height=height,
+            channels=self.channels,
+            pixels=image.__aura_resize(
+                self.pixels, self.width, self.height, self.channels, width, height, __filter_code(filter)
+            ),
+        )
+
+    public def crop(self, left: int64, top: int64, width: int64, height: int64) -> Image:
+        """The `width` by `height` part whose top left pixel is at column
+        `left`, row `top`. The part must lie inside the image."""
+        return Image(
+            width=width,
+            height=height,
+            channels=self.channels,
+            pixels=image.__aura_crop(
+                self.pixels, self.width, self.height, self.channels, left, top, width, height
+            ),
+        )
+
+    public def flip_horizontal(self) -> Image:
+        """The image mirrored left to right."""
+        return Image(
+            width=self.width,
+            height=self.height,
+            channels=self.channels,
+            pixels=image.__aura_flip(self.pixels, self.width, self.height, self.channels, 0),
+        )
+
+    public def flip_vertical(self) -> Image:
+        """The image mirrored top to bottom."""
+        return Image(
+            width=self.width,
+            height=self.height,
+            channels=self.channels,
+            pixels=image.__aura_flip(self.pixels, self.width, self.height, self.channels, 1),
+        )
+
+    public def to_array(self) -> Array[float32]:
+        """The samples as numbers from 0 to 1, in an Array of shape
+        `[height, width, channels]`."""
+        return image.__aura_to_array(self.pixels, self.width, self.height, self.channels, 0)
+
+    public def to_planes(self) -> Array[float32]:
+        """The samples as numbers from 0 to 1, one plane a channel, in an
+        Array of shape `[channels, height, width]`: the layout convolution
+        layers take."""
+        return image.__aura_to_array(self.pixels, self.width, self.height, self.channels, 1)
+
+    public def from_array(values: Array[float32]) -> Image:
+        """An image from an Array of shape `[height, width, channels]`, or
+        `[height, width]` for gray. Each number is multiplied by 255,
+        rounded, and kept inside 0 to 255."""
+        (width, height, channels, pixels) = image.__aura_from_array(values, 0)
+        return Image(width=width, height=height, channels=channels, pixels=pixels)
+
+    public def from_planes(values: Array[float32]) -> Image:
+        """An image from an Array of shape `[channels, height, width]`, the
+        reverse of `to_planes`."""
+        (width, height, channels, pixels) = image.__aura_from_array(values, 1)
+        return Image(width=width, height=height, channels=channels, pixels=pixels)
+
+
+def __filter_code(filter: Filter) -> int64:
+    match filter:
+        case Filter.Nearest:
+            return 0
+        case Filter.Bilinear:
+            return 1
+        case Filter.Bicubic:
+            return 2
+
+
+def __format_code(format: Format) -> int64:
+    match format:
+        case Format.Png:
+            return 0
+        case Format.Jpeg:
+            return 1
+        case Format.Ppm:
+            return 2
+
+
+def __error(status: int64, limit_pixels: int64, message: own str) -> Error:
+    if status == 3:
+        return Error.TooLarge(limit_pixels=limit_pixels)
+    if status == 2:
+        return Error.Unsupported(message=message)
+    return Error.InvalidData(message=message)
+
+
+public def info(data: list[uint8]) -> Result[Info, Error]:
+    """The format, size and channel count of the image in `data`, read from
+    its header. No pixel is decoded."""
+    (format, width, height, channels, message) = image.__aura_info(data)
+    if format < 0:
+        return Result.Err(__error(-format, 0, message))
+    mut found = Format.Ppm
+    if format == 0:
+        found = Format.Png
+    elif format == 1:
+        found = Format.Jpeg
+    return Result.Ok(Info(format=found, width=width, height=height, channels=channels))
+
+
+public def decode(data: list[uint8]) -> Result[Image, Error]:
+    """The image in `data`, which may be PNG, JPEG, or Netpbm. The format is
+    found from the first bytes. An image of more than 2 ** 28 pixels is
+    `Error.TooLarge`."""
+    return decode_up_to(data, 268435456)
+
+
+public def decode_up_to(data: list[uint8], max_pixels: int64) -> Result[Image, Error]:
+    """The image in `data`, when it has at most `max_pixels` pixels. The
+    header decides, so an image over the limit costs no memory."""
+    (status, width, height, channels, pixels, message) = image.__aura_decode(data, max_pixels)
+    if status != 0:
+        return Result.Err(__error(status, width, message))
+    return Result.Ok(Image(width=width, height=height, channels=channels, pixels=pixels))
+
+
+public def read(file_path: str) -> Result[Image, Error]:
+    """The image in the file at `file_path`. The format is found from the
+    file's first bytes, not from its name."""
+    match own fs.read_bytes(file_path):
+        case Result.Ok(list[uint8] as data):
+            return decode(data)
+        case Result.Err(io.Error as error):
+            return Result.Err(Error.Io(error=error))
+
+
+def __encode(picture: Image, format: int64, option: int64) -> Result[list[uint8], Error]:
+    (status, data, message) = image.__aura_encode(
+        picture.pixels, format, picture.width, picture.height, picture.channels, option
+    )
+    if status != 0:
+        return Result.Err(__error(status, 0, message))
+    return Result.Ok(data)
+
+
+public def encode_png(picture: Image, level: int64 = 6) -> Result[list[uint8], Error]:
+    """`picture` as a PNG file. PNG loses nothing. `level` runs from 0,
+    stored, through 1, fastest, to 9, smallest."""
+    return __encode(picture, 0, level)
+
+
+public def encode_jpeg(picture: Image, quality: int64 = 90) -> Result[list[uint8], Error]:
+    """`picture` as a JPEG file. `quality` runs from 1, smallest, to 100,
+    closest to the original. JPEG holds gray and RGB only: an image with
+    alpha is `Error.Unsupported`."""
+    return __encode(picture, 1, quality)
+
+
+public def encode_ppm(picture: Image) -> Result[list[uint8], Error]:
+    """`picture` as a binary Netpbm file: PGM for gray, PPM for RGB. An
+    image with alpha is `Error.Unsupported`."""
+    return __encode(picture, 2, 0)
+
+
+public def encode(picture: Image, format: Format) -> Result[list[uint8], Error]:
+    """`picture` in `format`, at PNG level 6 or JPEG quality 90."""
+    match format:
+        case Format.Png:
+            return encode_png(picture)
+        case Format.Jpeg:
+            return encode_jpeg(picture)
+        case Format.Ppm:
+            return encode_ppm(picture)
+
+
+public def format_of(file_path: str) -> Format | None:
+    """The format the extension of `file_path` names, in any letter case:
+    `png`; `jpg` or `jpeg`; `ppm`, `pgm` or `pnm`. `None` for any other."""
+    match own path.extension(file_path):
+        case str as extension:
+            lower = extension.to_lower()
+            if lower == "png":
+                return Format.Png
+            if lower == "jpg" or lower == "jpeg":
+                return Format.Jpeg
+            if lower == "ppm" or lower == "pgm" or lower == "pnm":
+                return Format.Ppm
+            return None
+        case None:
+            return None
+
+
+public def write(file_path: str, picture: Image) -> Result[None, Error]:
+    """Writes `picture` to `file_path` in the format its extension names,
+    replacing any file there. An extension that names no format is
+    `Error.Unsupported`."""
+    match format_of(file_path):
+        case Format as format:
+            return write_as(file_path, picture, format)
+        case None:
+            return Result.Err(
+                Error.Unsupported(
+                    message=f"`{file_path}` has no extension that names an image format: use png, jpg, jpeg, ppm, pgm or pnm"
+                )
+            )
+
+
+public def write_as(file_path: str, picture: Image, format: Format) -> Result[None, Error]:
+    """Writes `picture` to `file_path` in `format`, whatever the name."""
+    data = try encode(picture, format)
+    match own fs.write_bytes(file_path, data):
+        case Result.Ok(None):
+            return Result.Ok(None)
+        case Result.Err(io.Error as error):
+            return Result.Err(Error.Io(error=error))
