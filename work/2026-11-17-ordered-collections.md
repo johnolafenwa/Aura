@@ -80,3 +80,13 @@ Three runtime library tests exercise the native entry points directly.
 They check a sorted map snapshot after updating its copy, access through
 a nested sorted set, and switching a deque or heap to shared access.
 They also check the method name and source position after an empty pop.
+
+The Ubuntu coverage run at `15438291` exercised 16,897 of 17,361
+functions (97.3273%). The required minimum is 97.33%. Three additional
+tests alternate the host and native word operations on both storage
+layouts. They check deque order and empty pops, min/max heap peek and
+pop, and map overwrites and removals while retaining a snapshot. All
+13 ordered runtime tests passed locally. Compared with the same tests
+at `15438291`, the instrumented run exercised 10 more production
+functions or closures in `ordered_collections.rs`.
+[Ubuntu coverage report](https://github.com/johnolafenwa/Aura/actions/runs/44219781769/job/134518624198)
