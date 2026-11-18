@@ -516,35 +516,10 @@ jobs:
             packs/aura-v*-target-aarch64-unknown-linux-gnu.tar.gz \
             packs/aura-v*-target-aarch64-unknown-linux-musl.tar.gz
 
-  benchmark-compiler:
-    name: Find the Linux release for the integration benchmarks
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 309 }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 85
-    permissions:
-      actions: read
-    steps:
-      - name: Wait for this run's x86-64 artifact
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for ((attempt=0; attempt<165; attempt++)); do
-            api="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-            if gh api "$api/artifacts" --jq '.artifacts[].name' | grep -Fxq target-packs-X64; then
-              exit 0
-            fi
-            if gh api "$api/jobs?per_page=100" --jq '.jobs[] | select(.name == "native-binaries (ubuntu-24.04)" and .status == "completed") | .conclusion' | grep -Eq 'failure|cancelled|timed_out'; then
-              echo "The Linux release job ended before publishing its archive" >&2
-              exit 1
-            fi
-            sleep 30
-          done
-          exit 1
-
   integration-benchmarks:
     name: Measure ${{ matrix.suite }}
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 309 }}
-    needs: benchmark-compiler
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 309 }}
+    needs: native-binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
