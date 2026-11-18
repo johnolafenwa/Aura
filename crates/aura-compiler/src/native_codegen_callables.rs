@@ -337,7 +337,8 @@ fn word_from_value(builder: &mut dyn FunctionBackend, value: Val, abi: ScalarTyp
 /// The address of the environment words of the callable at `callable_ptr`.
 fn environment_base(builder: &mut dyn FunctionBackend, callable_ptr: Val, inline: bool) -> Val {
     if inline {
-        builder.iadd_imm(callable_ptr, 8)
+        let offset = builder.iconst(types::I64, 8);
+        builder.element_address(callable_ptr, offset)
     } else {
         builder.load(types::I64, MemFlags::new(), callable_ptr, 8)
     }

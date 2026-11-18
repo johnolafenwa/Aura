@@ -1,3 +1,4 @@
+import sys
 import time
 
 
@@ -13,4 +14,6 @@ def measure_local(seed, count):
 
 
 if __name__ == "__main__":
-    measure_local(7, 48_000_000)
+    seed = int(sys.argv[1]) if len(sys.argv) > 1 else 7
+    count = int(sys.argv[2]) if len(sys.argv) > 2 else 48_000_000
+    measure_local(seed, count)

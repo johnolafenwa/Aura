@@ -22,6 +22,24 @@ def measure_local(seed: int64, count: int64) -> None:
     print(f"local {count} {sys.monotonic_time_ms() - start} {result}")
 
 
-def main() -> None:
-    measure_local(7, 48000000)
-    measure_lambda(7, 48000000)
+def main() -> int32:
+    args = sys.args()
+    mut seed: int64 = 7
+    mut count: int64 = 48000000
+    if len(args) > 0:
+        match parse_int64(args[0]):
+            case Result.Ok(value):
+                seed = value
+            case Result.Err(_):
+                print("expected an integer seed")
+                return 2
+    if len(args) > 1:
+        match parse_int64(args[1]):
+            case Result.Ok(value):
+                count = value
+            case Result.Err(_):
+                print("expected an integer count")
+                return 2
+    measure_local(seed, count)
+    measure_lambda(seed, count)
+    return 0
