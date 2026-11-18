@@ -107,9 +107,10 @@ Last updated: 2026-11-18
 Five fixtures pass on MIR and the direct backend, including custom ordering,
 snapshot independence, B-tree splits and merges, and moving stored values
 that cannot be cloned. Editor completions and the manual examples pass.
-All four measured int64 workloads beat Python. Aura took 2.10 times Rust
-for deque, 0.90 for heap, 2.23 for sorted map and 2.17 for sorted set.
-The diagnostic fixtures and platform checks are in progress.
+On the dedicated Linux runner all four int64 workloads beat Python. Aura
+took 2.80 times Rust for deque, 1.03 for heap, 2.02 for sorted map and
+1.87 for sorted set. Empty and drained collections produced matching
+diagnostics on both backends. Hosted platform checks are in progress.
 See `2026-11-17-ordered-collections.md`.
 
 ## Collections, text, and numbers (steps 1 and 2 of 3 complete)

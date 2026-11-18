@@ -24,7 +24,21 @@ checks every checksum, discards one warm-up, alternates languages for
 seven samples and reports the median in milliseconds. The two ratios
 divide Aura's time by the reference time.
 
-## Measurements
+## Dedicated Linux runner
+
+On 2026-11-18, a GitHub-hosted Ubuntu x86-64 runner measured the release
+archive built for integration commit `1171e6c0`. It used rustc 1.95.0
+and CPython 3.12.3. All four checksums matched in every sample.
+[Workflow output](https://github.com/johnolafenwa/Aura/actions/runs/44201719086/job/134465583204)
+
+| Workload | Aura (ms) | Rust (ms) | Python (ms) | Aura / Rust | Aura / Python |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Deque | 0.084 | 0.030 | 0.638 | 2.80 | 0.13 |
+| Min-heap | 0.323 | 0.314 | 1.967 | 1.03 | 0.16 |
+| Sorted map | 1.804 | 0.895 | 4.542 | 2.02 | 0.40 |
+| Sorted set | 1.208 | 0.647 | 70.584 | 1.87 | 0.02 |
+
+## Shared development host
 
 On 2026-11-17, the programs ran on one reserved CPU of a shared Intel Xeon
 Platinum 8573C host running x86-64 Linux. Aura emitted optimized LLVM
@@ -43,3 +57,9 @@ its Python reference. The map measures successful lookups and the set
 measures successful removals. The deque and heap benchmark fresh local
 receivers. Generic or aliased receivers and user-defined key orders take
 different paths.
+
+A repeat on the shared host used the published PR release `c9fc4b7c`
+and the same inputs. Its wall-time ratios to Rust were 2.61 for deque,
+1.11 for heap, 3.08 for map and 3.98 for set. The map and set exceeded
+the target on that repeat. Substituting process CPU time gave ratios of
+2.19, 1.67, 2.61 and 1.79. All four beat Python by both clocks.
