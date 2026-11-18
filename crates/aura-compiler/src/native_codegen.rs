@@ -9077,18 +9077,18 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.seal_block(done_block);
         }
 
-        // The environment words may have changed (mutated captures), so the
-        // callee's words are read back into its local or owned temporary.
-        let reloaded = (0..1 + CALLABLE_ENVIRONMENT_WORDS)
-            .map(|index| {
-                self.builder.load(
-                    types::I64,
-                    MemFlags::new(),
-                    callable_ptr,
-                    (index as i32) * 8,
-                )
-            })
-            .collect::<Vec<_>>();
+        // Invoke adapters can update captured values. The descriptor that
+        // selects the adapter stays the same across calls.
+        let mut reloaded = Vec::with_capacity(1 + CALLABLE_ENVIRONMENT_WORDS);
+        reloaded.push(descriptor);
+        for index in 1..=CALLABLE_ENVIRONMENT_WORDS {
+            reloaded.push(self.builder.load(
+                types::I64,
+                MemFlags::new(),
+                callable_ptr,
+                (index as i32) * 8,
+            ));
+        }
         if let Some(root) = callee_root.as_deref() {
             if matches!(self.local_type(root)?, DirectType::Callable(_)) {
                 let vars = self.local_vars(root)?;
