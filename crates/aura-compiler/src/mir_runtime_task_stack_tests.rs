@@ -269,7 +269,9 @@ fn the_entry_stack_is_the_root_task_stack() {
     // The interpreter gives the program's first task the whole stack its
     // thread was started with, so deep recursion has the same room with
     // and without tasks.
-    assert_eq!(ROOT_LIGHTWEIGHT_TASK_STACK_SIZE, 64 * 1024 * 1024);
-    assert!(MIR_RUNTIME_STACK_SIZE >= 4 * ROOT_LIGHTWEIGHT_TASK_STACK_SIZE);
-    assert!(TASK_STACK_HEADROOM_RESERVE + ENTRY_THREAD_MARGIN < MIR_RUNTIME_STACK_SIZE);
+    const {
+        assert!(ROOT_LIGHTWEIGHT_TASK_STACK_SIZE == 64 * 1024 * 1024);
+        assert!(MIR_RUNTIME_STACK_SIZE >= 4 * ROOT_LIGHTWEIGHT_TASK_STACK_SIZE);
+        assert!(TASK_STACK_HEADROOM_RESERVE + ENTRY_THREAD_MARGIN < MIR_RUNTIME_STACK_SIZE);
+    }
 }
