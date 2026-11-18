@@ -256,6 +256,78 @@ fn scalar_layouts_compare_and_iterate_like_the_general_store() {
 }
 
 #[test]
+fn deque_host_and_word_operations_share_order_and_empty_pop_errors() {
+    for empty in [
+        call(new, vec![number(0)]),
+        Value::CollectionStore(I64Op::PushBack.new_store(false)),
+    ] {
+        let queue = call(deque_push, vec![empty, number(5), Value::Bool(false)]);
+        let queue = call(deque_push, vec![queue, number(3), Value::Bool(true)]);
+        let mut copy = store(queue.clone()).unwrap();
+        copy.write_i64(I64Op::PushBack, 8, 0).unwrap();
+        assert_eq!(copy.write_i64(I64Op::PopFront, 0, 0).unwrap(), Some(3));
+        assert_eq!(copy.write_i64(I64Op::PopBack, 0, 0).unwrap(), Some(8));
+        assert_eq!(copy.write_i64(I64Op::PopBack, 0, 0).unwrap(), Some(5));
+        let error = copy.write_i64(I64Op::PopFront, 0, 0).unwrap_err();
+        assert_eq!(error.code, "AU4003");
+
+        let (queue, last) = split(call(deque_pop, vec![queue, Value::Bool(false)]));
+        let (queue, first) = split(call(deque_pop, vec![queue, Value::Bool(true)]));
+        assert_eq!((first, last), (number(3), number(5)));
+        let error = deque_pop(vec![queue, Value::Bool(false)], None).unwrap_err();
+        assert_eq!(error.code, "AU4003");
+    }
+}
+
+#[test]
+fn heap_host_peek_and_word_pop_agree_across_storage_layouts() {
+    for (kind, descending, first, second) in [(1, false, 2, 7), (2, true, 7, 2)] {
+        for empty in [
+            call(new, vec![number(kind)]),
+            Value::CollectionStore(I64Op::HeapPush.new_store(descending)),
+        ] {
+            let heap = call(heap_push, vec![empty, number(7)]);
+            let mut mixed = store(heap).unwrap();
+            mixed.write_i64(I64Op::HeapPush, 2, 0).unwrap();
+            let snapshot = Value::CollectionStore(mixed.clone());
+            assert_eq!(
+                call(heap_peek, vec![snapshot.clone()]),
+                lookup(Some(number(first)))
+            );
+            assert_eq!(mixed.write_i64(I64Op::HeapPop, 0, 0).unwrap(), Some(first));
+            assert_eq!(mixed.write_i64(I64Op::HeapPop, 0, 0).unwrap(), Some(second));
+            let error = mixed.write_i64(I64Op::HeapPop, 0, 0).unwrap_err();
+            assert_eq!(error.code, "AU4003");
+            assert_eq!(call(len, vec![snapshot]), number(2));
+        }
+    }
+}
+
+#[test]
+fn map_host_and_word_operations_preserve_overwrites_and_snapshots() {
+    for empty in [
+        call(new, vec![number(3)]),
+        Value::CollectionStore(I64Op::MapSet.new_store(false)),
+    ] {
+        let original = call(map_put, vec![empty, number(3), number(12)]);
+        let mut copy = store(original.clone()).unwrap();
+        assert_eq!(copy.read_i64(I64Op::MapGet, 3).unwrap(), Some(12));
+        copy.write_i64(I64Op::MapSet, 3, 19).unwrap();
+        let updated = Value::CollectionStore(copy.clone());
+        assert_eq!(
+            call(map_get, vec![updated, number(3)]),
+            lookup(Some(number(19)))
+        );
+        assert_eq!(copy.write_i64(I64Op::MapRemove, 3, 0).unwrap(), Some(19));
+        assert_eq!(copy.read_i64(I64Op::MapGet, 3).unwrap(), None);
+        assert_eq!(
+            call(map_get, vec![original, number(3)]),
+            lookup(Some(number(12)))
+        );
+    }
+}
+
+#[test]
 fn confined_words_detach_once_and_survive_buffer_growth() {
     for (push, pop, descending) in [
         (I64Op::PushBack, I64Op::PopFront, false),
