@@ -20,7 +20,7 @@ httparse = "1"
 libc = "0.2"
 libffi = "5.1.1"
 memchr = "2"
-jpeg-encoder = { version = "0.7.1", features = ["simd"] }
+libjpeg-turbo-rs = "0.9.0"
 mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
 num-bigint = "0.5.1"
 num-integer = "0.1.47"

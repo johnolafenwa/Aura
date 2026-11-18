@@ -44,7 +44,7 @@ an `image.Error`. This is the split ADR-0082 uses for `http`.
 ### Formats and codecs
 
 The module reads and writes PNG, JPEG and the Netpbm family. PNG uses the
-`png` crate, JPEG decoding `zune-jpeg`, and JPEG encoding `jpeg-encoder`.
+`png` crate, JPEG decoding `zune-jpeg`, and JPEG encoding `libjpeg-turbo-rs`.
 All three are Rust with no C code, so the Windows and musl builds need
 nothing new. Netpbm is written by hand: P1 to P6 are read, and P5 and P6
 are written.
@@ -94,8 +94,9 @@ the tensor source.
 JPEG encoding splits a large image into strips of whole MCU rows, encodes
 them on several threads, and joins them with restart markers into one
 standard baseline file. The bilinear and bicubic resizes split their rows
-the same way. The output does not depend on the number of threads. The
-limit is the one Array kernels use, `AURA_ARRAY_THREADS`, at most 16.
+the same way. The restart markers depend on the number of strips, and the
+decoded samples are identical across thread counts. The limit is the one
+Array kernels use, `AURA_ARRAY_THREADS`, at most 16.
 
 ### Binary size
 

@@ -76,3 +76,19 @@ both files. On a dedicated Linux runner the integrated release beat
 Python in six of seven workloads. Encoding JPEG took 6.0 ms in Aura,
 41.3 ms in Rust and 5.0 ms in Pillow.
 [Image benchmark results](../benchmarks/image_codec/README.md#integrated-linux-release)
+
+## JPEG encoding on 2026-11-18
+
+The pure Rust `libjpeg-turbo-rs` encoder averages colour across each 2 by 2
+group of RGB pixels. On a red, green, blue, and white checkerboard, the
+previous top-left filter produced a red cast, with a maximum channel
+difference of 254. The regression checks that the decoded cells are neutral.
+The strip layout, quality range, grayscale support, and image-size limits
+are covered by the codec tests. Timings and sample conditions are in
+`benchmarks/image_codec/README.md`.
+
+Both JPEG header readers now accept legal long, narrow images. A 20,000 by
+1 file previously hit the underlying decoder's 16,384-pixel side limit
+before Aura considered its 20,000-pixel area. The regression checks both
+orientations on the interpreter and native backend, and distinguishes the
+successful decode from a caller's 19,999-pixel limit.
