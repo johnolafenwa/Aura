@@ -46,6 +46,14 @@ in this file.
 
 - Editor: the VS Code grammar highlights byte strings and their escapes.
 
+- Examples: `examples/packages/raylib` binds the raylib graphics library
+  through FFI. A script in the package generates the binding from
+  raylib's own API description, and it covers 556 of raylib 6.0's 600
+  functions. Three programs use it: a brick game with keyboard and mouse
+  input, a 3D scene with a camera and a model, and a picture drawn into
+  an image and written to a PNG. The package's README says how to install
+  raylib and run them.
+
 - New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
   files into an `image.Image`, whose pixels are a `list[uint8]`.
   `image.read`, `image.decode`, `image.info`, `image.write`, and the
