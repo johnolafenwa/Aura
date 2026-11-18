@@ -42,9 +42,9 @@ pub(super) struct ProgramShapes {
     /// `leaf_body`): such a method hands back the box it was given as it
     /// was, so a call tags neither the receiver nor the write-back.
     field_only_methods: HashSet<String>,
+    pub(super) numeric_union_projections: HashMap<String, (String, usize, crate::ffi::FfiScalar)>,
     /// Only compiler-supplied methods have no user source path.
     collection_methods: HashMap<String, crate::diag::Span>,
-    pub(super) numeric_union_projections: HashMap<String, (String, usize, crate::ffi::FfiScalar)>,
 }
 
 impl ProgramShapes {

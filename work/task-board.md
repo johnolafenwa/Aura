@@ -2,6 +2,20 @@
 
 Last updated: 2026-11-18
 
+## Failure recovery
+
+- Both backends implement `control.recover` and stack-bounded recursion.
+  Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
+- A release build measured 1.35 ns per successful scalar call and 104.49 ns
+  per caught literal assertion. With an interpolated message the medians
+  were 5.53 ns and 781.29 ns. Both variants beat Python and came within
+  twice Rust’s success time.
+- The [work note](2026-11-17-failure-recovery.md) records the verification
+  and example. [PR #302](https://github.com/johnolafenwa/Aura/pull/302)
+  targets the shared integration branch.
+- Both backends preserve C cleanup and the recovered diagnostic when a C
+  text callback traps or recovers an inner failure.
+
 ## Shared Mutable State (implemented)
 
 - The sync module provides `Mutex[T]`, `AtomicInt`, `AtomicBool` and
@@ -21,75 +35,11 @@ Last updated: 2026-11-18
   three times the Rust time.
   [Shared-state measurements](../benchmarks/shared_state/README.md)
 
-- Combined verification with failure recovery covers a mutex held by the caller
-  and a second mutex abandoned by a recovered call. See the shared-state note.
+- The combined mutex and recovery fixture holds one lock in the caller,
+  recovers a failed call holding another, and checks that both can be used
+  again. See the shared-state work note.
 
-## Failure recovery
-
-- Both backends implement `control.recover` and stack-bounded recursion.
-  Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
-- A release build measured 6.40 ns per successful scalar call and 308.14 ns
-  per caught literal assertion. With an interpolated message the medians
-  were 2.64 ns and 399.13 ns. Both variants beat Python and came within
-  twice Rust’s success time.
-- The [work note](2026-11-17-failure-recovery.md) records the verification
-  and example. [PR #302](https://github.com/johnolafenwa/Aura/pull/302)
-  targets the shared integration branch.
-- Recovery inside and outside a C text callback agrees on both backends.
-
-## The `image` module (complete)
-
-- Target: John's 2026-11-16 "lets do 1,2,3" on the graphics options, of
-  which this is option 2. Details are in `2026-11-16-image-module.md`.
-- Done: PNG, JPEG and Netpbm reading and writing, resize, crop, flips,
-  channel conversion, `Array` forms for tensors, the Manual page, book
-  section 20.6, ADR-0114, an example and a benchmark.
-- Verification: runtime and compiler unit tests with fixtures made by
-  Pillow, the example under `aura run` and in a built binary, and
-  `benchmarks/image_codec` against Rust and Pillow.
-  The documentation build and both dependency audits pass with the pinned glob matcher.
-- Left out: 16-bit samples, metadata, other formats, drawing.
-- JPEG encoding averages the colour in 2 by 2 pixel groups.
-  `benchmarks/image_codec/README.md` records the release comparison.
-
-
-## raylib graphics and FFI v2 (in progress)
-
-- Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
-  additions that C graphics libraries need: array fields, unions, and
-  arrays of structs. The design is in
-  `architecture_docs/29-ffi-v2-graphics-design-checkpoint.md`, and the
-  note is `2026-11-16-raylib-and-ffi-v2.md`.
-- Done: step 1, `examples/packages/raylib` on the FFI of 0.16: a generated
-  binding, a brick game, a 3D scene, and a picture program, with
-  acceptance tests on both backends and a CI step that installs raylib and
-  a virtual display.
-- Done: step 2 (ADR-0106): `array[T, N]` fields, `ptr[Name]` for arrays of
-  structs, AArch64 struct arguments that overflow the registers, and a fix
-  for a struct placed on the stack when only the other kind of register
-  had run out. The binding now covers 587 of raylib 6.0's 600 functions.
-- Verification: unit tests in the runtime and compiler, and acceptance
-  tests against a C fixture library and raylib on both backends on x86-64
-  Linux under Xvfb. Not run on macOS, Windows, or arm64 here; the AArch64
-  call sequence was checked by reading the generated assembly.
-- Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
-  that runs an SDL event loop on both backends.
-- Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
-  acceptance test. The manual and chapter 18 cover the copying and
-  failure rules. Native callback cleanup also covers a trap in a callback.
-- The FFI v2 benchmark covers struct arrays, fixed array fields, union
-  reads, and UTF-8 callbacks. Native record arrays with a matching C
-  layout copy directly into a call buffer. C-filled union lists used only
-  for numeric member reads can reuse those bytes. A callback that only reads
-  its text inputs can hold the owned strings on its stack. All four workloads
-  beat Python ctypes on the dedicated Linux runner at `5f111af1`. The text
-  callback took 32.64 ns in Aura, 9.61 ns in Rust and 378.88 ns in Python.
-  The other three were within three times the Rust time. The
-  expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
-  GLFW and SQLite.
-  [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
-
-## First-class closures (in progress)
+## First-class closures (implemented)
 
 - Target: John's 2026-11-16 approval of item 3 of the missing features
   list: a capturing closure needed an alias and a constructor call to be
@@ -115,6 +65,7 @@ Last updated: 2026-11-18
   took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
   18,443 ms for Python.
 
+
 ## Ordered collections (verification in progress)
 
 Five fixtures pass on MIR and the direct backend, including custom ordering,
@@ -139,7 +90,8 @@ See `2026-11-17-ordered-collections.md`.
 - Step 2 adds BigInt, Decimal and Complex (ADR-0113). All six measured
   workloads in the 21-run feature comparison beat Python and took at most
   1.46 times Rust’s time. In the first integrated Linux run, Fibonacci
-  took 6.779 ms in Aura and 6.455 ms in Python. Tests
+  took 6.779 ms in Aura and 6.455 ms in Python. The faster four-limb add
+  at `1033d521` took 4.841 ms in Aura, 3.890 ms in Rust and 6.452 ms in Python. Tests
   and measurements are in [the numbers work note](2026-11-17-numbers.md).
 - Step 3 adds `Deque`, `Heap`, `SortedMap` and `SortedSet` under ADR-0117.
   The [ordered collections work note](2026-11-17-ordered-collections.md)
@@ -154,6 +106,58 @@ See `2026-11-17-ordered-collections.md`.
   in Aura, 16.457 ms in Rust and 5.699 ms in Python by elapsed time. A
   process CPU run took 5.451 ms in Aura and 5.150 ms in Python. The
   first write to a shared union cost 10.7% on the mutation workload.
+
+## The `image` module (complete)
+
+- Target: John's 2026-11-16 "lets do 1,2,3" on the graphics options, of
+  which this is option 2. Details are in `2026-11-16-image-module.md`.
+- Done: PNG, JPEG and Netpbm reading and writing, resize, crop, flips,
+  channel conversion, `Array` forms for tensors, the Manual page, book
+  section 20.6, ADR-0114, an example and a benchmark.
+- Verification: runtime and compiler unit tests with fixtures made by
+  Pillow, the example under `aura run` and in a built binary, and
+  `benchmarks/image_codec` against Rust and Pillow.
+  The documentation build and both dependency audits pass with the pinned glob matcher.
+- Left out: 16-bit samples, metadata, other formats, drawing.
+- JPEG encoding averages colour across 2 by 2 pixel groups. Both backends
+  decode a 20,000-pixel row or column within the caller’s pixel limit.
+  [Codec measurements](../benchmarks/image_codec/README.md)
+
+## raylib graphics and FFI v2
+
+- Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
+  additions that C graphics libraries need: array fields, unions, and
+  arrays of structs. The design is in
+  `architecture_docs/29-ffi-v2-graphics-design-checkpoint.md`, and the
+  note is `2026-11-16-raylib-and-ffi-v2.md`.
+- Done: step 1, `examples/packages/raylib` on the FFI of 0.16: a generated
+  binding, a brick game, a 3D scene, and a picture program, with
+  acceptance tests on both backends and a CI step that installs raylib and
+  a virtual display.
+- Done: step 2 (ADR-0106): `array[T, N]` fields, `ptr[Name]` for arrays of
+  structs, AArch64 struct arguments that overflow the registers, and a fix
+  for a struct placed on the stack when only the other kind of register
+  had run out. The binding now covers 587 of raylib 6.0's 600 functions.
+- Verification: unit tests in the runtime and compiler, and acceptance
+  tests against a C fixture library and raylib on both backends on x86-64
+  Linux under Xvfb. The hosted AArch64 raylib run passed all 25 FFI cases
+  and the interpreter/native fixture comparison. The FFI v2 calling
+  convention was also checked against an AArch64 GCC-built C callee under QEMU.
+- Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
+  that runs an SDL event loop on both backends.
+- Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
+  acceptance test. The manual and chapter 18 cover the copying and
+  failure rules. Native callback cleanup also covers a trap in a callback.
+- The FFI v2 benchmark covers struct arrays, fixed array fields, union
+  reads, and UTF-8 callbacks. Native record arrays with a matching C
+  layout copy directly into a call buffer. C-filled union lists used only
+  for numeric member reads can reuse those bytes. A callback that only reads
+  its text inputs can hold the owned strings on its stack. In the dedicated
+  run at `1033d521`, text callbacks took 32.32 ns in Aura, 9.62 ns in Rust
+  and 378.27 ns in Python. All four workloads finished ahead of ctypes. The
+  expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
+  GLFW and SQLite.
+  [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
 
 ## Three compiler defects from the book sections (complete)
 

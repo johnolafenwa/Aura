@@ -1649,90 +1649,6 @@ fn iter_namespace() -> ModuleNamespace {
     namespace
 }
 
-/// The host part of `image`: the codecs and the pixel operations, each
-/// taking one large value and then integers. `Image`, `Error` and the
-/// public functions are Aura source in `std/image.au`.
-fn image_namespace() -> ModuleNamespace {
-    let int64 = || type_ref("int64", Vec::new());
-    let text = || type_ref("str", Vec::new());
-    let array = || type_ref("Array", vec![type_ref("float32", Vec::new())]);
-    let tuple = |items: Vec<TypeRef>| TypeRef::tuple(items, false, builtin_span());
-    let function = |name: &str, data: (&str, TypeRef), numbers: &[&str], result: TypeRef| {
-        let mut params = vec![borrow_param(data.0, data.1)];
-        params.extend(numbers.iter().map(|number| value_param(number, int64())));
-        function_info("image", name, params, result)
-    };
-    let pixels = || ("pixels", bytes_vec_type_ref());
-    let layout = ["width", "height", "channels"];
-    let with_layout = |rest: &[&'static str]| [&layout[..], rest].concat();
-    function_only_namespace(
-        "image",
-        vec![
-            function(
-                "__aura_info",
-                ("data", bytes_vec_type_ref()),
-                &[],
-                tuple(vec![int64(), int64(), int64(), int64(), text()]),
-            ),
-            function(
-                "__aura_decode",
-                ("data", bytes_vec_type_ref()),
-                &["max_pixels"],
-                tuple(vec![
-                    int64(),
-                    int64(),
-                    int64(),
-                    int64(),
-                    bytes_vec_type_ref(),
-                    text(),
-                ]),
-            ),
-            function(
-                "__aura_encode",
-                pixels(),
-                &["format", "width", "height", "channels", "option"],
-                tuple(vec![int64(), bytes_vec_type_ref(), text()]),
-            ),
-            function(
-                "__aura_convert",
-                pixels(),
-                &with_layout(&["target"]),
-                bytes_vec_type_ref(),
-            ),
-            function(
-                "__aura_resize",
-                pixels(),
-                &with_layout(&["new_width", "new_height", "filter"]),
-                bytes_vec_type_ref(),
-            ),
-            function(
-                "__aura_crop",
-                pixels(),
-                &with_layout(&["left", "top", "crop_width", "crop_height"]),
-                bytes_vec_type_ref(),
-            ),
-            function(
-                "__aura_flip",
-                pixels(),
-                &with_layout(&["vertical"]),
-                bytes_vec_type_ref(),
-            ),
-            function(
-                "__aura_to_array",
-                pixels(),
-                &with_layout(&["planes"]),
-                array(),
-            ),
-            function(
-                "__aura_from_array",
-                ("values", array()),
-                &["planes"],
-                tuple(vec![int64(), int64(), int64(), bytes_vec_type_ref()]),
-            ),
-        ],
-    )
-}
-
 /// Opaque, copy-on-write storage owned by the source collection classes.
 fn collections_namespace() -> ModuleNamespace {
     let ty = |name| type_ref(name, Vec::new());
@@ -1861,6 +1777,90 @@ fn collections_namespace() -> ModuleNamespace {
         .insert("__Store".to_string(), storage.clone());
     namespace.classes.insert("__Store".to_string(), storage);
     namespace
+}
+
+/// The host part of `image`: the codecs and the pixel operations, each
+/// taking one large value and then integers. `Image`, `Error` and the
+/// public functions are Aura source in `std/image.au`.
+fn image_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let text = || type_ref("str", Vec::new());
+    let array = || type_ref("Array", vec![type_ref("float32", Vec::new())]);
+    let tuple = |items: Vec<TypeRef>| TypeRef::tuple(items, false, builtin_span());
+    let function = |name: &str, data: (&str, TypeRef), numbers: &[&str], result: TypeRef| {
+        let mut params = vec![borrow_param(data.0, data.1)];
+        params.extend(numbers.iter().map(|number| value_param(number, int64())));
+        function_info("image", name, params, result)
+    };
+    let pixels = || ("pixels", bytes_vec_type_ref());
+    let layout = ["width", "height", "channels"];
+    let with_layout = |rest: &[&'static str]| [&layout[..], rest].concat();
+    function_only_namespace(
+        "image",
+        vec![
+            function(
+                "__aura_info",
+                ("data", bytes_vec_type_ref()),
+                &[],
+                tuple(vec![int64(), int64(), int64(), int64(), text()]),
+            ),
+            function(
+                "__aura_decode",
+                ("data", bytes_vec_type_ref()),
+                &["max_pixels"],
+                tuple(vec![
+                    int64(),
+                    int64(),
+                    int64(),
+                    int64(),
+                    bytes_vec_type_ref(),
+                    text(),
+                ]),
+            ),
+            function(
+                "__aura_encode",
+                pixels(),
+                &["format", "width", "height", "channels", "option"],
+                tuple(vec![int64(), bytes_vec_type_ref(), text()]),
+            ),
+            function(
+                "__aura_convert",
+                pixels(),
+                &with_layout(&["target"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_resize",
+                pixels(),
+                &with_layout(&["new_width", "new_height", "filter"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_crop",
+                pixels(),
+                &with_layout(&["left", "top", "crop_width", "crop_height"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_flip",
+                pixels(),
+                &with_layout(&["vertical"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_to_array",
+                pixels(),
+                &with_layout(&["planes"]),
+                array(),
+            ),
+            function(
+                "__aura_from_array",
+                ("values", array()),
+                &["planes"],
+                tuple(vec![int64(), int64(), int64(), bytes_vec_type_ref()]),
+            ),
+        ],
+    )
 }
 
 /// The host part of `regex`: the searches themselves, keyed by the number
@@ -3560,9 +3560,9 @@ const HOST_BUILTIN_MODULES: &[&str] = &[
     "log",
     "trace",
     "random",
-    "sync",
     "numbers",
     "collections",
+    "sync",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -3736,13 +3736,13 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
         "iter",
         "prelude",
         "simd",
-        "collections",
         "toml",
         "log",
         "metrics",
         "trace",
-        "sync",
         "numbers",
+        "collections",
+        "sync",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

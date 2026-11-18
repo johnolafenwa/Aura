@@ -815,6 +815,22 @@ fn direct_typed_layouts_convert_only_at_the_print() {
 }
 
 #[test]
+fn a_stored_wide_callable_owns_its_captures_as_runtime_values() {
+    let source = r#"type Step = Callable[def(value: int64) -> int64]
+
+def stored(a: int64, b: int64, c: int64, d: int64) -> list[Step]:
+    return [Step(lambda value: value + a + b + c + d)]
+
+def main() -> None:
+    steps = stored(1, 2, 3, 4)
+    print(steps[0](5))
+"#;
+    let (_, direct) = assert_both_backends("repr-stored-wide-callable", source, "15\n");
+    assert_eq!(direct.closure_environments, 1);
+    assert_eq!(direct.callable_overflow_allocations, 1);
+}
+
+#[test]
 fn small_bigint_arithmetic_keeps_the_loop_accumulator_inline() {
     let sample = |count: u64| {
         let source = format!(
@@ -831,20 +847,4 @@ fn small_bigint_arithmetic_keeps_the_loop_accumulator_inline() {
         "additional small additions allocate no boxes"
     );
     assert_eq!(long.union_payload_boxes, short.union_payload_boxes);
-}
-
-#[test]
-fn a_stored_wide_callable_owns_its_captures_as_runtime_values() {
-    let source = r#"type Step = Callable[def(value: int64) -> int64]
-
-def stored(a: int64, b: int64, c: int64, d: int64) -> list[Step]:
-    return [Step(lambda value: value + a + b + c + d)]
-
-def main() -> None:
-    steps = stored(1, 2, 3, 4)
-    print(steps[0](5))
-"#;
-    let (_, direct) = assert_both_backends("repr-stored-wide-callable", source, "15\n");
-    assert_eq!(direct.closure_environments, 1);
-    assert_eq!(direct.callable_overflow_allocations, 1);
 }

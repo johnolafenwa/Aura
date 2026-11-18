@@ -4074,6 +4074,29 @@ def main():
 }
 
 #[test]
+fn local_function_bodies_have_independent_verification_conditions() {
+    let source = r#"
+def main() -> None:
+    base: int64 = 7
+    def pick(value: int64) -> int64:
+        if value == 0:
+            assert value == 0
+            return base
+        assert value != 0
+        return value
+    print(pick(2))
+"#;
+    if let Some(report) = verify(source) {
+        assert!(report.is_proved(), "{report:#?}");
+        assert_eq!(report.obligations.len(), 2);
+    }
+    let bad = source.replace("assert value == 0", "assert value != 0");
+    if let Some(report) = verify(&bad) {
+        assert!(!report.is_proved(), "the branch violates its assertion");
+    }
+}
+
+#[test]
 fn fresh_sync_reads_do_not_preserve_a_previous_observation() {
     let source = r#"import sync
 
@@ -4105,28 +4128,5 @@ def main():
                     && check.status != Status::Proved),
             "shared read at line {line} must stay unproved: {report:#?}",
         );
-    }
-}
-
-#[test]
-fn local_function_bodies_have_independent_verification_conditions() {
-    let source = r#"
-def main() -> None:
-    base: int64 = 7
-    def pick(value: int64) -> int64:
-        if value == 0:
-            assert value == 0
-            return base
-        assert value != 0
-        return value
-    print(pick(2))
-"#;
-    if let Some(report) = verify(source) {
-        assert!(report.is_proved(), "{report:#?}");
-        assert_eq!(report.obligations.len(), 2);
-    }
-    let bad = source.replace("assert value == 0", "assert value != 0");
-    if let Some(report) = verify(&bad) {
-        assert!(!report.is_proved(), "the branch violates its assertion");
     }
 }

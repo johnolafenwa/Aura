@@ -7,27 +7,34 @@ in this file.
 
 ## Unreleased
 
-- The `sync` module adds `Mutex[T]`, `AtomicInt`, `AtomicBool`, and
-  `Map[K, V]` for state shared between tasks. A `with` block around
-  `mutex.lock()` gives its body a mutable view of the guarded value.
+- A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
 
-- `control.recover(function, arguments...)` returns the function's value in
-  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
-  current task and cleans up its own scopes on failure.
-- Recursive calls can continue past 256 frames. A call that exhausts the
-  available stack traps with AU4005. Deep diagnostics record how many
-  intervening calls were omitted.
-
-- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
-  files into an `image.Image`, whose pixels are a `list[uint8]`.
-  JPEG encoding averages colour across each 2 by 2 group of pixels.
-  `image.read`, `image.decode`, `image.info`, `image.write`, and the
-  `image.encode_*` functions return `Result` with an `image.Error`, and a
-  damaged or oversized file is never a trap. An image can be resized,
-  cropped, flipped, and converted between gray, RGB, and alpha forms.
-  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
-  `Tensor.from_array`. See the Image Module page of the Manual and
-  section 20.6 of the book (ADR-0114).
+- Language: a closure is stored without ceremony. A lambda, a function, a
+  bound method, or a local that holds a closure packs where a
+  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
+  binding, an argument, a field, a list, set, or dictionary element, a
+  `return`, and each arm of a conditional or `match` expression. A type
+  alias called as a constructor is no longer needed, and `AU2015` no longer
+  reports implicit erased storage. The constructor stays valid and is still
+  how a packed value is restricted to a weaker contract.
+- Language: a lambda without a capture list captures a Copy parameter of
+  the enclosing function by value, so `def make(n: int64)` can return
+  `lambda value: value + n`. A parameter that is not Copy still needs `own`
+  or a clone and reports `AU3002`.
+- Compiler: a call through a closure kept in a class field or a list
+  element is direct. The stored value keeps the closure's four words, and
+  the call reaches them where the field or the list keeps them. A field
+  call takes about 41 instructions on x86-64, and a `for` loop over a
+  shared `list[Callable[...]]` takes about 40 per element. A call of a
+  closure with mutable captures no longer asks the runtime for mutable
+  sinks its caller never handed over.
+- Fixed: a `for` loop over `mut` elements of a list of Mutable callables,
+  `for tally in mut tallies: tally(1)`, was rejected by the MIR validator
+  with "no authoritative callable contract". An element loan now carries
+  the callable identities of its collection.
+- Fixed: a nested list of callables whose rows differ in length, such as
+  `[[first], [second, third]]`, was rejected by the MIR validator when a
+  row was read. A shorter row no longer poisons the positions it lacks.
 
 - C callbacks accept NUL-terminated UTF-8 text. Declare the parameter
   as `cstr` in the foreign signature and `str` in the named Aura
@@ -71,35 +78,6 @@ in this file.
   an image and written to a PNG. The package's README says how to install
   raylib and run them.
 
-- A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
-
-- Language: a closure is stored without ceremony. A lambda, a function, a
-  bound method, or a local that holds a closure packs where a
-  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
-  binding, an argument, a field, a list, set, or dictionary element, a
-  `return`, and each arm of a conditional or `match` expression. A type
-  alias called as a constructor is no longer needed, and `AU2015` no longer
-  reports implicit erased storage. The constructor stays valid and is still
-  how a packed value is restricted to a weaker contract.
-- Language: a lambda without a capture list captures a Copy parameter of
-  the enclosing function by value, so `def make(n: int64)` can return
-  `lambda value: value + n`. A parameter that is not Copy still needs `own`
-  or a clone and reports `AU3002`.
-- Compiler: a call through a closure kept in a class field or a list
-  element is direct. The stored value keeps the closure's four words, and
-  the call reaches them where the field or the list keeps them. A field
-  call costs about 76 instructions where it cost about 8,400, and a `for`
-  loop over a `list[Callable[...]]` about 128 an element. A call of a
-  closure with mutable captures no longer asks the runtime for mutable
-  sinks its caller never handed over.
-- Fixed: a `for` loop over `mut` elements of a list of Mutable callables,
-  `for tally in mut tallies: tally(1)`, was rejected by the MIR validator
-  with "no authoritative callable contract". An element loan now carries
-  the callable identities of its collection.
-- Fixed: a nested list of callables whose rows differ in length, such as
-  `[[first], [second, third]]`, was rejected by the MIR validator when a
-  row was read. A shorter row no longer poisons the positions it lacks.
-
 - The `numbers` module supplies arbitrary-size `BigInt`, exact `Decimal` with explicit rounding, and two-component `Complex` arithmetic.
 
 - The `collections` module adds `Deque`, `Heap`, `SortedMap` and `SortedSet`.
@@ -140,6 +118,27 @@ in this file.
   (ADR-0110).
 
 - Editor: the VS Code grammar highlights byte strings and their escapes.
+
+- The `sync` module adds `Mutex[T]`, `AtomicInt`, `AtomicBool`, and
+  `Map[K, V]` for state shared between tasks. A `with` block around
+  `mutex.lock()` gives its body a mutable view of the guarded value.
+
+- `control.recover(function, arguments...)` returns the function's value in
+  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
+  current task and cleans up its own scopes on failure.
+- Recursive calls can continue past 256 frames. A call that exhausts the
+  available stack traps with AU4005. Deep diagnostics record how many
+  intervening calls were omitted.
+- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
+  files into an `image.Image`, whose pixels are a `list[uint8]`.
+  JPEG encoding averages colour across each 2 by 2 group of pixels.
+  `image.read`, `image.decode`, `image.info`, `image.write`, and the
+  `image.encode_*` functions return `Result` with an `image.Error`, and a
+  damaged or oversized file is never a trap. An image can be resized,
+  cropped, flipped, and converted between gray, RGB, and alpha forms.
+  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
+  `Tensor.from_array`. See the Image Module page of the Manual and
+  section 20.6 of the book (ADR-0114).
 
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as

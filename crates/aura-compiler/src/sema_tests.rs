@@ -34192,6 +34192,14 @@ fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
 }
 
 #[test]
+fn calling_a_tuple_closure_borrows_its_place_while_evaluating_arguments() {
+    let source =
+        include_str!("../tests/fixtures/check-fail/callable_tuple_overlapping_argument.au");
+    let error = crate::check_source(source).expect_err("the argument replaces the held callable");
+    assert_eq!(error.code, "AU3002", "{error:?}");
+}
+
+#[test]
 fn numbers_require_explicit_conversion_for_arithmetic() {
     let source =
         include_str!("../tests/fixtures/check-fail/bigint_requires_explicit_conversion.au");
@@ -34201,12 +34209,4 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         error.message.contains("BigInt") && error.message.contains("int64"),
         "{error:?}"
     );
-}
-
-#[test]
-fn calling_a_tuple_closure_borrows_its_place_while_evaluating_arguments() {
-    let source =
-        include_str!("../tests/fixtures/check-fail/callable_tuple_overlapping_argument.au");
-    let error = crate::check_source(source).expect_err("the argument replaces the held callable");
-    assert_eq!(error.code, "AU3002", "{error:?}");
 }

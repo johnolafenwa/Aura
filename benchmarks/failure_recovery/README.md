@@ -21,15 +21,15 @@ including its structured error value.
 ## Results
 
 Median nanoseconds per call on one Intel Xeon Platinum 8573C core, Linux
-x86-64, using the release compiler from CI run 44197632386 (feature
-commit `7a1147db`), Rust 1.95.0 and CPython 3.12.14. Each column uses
+x86-64, using the release compiler from CI run 44203518506 (feature
+commit `1dba8ad1`), Rust 1.95.0 and CPython 3.12.14. Each column uses
 five samples. The script checks the checksum of every run.
 
 | Language | Literal success | Literal failure | Formatted success | Formatted failure |
 | --- | ---: | ---: | ---: | ---: |
-| Aura | 6.40 | 308.14 | 2.64 | 399.13 |
-| Rust | 3.85 | 11246.96 | 1.49 | 9836.45 |
-| Python | 387.87 | 2115.95 | 198.37 | 1204.27 |
+| Aura | 1.35 | 104.49 | 5.53 | 781.29 |
+| Rust | 1.39 | 8094.02 | 3.13 | 12556.90 |
+| Python | 337.32 | 908.15 | 280.70 | 1851.51 |
 
 The handoff revision (`67b0d91`) took 379.66 ns per success and
 12,008.88 ns per failure on the literal workload. After optimizing

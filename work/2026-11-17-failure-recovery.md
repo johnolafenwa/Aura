@@ -48,13 +48,13 @@ with invocation-specific messages. MIR and Linux native matched across all
 message reported AU4004 on both backends.
 
 All 1,304 runtime library tests passed. The cached-file read test ran on
-Linux tmpfs, which supports its nonblocking read. The released Linux x86-64
-compiler from CI run 44197632386 built a hello-world executable of 1,144,456 bytes after unused native
-recovery code was removed, down 42,080 bytes with the same size gate.
+Linux tmpfs, which supports its nonblocking read. The Linux x86-64 kit
+from CI run 44203518506 built a 1,144,456-byte hello-world executable,
+down 42,080 bytes with the same size gate.
 
 On the release compiler, ten million successful checked scalar calls
-and 100,000 caught failures produced medians of 6.40 ns and 308.14 ns per
-call with a literal message, or 2.64 ns and 399.13 ns with an interpolated
+and 100,000 caught failures produced medians of 1.35 ns and 104.49 ns per
+call with a literal message, or 5.53 ns and 781.29 ns with an interpolated
 message. The caught error retains its source and its own formatted
 message. The [benchmark](../benchmarks/failure_recovery/README.md)
 records comparisons against Rust and Python and the earlier compiler.
