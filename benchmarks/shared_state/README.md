@@ -61,3 +61,20 @@ checksums as the four-core run above. The Aura scheduler used four workers.
 The four-task mutex took 2.86 times the Rust time and 1.67 times the
 Python time on this runner. The other five workloads finished sooner
 in Aura than in Python. [GitHub Actions measurements](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634681)
+
+A second dedicated x86-64 job at `5f111af1` also took three measurements
+per workload with four Aura workers. The Rust compiler was 1.95.0 and
+Python was 3.12.3. These medians give the three times on that runner.
+
+| Workload | Aura (ms) | Rust (ms) | Python (ms) |
+| --- | ---: | ---: | ---: |
+| `lock` | 80 | 20 | 860 |
+| `atomic` | 257 | 47 | 4,306 |
+| `dict` | 199 | 51 | 950 |
+| `lock_shared` | 502 | 104 | 838 |
+| `atomic_shared` | 388 | 344 | 4,179 |
+| `cache_shared` | 261 | 318 | 38,821 |
+
+On this runner Aura finished all six workloads ahead of Python. Against
+Rust, the first four took 4.00, 5.47, 3.90 and 4.83 times as long respectively.
+[GitHub Actions measurements](https://github.com/johnolafenwa/Aura/actions/runs/44212212238/job/134502108609)

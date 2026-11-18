@@ -14,8 +14,8 @@ Last updated: 2026-11-18
   and the multi-task example.
 - The uncontended integer lock took 36.5 ns per update on four pinned
   CPUs. Aura finished ahead of CPython on all six workloads on that
-  machine. The dedicated integration runner measured 823 ms in Aura,
-  288 ms in Rust and 494 ms in CPython for the four-task mutex.
+  machine. Two dedicated integration runners measured 823 / 288 / 494 ms
+  and 502 / 104 / 838 ms in Aura, Rust and CPython for the four-task mutex.
   [Shared-state measurements](../benchmarks/shared_state/README.md)
 
 ## The `image` module (complete)

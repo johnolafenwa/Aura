@@ -133,3 +133,9 @@ A dedicated Linux runner tested the combined release at `248ffb7e`.
 The four-task mutex took 823 ms in Aura, 288 ms in Rust and 494 ms in
 CPython. All three programs reported 4,000,000 increments. The four-task
 cache took 876 ms, 348 ms and 30,755 ms respectively.
+
+A second dedicated runner, on `5f111af1`, measured 502 ms in Aura,
+104 ms in Rust and 838 ms in Python for the four-task mutex. The shared
+atomic counter took 388, 344 and 4,179 ms respectively. The uncontended
+atomic counter took 257, 47 and 4,306 ms. The two runner results and
+the four pinned CPUs use independent release measurements.
