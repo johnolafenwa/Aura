@@ -30945,6 +30945,82 @@ fn native_numbers_read_borrowed_limbs_and_return_modular_powers_in_one_word() {
 }
 
 #[test]
+fn native_bigint_failures_keep_the_borrowed_magnitude_and_report_the_domain() {
+    use crate::list_elements::ListElements;
+    let limbs = |words: Vec<u64>| {
+        Value::Vec(VecValue::new(
+            Type::named("uint64"),
+            ListElements::Uint64(words.into()),
+        ))
+    };
+    let complete = limbs(vec![1, 0, 0, 0, 7]);
+    let incomplete = limbs(vec![1, 0, 0, 0]);
+    let left = boxed_value(complete.clone()) as usize;
+    let right = boxed_value(incomplete.clone()) as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let result = super::aura_direct_big_add_words(left as *mut _, right as *mut _);
+            Ok(unsafe { take_value(result) })
+        })
+    })
+    .expect_err("missing magnitude");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "BigInt.add received an incomplete magnitude");
+    assert_eq!(unsafe { take_value(left as *mut _) }, complete);
+    assert_eq!(unsafe { take_value(right as *mut _) }, incomplete);
+
+    for (exponent, modulus, message) in [
+        (-1, 7, "`BigInt.pow_mod` needs an exponent of 0 or more"),
+        (2, 0, "division by zero"),
+    ] {
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let power = super::aura_direct_small_pow_mod(3, exponent, modulus);
+                Ok(Value::Int(IntegerValue::from_i64(power)))
+            })
+        })
+        .expect_err("invalid compact modular power");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, message);
+    }
+}
+
+#[test]
+fn native_array_subtraction_reuses_only_an_exclusively_owned_right_temporary() {
+    fn array(values: [i64; 2]) -> Value {
+        Value::Array(
+            ArrayValue::new(Box::new([2]), ArrayStorage::Int64(values.to_vec().into()))
+                .expect("two integer elements"),
+        )
+    }
+    fn buffer(value: &Value) -> *const i64 {
+        let Value::Array(array) = value else {
+            panic!("expected an array");
+        };
+        let ArrayStorage::Int64(elements) = array.storage() else {
+            panic!("expected int64 elements");
+        };
+        elements.as_ptr()
+    }
+    let scalar = int_value(10);
+    for shared in [false, true] {
+        let operand = boxed_value(array([2, 6]));
+        let alias = shared.then(|| unsafe { retain_value(operand) });
+        let original = unsafe { super::with_value(operand, buffer) };
+        let flags = super::ARRAY_BINARY_SCALAR_LEFT | super::ARRAY_BINARY_RIGHT_TEMPORARY;
+        let result = super::aura_direct_array_binary(scalar, operand, flags, 1, 0, 0, 0);
+        let result = unsafe { take_value(result) };
+        assert_eq!(result, array([8, 4]));
+        assert_eq!(buffer(&result) == original, !shared);
+        unsafe { release_value(operand) };
+        if let Some(alias) = alias {
+            assert_eq!(unsafe { take_value(alias) }, array([2, 6]));
+        }
+    }
+    unsafe { release_value(scalar) };
+}
+
+#[test]
 fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     let mut out = [7, 9];
     assert_eq!(
