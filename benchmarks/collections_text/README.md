@@ -49,6 +49,10 @@ The new runtime determines membership and insertion order at union creation.
 Large sets of scalar or string keys can share their backing storage until
 one of the participating sets changes.
 
+A separate process CPU comparison took 5.451 ms for Aura, 16.027 ms for
+Rust and 5.150 ms for Python. The former Aura implementation took
+12.264 ms in that run.
+
 A second comparison shuffled the input and removed entries before each
 union. Process CPU times include the operation following the union.
 
