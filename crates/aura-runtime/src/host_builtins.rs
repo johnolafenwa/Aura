@@ -1202,6 +1202,7 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
                 .or_else(|| time_host::time_host_function(other))
                 .or_else(|| http_client::http_host_function(other))
                 .or_else(|| tensor_host::tensor_host_function(other))
+                .or_else(|| image_host::image_host_function(other))
         }
     };
     Some(function)

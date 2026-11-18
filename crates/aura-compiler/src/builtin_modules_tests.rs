@@ -244,6 +244,15 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::constant_time_eq",
         "gzip::compress",
         "gzip::decompress",
+        "image::__aura_info",
+        "image::__aura_decode",
+        "image::__aura_encode",
+        "image::__aura_convert",
+        "image::__aura_resize",
+        "image::__aura_crop",
+        "image::__aura_flip",
+        "image::__aura_to_array",
+        "image::__aura_from_array",
         "regex::__aura_compile",
         "regex::__aura_pattern",
         "regex::__aura_escape",
@@ -1042,6 +1051,99 @@ def unpack(data: list[uint8]) -> str:
     )
     .expect_err("gzip.compress takes bytes, not text");
     assert!(error.message.contains("list[uint8]"), "{}", error.message);
+}
+
+#[test]
+fn image_module_type_checks_its_whole_api() {
+    assert!(super::is_builtin_root_module("image"));
+    assert!(super::builtin_module_registry().contains_key("image"));
+    let resize = host_builtin_metadata("image::__aura_resize").expect("image resize metadata");
+    assert_eq!(resize.params.len(), 7);
+    for name in crate::native_runtime::HOST_BUILTIN_SYMBOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.starts_with("image::"))
+    {
+        let metadata = host_builtin_metadata(name).expect("an image entry has metadata");
+        assert_eq!(
+            crate::native_runtime::dynamic_host_abi(name).map(|abi| abi.params.len()),
+            Some(metadata.params.len()),
+            "{name}"
+        );
+    }
+
+    crate::check_source(
+        r#"import image
+
+def shrink(source: str, target: str) -> Result[int64, image.Error]:
+    picture = try image.read(source)
+    small = picture.resize(picture.width // 2, picture.height // 2)
+    sharp = picture.resize_with(64, 64, image.Filter.Bicubic)
+    try image.write(target, small.to_gray())
+    try image.write_as(target, sharp.to_rgb(), image.Format.Jpeg)
+    return Result.Ok(small.pixels.len() + sharp.width)
+
+def codecs(picture: image.Image) -> Result[int64, image.Error]:
+    png = try image.encode_png(picture, level=9)
+    jpeg = try image.encode_jpeg(picture.to_rgb(), quality=80)
+    ppm = try image.encode_ppm(picture.to_gray())
+    any = try image.encode(picture, image.Format.Png)
+    found = try image.info(png)
+    again = try image.decode(jpeg)
+    bounded = try image.decode_up_to(ppm, 1024)
+    return Result.Ok(found.width + again.height + bounded.channels + any.len())
+
+def pixels() -> int64:
+    mut picture = image.Image.new(4, 3, 4)
+    picture.set(1, 1, 3, 255)
+    filled = image.Image.filled(2, 2, 1, 128)
+    part = picture.crop(0, 0, 2, 2).flip_horizontal().flip_vertical()
+    wide = part.to_rgba().to_gray_alpha()
+    mut total = picture.get(1, 1, 3) as int64 + filled.pixels.len() + wide.channels
+    if picture.has_alpha():
+        total += 1
+    return total
+
+def arrays(picture: image.Image) -> image.Image:
+    values: Array[float32] = picture.to_array()
+    planes: Array[float32] = picture.to_planes()
+    first = image.Image.from_array(values)
+    second = image.Image.from_planes(planes)
+    if first.pixels == second.pixels:
+        return first
+    return second
+
+def named(file_path: str) -> bool:
+    match image.format_of(file_path):
+        case image.Format as format:
+            return format == image.Format.Ppm
+        case None:
+            return false
+
+def reason(failure: image.Error) -> str:
+    match failure:
+        case image.Error.Io(error):
+            return "io"
+        case image.Error.InvalidData(message):
+            return message.clone()
+        case image.Error.Unsupported(message):
+            return message.clone()
+        case image.Error.TooLarge(limit_pixels):
+            return f"{limit_pixels}"
+"#,
+    )
+    .expect("the image API should type-check");
+
+    let error = crate::check_source(
+        "import image\n\ndef bad() -> Result[image.Image, image.Error]:\n    return image.decode(\"photo.png\")\n",
+    )
+    .expect_err("image.decode takes bytes, not a path");
+    assert!(error.message.contains("list[uint8]"), "{}", error.message);
+    let error = crate::check_source(
+        "import image\n\ndef bad(picture: image.Image) -> None:\n    picture.set(0, 0, 0, 1)\n",
+    )
+    .expect_err("set needs a mutable image");
+    assert!(error.message.contains("mut"), "{}", error.message);
 }
 
 #[test]

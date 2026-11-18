@@ -1595,6 +1595,8 @@ maintained surface by area and states how it may change.
   SHA-256, and HMAC-SHA256.
 - [Gzip Module](/manual/gzip): gzip compression and bounded decompression of
   byte lists, with typed errors.
+- [Image Module](/manual/image): PNG, JPEG, and PPM pictures as pixel
+  lists, with resizing, channel conversion, and `Array` forms for tensors.
 - [Regex Module](/manual/regex): compiled regular expressions with
   linear-time search, groups, replacement, and splitting.
 - [Time Module](/manual/time): the clocks, `DateTime` with fixed offsets,
@@ -1986,6 +1988,32 @@ limit, and the error variants.
 | --- | --- | --- |
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
+
+## Image
+
+[Image Module](/manual/image) covers the pixel layout, what each format
+reads and writes, the pixel limit, the `Image` members, and the error
+variants.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `image.read` | `read(file_path: str) -> Result[Image, image.Error]` | Decodes a PNG, JPEG, or PPM file. The format comes from the file's first bytes. |
+| `image.decode` | `decode(data: list[uint8]) -> Result[Image, image.Error]` | Decodes an image of at most 268,435,456 pixels. |
+| `image.decode_up_to` | `decode_up_to(data: list[uint8], max_pixels: int64) -> Result[Image, image.Error]` | Returns `image.Error.TooLarge` before decoding when the header names more than `max_pixels` pixels. |
+| `image.info` | `info(data: list[uint8]) -> Result[image.Info, image.Error]` | The format, width, height, and channel count from the header. |
+| `image.write` | `write(file_path: str, picture: Image) -> Result[None, image.Error]` | Writes the format the extension names: `png`; `jpg` or `jpeg`; `ppm`, `pgm`, or `pnm`. |
+| `image.write_as` | `write_as(file_path: str, picture: Image, format: Format) -> Result[None, image.Error]` | Writes `format` whatever the name. |
+| `image.encode` | `encode(picture: Image, format: Format) -> Result[list[uint8], image.Error]` | The file's bytes at PNG level 6 or JPEG quality 90. |
+| `image.encode_png` | `encode_png(picture: Image, level: int64 = 6) -> Result[list[uint8], image.Error]` | A PNG file at `level` 0 to 9. A level out of range traps with `AU4001`. |
+| `image.encode_jpeg` | `encode_jpeg(picture: Image, quality: int64 = 90) -> Result[list[uint8], image.Error]` | A JPEG file at `quality` 1 to 100. An image with alpha is `image.Error.Unsupported`. |
+| `image.encode_ppm` | `encode_ppm(picture: Image) -> Result[list[uint8], image.Error]` | A binary PGM or PPM file. An image with alpha is `image.Error.Unsupported`. |
+| `image.format_of` | `format_of(file_path: str) -> Format \| None` | The format an extension names, in any letter case. |
+
+`image.Image` has the public fields `width`, `height`, `channels`, and
+`pixels: list[uint8]`. Its members are `Image.new`, `Image.filled`, `get`,
+`set`, `has_alpha`, `to_gray`, `to_gray_alpha`, `to_rgb`, `to_rgba`,
+`resize`, `resize_with`, `crop`, `flip_horizontal`, `flip_vertical`,
+`to_array`, `to_planes`, `Image.from_array`, and `Image.from_planes`.
 
 ## Regex
 
@@ -8083,6 +8111,13 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower.
 - Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input, not unlimited waits. The exact error classification is fixed by the Duration design record.
+
+### Images
+
+- The `image` module holds 8-bit samples only. A 16-bit PNG or PPM is narrowed as it is read.
+- It reads and writes PNG, JPEG, and the Netpbm family. GIF, BMP, WebP, TIFF, and AVIF are not provided.
+- Metadata, including EXIF orientation and colour profiles, is neither returned nor written.
+- An image is decoded and encoded whole in memory. `image.decode` refuses more than 268,435,456 pixels, and `image.decode_up_to` accepts a limit up to 536,870,911.
 
 ### JSON
 
@@ -16907,6 +16942,336 @@ caller sets `Accept-Encoding`, the body is returned as sent.
 - A response head is limited to 256 KiB and 64 headers, and one line of a
   body to 64 MiB.
 - Server-sent event lines that end with a lone `\r` are not supported.
+
+## Source: docs/manual/image.md
+
+# Image Module
+
+The `image` module reads and writes PNG, JPEG, and PPM pictures. A decoded
+picture is an `image.Image`: a width, a height, a channel count, and its
+samples as a `list[uint8]`. The module also crops, resizes, and converts
+pictures, and hands their samples to an [`Array`](/manual/numeric-arrays)
+for numeric work and [tensors](/manual/tensors).
+
+```aura
+import image
+```
+
+## Example
+
+```aura
+import image
+
+def thumbnail(source: str, target: str) -> Result[None, image.Error]:
+    picture = try image.read(source)
+    small = picture.resize(160, 120)
+    try image.write(target, small.to_rgb())
+    return Result.Ok(None)
+
+def main():
+    match thumbnail("photo.png", "thumbnail.jpg"):
+        case Result.Ok(_):
+            print("written")
+        case Result.Err(image.Error.Io(error)):
+            print(error)
+        case Result.Err(_):
+            print("not an image this module reads")
+```
+
+`image.read` finds the format from the file's first bytes. `image.write`
+chooses it from the extension of the name.
+
+## The Image Class
+
+```text
+public class Image:
+    public width: int64
+    public height: int64
+    public channels: int64
+    public pixels: list[uint8]
+```
+
+`channels` says what a pixel holds:
+
+| `channels` | A pixel is |
+| --- | --- |
+| `1` | gray |
+| `2` | gray, alpha |
+| `3` | red, green, blue |
+| `4` | red, green, blue, alpha |
+
+`pixels` holds `width * height * channels` samples from `0` to `255`. Rows
+run from the top, pixels in a row from the left, and the channels of a pixel
+sit next to each other. The sample of channel `c` at column `x`, row `y` is
+`pixels[(y * width + x) * channels + c]`. Alpha `255` is opaque, and colour
+is not multiplied by alpha.
+
+The fields are public, so a program can build an `Image` from samples it
+computed and can read or write `pixels` directly in a loop:
+
+```aura
+import image
+
+def invert(picture: mut image.Image) -> None:
+    for index in range(picture.pixels.len()):
+        sample = picture.pixels[index]
+        picture.pixels[index] = 255 - sample
+
+def main():
+    mut picture = image.Image.filled(2, 2, 1, 200)
+    invert(picture)
+    print(picture.pixels)
+```
+
+It prints `[55, 55, 55, 55]`.
+
+An operation that takes an `Image` checks that `pixels` has exactly
+`width * height * channels` samples, that both sides are at least `1`, and
+that `channels` is from `1` to `4`. An image that breaks one of these is a
+programming error and traps with `AU4001`.
+
+| Member | Signature | Result |
+| --- | --- | --- |
+| `Image.new` | `new(width: int64, height: int64, channels: int64) -> Image` | A black image. With an alpha channel it is transparent. |
+| `Image.filled` | `filled(width: int64, height: int64, channels: int64, value: uint8) -> Image` | An image with every sample set to `value`. |
+| `get` | `get(self, x: int64, y: int64, channel: int64) -> uint8` | One sample. |
+| `set` | `set(mut self, x: int64, y: int64, channel: int64, value: uint8) -> None` | Sets one sample. |
+| `has_alpha` | `has_alpha(self) -> bool` | Whether `channels` is `2` or `4`. |
+| `to_gray` | `to_gray(self) -> Image` | One gray channel. Alpha is dropped. |
+| `to_gray_alpha` | `to_gray_alpha(self) -> Image` | Gray and alpha. |
+| `to_rgb` | `to_rgb(self) -> Image` | Red, green, blue. Alpha is dropped. |
+| `to_rgba` | `to_rgba(self) -> Image` | Red, green, blue, alpha. |
+| `resize` | `resize(self, width: int64, height: int64) -> Image` | The image scaled with `Filter.Bilinear`. |
+| `resize_with` | `resize_with(self, width: int64, height: int64, filter: Filter) -> Image` | The image scaled with `filter`. |
+| `crop` | `crop(self, left: int64, top: int64, width: int64, height: int64) -> Image` | The part whose top left pixel is at column `left`, row `top`. |
+| `flip_horizontal` | `flip_horizontal(self) -> Image` | The image mirrored left to right. |
+| `flip_vertical` | `flip_vertical(self) -> Image` | The image mirrored top to bottom. |
+| `to_array` | `to_array(self) -> Array[float32]` | The samples as numbers from `0` to `1`, shape `[height, width, channels]`. |
+| `to_planes` | `to_planes(self) -> Array[float32]` | The samples as numbers from `0` to `1`, shape `[channels, height, width]`. |
+| `Image.from_array` | `from_array(values: Array[float32]) -> Image` | The reverse of `to_array`. |
+| `Image.from_planes` | `from_planes(values: Array[float32]) -> Image` | The reverse of `to_planes`. |
+
+Every method that returns an `Image` returns a new one and leaves the
+receiver unchanged. `get` and `set` trap with `AU4001` for a pixel or a
+channel outside the image, and so do `new` and `filled` for a side below `1`
+or a channel count outside `1` to `4`.
+
+### Converting Channels
+
+Gray is `0.299 * red + 0.587 * green + 0.114 * blue`, rounded. Gray to
+colour copies the gray value into all three channels. A new alpha channel
+is `255`. Dropping alpha discards it and leaves the colour as it is.
+
+### Resizing
+
+| `Filter` | A pixel is | Use it for |
+| --- | --- | --- |
+| `Nearest` | the nearest source pixel | pixel art, masks, and label maps, where values must not mix |
+| `Bilinear` | a weighted mean of the pixels around the point | photographs. This is what `resize` uses. |
+| `Bicubic` | a wider weighted mean | a sharper result, at about twice the time |
+
+When an image shrinks, `Bilinear` and `Bicubic` widen to cover every source
+pixel, so a thumbnail is a true average and fine patterns do not turn into
+noise. `Bicubic` can overshoot at a hard edge. Results stay inside `0` to
+`255`. A target side below `1`, or a target of more than 536,870,911 pixels,
+traps with `AU4001`.
+
+`crop` traps with `AU4001` unless the part lies inside the image.
+
+## Reading
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `image.read` | `read(file_path: str) -> Result[Image, image.Error]` | The image in a file. |
+| `image.decode` | `decode(data: list[uint8]) -> Result[Image, image.Error]` | The image in a byte list. |
+| `image.decode_up_to` | `decode_up_to(data: list[uint8], max_pixels: int64) -> Result[Image, image.Error]` | The image, when it has at most `max_pixels` pixels. |
+| `image.info` | `info(data: list[uint8]) -> Result[image.Info, image.Error]` | The format, width, height, and channel count from the header. No pixel is decoded. |
+
+The format comes from the first bytes of the data, never from a file name.
+`image.Info` has the public fields `format: Format`, `width`, `height`, and
+`channels`.
+
+A decoded image has the channels its file has:
+
+| Format | What is read | `channels` |
+| --- | --- | --- |
+| PNG | Every colour type and bit depth, interlaced or not. A palette expands to colour. A transparency key becomes an alpha channel. A 16-bit sample keeps its high byte. | `1` to `4` |
+| JPEG | Baseline and progressive files at 8 bits. A CMYK file is converted to red, green, blue. | `1` or `3` |
+| PPM | The Netpbm family, text or binary: PBM (`P1`, `P4`), PGM (`P2`, `P5`), and PPM (`P3`, `P6`). A maximum value other than `255` is scaled to it. | `1` or `3` |
+
+A file's header can claim any size, so a few bytes can ask for gigabytes.
+The module reads the size from the header and refuses a larger image with
+`image.Error.TooLarge` before it decodes anything. `read` and `decode` allow
+268,435,456 pixels. When files come from outside the program, pass the
+largest image the program is prepared to hold to `decode_up_to`:
+
+```aura
+import fs
+import image
+
+def load_avatar(file_path: str) -> image.Image | None:
+    match own fs.read_bytes(file_path):
+        case Result.Ok(data):
+            match own image.decode_up_to(data, 1024 * 1024):
+                case Result.Ok(picture):
+                    return picture
+                case Result.Err(_):
+                    return None
+        case Result.Err(_):
+            return None
+```
+
+`max_pixels` must be from `1` to `536870911`. A value outside that range
+traps with `AU4001`.
+
+## Writing
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `image.write` | `write(file_path: str, picture: Image) -> Result[None, image.Error]` | Writes the file in the format its extension names. |
+| `image.write_as` | `write_as(file_path: str, picture: Image, format: Format) -> Result[None, image.Error]` | Writes the file in `format`, whatever its name. |
+| `image.encode` | `encode(picture: Image, format: Format) -> Result[list[uint8], image.Error]` | The file's bytes, at PNG level `6` or JPEG quality `90`. |
+| `image.encode_png` | `encode_png(picture: Image, level: int64 = 6) -> Result[list[uint8], image.Error]` | A PNG file. |
+| `image.encode_jpeg` | `encode_jpeg(picture: Image, quality: int64 = 90) -> Result[list[uint8], image.Error]` | A JPEG file. |
+| `image.encode_ppm` | `encode_ppm(picture: Image) -> Result[list[uint8], image.Error]` | A binary PGM file for gray, or a binary PPM file for colour. |
+| `image.format_of` | `format_of(file_path: str) -> Format \| None` | The format an extension names. |
+
+`write` replaces a file that exists. Extensions are read in any letter case:
+
+| `Format` | Extensions |
+| --- | --- |
+| `Png` | `png` |
+| `Jpeg` | `jpg`, `jpeg` |
+| `Ppm` | `ppm`, `pgm`, `pnm` |
+
+A name with any other extension, or none, is `image.Error.Unsupported`.
+
+**PNG** loses nothing and holds every channel count. `level` runs from `0`
+to `9`: `0` stores the samples uncompressed, `1` is the fastest compression,
+and `9` gives the smallest file. Levels `1` to `3` use a fast compressor
+made for PNG. Use them when speed matters more than size.
+
+**JPEG** is smaller and loses detail. `quality` runs from `1`, the smallest
+file, to `100`, the closest to the original. JPEG holds gray and colour
+only. An image with alpha is `image.Error.Unsupported`: call `to_rgb()` or
+`to_gray()` first, which states that the alpha is dropped. Colour is stored
+at half resolution in both directions, as most JPEG files are. A side longer
+than 65,535 pixels is `image.Error.Unsupported`.
+
+**PPM** is uncompressed and trivial to parse, which makes it useful for
+tests and for tools that read nothing else. An image with alpha is
+`image.Error.Unsupported`.
+
+A level outside `0` to `9` or a quality outside `1` to `100` is a
+programming error and traps with `AU4001`.
+
+The same image and options give the same bytes on one Aura version and one
+machine. The bytes of a PNG or a JPEG can differ between Aura versions, and
+a JPEG's bytes depend on the number of processors. Only the decoded pixels
+are guaranteed.
+
+## Arrays And Tensors
+
+`to_array` and `to_planes` copy the samples into an `Array[float32]` and
+divide them by `255`, so each number is from `0` to `1`:
+
+- `to_array` keeps the order of `pixels`. The shape is
+  `[height, width, channels]`.
+- `to_planes` puts each channel in its own plane. The shape is
+  `[channels, height, width]`, the layout
+  [`Conv2d`](/manual/tensors) and most trained models take.
+
+`Image.from_array` and `Image.from_planes` go back. Each number is
+multiplied by `255`, rounded, and kept inside `0` to `255`. Both accept an
+Array of two axes, `[height, width]`, as a gray image. An Array of another
+rank, of more than four channels, or with no elements traps with `AU4001`.
+
+A tensor is one call further, on the device the program chooses:
+
+```aura
+import image
+import tensor
+from tensor import Device, Tensor
+
+def main():
+    picture = image.Image.filled(4, 2, 3, 51)
+    device = Device.cpu()
+    planes = Tensor[float32].from_array(picture.to_planes(), device)
+    print(planes.shape())
+    brighter = planes * 2.0
+    back = image.Image.from_planes(brighter.to_array())
+    print(back.get(0, 0, 0))
+```
+
+It prints `[3, 2, 4]` and `102`.
+
+`Array` has no `uint8` element type, so the exact samples stay in `pixels`.
+Work on `pixels` when a result must be exact to the byte.
+
+## Error Model
+
+| Variant | Meaning |
+| --- | --- |
+| `Io(error: io.Error)` | `read`, `write`, or `write_as` could not read or write the file. `error` is the [`io.Error`](/manual/io#io-error) from the filesystem. |
+| `InvalidData(message: str)` | The bytes are not a complete, well-formed image: they are empty, cut short, or corrupted. `message` describes the fault for a log and is not a stable format. |
+| `Unsupported(message: str)` | The data is in a format the module does not read, the file uses a feature it does not handle, or the format asked for cannot hold the image. |
+| `TooLarge(limit_pixels: int64)` | The image has more pixels than the limit. `limit_pixels` is the limit that applied. |
+
+Bad data is never a trap. A file from outside the program can only produce
+one of these values. Allocation failure is not an `image.Error`. It traps
+with `AU4005`.
+
+## Speed
+
+Decoding and PNG encoding run on the calling thread. JPEG encoding and the
+`Bilinear` and `Bicubic` resizes split a large image into bands and work on
+them on several threads, up to 16. The pixels do not depend on the number of
+threads. Set the environment variable `AURA_ARRAY_THREADS` to a positive
+number to bound the threads. With `1`, all the work stays on the calling
+thread.
+
+`benchmarks/image_codec` in the repository times each operation against
+Rust's `image` crate and Python's Pillow on a 1600 by 1200 photograph-like
+picture. These are the best of ten passes in milliseconds on a four-core
+x86-64 Linux machine:
+
+| Operation | Aura | Rust `image` 0.25 | Pillow 12 |
+| --- | ---: | ---: | ---: |
+| Decode PNG | 14.5 | 14.3 | 32.8 |
+| Decode JPEG | 8.3 | 8.8 | 8.1 |
+| Encode PNG, level 6 | 107.7 | 511.5 | 657.0 |
+| Encode PNG, level 1 | 14.2 | 11.6 | 145.5 |
+| Encode JPEG, quality 90 | 5.0 | 49.1 | 5.8 |
+| Resize to 800 by 600, bilinear | 3.2 | 18.9 | 9.7 |
+| Samples to `float32` | 6.4 | 2.6 | 7.5 |
+
+The default settings of the three libraries differ, so the PNG rows at
+level 6 do not produce files of the same size. The benchmark's README
+gives the sizes. JPEG decoding is level with Pillow, which uses
+libjpeg-turbo.
+
+## Backend Support
+
+The MIR runtime and the direct native backend run the same implementation,
+so their results match byte for byte. A program that does not import `image`
+links none of it.
+
+## Limits
+
+- Samples are 8 bits. A 16-bit PNG or PPM is narrowed when it is read, and
+  no format is written at 16 bits.
+- GIF, BMP, WebP, TIFF, and AVIF are not provided.
+- An animated PNG gives its first frame.
+- Metadata is neither returned nor written: EXIF, including the orientation
+  a camera records, colour profiles, gamma, and text chunks. A photograph
+  taken with the camera turned appears turned.
+- JPEG files that use arithmetic coding, lossless mode, or 12-bit samples
+  are `image.Error.Unsupported`.
+- Reading and writing work on a whole image in memory. There is no decoding
+  by rows or tiles.
+- There are no drawing operations, such as lines, shapes, or text.
+
+Design record: [ADR-0114: The `image` module](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0114-image-module.md).
 
 ## Source: docs/manual/io.md
 
@@ -26282,6 +26647,10 @@ different from an `Array`, whose integer arithmetic is checked.
 These members name the dtype, so they are called on `Tensor[T]` with the
 dtype written: `Tensor[float32].from_array(values, device)`. `E` is the
 element type.
+
+A picture becomes a tensor through an `Array`: `image.Image.to_planes()`
+returns `[channels, height, width]` values from 0 to 1 for `from_array`.
+See the [Image Module](/manual/image#arrays-and-tensors).
 
 | API | Signature | Result |
 | --- | --- | --- |
@@ -58451,7 +58820,7 @@ and times, for regular expressions, for random numbers, and for telling an
 operator what the program is doing.
 
 This chapter visits them in turn. To keep the visits connected we will build
-one small tool across all five sections. `courier` wraps a text message in
+one small tool across the first five sections. `courier` wraps a text message in
 an *envelope* that can be pasted into a chat, a URL, or a configuration file
 and checked at the other end. An envelope is compressed, so it is short. It
 is signed with a shared secret, so the receiver knows who made it and that
@@ -58473,7 +58842,8 @@ By the end of the chapter you will be able to move between text and bytes
 without guessing at an encoding, sign and verify a message, do arithmetic on
 instants in time, pull fields out of text with a pattern, choose between
 reproducible and unpredictable random numbers, and emit structured logs and
-counters from a running program.
+counters from a running program. A last section, which stands apart from
+`courier`, reads and writes pictures.
 
 ## Source: docs/book/ch20-01-bytes-and-codecs.md
 
@@ -59970,7 +60340,7 @@ them.
 
 ## Summary
 
-That completes the tour, and `courier`. Its envelopes are compressed with
+That completes `courier`. Its envelopes are compressed with
 `gzip`, signed with `bytes.hmac_sha256`, and carried as base64 and hex. They
 are stamped with a `time.DateTime` and refused when they are stale. Each has
 an id from `random.secure_bytes`, the tool's log can be taken apart with a
@@ -59991,6 +60361,232 @@ The Manual has a page for each: [bytes](/manual/bytes),
 [randomness](/manual/randomness), and the
 [control-plane modules](/manual/control-plane) for `log`, `trace`,
 `metrics`, and `sys`.
+
+One module is left that `courier` had no use for. The next section reads
+and writes pictures.
+
+## Source: docs/book/ch20-06-images.md
+
+# Images
+
+`courier` is finished, but the tour has one more stop, and it does not need
+a project to carry it. Sooner or later a program has to open a picture: to
+make a thumbnail for a web page, to check what a user uploaded, or to hand
+a photograph to a neural network. The `image` module reads and writes PNG,
+JPEG, and PPM files, and it keeps a picture in the plainest form it can.
+
+## A picture is a list of bytes
+
+An `image.Image` has four public fields: `width`, `height`, `channels`, and
+`pixels`, which is a `list[uint8]`. The samples are stored row by row from
+the top, with the channels of a pixel next to each other. One channel is
+gray, three are red, green, and blue, and two or four add alpha as the last
+channel. There is nothing hidden behind the type, so you can loop over
+`pixels` like any other list. Let's draw a picture and save it:
+
+*Filename: src/main.au*
+
+```aura
+import image
+
+def sunset(width: int64, height: int64) -> image.Image:
+    mut picture = image.Image.new(width, height, 3)
+    for y in range(height):
+        for x in range(width):
+            picture.set(x, y, 0, (255 - y * 255 // height) as uint8)
+            picture.set(x, y, 1, (x * 120 // width) as uint8)
+            picture.set(x, y, 2, (y * 200 // height) as uint8)
+    return picture
+
+def main():
+    picture = sunset(320, 240)
+    match image.write("sunset.png", picture):
+        case Result.Ok(None):
+            print("wrote sunset.png")
+        case Result.Err(image.Error as error):
+            print(f"could not write: {error}")
+```
+
+```text
+wrote sunset.png
+```
+
+`Image.new` gives a black image, and `set` writes one sample after checking
+that the column, row, and channel exist. `image.write` looks at the
+extension to choose the format: `png`, `jpg` or `jpeg`, and `ppm`, `pgm`,
+or `pnm`. Any other extension is an error and not a guess, because a file
+called `photo.dat` that silently became a PNG would surprise whoever reads
+it next. When the name cannot say, `image.write_as` takes the format as an
+argument.
+
+## Reading a file you did not make
+
+Reading is where the care goes, because the file may come from anyone.
+`image.read` finds the format from the first bytes of the file and ignores
+its name, so a JPEG that someone renamed to `.png` still opens. Here is the
+thumbnail maker, with every way it can fail spelled out:
+
+*Filename: src/main.au*
+
+```aura
+import fs
+import io
+import image
+
+def thumbnail(source: str, target: str, longest: int64) -> Result[image.Info, image.Error]:
+    picture = try image.read(source)
+    mut width = longest
+    mut height = longest
+    if picture.width >= picture.height:
+        height = max(1, picture.height * longest // picture.width)
+    else:
+        width = max(1, picture.width * longest // picture.height)
+    small = picture.resize(width, height)
+    try image.write(target, small)
+    return Result.Ok(
+        image.Info(format=image.Format.Jpeg, width=small.width, height=small.height, channels=small.channels)
+    )
+
+def describe(failure: image.Error) -> str:
+    match failure:
+        case image.Error.Io(error):
+            return f"file error: {error}"
+        case image.Error.InvalidData(message):
+            return f"damaged image: {message}"
+        case image.Error.Unsupported(message):
+            return f"not supported: {message}"
+        case image.Error.TooLarge(limit_pixels):
+            return f"more than {limit_pixels} pixels"
+
+def main():
+    match thumbnail("sunset.png", "sunset-small.jpg", 96):
+        case Result.Ok(image.Info as made):
+            print(f"{made.width}x{made.height}")
+        case Result.Err(image.Error as failure):
+            print(describe(failure))
+    match thumbnail("missing.png", "x.jpg", 96):
+        case Result.Ok(image.Info as made):
+            print(f"{made.width}x{made.height}")
+        case Result.Err(image.Error as failure):
+            print(describe(failure))
+    match own fs.read_bytes("sunset.png"):
+        case Result.Ok(list[uint8] as data):
+            match image.decode(data[0:200]):
+                case Result.Ok(image.Image as picture):
+                    print(picture.width)
+                case Result.Err(image.Error as failure):
+                    print(describe(failure))
+            match image.decode_up_to(data, 10000):
+                case Result.Ok(image.Image as picture):
+                    print(picture.width)
+                case Result.Err(image.Error as failure):
+                    print(describe(failure))
+        case Result.Err(io.Error as error):
+            print(f"{error}")
+```
+
+```text
+96x72
+file error: io.Error.NotFound
+damaged image: invalid PNG: unexpected end of file
+more than 10000 pixels
+```
+
+`image.Error` has four variants, and each one calls for a different
+response. `Io` wraps the `io.Error` from the file system. `InvalidData`
+means the bytes are not a complete, well-formed image, which is what we got
+when we cut the file off after 200 bytes. `Unsupported` means the image is
+fine but this module cannot do what was asked: a JPEG that uses arithmetic
+coding, or an image with alpha going into a JPEG, which has nowhere to put
+it.
+
+`TooLarge` deserves a closer look. A compressed image can be tiny on disk
+and enormous in memory. A few kilobytes of PNG can claim to be 60,000
+pixels on each side, and a program that believes the header will try to
+allocate gigabytes. Aura reads the header first and compares the pixel
+count with a limit before it decodes anything. `image.decode` and
+`image.read` allow 268,435,456 pixels, which is far more than any camera
+produces. A service that takes uploads should choose a smaller number with
+`image.decode_up_to`, as the last `match` does. When you only want to know
+what a file holds, `image.info` returns the format and size from the header
+and decodes no pixels at all.
+
+Notice that `resize` returned a new image and left `picture` alone. Every
+whole-image operation works that way: `resize`, `crop`, `flip_horizontal`,
+`flip_vertical`, and the conversions `to_gray`, `to_rgb`, and `to_rgba`.
+`resize` uses a bilinear filter, and when it shrinks an image it averages
+over all the pixels each new pixel covers, so a thumbnail does not shimmer
+with the fine detail it could not keep. `resize_with` takes
+`image.Filter.Nearest` when you want hard edges, or `image.Filter.Bicubic`
+for a sharper result.
+
+## From pixels to numbers
+
+Bytes are the right form for a file, but arithmetic wants floating-point
+numbers. `to_array` gives the samples as an `Array[float32]` of shape
+`[height, width, channels]`, with every value divided by 255 so it lies
+from 0 to 1. `to_planes` gives the same numbers with one plane a channel,
+`[channels, height, width]`, which is the layout the convolution layers of
+[Chapter 23](/book/ch23-00-neural-networks) take. From there a picture
+becomes a tensor in one call:
+
+*Filename: src/main.au*
+
+```aura
+import image
+import tensor
+from tensor import Device, Tensor
+
+def main():
+    match image.read("sunset.png"):
+        case Result.Ok(image.Image as picture):
+            gray = picture.to_gray()
+            print(f"{gray.width}x{gray.height} channels={gray.channels}")
+            planes = picture.to_planes()
+            print(planes.shape())
+            print(planes[0, 0, 0])
+            batch = Tensor[float32].from_array(planes, Device.cpu())
+            brighter = (batch * 1.5).to_array()
+            match image.write("sunset-bright.png", image.Image.from_planes(brighter)):
+                case Result.Ok(None):
+                    print("wrote sunset-bright.png")
+                case Result.Err(image.Error as failure):
+                    print("failed")
+        case Result.Err(image.Error as failure):
+            print("failed")
+```
+
+```text
+320x240 channels=1
+[3, 240, 320]
+1.0
+wrote sunset-bright.png
+```
+
+`Image.from_planes` and `Image.from_array` go the other way. They multiply
+by 255, round, and keep each value inside 0 to 255, so the over-bright
+pixels we made by multiplying by 1.5 come out white and do not wrap around
+to black.
+
+The `image` module does not import `tensor`. The bridge is the `Array` both
+of them understand, which means a program that only resizes thumbnails does
+not carry the tensor library in its binary, and a program that never
+imports `image` does not carry the codecs.
+
+## Where the module stops
+
+It handles 8-bit images. A PNG with 16 bits a sample is narrowed to 8 as
+it is read, an animated PNG gives its first frame, and GIF, WebP, and TIFF
+are not read.
+It does not draw: there are no lines, text, or blending, only the
+whole-image operations above. Colour profiles and EXIF data are ignored
+on reading and not written, so a photograph a phone marked as rotated
+comes out the way its pixels are stored.
+
+Within those limits it is quick. Decoding and encoding run at the speed of
+the Rust libraries that do the same job, and JPEG encoding and resizing use
+all the cores of the machine. The [Image Module](/manual/image) page of the
+Manual has every function and the measured times.
 
 ## Source: docs/book/ch21-00-tensors.md
 
