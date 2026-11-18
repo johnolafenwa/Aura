@@ -19,3 +19,26 @@ The script builds both native executables, runs Aura with four scheduler workers
 | `cache_shared` | Four tasks each run one million repeatable lookups. On a miss, the task stores three times the key. | 1,024 entries and a sum of 6,135,895,677 across the four tasks |
 
 The cache lookups and stores take separate locks in all three programs. Two simultaneous misses for a key therefore write the same value.
+
+## Linux x86-64 results
+
+The table gives median wall time in milliseconds over three runs on an
+Intel Xeon Platinum 8573C. The native Aura compiler and runtime came
+from the `4f5b3dff` Linux release build. Rust used `rustc 1.95.0` and
+Python used CPython 3.12.14. All programs used the same four CPUs.
+The Aura scheduler used four workers. Build and test jobs on the worker
+were paused for each measured run. The order rotated between rounds.
+All checksums matched.
+
+| Workload | Aura (ms) | Rust (ms) | Python (ms) | Aura time / Rust time | Python time / Aura time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `lock` | 146 | 82 | 829 | 1.78× | 5.68× |
+| `atomic` | 380 | 252 | 4,484 | 1.51× | 11.80× |
+| `dict` | 233 | 90 | 1,007 | 2.59× | 4.32× |
+| `lock_shared` | 293 | 266 | 822 | 1.10× | 2.81× |
+| `atomic_shared` | 540 | 318 | 4,160 | 1.70× | 7.70× |
+| `cache_shared` | 352 | 289 | 25,828 | 1.22× | 73.38× |
+
+The uncontended integer lock took 36.5 ns per increment, including
+acquire and release. The four-task cache took 1.22 times the Rust
+time for the same four million lookups.

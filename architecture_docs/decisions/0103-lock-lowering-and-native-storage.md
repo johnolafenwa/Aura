@@ -52,6 +52,10 @@ A box with another owner first supplies an independent value.
 A shared map lookup locks the cell, copies the matching entry, and then
 unlocks it. A native map can stay in its existing box for this read.
 Building the returned `Lookup` after the copy shortens the critical section.
+When a match consumes a lookup directly from `sync.Map[int64, int64]`,
+native code keeps the copied integer and a separate presence flag in the
+caller's frame. A stored zero therefore remains distinguishable from a miss,
+and a later write by another task cannot change the matched value.
 
 ## Consequences
 
