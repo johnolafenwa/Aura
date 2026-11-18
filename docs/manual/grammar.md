@@ -297,6 +297,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], extern-aggregate-declaration
     | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
@@ -307,12 +308,24 @@ type-alias-declaration
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type,
+      "(", [ parameter-list ], ")", "->", type, [ "symbol", STRING ],
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+extern-aggregate-declaration
+    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+      INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
+
+extern-member
+    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    | "pass", NEWLINE ;
+
+extern-field-type
+    = type
+    | "array", "[", extern-field-type, ",", INTEGER, "]" ;
 
 export-function-declaration
     = "export", STRING, function-declaration ;
@@ -331,11 +344,12 @@ transparent alias for the written target type. The target may use the alias's
 own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
-Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic. An extern function's optional
-indented block holds only `requires` and `ensures` clauses, its trusted
-contract. `symbol` and `drop` are words only in these clauses.
-[FFI](/manual/ffi) restricts their parameter modes and types.
+Extern declarations require the ABI string `"C"` and take no type parameters.
+An extern function's optional block holds only `requires` and `ensures`
+clauses, its trusted contract. The contextual words `symbol` and `drop`
+name the C symbol and the handle's release function respectively. A C struct
+or union needs at least one field with a C layout. [FFI](/manual/ffi) gives
+the field types, array lengths and call signatures that can cross the boundary.
 
 `export` is a word only when a string follows it at the start of a
 module-level declaration. The string must be exactly `"C"`. The function has

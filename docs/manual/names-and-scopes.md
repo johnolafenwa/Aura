@@ -344,7 +344,7 @@ Name, visibility, trait, module, and scope resolution happen in the compiler fro
 ## Limits And Implementation-Defined Behavior
 
 - Local declarations and comprehension targets cannot shadow visible locals in the positions listed above.
-- Items cannot be nested in function suites.
+- A local `def` binds its name in the enclosing block. Other module items cannot be nested in a function suite.
 - Wildcard imports, relative-dot imports, and imported top-level execution are unavailable.
 - Import aliases follow the ordinary no-collision and visibility rules.
 
@@ -363,6 +363,6 @@ Implemented:
 - comprehension scopes
 - the entry-module top-level scope described above
 
-Unavailable: dynamic names, reflection-based lookup, nested items, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
+Unavailable: dynamic names, reflection-based lookup, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
 
 Design record: `architecture_docs/decisions/0037-expression-closures-and-value-capture.md`.

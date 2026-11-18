@@ -767,9 +767,9 @@ its own axis.
 
 ### String Indexes
 
-Integer indexing on `str` is unavailable. Use a slice to select a substring,
-or the string methods for whole-string operations. Exact UTF-8 conversion is
-available through `text.to_bytes()` and `str.from_bytes(bytes=...)`.
+`text[index]` returns a one-character `str`. Positions count Unicode scalar
+values from zero. A negative index counts from the end, and an index outside
+the string traps with `AU4003`. For the UTF-8 bytes, use `text.to_bytes()`.
 
 ## Slicing
 

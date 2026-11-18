@@ -5465,7 +5465,8 @@ A one-colon slice returns a fresh owned list:
 - The slice copies Copy elements and clones clone-safe non-Copy elements.
 
 `str` slicing uses the same position rules, counts Unicode scalar values, and
-returns a fresh valid UTF-8 `str`. You cannot index a `str` with an integer.
+returns a fresh valid UTF-8 `str`. A single integer index selects one Unicode
+scalar. See [String Indexes](/manual/expressions#string-indexes).
 
 ### Stable Sorting
 
@@ -11681,9 +11682,9 @@ its own axis.
 
 ### String Indexes
 
-Integer indexing on `str` is unavailable. Use a slice to select a substring,
-or the string methods for whole-string operations. Exact UTF-8 conversion is
-available through `text.to_bytes()` and `str.from_bytes(bytes=...)`.
+`text[index]` returns a one-character `str`. Positions count Unicode scalar
+values from zero. A negative index counts from the end, and an index outside
+the string traps with `AU4003`. For the UTF-8 bytes, use `text.to_bytes()`.
 
 ## Slicing
 
@@ -12899,14 +12900,14 @@ def main() -> int32:
 | `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
 | `-> Name` | `struct name` | | the struct comes back by value |
 
-- **Fields.** A field is a scalar of the [Scalars](#scalars) table,
-  another `extern "C"` class, which is held inline as a nested struct, or
-  an [array](#array-fields) of either. Any other field type is `AU2002`.
+- **Fields.** A field is a [scalar](#scalars), a C struct or [union](#unions),
+  or a fixed-size [array](#array-fields) of values with those layouts.
+  Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** In Aura code the class is a `copy class`, unless
-  it holds an array field. Construct it with keyword arguments, read and
-  assign its fields, and keep it in a list or another class. It has no C
-  identity until it crosses.
+- **An ordinary value.** A struct is Copy when each field is a scalar or
+  another Copy struct. A struct that contains an array or a union moves on
+  assignment. Construct it with keyword arguments, read and assign its fields,
+  and keep it in a list or another class. It has no C identity until it crosses.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -12931,8 +12932,8 @@ the stack, as each convention requires.
 #### Array Fields
 
 A field of type `array[T, N]` is laid out as `T name[N]`: `N` elements in a
-row, with the alignment of one. `T` is a scalar, an `extern "C"` class, or
-another array. `N` is a whole number from 1 to 1048576, written in the
+row with the alignment of `T`. An element can be a scalar, a C struct or
+union, or another array. `N` is a whole number from 1 to 1048576, written in the
 source.
 
 ```aura fragment
@@ -13994,7 +13995,7 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 # Functions
 
-Functions are module-level declarations introduced by `def`. A function's callable contract applies at every call site. It fixes:
+Use `def` to declare a module-level function or a [local function](/manual/closures#local-functions). A function's callable contract applies at every call site. It fixes:
 
 - the parameter names, passing modes, and types
 - the generic parameters and their bounds
@@ -14010,7 +14011,7 @@ def add(left: int32, right: int32) -> int32:
 
 ## Signatures And Return Types
 
-Every ordinary parameter has an explicit type. The return annotation is optional, and omitting it is exactly the same as writing `-> None`. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
+Every ordinary parameter has an explicit type. A module-level function or method may omit its return annotation, which means `-> None`. A local function must spell out its return type. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
 
 A plain triple-quoted string as the first statement of the body is the function's docstring. It documents parameters under an `Args:` heading and does not run. See [Docstrings And API Docs](/manual/docstrings).
 
@@ -14536,7 +14537,7 @@ Aura checks them every time the function runs. See
 
 ## `main`
 
-In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:
+When the entry module has no executable top-level statements, its module-level `main` function is the entrypoint. Its only valid signatures are:
 
 ```aura
 def main() -> int32:
@@ -14606,11 +14607,11 @@ Runtime diagnostics:
 
 | Code | Meaning |
 | --- | --- |
-| `AU4001` | Call-depth or general call trap. |
+| `AU4001` | General call trap. |
 | `AU4002` | Arithmetic overflow or underflow in a callee. |
 | `AU4003` | Bounds or lookup violation in a callee. |
 | `AU4004` | Zero divisor in a callee. |
-| `AU4005` | Trapping resource or I/O failure in a callee. |
+| `AU4005` | A call exhausts the stack, or a resource or I/O operation fails in a callee. |
 
 A callee's `AU4002`, `AU4003`, `AU4004`, or `AU4005` keeps the same typed Aura call frames and task ancestry on mid-level intermediate representation (MIR) execution and on direct-native execution.
 
@@ -16252,6 +16253,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], extern-aggregate-declaration
     | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
@@ -16262,12 +16264,24 @@ type-alias-declaration
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type,
+      "(", [ parameter-list ], ")", "->", type, [ "symbol", STRING ],
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+extern-aggregate-declaration
+    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+      INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
+
+extern-member
+    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    | "pass", NEWLINE ;
+
+extern-field-type
+    = type
+    | "array", "[", extern-field-type, ",", INTEGER, "]" ;
 
 export-function-declaration
     = "export", STRING, function-declaration ;
@@ -16286,11 +16300,12 @@ transparent alias for the written target type. The target may use the alias's
 own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
-Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic. An extern function's optional
-indented block holds only `requires` and `ensures` clauses, its trusted
-contract. `symbol` and `drop` are words only in these clauses.
-[FFI](/manual/ffi) restricts their parameter modes and types.
+Extern declarations require the ABI string `"C"` and take no type parameters.
+An extern function's optional block holds only `requires` and `ensures`
+clauses, its trusted contract. The contextual words `symbol` and `drop`
+name the C symbol and the handle's release function respectively. A C struct
+or union needs at least one field with a C layout. [FFI](/manual/ffi) gives
+the field types, array lengths and call signatures that can cross the boundary.
 
 `export` is a word only when a string follows it at the start of a
 module-level declaration. The string must be exactly `"C"`. The function has
@@ -20148,7 +20163,7 @@ Name, visibility, trait, module, and scope resolution happen in the compiler fro
 ## Limits And Implementation-Defined Behavior
 
 - Local declarations and comprehension targets cannot shadow visible locals in the positions listed above.
-- Items cannot be nested in function suites.
+- A local `def` binds its name in the enclosing block. Other module items cannot be nested in a function suite.
 - Wildcard imports, relative-dot imports, and imported top-level execution are unavailable.
 - Import aliases follow the ordinary no-collision and visibility rules.
 
@@ -20167,7 +20182,7 @@ Implemented:
 - comprehension scopes
 - the entry-module top-level scope described above
 
-Unavailable: dynamic names, reflection-based lookup, nested items, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
+Unavailable: dynamic names, reflection-based lookup, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
 
 Design record: `architecture_docs/decisions/0037-expression-closures-and-value-capture.md`.
 
@@ -26502,7 +26517,7 @@ Every implemented statement form uses the same checker and MIR lowering for MIR 
 - Loops have no `else` clause.
 - Statement match arms cannot be inline.
 - A statement can span physical lines only inside an open `(`, `[`, or `{`. Backslash continuation is not available.
-- Items cannot nest inside suites.
+- A function suite may contain a local `def`. Class, enum, and trait declarations require module scope.
 - Range iteration yields copy `int64` values and accepts only the bare form, as described above.
 
 No statement evaluation order is implementation-defined.
@@ -26511,7 +26526,7 @@ No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression statements, `return`, `assert`, conditionals, loops, `match`, scoped cleanup, `pass`, imports, and top-level execution in entry modules are implemented as described. Tuple targets for assignment and loops are implemented.
 
-Class and collection destructuring, loop `else`, exception statements, `raise`, `async`, and nested declarations are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
+Class and collection destructuring, loop `else`, exception statements, `raise`, and `async` are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
 
 Design record: the loop ownership modes are those accepted in ADR-0006. One-time iterable selection is the accepted ADR-0017 rule. Tuple assignment and loop targets follow Accepted ADR-0026.
 
@@ -27063,7 +27078,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Closures And Method Values
 
-- Closures are contextually typed `lambda parameters: expression` expressions.
+- A closure can use a contextually typed lambda expression or a local `def` with a written signature and a statement body.
 - Without a capture list, Copy values copy and owned non-Copy values move when the closure is created.
 - An exhaustive capture list may have shared, mutable, and owned entries. Shared-loan use is repeatable. Mutable-loan use is repeatable through a mutable closure place. Consuming owned-capture use is single-use.
 - A by-value closure is Transfer only when every capture is Transfer. A loan closure is never Transfer.
@@ -27086,13 +27101,13 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Foreign Functions
 
-- Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
+- A package enables the foreign function interface with `allow_ffi = true` in its manifest.
 - Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to elements of lists or Arrays, C structs with scalar or fixed-size array fields, C unions, pointer-length text and byte views, NUL-terminated `cstr` text, and opaque handles. A named top-level callback accepts scalars, pointers to one scalar, and `cstr` parameters.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
 - An extern parameter or result may be `Handle | None` or `cstr | None`, marshalled as one nullable C pointer.
-- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, C unions, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
+- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, assignment to C union members, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
 - FFI is an unsafe native boundary. It is not a memory safety promise for a false declaration or a misbehaving C implementation.
 
 ### Comprehensions
@@ -57582,12 +57597,11 @@ Aura passes the address of a C copy of `now`, and when the call returns,
 `const struct timespec *` for a struct the function only reads. Declare that
 as `mut` too, and pass a `mut` variable.
 
-On the Aura side there is nothing foreign about these values. An
-`extern "C"` class is a `copy class`: we build one with keyword arguments,
-read its fields, copy it by assignment, and keep it in a list. What it gives
-up is everything a C struct does not have. It has no methods, no field
-defaults, and no type parameters, and each field is a scalar or another
-`extern "C"` class, which C would hold inline as a nested struct.
+Our `Timespec` has only scalar fields, so assignment copies it. We can
+build one with keyword arguments, read its fields, and keep it in a list.
+C lays out nested structs inline. If a field contains a fixed-size array or
+a union, even inside a nested struct, assignment moves the value. An
+`extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
@@ -60145,9 +60159,10 @@ exactly that: an invalid sequence starts at byte 3. A program that reads
 bytes from a socket or a file and needs text has to decide what to do in
 that case, and Aura makes the decision visible.
 
-Neither conversion takes an encoding argument. Aura 0.16 converts to and
-from UTF-8 and nothing else. Text in Latin-1 or UTF-16 has to be transcoded
-before it reaches `str.from_bytes`.
+When you know a file uses Latin-1, call `bytes.decode(raw, "latin-1")` and
+match on the result to get its text. To write that text as UTF-16, use
+`bytes.encode(text, "utf-16")`. The [bytes manual](/manual/bytes#text-encodings)
+lists the supported encodings and the errors each call can return.
 
 ## Hexadecimal and base64
 

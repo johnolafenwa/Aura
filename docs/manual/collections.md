@@ -308,7 +308,8 @@ A one-colon slice returns a fresh owned list:
 - The slice copies Copy elements and clones clone-safe non-Copy elements.
 
 `str` slicing uses the same position rules, counts Unicode scalar values, and
-returns a fresh valid UTF-8 `str`. You cannot index a `str` with an integer.
+returns a fresh valid UTF-8 `str`. A single integer index selects one Unicode
+scalar. See [String Indexes](/manual/expressions#string-indexes).
 
 ### Stable Sorting
 
