@@ -151,6 +151,12 @@ ownership, diagnostics, and backend behavior.
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 
+## Numbers
+
+`numbers.BigInt`, `numbers.Decimal`, and `numbers.Complex` provide arbitrary-size
+integers, exact decimal arithmetic, and complex numbers. The module also exports
+`factorial` and the decimal rounding modes. [Numbers Module](/manual/numbers)
+
 ## Math
 
 Every argument is exactly `float64`. The module performs no implicit numeric

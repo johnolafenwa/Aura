@@ -12,6 +12,15 @@ so that the first week with Aura is less of a negotiation with the compiler.
 If you have read the book from the start, you have already met all of these.
 Treat this as the cheat sheet you hand a Python colleague.
 
+## Python Numeric Types
+
+When a Python integer grows beyond 64 bits, its storage grows with it. In
+Aura we choose `numbers.BigInt` for that range. For prices we use
+`numbers.Decimal.parse("19.95")` and match the result, or construct the
+value from a coefficient and exponent. We pass precision and rounding to
+individual operations. For Python's `1j`, write
+`numbers.Complex(re=0.0, im=1.0)`. [Numbers Module](/manual/numbers)
+
 ## Scripts and `main`
 
 A file of top-level statements is a script, and runs from top to bottom with

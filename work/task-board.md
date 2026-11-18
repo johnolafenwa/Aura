@@ -28,7 +28,7 @@ Last updated: 2026-11-18
   took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
   18,443 ms for Python.
 
-## Collections, text, and numbers (step 1 of 3 complete)
+## Collections, text, and numbers (steps 1 and 2 of 3 complete)
 
 - Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
   survey. The plan is
@@ -38,7 +38,9 @@ Last updated: 2026-11-18
   `bytes.encode` and `bytes.decode`, and set algebra (ADR-0110 to 0112).
 - Verification: runtime and compiler library tests, fixtures recorded on
   both backends, `check_doc_examples.py`, and the extension grammar tests.
-- Next: step 2, the `numbers` module (`BigInt`, `Decimal`, `Complex`).
+- Step 2 adds BigInt, Decimal and Complex (ADR-0113). All six measured
+  workloads beat Python and took at most 1.46 times Rust’s time. Tests
+  and measurements are in [the numbers work note](2026-11-17-numbers.md).
   Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
   the cost of list operations on a class field is removed.
 - The language server suite passes all 158 tests on Linux after updating

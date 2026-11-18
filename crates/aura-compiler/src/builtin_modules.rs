@@ -3137,6 +3137,147 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
     function_only_namespace(name, functions)
 }
 
+/// The host functions under the Aura source of `numbers` (`std/numbers.au`).
+/// Most host calls take a scalar and magnitude words, plus an exponent for
+/// a decimal. Large results use the wire list described in `numbers_host.rs`.
+fn numbers_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let float64 = || type_ref("float64", Vec::new());
+    let text = || type_ref("str", Vec::new());
+    let words = || type_ref("list", vec![type_ref("uint64", Vec::new())]);
+    let integer = |name: &str| {
+        vec![
+            value_param(&format!("{name}_small"), int64()),
+            borrow_param(&format!("{name}_digits"), words()),
+        ]
+    };
+    let decimal = |name: &str| {
+        let mut params = integer(name);
+        params.push(value_param(&format!("{name}_exponent"), int64()));
+        params
+    };
+    let function = |name: &str, groups: Vec<Vec<Param>>, result: TypeRef| {
+        function_info(
+            "numbers",
+            name,
+            groups.into_iter().flatten().collect(),
+            result,
+        )
+    };
+    let scalar = |name: &str, kind: TypeRef| vec![value_param(name, kind)];
+    function_only_namespace(
+        "numbers",
+        vec![
+            function(
+                "__aura_big_add_words",
+                vec![vec![
+                    borrow_param("left", words()),
+                    borrow_param("right", words()),
+                ]],
+                words(),
+            ),
+            function(
+                "__aura_small_pow_mod",
+                vec![
+                    scalar("base", int64()),
+                    scalar("exponent", int64()),
+                    scalar("modulus", int64()),
+                ],
+                int64(),
+            ),
+            function(
+                "__aura_big_binary",
+                vec![scalar("op", int64()), integer("left"), integer("right")],
+                words(),
+            ),
+            function(
+                "__aura_big_compare",
+                vec![integer("left"), integer("right")],
+                int64(),
+            ),
+            function(
+                "__aura_big_pow_mod",
+                vec![integer("base"), integer("exponent"), integer("modulus")],
+                words(),
+            ),
+            function(
+                "__aura_big_unary",
+                vec![scalar("op", int64()), integer("value")],
+                words(),
+            ),
+            function("__aura_big_bits", vec![integer("value")], int64()),
+            function(
+                "__aura_big_parse",
+                vec![vec![borrow_param("text", text())], scalar("radix", int64())],
+                words(),
+            ),
+            function(
+                "__aura_big_format",
+                vec![integer("value"), scalar("radix", int64())],
+                text(),
+            ),
+            function("__aura_big_to_float", vec![integer("value")], float64()),
+            function(
+                "__aura_big_from_float",
+                vec![scalar("value", float64())],
+                words(),
+            ),
+            function(
+                "__aura_dec_binary",
+                vec![
+                    scalar("op", int64()),
+                    decimal("left"),
+                    decimal("right"),
+                    scalar("digits", int64()),
+                    scalar("rounding", int64()),
+                ],
+                words(),
+            ),
+            function(
+                "__aura_dec_compare",
+                vec![decimal("left"), decimal("right")],
+                int64(),
+            ),
+            function(
+                "__aura_dec_round",
+                vec![
+                    decimal("value"),
+                    scalar("places", int64()),
+                    scalar("rounding", int64()),
+                ],
+                words(),
+            ),
+            function(
+                "__aura_dec_integer",
+                vec![decimal("value"), scalar("rounding", int64())],
+                words(),
+            ),
+            function("__aura_dec_normalize", vec![decimal("value")], words()),
+            function(
+                "__aura_dec_parse",
+                vec![vec![borrow_param("text", text())]],
+                words(),
+            ),
+            function(
+                "__aura_dec_format",
+                vec![decimal("value"), scalar("places", int64())],
+                text(),
+            ),
+            function("__aura_dec_to_float", vec![decimal("value")], float64()),
+            function(
+                "__aura_dec_from_float",
+                vec![scalar("value", float64())],
+                words(),
+            ),
+            function(
+                "__aura_dec_sqrt",
+                vec![decimal("value"), scalar("digits", int64())],
+                words(),
+            ),
+        ],
+    )
+}
+
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
         "io" => Some(io_namespace()),
@@ -3153,6 +3294,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "gzip" => Some(gzip_namespace()),
         "image" => Some(image_namespace()),
         "regex" => Some(regex_namespace()),
+        "numbers" => Some(numbers_namespace()),
         "http" => Some(http_namespace()),
         "time" => Some(time_namespace()),
         "tensor" => Some(tensor_namespace()),
@@ -3171,7 +3313,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
     "sys", "path", "math", "mem", "bytes", "gzip", "image", "regex", "time", "http", "tensor",
-    "json", "iter", "toml", "metrics", "log", "trace", "random",
+    "json", "iter", "toml", "metrics", "log", "trace", "random", "numbers",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -3299,6 +3441,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "image"
             | "http"
             | "regex"
+            | "numbers"
             | "time"
             | "tensor"
             | "json"
@@ -3323,7 +3466,7 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
         "gzip", "image", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd",
-        "toml", "log", "metrics", "trace",
+        "toml", "log", "metrics", "trace", "numbers",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

@@ -1,0 +1,51 @@
+from numbers import BigInt, Complex, Decimal, Rounding, factorial
+
+
+def double(value: own BigInt) -> BigInt:
+    return value + value
+
+
+def main() -> None:
+    one = BigInt.from_int(1)
+    high = BigInt.from_int(9223372036854775807) + one
+    print(str(high))
+    print(str(high * high))
+    print(str(high - one))
+    print(high.to_int() is None)
+    print(str(-high))
+    print(str(BigInt.from_int(-17) // BigInt.from_int(5)))
+    print(str(BigInt.from_int(-17) % BigInt.from_int(5)))
+    print(str(BigInt.from_int(2).pow_mod(BigInt.from_int(10), BigInt.from_int(7))))
+    print(factorial(30).to_radix(16))
+    print(BigInt.parse_radix("1z", 16) is None)
+    match own BigInt.parse_radix("-FF", 16):
+        case BigInt as value:
+            print(str(value))
+        case None:
+            print("invalid")
+    price = Decimal.from_parts(BigInt.from_int(1995), -2)
+    print((price * Decimal.from_int(3)).to_fixed(2))
+    print((price + Decimal.from_int(2)).to_plain())
+    print(
+        Decimal.from_int(2).divide(Decimal.from_int(3), 4, Rounding.HalfEven).to_plain()
+    )
+    print(Decimal.from_parts(BigInt.from_int(-5), -3).to_fixed(2))
+    print(Decimal.from_parts(BigInt.from_int(100), -2) == Decimal.from_int(1))
+    i = Complex(re=0.0, im=1.0)
+    print((i * i).re)
+    print((i * i).im)
+    print(i.conj() == Complex(re=0.0, im=-1.0))
+    large = Complex(re=1.0e308, im=1.0e308)
+    quotient = large / large
+    print(quotient == Complex(re=1.0, im=0.0))
+    print(Complex(re=1.0e308, im=0.0).sqrt().re == 1.0e154)
+    print(Complex(re=0.0, im=1.0e-300).sqrt().is_finite())
+    values = [high.copy(), one.copy()]
+    print(str(values[0] + values[1]))
+    with TaskGroup() as group:
+        task = group.start(double, high.copy())
+        match own task.result():
+            case TaskResult.Ready(value):
+                print(str(value))
+            case _:
+                print("task failed")

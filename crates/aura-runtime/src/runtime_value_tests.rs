@@ -1141,6 +1141,27 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
 }
 
 #[test]
+fn integer_array_construction_checks_untyped_literal_bounds_at_the_element() {
+    for (name, largest) in [("int32", i32::MAX as u128), ("int64", i64::MAX as u128)] {
+        let literal = |magnitude| Value::Int(IntegerValue::from_literal(magnitude));
+        let error = ArrayValue::from_values(
+            &Type::named(name),
+            Box::new([2]),
+            vec![literal(largest), literal(largest + 1)],
+        )
+        .expect_err("a literal outside the element type must not wrap");
+        assert_eq!(error.code, "AU4007");
+        assert_eq!(
+            error.message,
+            format!(
+                "array {name} storage requires {name} scalar at flat index 1, found {}",
+                largest + 1
+            )
+        );
+    }
+}
+
+#[test]
 fn array_containing_language_copies_preserve_reachable_structure_and_independence() {
     fn source_array(values: &[i32]) -> Value {
         Value::Array(
@@ -11302,6 +11323,52 @@ fn queue_iteration_wait_wakes_for_unobserved_task_group_failure() {
 }
 
 #[test]
+fn task_group_iteration_receives_the_last_send_before_reporting_completion() {
+    let cancellation = CancellationContext::default();
+    let group = TaskGroupValue::new(&cancellation);
+    let channel = ChannelValue::new();
+    let first = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    wait_task_ready(&first).expect("the first task should finish");
+    group.register_task(first.clone());
+
+    let (release, start) = std::sync::mpsc::channel();
+    let output = channel.clone();
+    let producer = TaskValue::from_handle(thread::spawn(move || {
+        start.recv().expect("release the last producer");
+        output.send(Value::Bool(true)).expect("send the final item");
+        output.close();
+        Ok(Value::Unit)
+    }));
+    group.register_task(producer.clone());
+
+    thread::scope(|scope| {
+        // The reader checks the group after seeing an empty queue. Pause its
+        // first task inspection until the last producer has sent and finished.
+        let first_result = lock_mutex(&first.inner.handle);
+        let reader = scope.spawn(|| recv_for_task_group_iteration(&channel, &cancellation, &group));
+        let deadline = Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_secs(5));
+        while group.inner.tasks.try_lock().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "reader did not inspect the group"
+            );
+            thread::yield_now();
+        }
+        release.send(()).expect("start the final send");
+        wait_task_ready(&producer).expect("the producer should finish");
+        drop(first_result);
+        assert_eq!(
+            reader.join().unwrap(),
+            RecvValueResult::Value(Value::Bool(true))
+        );
+    });
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Closed
+    );
+}
+
+#[test]
 fn phase73_observable_runtime_task_group_cancellation_precedes_empty_completion() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     group.cancel();
@@ -11469,10 +11536,12 @@ fn task_group_cleanup_probe_waits_for_a_child_parked_on_blocking_io() {
 #[test]
 fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     let channel = ChannelValue::new();
-    let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
-    assert_eq!(
-        wait_task_ready(&task).expect("snapshot dependency task should complete"),
-        Value::Unit
+    let task = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    super::complete_lightweight_task_state(
+        &task.inner,
+        TaskExecutionResult::Ready(Ok(Value::Unit)),
     );
 
     let task_weak = Arc::downgrade(&task.inner);
@@ -11494,14 +11563,11 @@ fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     drop(registration);
     drop(task);
     drop(channel);
-    for _ in 0..100 {
-        if task_weak.upgrade().is_none() {
-            break;
-        }
-        thread::yield_now();
-    }
     assert!(task_weak.upgrade().is_none());
     assert!(channel_weak.upgrade().is_none());
+    assert!(snapshot.task_waits[0].upgrade().is_none());
+    assert!(snapshot.recv_channels[0].upgrade().is_none());
+    assert!(snapshot.send_channels[0].upgrade().is_none());
 }
 
 #[test]

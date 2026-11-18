@@ -1,0 +1,20 @@
+from numbers import BigInt, Decimal
+
+
+def main() -> None:
+    high = BigInt.from_int(9223372036854775807)
+    low = -high - BigInt.from_int(1)
+    print(str(low - BigInt.from_int(1)))
+    print(str(low * BigInt.from_int(-1)))
+    print(str((high + BigInt.from_int(1)) + low))
+    a = Decimal.from_int(9223372036854775807)
+    print((a + Decimal.from_int(1)).to_plain())
+    print((a * Decimal.from_int(2)).to_plain())
+    cents = Decimal.from_parts(BigInt.from_int(25), -2)
+    print((cents * Decimal.from_int(4)).to_plain())
+    print((cents + Decimal.from_int(-10)).to_fixed(2))
+    print((cents - cents).to_plain())
+    limit: int64 = 9223372036854775807
+    print(limit.saturating_mul(2))
+    print((-limit).saturating_mul(2))
+    print(limit.wrapping_mul(2))

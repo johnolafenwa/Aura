@@ -1,0 +1,90 @@
+import numbers
+import time
+
+
+def factorials() -> int64:
+    mut bits = 0
+    for n in range(4000, 4100):
+        bits += numbers.factorial(n).bit_length()
+    return bits
+
+
+def fibonacci() -> int64:
+    mut a = numbers.BigInt.from_int(0)
+    mut b = numbers.BigInt.from_int(1)
+    for i in range(30000):
+        next = a + b
+        a = b
+        b = next
+    return a.bit_length()
+
+
+def small_integers() -> int64:
+    mut total = numbers.BigInt.from_int(0)
+    for i in range(500000):
+        total = total + numbers.BigInt.from_int(i)
+    match total.to_int():
+        case int64 as value:
+            return value
+        case None:
+            return -1
+
+
+def modular_powers() -> int64:
+    exponent = numbers.BigInt.from_int(65537)
+    modulus = numbers.BigInt.from_int(1000000007)
+    mut total = numbers.BigInt.from_int(0)
+    for i in range(1, 20001):
+        total = total + numbers.BigInt.from_int(i).pow_mod(exponent, modulus)
+    match total.to_int():
+        case int64 as value:
+            return value
+        case None:
+            return -1
+
+
+def money() -> str:
+    price = numbers.Decimal.from_parts(numbers.BigInt.from_int(1995), -2)
+    quantity = numbers.Decimal.from_int(3)
+    mut total = numbers.Decimal.from_int(0)
+    for i in range(200000):
+        total = total + price * quantity
+    return total.to_fixed(2)
+
+
+def mandelbrot() -> int64:
+    mut total = 0
+    for y in range(240):
+        for x in range(320):
+            c = numbers.Complex(
+                re=x.to_float() / 128.0 - 2.0,
+                im=y.to_float() / 120.0 - 1.0,
+            )
+            mut z = numbers.Complex(re=0.0, im=0.0)
+            mut iteration = 0
+            while iteration < 50 and z.re * z.re + z.im * z.im <= 4.0:
+                z = z * z + c
+                iteration += 1
+            total += iteration
+    return total
+
+
+def main() -> None:
+    start = time.monotonic()
+    f = factorials()
+    print(f"factorial {(time.monotonic() - start).to_ms()} {f}")
+    start2 = time.monotonic()
+    fib = fibonacci()
+    print(f"fibonacci {(time.monotonic() - start2).to_ms()} {fib}")
+    start3 = time.monotonic()
+    small = small_integers()
+    print(f"small_integers {(time.monotonic() - start3).to_ms()} {small}")
+    start4 = time.monotonic()
+    mod = modular_powers()
+    print(f"modular_powers {(time.monotonic() - start4).to_ms()} {mod}")
+    start5 = time.monotonic()
+    amount = money()
+    print(f"decimal_money {(time.monotonic() - start5).to_ms()} {amount}")
+    start6 = time.monotonic()
+    count = mandelbrot()
+    print(f"mandelbrot {(time.monotonic() - start6).to_ms()} {count}")

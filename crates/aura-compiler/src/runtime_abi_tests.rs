@@ -99,6 +99,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             "time::__aura_parsed_seconds",
             "time::__aura_parsed_nanos",
             "time::__aura_parsed_offset",
+            "numbers::__aura_big_add_words",
+            "numbers::__aura_small_pow_mod",
             "regex::__aura_is_match",
             "regex::__aura_count",
             "regex::__aura_find",

@@ -102,6 +102,7 @@ maintained surface by area and states how it may change.
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
   integers at a raw address.
+- [Numbers Module](/manual/numbers) covers arbitrary-size integers, exact decimal arithmetic, and complex numbers.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
