@@ -1,18 +1,31 @@
 # Task Board
 
-Last updated: 2026-11-17
+Last updated: 2026-11-18
 
 ## Failure recovery
 
 - Both backends implement `control.recover` and stack-bounded recursion.
   Five fixtures cover task cancellation, cleanup, ownership and diagnostics.
-- A release build measured 6.40 ns per successful scalar call and 308.14 ns
+- A release build measured 1.35 ns per successful scalar call and 104.49 ns
   per caught literal assertion. With an interpolated message the medians
-  were 2.64 ns and 399.13 ns. Both variants beat Python and came within
+  were 5.53 ns and 781.29 ns. Both variants beat Python and came within
   twice Rust’s success time.
 - The [work note](2026-11-17-failure-recovery.md) records the verification
   and example. [PR #302](https://github.com/johnolafenwa/Aura/pull/302)
   targets the shared integration branch.
+
+## The `image` module (complete)
+
+- Target: John's 2026-11-16 "lets do 1,2,3" on the graphics options, of
+  which this is option 2. Details are in `2026-11-16-image-module.md`.
+- Done: PNG, JPEG and Netpbm reading and writing, resize, crop, flips,
+  channel conversion, `Array` forms for tensors, the Manual page, book
+  section 20.6, ADR-0114, an example and a benchmark.
+- Verification: runtime and compiler unit tests with fixtures made by
+  Pillow, the example under `aura run` and in a built binary, and
+  `benchmarks/image_codec` against Rust and Pillow.
+  The documentation build and both dependency audits pass with the pinned glob matcher.
+- Left out: 16-bit samples, metadata, other formats, drawing.
 
 ## Three compiler defects from the book sections (complete)
 

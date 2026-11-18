@@ -1,0 +1,111 @@
+# The Aura side of the image benchmark: the `image` module.
+#
+# Decodes the PNG and the JPEG that `make_images.py` wrote, then encodes,
+# resizes and converts the decoded picture. Each phase runs ten times and
+# prints its fastest run in milliseconds and a number to compare with the
+# other sides, computed outside the timed part. Takes the directory holding
+# the two files.
+import fs
+import image
+import io
+import sys
+import time
+
+ROUNDS = 10
+
+
+def total(values: list[uint8]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value as int64
+    return sum
+
+
+def report(name: str, best: float64, check: int64) -> None:
+    print(f"{name} {best:.1f} {check}")
+
+
+def since(started: Duration) -> float64:
+    return (time.monotonic() - started).to_ms()
+
+
+def run(workdir: str) -> Result[None, image.Error]:
+    png = try read(f"{workdir}/photo.png")
+    jpeg = try read(f"{workdir}/photo.jpg")
+    picture = try image.decode(png)
+    pixels = picture.width * picture.height * 3
+
+    mut best = 1000000.0
+    mut decoded = try image.decode(png)
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        decoded = try image.decode(png)
+        best = min(best, since(started))
+    report("decode_png", best, total(decoded.pixels))
+
+    best = 1000000.0
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        decoded = try image.decode(jpeg)
+        best = min(best, since(started))
+    report("decode_jpeg", best, total(decoded.pixels) // pixels)
+
+    best = 1000000.0
+    mut encoded = try image.encode_ppm(picture)
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        encoded = try image.encode_png(picture)
+        best = min(best, since(started))
+    report("encode_png", best, encoded.len())
+
+    best = 1000000.0
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        encoded = try image.encode_png(picture, level=2)
+        best = min(best, since(started))
+    report("encode_png_fast", best, encoded.len())
+
+    best = 1000000.0
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        encoded = try image.encode_jpeg(picture)
+        best = min(best, since(started))
+    report("encode_jpeg", best, encoded.len())
+
+    best = 1000000.0
+    mut small = picture.crop(0, 0, 1, 1)
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        small = picture.resize(picture.width // 2, picture.height // 2)
+        best = min(best, since(started))
+    report("resize", best, total(small.pixels) // (pixels // 4))
+
+    best = 1000000.0
+    mut planes = small.to_planes()
+    for _ in range(ROUNDS):
+        started = time.monotonic()
+        planes = picture.to_planes()
+        best = min(best, since(started))
+    report("to_floats", best, (planes as Array[float64]).sum() as int64)
+    return Result.Ok(None)
+
+
+def read(file_path: str) -> Result[list[uint8], image.Error]:
+    match own fs.read_bytes(file_path):
+        case Result.Ok(list[uint8] as data):
+            return Result.Ok(data)
+        case Result.Err(io.Error as error):
+            return Result.Err(image.Error.Io(error=error))
+
+
+def main() -> int32:
+    args = sys.args()
+    if args.len() != 1:
+        print("usage: image_codec <workdir>")
+        return 2
+    match run(args[0].clone()):
+        case Result.Ok(None):
+            return 0
+        case Result.Err(image.Error as _):
+            print("image_codec failed")
+            return 1

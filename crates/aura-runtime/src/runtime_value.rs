@@ -73,6 +73,8 @@ mod generator;
 pub mod host_builtins;
 #[path = "http_client.rs"]
 pub mod http_client;
+#[path = "image_host.rs"]
+pub mod image_host;
 #[path = "regex_host.rs"]
 pub mod regex_host;
 #[path = "tensor_host.rs"]

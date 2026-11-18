@@ -128,3 +128,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 101. [ADR-0101: `aura build --target` builds programs for other Linux machines](0101-linux-targets-for-aura-build.md) — Accepted; x86-64 and arm64, glibc and static musl, from a Linux host; a musl program links the C library the runtime ships; each target has its own runtime library
 104. [ADR-0104. Trap recovery with control.recover](0104-trap-recovery-with-control-recover.md) defines the recovery boundary and its result.
 105. [ADR-0105. Call depth is bounded by the stack](0105-call-depth-is-bounded-by-the-stack.md) specifies when a recursive call traps.
+114. [ADR-0114: The `image` module](0114-image-module.md) — Accepted; PNG, JPEG and Netpbm into a class of three integers and a `list[uint8]`; codecs in the runtime behind nine host functions; a pixel limit checked before decoding; `Array` forms as the bridge to tensors

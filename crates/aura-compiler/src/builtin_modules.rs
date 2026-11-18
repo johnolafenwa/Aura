@@ -1646,6 +1646,90 @@ fn iter_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// The host part of `image`: the codecs and the pixel operations, each
+/// taking one large value and then integers. `Image`, `Error` and the
+/// public functions are Aura source in `std/image.au`.
+fn image_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let text = || type_ref("str", Vec::new());
+    let array = || type_ref("Array", vec![type_ref("float32", Vec::new())]);
+    let tuple = |items: Vec<TypeRef>| TypeRef::tuple(items, false, builtin_span());
+    let function = |name: &str, data: (&str, TypeRef), numbers: &[&str], result: TypeRef| {
+        let mut params = vec![borrow_param(data.0, data.1)];
+        params.extend(numbers.iter().map(|number| value_param(number, int64())));
+        function_info("image", name, params, result)
+    };
+    let pixels = || ("pixels", bytes_vec_type_ref());
+    let layout = ["width", "height", "channels"];
+    let with_layout = |rest: &[&'static str]| [&layout[..], rest].concat();
+    function_only_namespace(
+        "image",
+        vec![
+            function(
+                "__aura_info",
+                ("data", bytes_vec_type_ref()),
+                &[],
+                tuple(vec![int64(), int64(), int64(), int64(), text()]),
+            ),
+            function(
+                "__aura_decode",
+                ("data", bytes_vec_type_ref()),
+                &["max_pixels"],
+                tuple(vec![
+                    int64(),
+                    int64(),
+                    int64(),
+                    int64(),
+                    bytes_vec_type_ref(),
+                    text(),
+                ]),
+            ),
+            function(
+                "__aura_encode",
+                pixels(),
+                &["format", "width", "height", "channels", "option"],
+                tuple(vec![int64(), bytes_vec_type_ref(), text()]),
+            ),
+            function(
+                "__aura_convert",
+                pixels(),
+                &with_layout(&["target"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_resize",
+                pixels(),
+                &with_layout(&["new_width", "new_height", "filter"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_crop",
+                pixels(),
+                &with_layout(&["left", "top", "crop_width", "crop_height"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_flip",
+                pixels(),
+                &with_layout(&["vertical"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_to_array",
+                pixels(),
+                &with_layout(&["planes"]),
+                array(),
+            ),
+            function(
+                "__aura_from_array",
+                ("values", array()),
+                &["planes"],
+                tuple(vec![int64(), int64(), int64(), bytes_vec_type_ref()]),
+            ),
+        ],
+    )
+}
+
 /// The host part of `regex`: the searches themselves, keyed by the number
 /// the runtime gave the pattern. `Regex`, `Match`, `Captures`, and `compile`
 /// are Aura source in `std/regex.au`.
@@ -2946,6 +3030,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "mem" => Some(mem_namespace()),
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
+        "image" => Some(image_namespace()),
         "regex" => Some(regex_namespace()),
         "http" => Some(http_namespace()),
         "time" => Some(time_namespace()),
@@ -2964,8 +3049,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "tensor", "json",
-    "iter", "toml", "metrics", "log", "trace", "random",
+    "sys", "path", "math", "mem", "bytes", "gzip", "image", "regex", "time", "http", "tensor",
+    "json", "iter", "toml", "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -3090,6 +3175,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "mem"
             | "bytes"
             | "gzip"
+            | "image"
             | "http"
             | "regex"
             | "time"
@@ -3115,8 +3201,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
-        "gzip", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd", "toml",
-        "log", "metrics", "trace",
+        "gzip", "image", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd",
+        "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

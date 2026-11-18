@@ -74,6 +74,13 @@
       "regex::",
       "regex_automata::",
       "regex_syntax::"
+    ],
+    "image": [
+      "png::",
+      "zune_jpeg::",
+      "jpeg_encoder::",
+      "fdeflate::",
+      "aura_runtime::image_codec::"
     ]
   },
   "subjects": {
@@ -93,7 +100,8 @@
         "url",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "known_present": [
         "libffi",
@@ -115,7 +123,8 @@
         "http",
         "httparse",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "serde_json"
@@ -137,7 +146,8 @@
         "mir_interpreter",
         "toml",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "serde_json"
@@ -156,7 +166,8 @@
         "httparse",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "rustls",
@@ -174,7 +185,8 @@
         "mir_interpreter",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "tungstenite",
