@@ -160,12 +160,12 @@ pub fn decode(bytes: &[u8], encoding: Encoding) -> Result<String, EncodingError>
             None => decode_utf8(bytes, 0),
         },
         Encoding::Utf16 => match bytes {
-            [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, false, 2),
-            [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, true, 2),
-            _ => decode_utf16(bytes, false, 0),
+            [0xFF, 0xFE, rest @ ..] => decode_utf16::<false>(rest, 2),
+            [0xFE, 0xFF, rest @ ..] => decode_utf16::<true>(rest, 2),
+            _ => decode_utf16::<false>(bytes, 0),
         },
-        Encoding::Utf16Le => decode_utf16(bytes, false, 0),
-        Encoding::Utf16Be => decode_utf16(bytes, true, 0),
+        Encoding::Utf16Le => decode_utf16::<false>(bytes, 0),
+        Encoding::Utf16Be => decode_utf16::<true>(bytes, 0),
         Encoding::Utf32 => match bytes {
             [0xFF, 0xFE, 0, 0, rest @ ..] => decode_utf32(rest, false, 4),
             [0, 0, 0xFE, 0xFF, rest @ ..] => decode_utf32(rest, true, 4),
@@ -202,48 +202,47 @@ fn decode_utf8(bytes: &[u8], skipped: usize) -> Result<String, EncodingError> {
     }
 }
 
-fn decode_utf16(bytes: &[u8], big: bool, skipped: usize) -> Result<String, EncodingError> {
-    let unit_at = |index: usize| {
-        let pair = [bytes[index], bytes[index + 1]];
-        if big {
-            u16::from_be_bytes(pair)
-        } else {
-            u16::from_le_bytes(pair)
-        }
-    };
-    let mut text = String::with_capacity(bytes.len() / 2);
-    let mut index = 0;
-    while index + 1 < bytes.len() {
-        let unit = unit_at(index);
+fn decode_utf16<const BIG_ENDIAN: bool>(
+    bytes: &[u8],
+    skipped: usize,
+) -> Result<String, EncodingError> {
+    let (pairs, trailing) = bytes.as_chunks::<2>();
+    let mut text = String::with_capacity(pairs.len());
+    let mut units = pairs
+        .iter()
+        .map(|&pair| {
+            if BIG_ENDIAN {
+                u16::from_be_bytes(pair)
+            } else {
+                u16::from_le_bytes(pair)
+            }
+        })
+        .enumerate();
+    while let Some((index, unit)) = units.next() {
         let invalid = EncodingError::Invalid {
-            index: skipped + index,
+            index: skipped + index * 2,
         };
-        match unit {
+        let ch = match unit {
+            0..=0x7F => {
+                text.push(char::from(unit as u8));
+                continue;
+            }
             0xD800..=0xDBFF => {
-                // A high surrogate needs the low one right after it.
-                if index + 3 >= bytes.len() {
+                let Some((_, low @ 0xDC00..=0xDFFF)) = units.next() else {
                     return Err(invalid);
-                }
-                let low = unit_at(index + 2);
-                if !(0xDC00..=0xDFFF).contains(&low) {
-                    return Err(invalid);
-                }
+                };
                 let scalar =
                     0x10000 + ((u32::from(unit) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
-                text.push(char::from_u32(scalar).ok_or(invalid)?);
-                index += 4;
+                char::from_u32(scalar).ok_or(invalid)?
             }
             0xDC00..=0xDFFF => return Err(invalid),
-            _ => {
-                text.push(char::from_u32(u32::from(unit)).ok_or(invalid)?);
-                index += 2;
-            }
-        }
+            _ => char::from_u32(u32::from(unit)).ok_or(invalid)?,
+        };
+        text.push(ch);
     }
-    if index < bytes.len() {
-        // One byte is left over: half a code unit.
+    if !trailing.is_empty() {
         return Err(EncodingError::Invalid {
-            index: skipped + index,
+            index: skipped + pairs.len() * 2,
         });
     }
     Ok(text)
