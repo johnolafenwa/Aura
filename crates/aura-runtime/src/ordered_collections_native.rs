@@ -214,3 +214,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ordered_local_step(
         fail_operation(diagnostic, op, word)
     })
 }
+
+#[cfg(test)]
+#[path = "ordered_collections_native_tests.rs"]
+mod tests;

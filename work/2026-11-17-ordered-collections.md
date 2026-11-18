@@ -68,3 +68,15 @@ for heap, 2.02 for map and 1.87 for set. All four beat Python. On a
 shared-host repeat of the `c9fc4b7c` release, the wall-time ratios for
 map and set exceeded three, at 3.08 and 3.98. The full measurements
 and clocks are in the benchmark README. [Hosted results](https://github.com/johnolafenwa/Aura/actions/runs/44201719086/job/134465583204)
+
+The x86-64 Linux release at `c9fc4b7c` matched the 59 expected output
+lines from all five ordered collection fixtures on both backends. The
+empty deque and drained heap matched their full trap diagnostics on
+both backends. Four checker error snapshots matched. Windows passed
+2,127 compiler and 1,275 runtime library tests on this revision.
+[Windows test output](https://github.com/johnolafenwa/Aura/actions/runs/44198978743/job/134447908353)
+
+Three runtime library tests exercise the native entry points directly.
+They check a sorted map snapshot after updating its copy, access through
+a nested sorted set, and switching a deque or heap to shared access.
+They also check the method name and source position after an empty pop.
