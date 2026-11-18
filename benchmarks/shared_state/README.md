@@ -73,3 +73,28 @@ went from 685 to 698 ms and process CPU from 264.5 to 327 ms when
 comparing the prior scoped Linux release with the local backoff
 runtime. The cache wall time went from 994.5 to 959 ms and process CPU
 from 439 to 363.5 ms. These local runs used the same native frontend.
+
+A second comparison rebuilt the code immediately before and after the
+backoff with the same local release toolchain. In 15 alternating runs
+on four CPUs, four-task mutex wall time fell from 595 to 488 ms and
+process CPU from 286 to 231 ms. Four-task cache wall time fell from
+917 to 845 ms and process CPU from 386 to 350 ms. The uncontended
+integer lock used 184 ms of process CPU in both builds. All checksums
+matched.
+
+## Checked atomic addition
+
+The native atomic addition keeps sequentially consistent ordering. The
+runtime inlines the checked addition and constructs its diagnostic on
+the error path. A 20-million-increment comparison on one logical CPU
+used the same compiler and release settings for both runtimes. Eleven
+rotated runs measured 512 ms of process CPU before the change and
+443 ms afterward for the public `AtomicInt.add` loop. The direct host
+entry took 416 and 359 ms respectively.
+
+Callgrind counted 124.0 instructions per public increment before the
+change and 106.0 after it, using the difference between 10,000 and 20,000
+iterations of the same executable. In a separate five-round comparison,
+the prior public loop took 486 ms of process CPU, the new loop took
+418 ms, Rust took 228 ms and Python took 19,113 ms. All four produced
+20,000,000. These CPU measurements exclude time spent waiting to run.
