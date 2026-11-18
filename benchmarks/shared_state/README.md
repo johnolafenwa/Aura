@@ -74,6 +74,14 @@ comparing the prior scoped Linux release with the local backoff
 runtime. The cache wall time went from 994.5 to 959 ms and process CPU
 from 439 to 363.5 ms. These local runs used the same native frontend.
 
+A second comparison rebuilt the code immediately before and after the
+backoff with the same local release toolchain. In 15 alternating runs
+on four CPUs, four-task mutex wall time fell from 595 to 488 ms and
+process CPU from 286 to 231 ms. Four-task cache wall time fell from
+917 to 845 ms and process CPU from 386 to 350 ms. The uncontended
+integer lock used 184 ms of process CPU in both builds. All checksums
+matched.
+
 ## Checked atomic addition
 
 The native atomic addition keeps sequentially consistent ordering. The
