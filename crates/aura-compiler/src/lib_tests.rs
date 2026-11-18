@@ -3571,13 +3571,17 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
+    use std::os::unix::fs::OpenOptionsExt;
+
     let _guard = lock_io_example();
     let temp = TempDir::new("aura-async-file-io");
     let fifo_path = temp.path().join("events.fifo");
     let ready_path = temp.path().join("ready.txt");
+    let connected_path = temp.path().join("reader-connected.txt");
     let fifo_literal = escape_aura_string(&fifo_path.display().to_string());
     let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let read_timeout = crate::hosted_ci_timing_limit(StdDuration::from_secs(2));
+    let connected_literal = escape_aura_string(&connected_path.display().to_string());
+    let watchdog = crate::hosted_ci_timing_limit(StdDuration::from_secs(30));
 
     let status = Command::new("mkfifo")
         .arg(&fifo_path)
@@ -3596,8 +3600,9 @@ def wait_for_text(path: str):
         case Result.Err(err):
             print(err)
 
-def mark_ready(path: str):
-    sleep(20ms)
+def mark_ready(connected: str, path: str):
+    while not fs.exists(connected):
+        sleep(1ms)
     match fs.write_string(path, "ready"):
         case Result.Ok(_):
             pass
@@ -3607,8 +3612,8 @@ def mark_ready(path: str):
 def main() -> int32:
     with TaskGroup() as group:
         reader = group.start(wait_for_text, "{fifo_path}")
-        group.start_soon(mark_ready, "{ready_path}")
-        match reader.result(timeout={read_timeout_ms}ms):
+        group.start_soon(mark_ready, "{connected_path}", "{ready_path}")
+        match reader.result():
             case TaskResult.Ready(_):
                 pass
             case TaskResult.Error(_message):
@@ -3621,33 +3626,38 @@ def main() -> int32:
 "#,
         fifo_path = fifo_literal,
         ready_path = ready_literal,
-        read_timeout_ms = read_timeout.as_millis()
+        connected_path = connected_literal
     );
 
-    let writer_path = fifo_path.clone();
-    let writer = thread::spawn(move || {
-        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(500)));
-        let mut fifo = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(writer_path)
-            .expect("fifo writer should open the fifo");
-        fifo.write_all(b"ping").expect("fifo writer should succeed");
-    });
-
     let handle = thread::spawn(move || run_source(&source));
-    let ready_deadline =
-        Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_millis(350));
-    let mut ready_seen = false;
-    while Instant::now() < ready_deadline {
-        if ready_path.exists() {
-            ready_seen = true;
-            break;
+    // A write-only FIFO open succeeds only once a reader is waiting. Keep
+    // the writer open and empty while the other Aura task marks its progress.
+    let connect_deadline = Instant::now() + watchdog;
+    let mut writer = loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo_path)
+        {
+            Ok(writer) => break writer,
+            Err(error)
+                if error.raw_os_error() == Some(libc::ENXIO)
+                    && !handle.is_finished()
+                    && Instant::now() < connect_deadline =>
+            {
+                thread::sleep(StdDuration::from_millis(5));
+            }
+            Err(error) => panic!("the Aura reader should open the FIFO: {error}"),
         }
+    };
+    fs::write(connected_path, "connected").expect("signal the waiting Aura task");
+    let ready_deadline = Instant::now() + watchdog;
+    while !ready_path.exists() && Instant::now() < ready_deadline {
         thread::sleep(StdDuration::from_millis(5));
     }
-
-    writer.join().expect("fifo writer thread should join");
+    let ready_seen = ready_path.exists();
+    writer.write_all(b"ping").expect("release the FIFO reader");
+    drop(writer);
     let output = handle
         .join()
         .expect("async file I/O runtime thread should join")
@@ -3663,13 +3673,7 @@ def main() -> int32:
 
 #[test]
 fn lightweight_tasks_scale_to_thousands_of_waiting_tasks() {
-    let temp = TempDir::new("aura-lightweight-task-scale");
-    let ready_path = temp.path().join("ready.txt");
-    let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let source = format!(
-        r#"
-import fs
-
+    let source = r#"
 def sleeper(started: Queue[int32]) -> None:
     _ = started.put(1)
     while not cancelled():
@@ -3694,34 +3698,29 @@ def main() -> int32:
         for i in range(3000):
             group.start(sleeper, started)
         wait_for_count(started, 3000)
-        match fs.write_string("{ready_path}", "ready"):
-            case Result.Ok(_):
-                sleep(500ms)
-            case Result.Err(_):
-                group.cancel()
-                return 1
+        print("ready")
         group.cancel()
     return 0
-"#,
-        ready_path = ready_literal
-    );
+"#;
 
     let baseline_threads = current_process_thread_count();
-    let source_handle = thread::spawn(move || run_source(&source));
-    let deadline = Instant::now() + StdDuration::from_secs(15);
-    while !ready_path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "lightweight task stress never signalled readiness"
-        );
-        thread::sleep(StdDuration::from_millis(10));
-    }
-    let running_threads = current_process_thread_count();
-    let output = source_handle
-        .join()
-        .expect("lightweight task stress worker should not panic")
+    let (thread_counts, sampled) = std::sync::mpsc::channel();
+    let sink: StdoutSink = Arc::new(move |chunk| {
+        if chunk == "ready\n" {
+            // The caller is still in the task group until this print returns.
+            thread_counts.send(current_process_thread_count()).unwrap();
+        }
+    });
+    let output =
+        run_corpus_case_with_timeout("lightweight task stress", Path::new(file!()), move || {
+            run_source_with_stdout_sink(source, sink)
+        })
+        .expect("the task group should finish")
         .expect("lightweight task stress source should run");
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    let running_threads = sampled
+        .try_recv()
+        .expect("all 3,000 tasks should signal readiness before cancellation");
     assert!(
         running_threads <= baseline_threads + 32,
         "lightweight task stress should stay near the baseline thread count; baseline {}, running {}",

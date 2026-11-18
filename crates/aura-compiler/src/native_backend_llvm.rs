@@ -1959,9 +1959,12 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .map(|(index, ty)| {
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
-            match signature.indirects.iter().any(|(at, _)| *at == index) {
-                true => context.ptr_type(AddressSpace::default()).into(),
-                false => BasicMetadataTypeEnum::from(basic_type(context, *ty)),
+            match signature.indirects.iter().find(|(at, _)| *at == index) {
+                Some((_, Indirect::Aggregate { element, count })) => {
+                    basic_type(context, *element).array_type(*count).into()
+                }
+                Some(_) => context.ptr_type(AddressSpace::default()).into(),
+                None => BasicMetadataTypeEnum::from(basic_type(context, *ty)),
             }
         })
         .collect::<Vec<_>>();
@@ -3312,13 +3315,19 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     "",
                 ))?;
                 let mut arguments = self.args(args)?;
-                for (index, _) in &signature.indirects {
+                for (index, indirect) in &signature.indirects {
                     let address = built(self.builder.build_int_to_ptr(
                         self.int(args[*index])?,
                         context.ptr_type(AddressSpace::default()),
                         "",
                     ))?;
-                    arguments[*index] = address.into();
+                    arguments[*index] = match indirect {
+                        Indirect::Aggregate { element, count } => {
+                            let array = basic_type(context, *element).array_type(*count);
+                            built(self.builder.build_load(array, address, ""))?.into()
+                        }
+                        _ => address.into(),
+                    };
                 }
                 let call = built(self.builder.build_indirect_call(
                     function_type(context, signature),
@@ -3330,6 +3339,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     let (name, size) = match indirect {
                         Indirect::ByValue { size } => ("byval", *size),
                         Indirect::Result { size } => ("sret", *size),
+                        Indirect::Aggregate { .. } => continue,
                     };
                     let location = AttributeLoc::Param(*index as u32);
                     call.add_attribute(

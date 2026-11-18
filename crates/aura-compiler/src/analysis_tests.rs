@@ -1107,6 +1107,67 @@ fn machine_readable_analysis_covers_symbols_and_occurrences() {
 }
 
 #[test]
+fn an_extern_union_lists_its_members_and_hides_what_the_parser_declared_for_it() {
+    let source = concat!(
+        "extern \"C\" class Key:\n    code: int32\n\n",
+        "extern \"C\" union Event:\n    kind: uint32\n    key: Key\n\n",
+        "def code(event: Event) -> int32:\n    return event.key.code\n",
+    );
+    let module = crate::parser::parse(source).expect("a union should parse");
+    let symbols = symbols_from_module(&module, source);
+    assert_eq!(
+        symbols
+            .iter()
+            .map(|symbol| symbol.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Key", "Event", "code"]
+    );
+    let event = &symbols[1];
+    assert_eq!(
+        event
+            .children
+            .iter()
+            .map(|child| (child.name.as_str(), child.kind.as_str(), child.line))
+            .collect::<Vec<_>>(),
+        [("kind", "field", 4), ("key", "field", 5)]
+    );
+
+    let temp_dir = TempDir::new("aura-analysis-union");
+    let main_path = temp_dir.path().join("src/main.au");
+    fs::create_dir_all(main_path.parent().expect("main path should have a parent"))
+        .expect("failed to create package source dir");
+    fs::write(
+        temp_dir.path().join("Aura.toml"),
+        "[package]\nname = \"union_analysis\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("failed to write package manifest");
+    fs::write(&main_path, source).expect("failed to write the union source");
+    let analysis = analyze_path_source(&main_path, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let stride = crate::diag::GENERATED_COLUMN_STRIDE;
+    assert!(analysis
+        .occurrences
+        .iter()
+        .all(|occurrence| occurrence.start_character < stride));
+    assert!(!analysis
+        .occurrences
+        .iter()
+        .any(|occurrence| occurrence.hover.contains("__Event_")));
+    let key = analysis
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 8 && occurrence.hover.contains("property key"))
+        .expect("a member read is a property read");
+    // The member's definition is the union's declaration.
+    let definition = key.definition.as_ref().expect("the member is defined");
+    assert_eq!((definition.line, definition.start_character), (3, 11));
+}
+
+#[test]
 fn p64_extern_items_are_preserved_in_machine_readable_symbols() {
     let source = concat!(
         "public extern \"C\" opaque class ProcessHandle\n",
@@ -6095,6 +6156,8 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             span: Span::new(1, 1),
             doc: None,
             c_layout: false,
+            c_arrays: Default::default(),
+            c_union: None,
         },
         type_param_bounds: Default::default(),
         fields: std::collections::BTreeMap::from([(

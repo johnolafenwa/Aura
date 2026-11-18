@@ -404,6 +404,8 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             span: builtin_span(),
             doc: None,
             c_layout: false,
+            c_arrays: BTreeMap::new(),
+            c_union: None,
         },
         type_param_bounds: BTreeMap::new(),
         fields: BTreeMap::new(),

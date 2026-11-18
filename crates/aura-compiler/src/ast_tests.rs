@@ -53,6 +53,8 @@ fn item_name_matches_decl_name() {
         span: Span::new(1, 1),
         doc: None,
         c_layout: false,
+        c_arrays: Default::default(),
+        c_union: None,
     });
     let enum_item = Item::Enum(EnumDecl {
         public: true,

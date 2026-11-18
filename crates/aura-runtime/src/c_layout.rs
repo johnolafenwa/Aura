@@ -1,21 +1,30 @@
-//! The layout of a C struct, and how the C calling convention passes one
-//! by value.
+//! The layout of a C struct or union, and how the C calling convention
+//! passes one by value.
 //!
-//! An `extern "C" class` is a struct of fixed-width scalars and other such
-//! structs. The native backend and the interpreter both lay it out with
-//! this module, so they agree on every offset.
+//! An `extern "C" class` is a struct of fixed-width scalars, other such
+//! structs, unions, and fixed-size arrays of them. An `extern "C" union`
+//! holds the same kinds of members, all at offset 0. The native backend
+//! and the interpreter both lay them out with this module, so they agree
+//! on every offset.
 
 use serde::{Deserialize, Serialize};
 
 use crate::ffi::FfiScalar;
 
-/// A C struct: its fields in declaration order.
+/// A C struct or union: its fields in declaration order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CStruct {
     /// The Aura name of the class.
     pub name: String,
     pub fields: Vec<CField>,
+    /// The fields are the members of a union: each starts at offset 0.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub union: bool,
 }
+
+/// The name of the one field an `extern "C" union` has as an Aura class:
+/// its bytes.
+pub const UNION_BYTES_FIELD: &str = "bytes";
 
 /// One field of a [`CStruct`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -28,28 +37,68 @@ pub struct CField {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CFieldKind {
     Scalar(FfiScalar),
-    /// A struct held by value.
+    /// A struct or union held by value.
     Struct(CStruct),
+    /// A fixed-size array held in place: this many elements of one kind.
+    Array(Box<CFieldKind>, usize),
 }
 
 impl CFieldKind {
-    fn size(&self) -> usize {
+    /// The size of a value of the kind in bytes.
+    pub fn size(&self) -> usize {
         match self {
             Self::Scalar(scalar) => scalar.size(),
             Self::Struct(inner) => inner.size(),
+            Self::Array(element, count) => element.size() * count,
         }
     }
 
-    fn align(&self) -> usize {
+    /// The alignment of a value of the kind in bytes.
+    pub fn align(&self) -> usize {
         match self {
             Self::Scalar(scalar) => scalar.size(),
             Self::Struct(inner) => inner.align(),
+            Self::Array(element, _) => element.align(),
+        }
+    }
+
+    /// Whether a value of the kind is scalars only, each at one offset:
+    /// no array and no union at any depth.
+    fn is_plain(&self) -> bool {
+        match self {
+            Self::Scalar(_) => true,
+            Self::Struct(inner) => inner.is_plain(),
+            Self::Array(..) => false,
+        }
+    }
+
+    fn holds_union(&self) -> bool {
+        match self {
+            Self::Scalar(_) => false,
+            Self::Struct(inner) => inner.holds_union(),
+            Self::Array(element, _) => element.holds_union(),
+        }
+    }
+
+    fn push_leaves(&self, base: usize, leaves: &mut Vec<CLeaf>) {
+        match self {
+            Self::Scalar(scalar) => leaves.push(CLeaf {
+                offset: base,
+                scalar: *scalar,
+            }),
+            Self::Struct(inner) => inner.push_leaves(base, leaves),
+            Self::Array(element, count) => {
+                let size = element.size();
+                for index in 0..*count {
+                    element.push_leaves(base + index * size, leaves);
+                }
+            }
         }
     }
 }
 
-/// One scalar of a struct at its byte offset, with every nested struct
-/// flattened.
+/// One scalar of a struct at its byte offset, with every nested struct,
+/// union, and array flattened. The scalars of a union's members overlap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CLeaf {
     pub offset: usize,
@@ -134,11 +183,11 @@ impl CStruct {
     /// which took `general_used` general registers and `float_used`
     /// floating-point registers.
     ///
-    /// System V passes a struct on the stack when its pieces do not all
-    /// fit the registers that are left. AArch64 does the same, but in a
-    /// stack layout that separate arguments cannot spell, so that case is
-    /// an error here. Windows gives every argument one slot, so its one
-    /// piece always travels as an argument of its own.
+    /// System V and AArch64 pass a struct on the stack when its pieces do
+    /// not all fit the registers that are left. On AArch64 no later
+    /// argument then takes a register of the kind the struct needed.
+    /// Windows gives every argument one slot, so its one piece always
+    /// travels as an argument of its own.
     pub fn argument(
         &self,
         abi: CAbi,
@@ -160,17 +209,15 @@ impl CStruct {
             CAbi::SysV64 => 6,
             CAbi::Aapcs64 | CAbi::Win64 => 8,
         };
-        if general_used + general <= general_registers && float_used + float <= 8 {
+        // The arguments before may have used up one kind of register and
+        // gone on to the stack. That matters only to a struct that needs
+        // a register of that kind.
+        let general_fit = general == 0 || general_used + general <= general_registers;
+        let float_fit = float == 0 || float_used + float <= 8;
+        if general_fit && float_fit {
             return Ok(CArgument::Registers(pieces));
         }
-        match abi {
-            CAbi::SysV64 => Ok(CArgument::Stack),
-            CAbi::Aapcs64 | CAbi::Win64 => Err(format!(
-                "struct `{}` does not fit the argument registers that are left on this target; \
-                 declare it earlier in the parameter list or pass it as `mut {}`",
-                self.name, self.name
-            )),
-        }
+        Ok(CArgument::Stack)
     }
 
     /// A copy of the description that lives as long as the process, shared
@@ -196,33 +243,56 @@ impl CStruct {
             .unwrap_or(1)
     }
 
-    /// The byte offset of each field, in order, and the size of the struct
-    /// with its tail padding.
-    fn offsets(&self) -> (Vec<usize>, usize) {
-        let mut end = 0_usize;
-        let offsets = self
-            .fields
+    /// Places one field at its aligned offset and advances the struct's end.
+    fn place_field(&self, field: &CField, end: &mut usize) -> usize {
+        let offset = if self.union {
+            0
+        } else {
+            end.next_multiple_of(field.kind.align())
+        };
+        *end = (*end).max(offset + field.kind.size());
+        offset
+    }
+
+    /// Fields and their byte offsets in declaration order. All members of
+    /// a union start at byte zero.
+    pub(crate) fn fields_with_offsets(&self) -> impl Iterator<Item = (&CField, usize)> {
+        let mut end = 0;
+        self.fields
             .iter()
-            .map(|field| {
-                let offset = end.next_multiple_of(field.kind.align());
-                end = offset + field.kind.size();
-                offset
-            })
-            .collect();
-        (offsets, end.next_multiple_of(self.align()))
+            .map(move |field| (field, self.place_field(field, &mut end)))
+    }
+
+    /// Whether the struct is scalars only, each at one offset: it is not a
+    /// union and holds no array and no union at any depth. Generated code
+    /// keeps such a class as one word per scalar.
+    pub fn is_plain(&self) -> bool {
+        !self.union && self.fields.iter().all(|field| field.kind.is_plain())
     }
 
     /// The size of the struct in bytes, as `sizeof` gives it.
     pub fn size(&self) -> usize {
-        self.offsets().1
+        let mut end = 0;
+        for field in &self.fields {
+            self.place_field(field, &mut end);
+        }
+        end.next_multiple_of(self.align())
     }
 
     /// The byte offset of each field, in order.
     pub fn field_offsets(&self) -> Vec<usize> {
-        self.offsets().0
+        self.fields_with_offsets()
+            .map(|(_, offset)| offset)
+            .collect()
     }
 
-    /// Every scalar of the struct in order, with nested structs flattened.
+    /// Whether the struct is a union or holds one at any depth.
+    pub fn holds_union(&self) -> bool {
+        self.union || self.fields.iter().any(|field| field.kind.holds_union())
+    }
+
+    /// Every scalar of the struct in order, with nested structs, unions,
+    /// and arrays flattened. The scalars of a union's members overlap.
     pub fn leaves(&self) -> Vec<CLeaf> {
         let mut leaves = Vec::new();
         self.push_leaves(0, &mut leaves);
@@ -230,15 +300,25 @@ impl CStruct {
     }
 
     fn push_leaves(&self, base: usize, leaves: &mut Vec<CLeaf>) {
-        for (field, offset) in self.fields.iter().zip(self.field_offsets()) {
-            match &field.kind {
-                CFieldKind::Scalar(scalar) => leaves.push(CLeaf {
-                    offset: base + offset,
-                    scalar: *scalar,
-                }),
-                CFieldKind::Struct(inner) => inner.push_leaves(base + offset, leaves),
-            }
+        for (field, offset) in self.fields_with_offsets() {
+            field.kind.push_leaves(base + offset, leaves);
         }
+    }
+
+    /// The float type and count of the struct when it is a homogeneous
+    /// floating-point aggregate of AArch64: every scalar in it is the same
+    /// float type, and it holds one to four of them, counted by size so
+    /// that the overlapping members of a union count once.
+    fn homogeneous_floats(&self) -> Option<(FfiScalar, usize)> {
+        let leaves = self.leaves();
+        let first = leaves.first()?.scalar;
+        if !matches!(first, FfiScalar::F32 | FfiScalar::F64)
+            || leaves.iter().any(|leaf| leaf.scalar != first)
+        {
+            return None;
+        }
+        let count = self.size() / first.size();
+        (1..=4).contains(&count).then_some((first, count))
     }
 
     /// How `abi` passes the struct by value.
@@ -246,17 +326,12 @@ impl CStruct {
         let size = self.size();
         let leaves = self.leaves();
         let is_float = |leaf: &CLeaf| matches!(leaf.scalar, FfiScalar::F32 | FfiScalar::F64);
-        if abi == CAbi::Aapcs64
-            && leaves.len() <= 4
-            && leaves.iter().all(is_float)
-            && leaves.iter().all(|leaf| leaf.scalar == leaves[0].scalar)
-        {
+        if let (CAbi::Aapcs64, Some((scalar, count))) = (abi, self.homogeneous_floats()) {
             return CPassing::Registers(
-                leaves
-                    .iter()
-                    .map(|leaf| CPiece::Float {
-                        offset: leaf.offset,
-                        scalar: leaf.scalar,
+                (0..count)
+                    .map(|index| CPiece::Float {
+                        offset: index * scalar.size(),
+                        scalar,
                     })
                     .collect(),
             );

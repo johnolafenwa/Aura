@@ -1373,6 +1373,52 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         }
     }
 
+    // An `extern "C"` class is Copy unless it holds an array field, which
+    // is a list, or a class that does. The parser saw only the arrays.
+    loop {
+        let holder = classes.iter().find_map(|(name, class)| {
+            let holds_list = class.decl.c_layout
+                && class.decl.copy
+                && class.decl.fields.iter().any(|field| {
+                    super::ffi_struct(&class.fields[&field.name].ty, &classes)
+                        .is_some_and(|held| !held.decl.copy)
+                });
+            holds_list.then(|| name.clone())
+        });
+        let Some(holder) = holder else {
+            break;
+        };
+        if let Some(class) = classes.get_mut(&holder) {
+            class.decl.copy = false;
+        }
+    }
+
+    // A union's class holds as many bytes as the C union has. The parser
+    // wrote the default of that field for a length it could not know.
+    let union_sizes = classes
+        .iter()
+        .filter(|(_, class)| class.decl.c_union.is_some())
+        .filter_map(|(name, _)| {
+            let layout = super::ffi_struct_layout(&Type::named(name), &classes)?;
+            Some((name.clone(), layout.size()))
+        })
+        .collect::<Vec<_>>();
+    for (name, size) in union_sizes {
+        let default = classes
+            .get_mut(&name)
+            .and_then(|class| class.decl.fields.first_mut())
+            .and_then(|field| field.default.as_mut());
+        if let Some(Expr {
+            kind: ExprKind::Comprehension { clauses, .. },
+            ..
+        }) = default
+        {
+            if let ExprKind::Call { args, .. } = &mut clauses[0].iterable.kind {
+                args[0].value.kind = ExprKind::Int(size as u128);
+            }
+        }
+    }
+
     for class in classes.values() {
         // The fields of an `extern "C"` class get their own, narrower check.
         if !class.decl.copy || class.decl.c_layout {
@@ -1601,10 +1647,15 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         register_public_namespace_opaque_handles(namespace, &mut ffi_signature_opaque_handles);
     }
 
-    for item in &module.items {
-        if let Item::Class(class_decl) = item {
-            if class_decl.c_layout {
-                super::validate_ffi_struct_fields(&classes[&class_decl.name], &classes)?;
+    // The members of a union are checked before the classes the parser
+    // declared for each of them, so a member is reported as a member.
+    for members_first in [true, false] {
+        for item in &module.items {
+            if let Item::Class(class_decl) = item {
+                let members = crate::ast::c_union_of_members_class(&class_decl.name).is_some();
+                if class_decl.c_layout && members == members_first {
+                    super::validate_ffi_struct_fields(&classes[&class_decl.name], &classes)?;
+                }
             }
         }
     }
@@ -1654,7 +1705,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             ExternFunctionInfo {
                 c_struct_params: params
                     .iter()
-                    .map(|param| super::ffi_struct_layout(param, &classes))
+                    .enumerate()
+                    .map(|(index, param)| match extern_decl.pointer_param(index) {
+                        true => super::ffi_struct_elements_layout(param, &classes),
+                        false => super::ffi_struct_layout(param, &classes),
+                    })
                     .collect(),
                 c_struct_result: super::ffi_struct_layout(&return_type, &classes),
                 handle_drops: super::ffi_handle_drops(

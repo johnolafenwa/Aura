@@ -1,0 +1,77 @@
+extern "C" class Pixel:
+    x: int32
+    y: int32
+
+
+extern "C" class Samples:
+    lanes: array[int32, 4]
+
+
+extern "C" union Word:
+    code: int32
+    bits: uint32
+
+
+extern "C" def fc_bench_time_ns() -> int64
+
+
+extern "C" def fc_pixels(pixels: ptr[Pixel], count: int32) -> int64
+
+
+extern "C" def fc_samples(samples: Samples) -> int64
+
+
+extern "C" def fc_words(words: mut ptr[Word], count: int32) -> None
+
+
+extern "C" def fc_text_callback(count: def(text: cstr) -> int64) -> int64
+
+
+def character_count(text: str) -> int64:
+    return len(text)
+
+
+def report(
+    name: str,
+    started: int64,
+    count: int64,
+    total: int64,
+    expected: int64,
+) -> None:
+    elapsed = fc_bench_time_ns() - started
+    assert total == expected
+    ns = (elapsed as float64) / (count as float64)
+    print(f"{name} {ns}")
+
+
+def main() -> int32:
+    count: int64 = 2000000
+    pixels = [Pixel(1, 2), Pixel(3, 4), Pixel(5, 6), Pixel(7, 8)]
+    samples = Samples(lanes=[1, 2, 3, 4])
+    mut words = [Word(), Word(), Word(), Word()]
+    fc_words(words, 4)
+
+    mut total: int64 = 0
+    mut started = fc_bench_time_ns()
+    for i in range(count):
+        total += fc_pixels(pixels, 4)
+    report("struct_array", started, count, total, 36 * count)
+
+    total = 0
+    started = fc_bench_time_ns()
+    for i in range(count):
+        total += fc_samples(samples)
+    report("array_field", started, count, total, 10 * count)
+
+    total = 0
+    started = fc_bench_time_ns()
+    for i in range(count):
+        total += words[i % 4].code as int64
+    report("union_read", started, count, total, 4 * count)
+
+    total = 0
+    started = fc_bench_time_ns()
+    for i in range(count):
+        total += fc_text_callback(character_count)
+    report("text_callback", started, count, total, 4 * count)
+    return 0

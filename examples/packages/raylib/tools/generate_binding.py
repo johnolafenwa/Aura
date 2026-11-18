@@ -3,8 +3,10 @@
 
 raylib ships `tools/rlparser/output/raylib_api.json`, which lists every struct,
 enum, constant, and function of `raylib.h`. This script turns that file
-into Aura `extern "C"` declarations. A function whose C signature has no
-Aura spelling is left out, and the end of the generated module lists each
+into Aura `extern "C"` declarations. A fixed-size array in a struct is
+an `array[T, N]` field, and a pointer to the first of a run of structs is
+a `ptr[Name]` parameter. A function whose C signature has no Aura
+spelling is left out, and the end of the generated module lists each
 one with the reason.
 
 Usage:
@@ -106,15 +108,17 @@ def field_type(c_type, structs, aliases):
     if c_type.endswith("*") or c_type in POINTER_ALIASES:
         # The address is passed back to raylib and never followed.
         return "uint64"
-    if "[" in c_type:
-        raise Skip(f"array field `{c_type}`")
+    if c_type.endswith("]"):
+        # `float[4]` is four floats in a row inside the struct.
+        element, _, length = c_type[:-1].rpartition("[")
+        return f"array[{field_type(element, structs, aliases)}, {int(length)}]"
     name = aliases.get(c_type, c_type)
     if name in structs:
         return name
     raise Skip(f"unbound field `{c_type}`")
 
 
-def param_type(c_type, name, structs, aliases, callbacks):
+def param_type(c_type, name, structs, aliases, callbacks, function=""):
     c_type = c_type.strip()
     if c_type == "...":
         raise Skip("variadic")
@@ -140,8 +144,13 @@ def param_type(c_type, name, structs, aliases, callbacks):
             return f"mut {scalar}"
         base = aliases.get(base, base)
         if base in structs:
-            if const or name in ARRAY_PARAMS:
-                raise Skip(f"array of structs `{c_type}`")
+            if function.startswith("Unload"):
+                # The address a `Load` function returned, passed back.
+                return "uint64"
+            if const:
+                return f"ptr[{base}]"
+            if name in ARRAY_PARAMS:
+                return f"mut ptr[{base}]"
             return f"mut {base}"
         raise Skip(f"pointer `{c_type}`")
     name = aliases.get(c_type, c_type)
@@ -287,7 +296,9 @@ def main():
             for param in function.get("params", []):
                 unbound(param["type"], aliases, skipped_structs)
                 pname = rename(param["name"])
-                ptype = param_type(param["type"], param["name"], structs, aliases, callbacks)
+                ptype = param_type(
+                    param["type"], param["name"], structs, aliases, callbacks, name
+                )
                 params.append(f"{pname}: {ptype}")
             unbound(function["returnType"], aliases, skipped_structs)
             result = result_type(function["returnType"], structs, aliases)

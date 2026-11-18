@@ -547,6 +547,10 @@ impl std::hash::Hasher for AddressHasher {
 
 struct DirectTaskRuntimeState {
     runtime_error_capture: bool,
+    /// While a callback is running the C caller must regain control before a
+    /// trap or cancellation can abandon this task's native frames.
+    foreign_callback_cleanup_base: Option<usize>,
+    foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
     cleanup_draining: bool,
@@ -686,6 +690,8 @@ impl Default for DirectTaskRuntimeState {
     fn default() -> Self {
         Self {
             runtime_error_capture: false,
+            foreign_callback_cleanup_base: None,
+            foreign_callback_failure: None,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
             cleanup_draining: false,
@@ -1484,7 +1490,16 @@ impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
         // first write to a list gives it room.
-        let (access, elements, len, _, holders) = list_view_of(&value);
+        let view = list_view_of(&value);
+        Self::with_view(value, runtime_type_name, view)
+    }
+
+    #[inline]
+    fn with_view(
+        value: Value,
+        runtime_type_name: Option<RuntimeName>,
+        (access, elements, len, _, holders): (u32, usize, usize, u32, usize),
+    ) -> Self {
         Self {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
@@ -3007,6 +3022,9 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     result
 }
 
+const EMPTY_VALUE_VIEW: (u32, usize, usize, u32, usize) =
+    (DirectListAccess::None as u32, 0, 0, 0, 0);
+
 /// The access code, element address, length, room for in-place appends,
 /// and holder count address of a `list` value or an `Array`, or `None` and
 /// zeros for any other value. The storage is on the heap, so the address
@@ -3071,7 +3089,7 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
         // writes its fields at their offsets in the block.
         Value::Instance(instance) => match instance.fields.typed() {
             Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0, 0),
-            None => (DirectListAccess::None as u32, 0, 0, 0, 0),
+            None => EMPTY_VALUE_VIEW,
         },
         // A variant kept in its enum's layout: generated code tests the
         // variant's index and reads its payloads at their offsets in the
@@ -3083,9 +3101,9 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
                 (typed.layout().access(), typed.data(), typed.variant(), 0, 0)
             }
             VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0, 0),
-            VariantPayloads::Values(_) => (DirectListAccess::None as u32, 0, 0, 0, 0),
+            VariantPayloads::Values(_) => EMPTY_VALUE_VIEW,
         },
-        _ => (DirectListAccess::None as u32, 0, 0, 0, 0),
+        _ => EMPTY_VALUE_VIEW,
     }
 }
 
@@ -5174,15 +5192,20 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         // The forced-exit callback can still reclaim this snapshot and every
         // remaining outer registration from `DirectTaskRuntimeState`.
         let registration = with_direct_task_runtime_state_for_key(key, |state| {
-            state.cleanup_stack.last().map(|registration| {
-                (
-                    registration.id,
-                    registration.thunk_ptr,
-                    registration.args,
-                    registration.arg_count,
-                    registration.call_depth,
-                )
-            })
+            let first = state.foreign_callback_cleanup_base.unwrap_or(0);
+            state
+                .cleanup_stack
+                .get(first..)?
+                .last()
+                .map(|registration| {
+                    (
+                        registration.id,
+                        registration.thunk_ptr,
+                        registration.args,
+                        registration.arg_count,
+                        registration.call_depth,
+                    )
+                })
         });
         let Some((id, thunk_ptr, args, arg_count, call_depth)) = registration else {
             break;
@@ -5252,7 +5275,9 @@ fn attach_direct_manager_exit_failures(mut diagnostic: Diagnostic) -> Diagnostic
 }
 
 fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    if direct_runtime_error_capture_enabled() {
+    if with_direct_task_runtime_state(|state| {
+        state.runtime_error_capture || state.foreign_callback_cleanup_base.is_some()
+    }) {
         std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
     }
     if matches!(
@@ -5378,6 +5403,18 @@ fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
+        // The callback guard is the nearest boundary. A forced task exit
+        // here would bypass C's cleanup and the entry's argument releases.
+        Err(payload)
+            if with_direct_task_runtime_state(|state| {
+                state.foreign_callback_cleanup_base.is_some()
+            }) =>
+        {
+            if payload.is::<TaskCancelledSignal>() {
+                drain_direct_cleanup_stack();
+            }
+            std::panic::resume_unwind(payload)
+        }
         Err(payload) if payload.is::<TaskCancelledSignal>() => {
             if direct_runtime_error_capture_enabled() {
                 drain_direct_cleanup_stack();

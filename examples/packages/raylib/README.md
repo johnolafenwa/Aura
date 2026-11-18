@@ -48,11 +48,12 @@ aura run src/picture.au
 `aura build -o bricks src/main.au` writes a native executable that loads
 raylib when it starts.
 
-`picture.au` prints the size of the image it wrote and two of its colors:
+`picture.au` prints the size of the image it wrote and three of its colors:
 
 ```text
 picture.png is 320 by 200
 the sun is 255, 203, 0
+the hill is 0, 158, 47
 the grass is 0, 117, 44
 ```
 
@@ -83,15 +84,16 @@ How C types read in the binding:
 | `const char *` | `cstr`, which takes and returns a `str` |
 | `Image *image`, `Camera *camera` | a `mut` parameter, which takes a mutable variable |
 | `int *count` | a `mut int32` out-parameter |
+| `const Vector2 *points` with a count | `ptr[Vector2]`, which takes a `list[Vector2]` |
+| `float params[4]` inside a struct | an `array[float32, 4]` field, which is a list of four floats |
 | a pointer inside a struct, such as `Image.data` | a `uint64` address that raylib owns |
 | a returned pointer, such as `LoadFileData` | a `uint64` address to hand back to the matching `Unload` function |
 | `KEY_SPACE`, `FLAG_VSYNC_HINT`, and other enum values | `int32` constants |
 | `RED`, `RAYWHITE`, and other colors | `Color` constants |
 
-The binding covers 556 of raylib's 600 functions. The end of
-`src/raylib.au` lists the others with the reason for each: structs with a
-fixed-size array field, functions that take an array of structs, variadic
-functions, and callbacks.
+The binding covers 587 of raylib's 600 functions. The end of
+`src/raylib.au` lists the others with the reason for each: variadic
+functions, callbacks, and one pointer to a pointer.
 
 ## Run The Tests
 

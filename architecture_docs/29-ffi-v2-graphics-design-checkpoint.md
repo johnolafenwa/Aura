@@ -1,7 +1,14 @@
 # FFI v2 And raylib Design Checkpoint
 
 Status: **Open 2026-11-16.** Work proceeds on the defaults marked below.
-Each default stays open to change until the release that ships it.
+Sections A, C, and the AArch64 part of F are implemented and recorded in
+[ADR-0106](decisions/0106-c-array-fields-and-struct-arrays.md). Section B
+is implemented and recorded in [ADR-0107](decisions/0107-c-unions.md),
+with one change from B3: a union is built from a member with the
+associated function `Name.from_member(value)`, not `Name(member=value)`.
+Section E1 is implemented in
+[ADR-0108](decisions/0108-c-text-in-callbacks.md). Each default stays
+open to change until the release that ships it.
 
 This checkpoint covers two pieces of the graphics work: a maintained
 raylib package, and the FFI additions that C graphics libraries need. The
@@ -140,10 +147,10 @@ as a `bool` field of a struct does.
   LLVM places it on the stack as the convention requires. The build
   error of FFI v1 goes away.
 
-Classes of scalars keep the generated-code path of FFI v1. A class with
-an array or a union, a union itself, and a struct array cross through one
-shared routine in the runtime that both backends call, so they agree by
-construction.
+The native backend keeps the generated code of FFI v1 for scalar structs.
+It can copy a read-only list of matching native records or a small fixed
+scalar array by its verified layout. The shared runtime conversion handles
+other representations and reports shape and length errors.
 
 ## G. The raylib Package
 
