@@ -25322,3 +25322,104 @@ def main():
 "#;
     crate::run_source(source).expect("held generators close when their owner returns");
 }
+
+#[test]
+fn mir_runs_set_algebra_string_indexing_byte_strings_and_text_encodings() {
+    let output = crate::run_source(
+        r#"
+import bytes
+import math
+
+def show(items: set[int64]) -> str:
+    mut parts: list[str] = []
+    for item in items:
+        parts.append(str(item))
+    return ",".join(parts)
+
+
+def main():
+    a: set[int64] = {1, 2, 3, 4}
+    b: set[int64] = {3, 4, 5}
+    print(show(a.union(b)) + " " + show(a | b))
+    print(show(a.intersection(b)) + " " + show(a & b))
+    print(show(a.difference(b)) + " " + show(a - b))
+    print(show(a.symmetric_difference(b)) + " " + show(a ^ b))
+    print(a.is_subset(b))
+    print(a.is_superset({1}))
+    print(a.is_disjoint({9}))
+    mut c: set[int64] = {9}
+    c.update(a - b)
+    c |= {7}
+    print(show(c))
+    text = "héllo"
+    print(text[1] + text[-1] + text.char_at(0))
+    print(len(b"a\xffb"))
+    match bytes.encode("hé", "utf-16-le"):
+        case Ok(data):
+            print(bytes.hex_encode(data))
+        case Err(_):
+            print("failed")
+    match bytes.decode(b"h\xe9", "latin-1"):
+        case Ok(back):
+            print(back)
+        case Err(_):
+            print("failed")
+    match bytes.decode(b"\xff", "utf-8"):
+        case Err(bytes.EncodingError.Invalid(index)):
+            print(index)
+        case _:
+            print("unexpected")
+    print(math.gcd(12, 18) + math.isqrt(17))
+    print(math.hypot(3.0, 4.0))
+"#,
+    )
+    .expect("the program runs");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "1,2,3,4,5 1,2,3,4,5\n",
+            "3,4 3,4\n",
+            "1,2 1,2\n",
+            "1,2,5 1,2,5\n",
+            "false\n",
+            "true\n",
+            "true\n",
+            "9,1,2,7\n",
+            "éoh\n",
+            "3\n",
+            "6800e900\n",
+            "hé\n",
+            "0\n",
+            "10\n",
+            "5.0\n",
+        )
+    );
+
+    for (body, code, message) in [
+        (
+            "    print(\"abc\"[3])\n",
+            "AU4003",
+            "str index 3 is out of range",
+        ),
+        (
+            "    print(\"abc\".char_at(-4))\n",
+            "AU4003",
+            "str index -4 is out of range",
+        ),
+        (
+            "    print(math.acos(2.0))\n",
+            "AU4001",
+            "`math.acos` domain error",
+        ),
+        (
+            "    print(math.comb(100, 50))\n",
+            "AU4002",
+            "`math.comb` overflow",
+        ),
+    ] {
+        let error =
+            crate::run_source(&format!("import math\n\ndef main():\n{body}")).expect_err(body);
+        assert_eq!(error.code, code, "{body}");
+        assert!(error.message.contains(message), "{body}: {}", error.message);
+    }
+}

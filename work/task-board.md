@@ -28,6 +28,29 @@ Last updated: 2026-11-18
   took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
   18,443 ms for Python.
 
+## Collections, text, and numbers (step 1 of 3 complete)
+
+- Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
+  survey. The plan is
+  `architecture_docs/32-collections-text-numbers-design-checkpoint.md`,
+  and step 1 is in `2026-11-16-collections-text-numbers-step-1.md`.
+- Done: 27 `math` functions and `tau`, byte strings, `text[index]`,
+  `bytes.encode` and `bytes.decode`, and set algebra (ADR-0110 to 0112).
+- Verification: runtime and compiler library tests, fixtures recorded on
+  both backends, `check_doc_examples.py`, and the extension grammar tests.
+- Next: step 2, the `numbers` module (`BigInt`, `Decimal`, `Complex`).
+  Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
+  the cost of list operations on a class field is removed.
+- The language server suite passes all 158 tests on Linux after updating
+  the set completion list and checking its result and argument types.
+- Four cross-language workloads cover integer math, ASCII indexing, set
+  union and UTF-16. The compiler and runtime use a scalar integer math entry.
+- The measured ASCII index and UTF-16 round trip now complete ahead of
+  Python and within the Rust target. The benchmark notes give the source
+  shape, check totals and measurements. Materialized set union took
+  4.493 ms against 16.457 ms in Rust and 5.699 ms in Python. The first
+  write to a shared union took 10.7% longer in the mutation benchmark.
+
 ## The `image` module (complete)
 
 - Target: John's 2026-11-16 "lets do 1,2,3" on the graphics options, of

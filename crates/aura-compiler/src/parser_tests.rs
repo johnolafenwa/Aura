@@ -6157,3 +6157,44 @@ fn local_function_signatures_require_a_result_and_exclude_defaults_and_views() {
         assert!(error.message.contains(message), "{error:?}");
     }
 }
+
+#[test]
+fn byte_strings_parse_to_a_byte_list_expression() {
+    let ascii = parse_stmt_from("data = b\"hi\"\n").expect("an ASCII byte string parses");
+    let Stmt::Assign(assign) = ascii else {
+        panic!("expected an assignment");
+    };
+    // ASCII bytes are the UTF-8 bytes of the same text.
+    let ExprKind::Call { callee, args } = &assign.value.kind else {
+        panic!("expected a call, found {:?}", assign.value.kind);
+    };
+    assert!(args.is_empty());
+    let ExprKind::Member { object, field } = &callee.kind else {
+        panic!("expected a member");
+    };
+    assert_eq!(field, "to_bytes");
+    assert!(matches!(&object.kind, ExprKind::String(text) if text == "hi"));
+
+    let binary = parse_stmt_from("data = b\"\\xff\\x00a\"\n").expect("escaped bytes parse");
+    let Stmt::Assign(assign) = binary else {
+        panic!("expected an assignment");
+    };
+    let ExprKind::List(elements) = &assign.value.kind else {
+        panic!("expected a list, found {:?}", assign.value.kind);
+    };
+    let bytes = elements
+        .iter()
+        .map(|element| match &element.kind {
+            ExprKind::Cast { expr, .. } => match expr.kind {
+                ExprKind::Int(byte) => byte,
+                _ => panic!("expected an integer"),
+            },
+            other => panic!("expected a cast, found {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bytes, [255, 0, 97]);
+
+    // A byte string starts an expression statement and an argument.
+    parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
+    parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
+}

@@ -1,9 +1,11 @@
 # Math Module
 
-The `math` module provides exact binary64 constants and scalar `float64`
-functions for rounding, powers, exponentials, logarithms, and trigonometry.
-Every function input is `float64`. The module performs no implicit numeric
-conversion.
+The `math` module provides exact binary64 constants, scalar `float64`
+functions for rounding, powers, roots, exponentials, logarithms, and
+trigonometry with its inverse and hyperbolic forms, and exact `int64`
+functions such as `gcd` and `factorial`. A function takes `float64`
+arguments unless its signature says `int64`. The module performs no implicit
+numeric conversion.
 
 ## Public API
 
@@ -13,6 +15,7 @@ conversion.
 | `math.e` | `float64` constant | Nearest binary64 value to Euler's number, bits `0x4005bf0a8b145769`. |
 | `math.inf` | `float64` constant | Positive infinity, bits `0x7ff0000000000000`. |
 | `math.nan` | `float64` constant | Canonical quiet NaN, bits `0x7ff8000000000000`. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi, bits `0x401921fb54442d18`. |
 | `math.floor` | `floor(value: float64) -> int64` | Greatest integer less than or equal to `value`. |
 | `math.ceil` | `ceil(value: float64) -> int64` | Least integer greater than or equal to `value`. |
 | `math.trunc` | `trunc(value: float64) -> int64` | The integer left after dropping the fractional part, rounding toward zero. |
@@ -24,6 +27,33 @@ conversion.
 | `math.sin` | `sin(value: float64) -> float64` | Binary64 sine of an angle in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Binary64 cosine of an angle in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Binary64 tangent of an angle in radians. |
+| `math.asin` | `asin(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose sine is `value`. |
+| `math.acos` | `acos(value: float64) -> float64` | The angle in `[0, pi]` whose cosine is `value`. |
+| `math.atan` | `atan(value: float64) -> float64` | The angle in `[-pi/2, pi/2]` whose tangent is `value`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle in `[-pi, pi]` of the point `(x, y)`, with the quadrant taken from both signs. |
+| `math.sinh` | `sinh(value: float64) -> float64` | Hyperbolic sine. |
+| `math.cosh` | `cosh(value: float64) -> float64` | Hyperbolic cosine. |
+| `math.tanh` | `tanh(value: float64) -> float64` | Hyperbolic tangent. |
+| `math.asinh` | `asinh(value: float64) -> float64` | Inverse hyperbolic sine. |
+| `math.acosh` | `acosh(value: float64) -> float64` | Inverse hyperbolic cosine, for `value >= 1`. |
+| `math.atanh` | `atanh(value: float64) -> float64` | Inverse hyperbolic tangent, for `-1 < value < 1`. |
+| `math.sqrt` | `sqrt(value: float64) -> float64` | Correctly rounded square root. |
+| `math.cbrt` | `cbrt(value: float64) -> float64` | Cube root. Defined for negative values. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | `sqrt(x*x + y*y)` without overflow in the squares. |
+| `math.expm1` | `expm1(value: float64) -> float64` | `exp(value) - 1`, accurate for small `value`. |
+| `math.log1p` | `log1p(value: float64) -> float64` | `log(1 + value)`, accurate for small `value`. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign bit of `sign`. |
+| `math.degrees` | `degrees(value: float64) -> float64` | Radians to degrees. |
+| `math.radians` | `radians(value: float64) -> float64` | Degrees to radians. |
+| `math.is_nan` | `is_nan(value: float64) -> bool` | `true` for NaN. |
+| `math.is_inf` | `is_inf(value: float64) -> bool` | `true` for either infinity. |
+| `math.is_finite` | `is_finite(value: float64) -> bool` | `true` for a value that is neither NaN nor infinite. |
+| `math.gcd` | `gcd(left: int64, right: int64) -> int64` | Greatest common divisor, never negative. `gcd(0, 0)` is `0`. |
+| `math.lcm` | `lcm(left: int64, right: int64) -> int64` | Least common multiple, never negative. Zero when either argument is zero. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | The greatest integer whose square is at most `value`. |
+| `math.factorial` | `factorial(value: int64) -> int64` | `value!`. Fits `int64` up to `factorial(20)`. |
+| `math.comb` | `comb(count: int64, chosen: int64) -> int64` | The number of ways to choose `chosen` of `count` items without order. Zero when `chosen > count`. |
+| `math.perm` | `perm(count: int64, chosen: int64) -> int64` | The number of ordered arrangements of `chosen` of `count` items. Zero when `chosen > count`. |
 
 ## Example
 
@@ -51,6 +81,26 @@ NaN
 
 The same program is maintained as `examples/numbers/scalar_math.au`.
 
+The inverse functions and the integer functions:
+
+<<< ../../examples/numbers/angles_and_integers.au{aura}
+
+This program prints:
+
+```text
+5.0
+53
+30
+true
+true
+12
+12
+31622
+3628800
+2598960
+20
+```
+
 ## IEEE-754, Domain, And Overflow Policy
 
 This table is normative for every maintained backend. `log*` means `log`,
@@ -75,6 +125,16 @@ This table is normative for every maintained backend. `log*` means `log`,
 | `pow(0.0, y)` for finite `y < 0.0` | `AU4001` domain error. |
 | `pow(x, y)` for finite `x < 0.0` and finite non-integral `y` | `AU4001` domain error. |
 | Finite `pow` inputs with an infinite-magnitude mathematical result | `AU4002`. |
+| Any `float64` function below with a NaN argument | NaN. |
+| `sqrt(x)` for `x < 0.0`, including `-inf`. `sqrt(-0.0)` is `-0.0` | `AU4001` domain error. |
+| `asin(x)` or `acos(x)` for `x` outside `[-1, 1]` | `AU4001` domain error. |
+| `acosh(x)` for `x < 1.0` | `AU4001` domain error. |
+| `atanh(x)` for `x <= -1.0` or `x >= 1.0` | `AU4001` domain error. |
+| `log1p(x)` for `x <= -1.0` | `AU4001` domain error. |
+| `sinh`, `cosh`, `expm1`, `hypot`, or `degrees` of finite input whose result overflows | `AU4002`. |
+| `atan`, `atan2`, `tanh`, `asinh`, `cbrt`, `copysign`, `radians`, and the three predicates | Defined for every input. |
+| `isqrt`, `factorial`, `comb`, or `perm` with a negative argument | `AU4001` domain error. |
+| `gcd`, `lcm`, `factorial`, `comb`, or `perm` whose exact result does not fit `int64` | `AU4002`. `gcd` overflows only when the answer is 2^63. |
 | Other libm results, including documented infinities from infinite inputs | The corresponding IEEE-754 binary64 value. |
 
 For the negative-base `pow` rule, an exponent is integral when its binary64
@@ -96,13 +156,15 @@ defined in this Manual.
 
 ## Typing Rules
 
-The four constants have type `float64` and the exact bit patterns in
+The five constants have type `float64` and the exact bit patterns in
 [Public API](#public-api). You can read them qualified, or import them directly
 with ordinary import aliases.
 
-Every function parameter is `float64`. `floor`, `ceil`, and `trunc` return
-`int64`. Every other function returns `float64`. A value of any other numeric
-type needs an explicit conversion before the call. The normal checks on
+`gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and `perm` take and return
+`int64`. Every other function parameter is `float64`. `floor`, `ceil`, and
+`trunc` return `int64`, the three `is_` predicates return `bool`, and every
+other function returns `float64`. A value of any other numeric type needs an
+explicit conversion before the call. The normal checks on
 argument count, argument names, and exact types apply.
 
 The module namespace contains every constant and function in the Public API
@@ -144,7 +206,7 @@ call produces no value.
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown module member. |
-| `AU2002` | An argument whose type is not exactly `float64`. |
+| `AU2002` | An argument whose type is not exactly the parameter's type, `float64` or `int64`. |
 | `AU2004` | Invalid argument binding, such as a wrong argument count or name. |
 | `AU4001` | A domain error listed in the policy table. |
 | `AU4002` | Finite overflow, or a rounding result that does not fit in `int64`. |
@@ -158,9 +220,11 @@ use the same host math library for finite results.
 
 ## Limits And Implementation-Defined Behavior
 
-The module covers scalar `float64` only. It has no complex, decimal,
-arbitrary-precision, vectorized, combinatorial, or random operations. The
-logarithm functions take one value and have no alternate-base form.
+The module covers scalar `float64` and `int64` only. It has no `float32`
+forms and no complex, decimal, arbitrary-precision, vectorized, or random
+operations. The integer functions do not widen: a result outside `int64` is
+`AU4002`. The logarithm functions take one value and have no alternate-base
+form.
 
 The final bits of finite transcendental results can differ across target and
 libm pairs. The host's rendering around an `AU4001` or `AU4002` failure
@@ -168,7 +232,8 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.16 on both the MIR and direct
+`tau` and the functions from `asin` to `perm` in the Public API table are new
+after Aura 0.16. Everything on this page is implemented on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.

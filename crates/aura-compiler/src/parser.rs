@@ -3099,6 +3099,7 @@ impl Parser {
             | TokenKind::BoolLiteral(_)
             | TokenKind::StringLiteral(_)
             | TokenKind::FStringLiteral(_)
+            | TokenKind::BytesLiteral(_)
             | TokenKind::KwNot
             | TokenKind::KwTry
             | TokenKind::KwMatch
@@ -4383,6 +4384,7 @@ impl Parser {
                 kind: ExprKind::FString(self.parse_format_parts(&value, token.span)?),
                 span: token.span,
             }),
+            TokenKind::BytesLiteral(value) => Ok(bytes_literal_expr(&value, token.span)),
             TokenKind::LParen => {
                 if self.at_simple(&TokenKind::RParen) {
                     return Err(parse_error(
@@ -6088,6 +6090,48 @@ fn single_axis_slice(object: Expr, slice: ArrayAxisSlice<'_>) -> Expr {
                 argument(step.clone()),
             ],
         },
+        span,
+    }
+}
+
+/// The expression a byte-string literal stands for, a fresh `list[uint8]`.
+/// ASCII bytes are the UTF-8 bytes of the same text, so the literal is
+/// `"...".to_bytes()`, one copy. Any other literal is the list of its bytes,
+/// each written as `N as uint8`.
+fn bytes_literal_expr(bytes: &[u8], span: Span) -> Expr {
+    if let Some(text) = std::str::from_utf8(bytes).ok().filter(|_| bytes.is_ascii()) {
+        return Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(Expr {
+                            kind: ExprKind::String(text.to_string()),
+                            span,
+                        }),
+                        field: "to_bytes".to_string(),
+                    },
+                    span,
+                }),
+                args: Vec::new(),
+            },
+            span,
+        };
+    }
+    let elements = bytes
+        .iter()
+        .map(|byte| Expr {
+            kind: ExprKind::Cast {
+                expr: Box::new(Expr {
+                    kind: ExprKind::Int(u128::from(*byte)),
+                    span,
+                }),
+                ty: TypeRef::named("uint8", Vec::new(), false, span),
+            },
+            span,
+        })
+        .collect();
+    Expr {
+        kind: ExprKind::List(elements),
         span,
     }
 }

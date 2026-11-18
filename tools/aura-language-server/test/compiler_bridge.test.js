@@ -2807,7 +2807,35 @@ test("compiler bridge exposes the complete math module function surface", async 
     "    print(math.sin(0.0))",
     "    print(math.cos(0.0))",
     "    print(math.tan(0.0))",
+    "    print(math.sqrt(1.0))",
+    "    print(math.cbrt(1.0))",
+    "    print(math.asin(1.0))",
+    "    print(math.acos(1.0))",
+    "    print(math.atan(1.0))",
+    "    print(math.sinh(1.0))",
+    "    print(math.cosh(1.0))",
+    "    print(math.tanh(1.0))",
+    "    print(math.asinh(1.0))",
+    "    print(math.acosh(1.0))",
+    "    print(math.atanh(1.0))",
+    "    print(math.expm1(1.0))",
+    "    print(math.log1p(1.0))",
+    "    print(math.degrees(1.0))",
+    "    print(math.radians(1.0))",
+    "    print(math.atan2(1.0, 1.0))",
+    "    print(math.hypot(3.0, 4.0))",
+    "    print(math.copysign(1.0, -1.0))",
+    "    print(math.is_nan(1.0))",
+    "    print(math.is_inf(1.0))",
+    "    print(math.is_finite(1.0))",
+    "    print(math.gcd(4, 6))",
+    "    print(math.lcm(4, 6))",
+    "    print(math.isqrt(9))",
+    "    print(math.factorial(5))",
+    "    print(math.comb(5, 2))",
+    "    print(math.perm(5, 2))",
     "    print(math.pi)",
+    "    print(math.tau)",
     "    print(math.e)",
     "    print(math.inf)",
     "    print(math.nan)",
@@ -2826,13 +2854,41 @@ test("compiler bridge exposes the complete math module function surface", async 
     ["log10", "log10(value: float64) -> float64"],
     ["sin", "sin(value: float64) -> float64"],
     ["cos", "cos(value: float64) -> float64"],
-    ["tan", "tan(value: float64) -> float64"]
+    ["tan", "tan(value: float64) -> float64"],
+    ["sqrt", "sqrt(value: float64) -> float64"],
+    ["cbrt", "cbrt(value: float64) -> float64"],
+    ["asin", "asin(value: float64) -> float64"],
+    ["acos", "acos(value: float64) -> float64"],
+    ["atan", "atan(value: float64) -> float64"],
+    ["sinh", "sinh(value: float64) -> float64"],
+    ["cosh", "cosh(value: float64) -> float64"],
+    ["tanh", "tanh(value: float64) -> float64"],
+    ["asinh", "asinh(value: float64) -> float64"],
+    ["acosh", "acosh(value: float64) -> float64"],
+    ["atanh", "atanh(value: float64) -> float64"],
+    ["expm1", "expm1(value: float64) -> float64"],
+    ["log1p", "log1p(value: float64) -> float64"],
+    ["degrees", "degrees(value: float64) -> float64"],
+    ["radians", "radians(value: float64) -> float64"],
+    ["atan2", "atan2(y: float64, x: float64) -> float64"],
+    ["hypot", "hypot(x: float64, y: float64) -> float64"],
+    ["copysign", "copysign(magnitude: float64, sign: float64) -> float64"],
+    ["is_nan", "is_nan(value: float64) -> bool"],
+    ["is_inf", "is_inf(value: float64) -> bool"],
+    ["is_finite", "is_finite(value: float64) -> bool"],
+    ["gcd", "gcd(left: int64, right: int64) -> int64"],
+    ["lcm", "lcm(left: int64, right: int64) -> int64"],
+    ["isqrt", "isqrt(value: int64) -> int64"],
+    ["factorial", "factorial(value: int64) -> int64"],
+    ["comb", "comb(count: int64, chosen: int64) -> int64"],
+    ["perm", "perm(count: int64, chosen: int64) -> int64"]
   ]);
   const constants = new Map([
     ["pi", "float64"],
     ["e", "float64"],
     ["inf", "float64"],
-    ["nan", "float64"]
+    ["nan", "float64"],
+    ["tau", "float64"]
   ]);
 
   try {
@@ -4347,7 +4403,11 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     );
     assert.deepEqual(
       [...setNames].sort(),
-      ["add", "clear", "copy", "discard", "is_empty", "len", "remove", "reserve"]
+      [
+        "add", "clear", "copy", "difference", "discard", "intersection",
+        "is_disjoint", "is_empty", "is_subset", "is_superset", "len",
+        "remove", "reserve", "symmetric_difference", "union", "update"
+      ]
     );
     const setLengthCompletions = setCompletions.filter((item) => item.name === "len");
     assert.equal(
@@ -4367,6 +4427,9 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     assert.equal(setDetails.get("discard"), "discard(value: T) -> None");
     assert.equal(setDetails.get("copy"), "copy() -> set[T]");
     assert.equal(setDetails.get("reserve"), "reserve(additional: int64) -> None");
+    assert.equal(setDetails.get("union"), "union(other: set[T]) -> set[T]");
+    assert.equal(setDetails.get("is_subset"), "is_subset(other: set[T]) -> bool");
+    assert.equal(setDetails.get("update"), "update(other: own set[T]) -> None");
 
     const entriesOccurrence = analysis.occurrences.find(
       (occurrence) =>

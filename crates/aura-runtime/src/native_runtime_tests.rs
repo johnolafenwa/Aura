@@ -29180,6 +29180,36 @@ fn direct_trap_message(run: impl FnOnce() + Send + 'static) -> String {
 }
 
 #[test]
+fn direct_integer_math_preserves_results_and_diagnostics() {
+    use super::aura_direct_math_integer;
+    for (i, (left, right, expected)) in [
+        (18, -27, 9),
+        (-4, 6, 12),
+        (99, 0, 9),
+        (5, 0, 120),
+        (7, 2, 21),
+        (7, 2, 42),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(aura_direct_math_integer(i as i64, left, right), expected);
+    }
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(0, i64::MIN, 0);
+    })
+    .contains("math.gcd"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(2, -1, 0);
+    })
+    .contains("math.isqrt"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(99, 0, 0);
+    })
+    .contains("invalid integer math operation"));
+}
+
+#[test]
 fn direct_time_helpers_write_parse_and_keep_the_outcome() {
     let text = |value: *mut OpaqueValue| match unsafe { take_value(value) } {
         Value::String(text) => text.to_string(),
@@ -30741,4 +30771,191 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
         result.expect("inline callable checks should complete"),
         Value::Unit
     );
+}
+
+fn int_set(values: &[i64]) -> *mut OpaqueValue {
+    let mut elements = crate::collection_index::SetElements::new();
+    for value in values {
+        elements.insert(Value::Int(IntegerValue::from_i64(*value)));
+    }
+    boxed_value(Value::Set(SetValue {
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
+        elements,
+    }))
+}
+
+fn set_values(set: *mut OpaqueValue) -> Vec<Value> {
+    match unsafe { take_value(set) } {
+        Value::Set(set) => set.elements.iter().cloned().collect(),
+        other => panic!("expected a set, found {other:?}"),
+    }
+}
+
+fn int_values(values: &[i64]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| Value::Int(IntegerValue::from_i64(*value)))
+        .collect()
+}
+
+#[test]
+fn direct_set_algebra_opcodes_read_both_sets_and_update_consumes_the_other() {
+    let left = int_set(&[4, 1, 2]);
+    let right = int_set(&[2, 9, 4]);
+    for (opcode, expected) in [
+        (8, int_values(&[4, 1, 2, 9])),
+        (9, int_values(&[4, 2])),
+        (10, int_values(&[1])),
+        (11, int_values(&[1, 9])),
+    ] {
+        let result = super::aura_direct_collection_operation(left, right, 0, opcode);
+        match unsafe { value_ref(result) } {
+            Value::Set(set) => assert_eq!(set.element_type, Type::named("int64")),
+            other => panic!("expected a set, found {other:?}"),
+        }
+        assert_eq!(set_values(result), expected, "opcode {opcode}");
+    }
+    for (opcode, other, expected) in [
+        (12, &[1, 2, 4, 8][..], true),
+        (12, &[1, 2][..], false),
+        (13, &[1, 4][..], true),
+        (13, &[1, 5][..], false),
+        (14, &[7, 8][..], true),
+        (14, &[7, 2][..], false),
+    ] {
+        let other = int_set(other);
+        let result = super::aura_direct_collection_operation(left, other, 0, opcode);
+        assert_eq!(
+            unsafe { take_value(result) },
+            Value::Bool(expected),
+            "opcode {opcode}"
+        );
+        unsafe { release_value(other) };
+    }
+    // Both operands are still whole.
+    assert_eq!(super::aura_direct_set_len(left), 3);
+    assert_eq!(super::aura_direct_set_len(right), 3);
+
+    expect_unit(super::aura_direct_collection_operation(left, right, 0, 15));
+    assert_eq!(set_values(left), int_values(&[4, 1, 2, 9]));
+
+    let wrong = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let set = int_set(&[1]);
+            let _ = super::aura_direct_collection_operation(set, int_value(3), 0, 15);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("`update` takes a set");
+    assert!(wrong
+        .message
+        .contains("`update` requires another `set[T]` value"));
+}
+
+#[test]
+fn direct_index_reuses_an_immutable_box_for_the_same_ascii_character() {
+    let opcode = crate::text_methods::text_method_opcode("char_at").unwrap();
+    let receiver = string_value("abba");
+    let first = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), 0);
+    let last = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), -1);
+    assert_eq!(first, last);
+    assert_eq!(unsafe { take_value(first) }, Value::string("a"));
+    assert_eq!(unsafe { take_value(last) }, Value::string("a"));
+    unsafe { release_value(receiver) };
+}
+
+#[test]
+fn direct_string_scalar_reads_signed_indices_and_preserves_errors() {
+    let text = string_value("a😀z");
+    assert_eq!(super::aura_direct_string_scalar_at(text, -2), 0x1f600);
+    assert_eq!(
+        super::aura_direct_string_scalar_at(text, 0),
+        i64::from(b'a')
+    );
+    unsafe { release_value(text) };
+    for (value, index, expected) in [
+        (
+            Value::string("a😀z"),
+            i64::MIN,
+            "out of range for a string of 3 characters",
+        ),
+        (
+            Value::string(""),
+            0,
+            "out of range for a string of 0 characters",
+        ),
+        (Value::Bool(false), 0, "expected `str`"),
+    ] {
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let value = boxed_value(value);
+                super::aura_direct_string_scalar_at(value, index);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid scalar selection traps");
+        assert!(error.message.contains(expected), "{error:?}");
+    }
+}
+
+#[test]
+fn native_literal_codecs_borrow_their_source_and_preserve_encoding_errors() {
+    use crate::text_encodings::Encoding;
+    let source = string_value("A");
+    for (index, _) in Encoding::ALL.iter().enumerate() {
+        let code = index as i64;
+        let bytes = expect_result_ok_payload(super::aura_direct_text_codec(source, code, 0));
+        let bytes = boxed_value(bytes);
+        let decoded = super::aura_direct_text_codec(bytes, code, 1);
+        assert_eq!(expect_result_ok_string(decoded), "A");
+        unsafe { release_value(bytes) };
+    }
+    unsafe { release_value(source) };
+    for (source, encoding, decode, variant, index) in [
+        (string_value("A😀"), Encoding::Ascii, 0, "Unencodable", 1),
+        (
+            direct_byte_list(&[65, 0, 0]),
+            Encoding::Utf16Le,
+            1,
+            "Invalid",
+            2,
+        ),
+    ] {
+        let code = Encoding::ALL
+            .iter()
+            .position(|item| *item == encoding)
+            .unwrap() as i64;
+        let error = expect_result_err_payload(super::aura_direct_text_codec(source, code, decode));
+        let Value::EnumVariant(error) = error else {
+            panic!("expected an encoding error, got {error:?}");
+        };
+        assert_eq!(error.variant_name, variant);
+        assert_eq!(
+            error.single_payload().unwrap(),
+            &Value::Int(IntegerValue::from_i64(index))
+        );
+        unsafe { release_value(source) };
+    }
+}
+
+#[test]
+fn direct_char_at_reads_one_character_and_traps_out_of_range() {
+    assert_eq!(
+        direct_text_method("char_at", "héllo", None, 1),
+        Value::string("é")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "hello", None, -1),
+        Value::string("o")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "日本語", None, -3),
+        Value::string("日")
+    );
+    let opcode = crate::text_methods::text_method_opcode("char_at").expect("known text method");
+    for (text, index) in [("hello", 5), ("héllo", -6), ("", 0)] {
+        let trap = direct_text_method_trap(opcode, Value::string(text), None, index);
+        assert_eq!(trap.code, "AU4003");
+        assert!(trap.message.contains("is out of range for a string of"));
+    }
 }

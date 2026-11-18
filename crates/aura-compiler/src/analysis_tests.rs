@@ -528,7 +528,44 @@ fn math_analysis_completes_and_hovers_the_exact_public_surface() {
     assert_eq!(
         names,
         std::collections::BTreeSet::from([
-            "ceil", "cos", "exp", "floor", "log", "log10", "log2", "pow", "sin", "tan", "trunc",
+            "acos",
+            "acosh",
+            "asin",
+            "asinh",
+            "atan",
+            "atan2",
+            "atanh",
+            "cbrt",
+            "ceil",
+            "comb",
+            "copysign",
+            "cos",
+            "cosh",
+            "degrees",
+            "exp",
+            "expm1",
+            "factorial",
+            "floor",
+            "gcd",
+            "hypot",
+            "is_finite",
+            "is_inf",
+            "is_nan",
+            "isqrt",
+            "lcm",
+            "log",
+            "log10",
+            "log1p",
+            "log2",
+            "perm",
+            "pow",
+            "radians",
+            "sin",
+            "sinh",
+            "sqrt",
+            "tan",
+            "tanh",
+            "trunc",
         ])
     );
     let pow = completions
@@ -4501,6 +4538,16 @@ fn analysis_completion_and_inference_helpers_cover_builtin_collection_and_enum_s
         builder.infer_expr_type(
             &expr(ExprKind::Index {
                 object: Box::new(expr(ExprKind::String("abc".to_string()))),
+                index: Box::new(expr(ExprKind::Int(0))),
+            }),
+            &scope,
+        ),
+        Some(Type::named("str"))
+    );
+    assert_eq!(
+        builder.infer_expr_type(
+            &expr(ExprKind::Index {
+                object: Box::new(expr(ExprKind::Bool(true))),
                 index: Box::new(expr(ExprKind::Int(0))),
             }),
             &scope,

@@ -5,8 +5,9 @@ base64 codecs, SHA-256 hashing, and HMAC-SHA256 message authentication.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
-UTF-8 conversion is a pair of `str` methods. Byte search, hexadecimal, base64,
-and SHA-256 live in the built-in `bytes` module.
+A byte string, `b"..."`, is a literal of that type. UTF-8 conversion is a pair
+of `str` methods. Other text encodings, byte search, hexadecimal, base64, and
+SHA-256 live in the built-in `bytes` module.
 
 ## Public API
 
@@ -14,6 +15,8 @@ and SHA-256 live in the built-in `bytes` module.
 | --- | --- | --- |
 | `str.to_bytes` | `to_bytes() -> list[uint8]` | A fresh list holding the exact UTF-8 encoding of the receiver. |
 | `str.from_bytes` | `from_bytes(bytes: list[uint8]) -> Result[str, bytes.Error]` | A fresh str when `bytes` is valid UTF-8, otherwise a typed error. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | A fresh list holding `text` in the named encoding. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | A fresh str when `value` is valid in the named encoding, otherwise a typed error. |
 | `bytes.hex_encode` | `hex_encode(value: list[uint8]) -> str` | Lowercase hexadecimal, two ASCII digits per byte. |
 | `bytes.hex_decode` | `hex_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict hexadecimal decoding. |
 | `bytes.base64_encode` | `base64_encode(value: list[uint8]) -> str` | RFC 4648 standard-alphabet base64 with canonical padding. |
@@ -34,8 +37,86 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.16 accepts no encoding
-argument on either conversion.
+`to_bytes` and `from_bytes` are always UTF-8 and take no encoding argument.
+For another encoding use `bytes.encode` and `bytes.decode`, described under
+[Text Encodings](#text-encodings).
+
+## Byte Strings
+
+A byte string is a literal of type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b"\x89PNG"
+    quote = b'say "hi"'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+    print(len(quote))
+```
+
+- The body holds printable ASCII characters. Each is its ASCII byte.
+- The escapes are those of an ordinary string except `\u{...}`: `\n`, `\t`,
+  `\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. In a byte string `\xHH` is the
+  byte `HH`, for every value from `00` to `ff`.
+- A character outside ASCII, a `\u{...}` escape, and a triple-quoted byte
+  string are lexical errors, `AU1001`. Write a non-ASCII character as its
+  bytes, or use `"é".to_bytes()`.
+- There is no raw byte string and no byte f-string.
+
+Each evaluation produces a fresh list, as a list literal does, so a byte
+string bound with `mut` can be appended to.
+
+## Text Encodings
+
+`bytes.encode` and `bytes.decode` convert between `str` and bytes in a named
+encoding:
+
+<<< ../../examples/bytes/byte_strings_and_encodings.au{aura}
+
+This program prints:
+
+```text
+16
+true
+00ff
+utf-8: 636166c3a9
+latin-1: 636166e9
+utf-16-le: 630061006600e900
+ascii: cannot hold character 3
+no encoding named ebcdic
+“quoted”
+```
+
+| Name | Encoding |
+| --- | --- |
+| `utf-8` | UTF-8, the same bytes as `to_bytes`. |
+| `utf-8-sig` | UTF-8 with a byte-order mark. Encoding writes the mark. Decoding strips one if present. |
+| `utf-16` | UTF-16. Encoding writes a byte-order mark and little-endian units. Decoding reads the order from the mark, and little-endian when there is none. |
+| `utf-16-le`, `utf-16-be` | UTF-16 in a fixed byte order. No mark is written, and none is stripped. |
+| `utf-32` | UTF-32, with the same mark rules as `utf-16`. |
+| `utf-32-le`, `utf-32-be` | UTF-32 in a fixed byte order. |
+| `latin-1` | ISO-8859-1. Byte `HH` is the character `U+00HH`. |
+| `ascii` | Seven-bit ASCII. |
+| `windows-1252` | The Windows Western European code page. |
+
+A name is compared without regard to letter case, and `-`, `_`, and spaces
+are ignored, so `"UTF-16"`, `"utf_16"`, and `"utf16"` are one encoding.
+
+`bytes.EncodingError` has three variants:
+
+| Variant | Meaning |
+| --- | --- |
+| `Unknown(name: str)` | No encoding has this name. |
+| `Invalid(index: int64)` | Decoding failed. `index` is the offset of the first byte that is not valid. |
+| `Unencodable(index: int64)` | Encoding failed. `index` is the position, in characters, of the first character the encoding cannot hold. |
+
+Decoding is strict. There is no replacement character and no option to skip
+invalid input. A truncated UTF-16 or UTF-32 unit, an unpaired surrogate, a
+value above `U+10FFFF`, a byte above `7f` in ASCII, and one of the five
+unassigned Windows-1252 bytes are all `Invalid`.
 
 ## Example
 
@@ -220,10 +301,12 @@ those uses.
 
 ## Grammar
 
-This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
-method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.16 has no byte-string
-literal.
+The byte-string token is defined in
+[Lexical Structure](/manual/lexical-structure#byte-string-literals). It is a
+primary expression of type `list[uint8]`. The rest of this surface adds no
+grammar: `list[uint8]`, `import bytes`, associated calls, method calls, module
+calls, named arguments, and `Result` patterns use the ordinary forms defined
+elsewhere in this Manual.
 
 ## Typing Rules
 
@@ -246,8 +329,9 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.16
-signature. Ordinary argument checking rejects it.
+`to_bytes` and `from_bytes` take no `encoding` argument. Ordinary argument
+checking rejects one. `bytes.EncodingError` is not a Copy enum, because
+`Unknown` holds a `str`.
 
 A source module you write whose last path component is `bytes` does not get
 this API. The built-in behavior belongs only to the `bytes` module that the
@@ -338,14 +422,14 @@ the host.
 
 Aura 0.16 does not provide:
 
-- other text encodings
+- text encodings other than those listed under [Text Encodings](#text-encodings)
+- decoding that replaces or skips invalid input
+- raw, triple-quoted, or formatted byte strings
 - URL-safe or unpadded base64
 - streaming codecs or incremental hashing
 - password hashing, or a hash other than SHA-256
 - a separate mutable byte buffer type
 - implicit text conversion
-
-The reserved `encoding` parameter is not implemented.
 
 ## Status
 

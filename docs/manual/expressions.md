@@ -300,6 +300,7 @@ change these operators, because built-in rules come first.
 | `/` | Same floating-point type |
 | unary `-` | Same numeric type |
 | `&`, `\|`, `^`, unary `~` | Same exact integer type |
+| `\|`, `&`, `-`, `^` on two `set[T]` | `set[T]`, see [Set Algebra](/manual/collections#set-algebra) |
 | `<<`, `>>` | Same exact integer type for value and count |
 | `==`, `!=` | `bool` for equal operand types |
 | `<`, `<=`, `>`, `>=` | `bool` for equal numeric types, two Duration values, or two `str` values |
@@ -347,6 +348,10 @@ from finite inputs fails with `AU4002`.
 Bitwise operators use each integer's fixed declared width. `&`, `|`, and `^`
 combine corresponding bits. `~` flips every bit. Binary operands must have
 the same exact concrete integer type.
+
+Between two sets of one element type, `|`, `&`, `^`, and `-` are the set
+methods `union`, `intersection`, `symmetric_difference`, and `difference`.
+See [Set Algebra](/manual/collections#set-algebra).
 
 A shift's count has the same exact type as the shifted value, and it must
 satisfy `0 <= count < width`. Signed right shift is arithmetic. Unsigned right
@@ -822,7 +827,15 @@ not count UTF-8 bytes or grapheme clusters. Finding scalar boundaries scans
 the source, so str slicing is O(n). When the text before the end is ASCII,
 each scalar is one byte, so the scan only checks those bytes and decodes no
 character. Other text is decoded once. The result is a newly allocated, valid
-UTF-8 str. Integer `string[index]` is unavailable.
+UTF-8 str.
+
+`string[index]` with one integer reads the character at that position as a
+one-character `str`. It is the method call `string.char_at(index)`: positions
+count Unicode scalar values, a negative index counts from the end, and an
+index outside the string traps with `AU4003`. Reading from ASCII text takes
+constant time. Other text is scanned to the position, so a loop over every
+character of non-ASCII text should use `for letter in text.chars()`. A `str`
+is not a place: `string[index] = value` is `AU2003`.
 
 ### Array Slices
 

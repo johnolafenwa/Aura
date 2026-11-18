@@ -2370,6 +2370,7 @@ impl<'a> NativeCodegen<'a> {
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
+            indexed_ascii_literals: lookups::indexed_ascii_literals(function),
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -3814,6 +3815,8 @@ struct FunctionCompiler<'a> {
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
     text_byte_slices: HashSet<String>,
+    /// Indexed locals that keep the same ASCII string literal throughout the function.
+    indexed_ascii_literals: HashMap<String, String>,
     /// The list and slice words of each of `text_byte_slices` whose
     /// `str.from_bytes` is still to compile.
     byte_slice_words: HashMap<String, Vec<Val>>,
@@ -4870,6 +4873,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
                 skipped = fused - 1;
+                continue;
+            }
+            if self.compile_indexed_str_comparison(&block.instructions[instruction_index..])? {
+                skipped = 2;
                 continue;
             }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
@@ -7814,6 +7821,105 @@ impl<'a> FunctionCompiler<'a> {
         }))
     }
 
+    /// A character immediately compared against a one-scalar literal and then
+    /// released has no observable string identity. Keep its scalar in a word.
+    fn compile_indexed_str_comparison(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<bool, String> {
+        let [Instruction::Assign {
+            target: character,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Str(StrOp::CharAt),
+                            receiver: Some(Operand::Place(text)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }, Instruction::Assign {
+            target,
+            value: Rvalue::Binary {
+                op, left, right, ..
+            },
+        }, Instruction::Release { place }, ..] = instructions
+        else {
+            return Ok(false);
+        };
+        if place != character || !character.starts_with("%t") {
+            return Ok(false);
+        }
+        let condition = match op {
+            BinaryOp::Eq => IntCC::Equal,
+            BinaryOp::NotEq => IntCC::NotEqual,
+            _ => return Ok(false),
+        };
+        let ((Operand::Place(compared), Operand::String(literal))
+        | (Operand::String(literal), Operand::Place(compared))) = (left, right)
+        else {
+            return Ok(false);
+        };
+        let mut scalars = literal.chars();
+        let (Some(literal), None) = (scalars.next(), scalars.next()) else {
+            return Ok(false);
+        };
+        let [argument] = args.as_slice() else {
+            return Ok(false);
+        };
+        if compared != character || text.contains('.') || argument.writeback_place.is_some() {
+            return Ok(false);
+        }
+        let known = self.indexed_ascii_literals.get(text).cloned();
+        let text = self.load_place(text)?.values[0];
+        let index =
+            self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+        let index = self
+            .coerce_value(index, &DirectType::Scalar(ScalarKind::Int64))?
+            .values[0];
+        let actual = if let Some(bytes) = known {
+            let (data, length) = self.string_constant(bytes.as_bytes())?;
+            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, index, 0);
+            let from_end = self.builder.iadd(index, length);
+            let position = self.builder.select(negative, from_end, index);
+            let outside = self
+                .builder
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, position, length);
+            let (fast, slow, join) = emit_frame_branch(&mut *self.builder, outside);
+            self.builder.append_block_param(join, types::I64);
+            self.builder.switch_to_block(fast);
+            let address = self.builder.iadd(data, position);
+            let byte = self.builder.uload8(types::I64, MemFlags::new(), address, 0);
+            self.builder.jump(join, &[byte]);
+            self.builder.switch_to_block(slow);
+            let checked = self
+                .builder
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index]);
+            self.builder.jump(join, &[checked.results[0]]);
+            self.builder.switch_to_block(join);
+            self.builder.seal_block(join);
+            self.builder.block_params(join)[0]
+        } else {
+            self.builder
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index])
+                .results[0]
+        };
+        let comparison = self
+            .builder
+            .icmp_imm(condition, actual, i64::from(u32::from(literal)));
+        let word = self.builder.uextend(types::I64, comparison);
+        self.store_place(
+            target,
+            ValueRef {
+                values: vec![word],
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            },
+        )?;
+        Ok(true)
+    }
+
     /// Compares a `str` value with a string literal without boxing the
     /// literal. Returns `None` when neither operand fits that shape.
     fn compile_str_literal_comparison(
@@ -10120,6 +10226,25 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
+        if let Some(operation) = aura_runtime::runtime_value::host_builtins::INTEGER_MATH_CALLS
+            .iter()
+            .position(|&(qualified, _, arity)| qualified == name && arity == args.len())
+        {
+            let operation = self.builder.iconst(types::I64, operation as i64);
+            let left = self.load_word(&args[0], ScalarKind::Int64, true)?;
+            let right = match args.get(1) {
+                Some(arg) => self.load_word(arg, ScalarKind::Int64, true)?,
+                None => self.builder.iconst(types::I64, 0),
+            };
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::MathInteger],
+                &[operation, left, right],
+            );
+            return Ok(ValueRef {
+                values: call.results,
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            });
+        }
         if lookups::is_str_from_bytes(builtin) {
             let slot = self.lookup_payload == Some(false);
             if let Some(text) = self.compile_text_from_byte_slice(args)? {
@@ -10142,6 +10267,55 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
         }
+        use aura_runtime::text_encodings::Encoding;
+        let literal_codec = match (name, args) {
+            ("bytes::encode" | "bytes::decode", [source, label]) => {
+                match (&source.value, &label.value) {
+                    (Operand::Place(source), Operand::String(label)) => Encoding::from_name(label)
+                        .and_then(|encoding| {
+                            Encoding::ALL
+                                .iter()
+                                .position(|supported| supported == &encoding)
+                        })
+                        .map(|code| (source, code)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let results = if let Some((source, code)) = literal_codec {
+            let source = self.load_place(source)?;
+            let code = self.builder.iconst(types::I64, code as i64);
+            let decode = self
+                .builder
+                .iconst(types::I64, i64::from(name == "bytes::decode"));
+            self.builder
+                .call(
+                    self.runtime[RuntimeFn::TextCodec],
+                    &[source.values[0], code, decode],
+                )
+                .results
+        } else {
+            self.call_host_arg_buffer(builtin, args)?
+        };
+        let semantic_type = RuntimeOp::Host(builtin)
+            .result_type(None, &[])
+            .expect("a host builtin names its result type");
+        let result = self.owned_opaque_result(results, semantic_type.clone());
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{name}`"),
+        )?;
+        self.coerce_value(result, &target)
+    }
+
+    fn call_host_arg_buffer(
+        &mut self,
+        builtin: HostBuiltin,
+        args: &[MirArg],
+    ) -> std::result::Result<Vec<Val>, String> {
+        let name = builtin.name();
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -10170,17 +10344,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         let entry = self.host_builtin_ref(builtin)?;
         let call = self.builder.call(entry, &[buffer, count]);
-
-        let semantic_type = RuntimeOp::Host(builtin)
-            .result_type(None, &[])
-            .expect("a host builtin names its result type");
-        let result = self.owned_opaque_result(call.results, semantic_type.clone());
-        let target = ensure_direct_type(
-            &semantic_type,
-            &self.classes,
-            &format!("return value of `{name}`"),
-        )?;
-        self.coerce_value(result, &target)
+        Ok(call.results)
     }
 
     /// `json.as_int`, `json.as_float`, or `json.as_bool` whose `T | None`
@@ -16366,7 +16530,7 @@ impl<'a> FunctionCompiler<'a> {
         let object = self.ensure_opaque(object)?;
         let zero = self.builder.iconst(types::I64, 0);
         let (argument, count) = match (op, args.first()) {
-            (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
+            (RuntimeOp::Str(StrOp::Repeat | StrOp::CharAt), Some(argument)) => {
                 let count =
                     self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
                 let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
@@ -17239,6 +17403,32 @@ impl<'a> FunctionCompiler<'a> {
                 let result = self.emit_collection_operation(call, set, Some(value.values[0]), None);
                 self.store_receiver_back(receiver_place, &object)?;
                 self.release_opaque_handle(result);
+                Ok(unit_value(&mut *self.builder))
+            }
+            SetOp::Union
+            | SetOp::Intersection
+            | SetOp::Difference
+            | SetOp::SymmetricDifference
+            | SetOp::IsSubset
+            | SetOp::IsSuperset
+            | SetOp::IsDisjoint => {
+                // The other set is read where it lies.
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let result = self.emit_collection_operation(call, set, Some(other.values[0]), None);
+                if matches!(op, SetOp::IsSubset | SetOp::IsSuperset | SetOp::IsDisjoint) {
+                    let boxed = self.owned_opaque_result(vec![result], Type::named("bool"));
+                    return self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool));
+                }
+                Ok(self.owned_opaque_result(vec![result], set_ty))
+            }
+            SetOp::Update => {
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let other = self.transfer_owned_opaque_value(&other);
+                let result = self.emit_collection_operation(call, set, Some(other), None);
+                self.release_opaque_handle(result);
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             SetOp::Clear => {

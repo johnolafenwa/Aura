@@ -4009,15 +4009,73 @@ def classify(value: PairState):
 }
 
 #[test]
-fn d4_string_indexing_remains_rejected() {
-    let error = crate::check_source(
-        "def index_text() -> str:\n    text = 'Aura'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
+fn string_indexing_reads_one_character_and_rejects_writes_and_other_indices() {
+    crate::check_source(
+        "def index_text() -> str:\n    text = 'Aura'\n    return text[0] + text.char_at(-1)\n\ndef main() -> int32:\n    return 0\n",
     )
-    .expect_err("Aura does not define integer str indexing");
-    assert_eq!(
-        error.message,
-        "cannot index non-Array, list, or dict value `str`"
-    );
+    .expect("a str index reads one character");
+    let write =
+        crate::check_source("def main() -> None:\n    mut text = 'Aura'\n    text[0] = 'x'\n")
+            .expect_err("a str index is not a place");
+    assert_eq!(write.code.as_str(), "AU2003");
+    assert_eq!(write.message, "a `str` cannot be changed through an index");
+    let key = crate::check_source("def main() -> None:\n    text = 'Aura'\n    print(text['a'])\n")
+        .expect_err("a str index is an integer");
+    assert!(key
+        .message
+        .starts_with("str indices must have type `int64`"));
+    let float = crate::check_source(
+        "def main() -> None:\n    text = 'Aura'\n    print(text.char_at(1.5))\n",
+    )
+    .expect_err("char_at takes an integer");
+    assert_eq!(float.code.as_str(), "AU2002");
+}
+
+#[test]
+fn set_algebra_checks_operand_types_mutability_and_result_types() {
+    let source = |body: &str| {
+        format!("def main() -> None:\n    a: set[int64] = {{1, 2}}\n    names: set[str] = {{'x'}}\n    mut c: set[int64] = {{3}}\n{body}")
+    };
+    crate::check_source(&source(
+        "    d: set[int64] = (a | c) & a.union(c) - a.difference(c) ^ a.symmetric_difference(c)\n    e: bool = a.is_subset(d) or a.is_superset(d) or a.is_disjoint(other=d)\n    c.update(d)\n    c |= a\n    print(e)\n",
+    ))
+    .expect("set algebra should type-check");
+    for (body, code, message) in [
+        (
+            "    print(len(a.union(names)))\n",
+            "AU2002",
+            "`union` expects `set[int64]`, found `set[str]`",
+        ),
+        (
+            "    print(a.is_subset([1]))\n",
+            "AU2002",
+            "`is_subset` expects `set[int64]`, found `list[int64]`",
+        ),
+        (
+            "    print(len(a | names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    print(len(a - names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    a.update(c)\n",
+            "AU3003",
+            "method `update` requires a mutable receiver",
+        ),
+    ] {
+        let error = crate::check_source(&source(body)).expect_err(body);
+        assert_eq!(error.code.as_str(), code, "{body}");
+        assert_eq!(error.message, message, "{body}");
+    }
+    let missing =
+        crate::check_source(&source("    print(a.union())\n")).expect_err("union needs a set");
+    assert!(!missing.code.is_empty());
+    let shift = crate::check_source(&source("    print(len(a << c))\n")).expect_err("no set shift");
+    assert_eq!(shift.code.as_str(), "AU2003");
 }
 
 #[test]
@@ -9494,7 +9552,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Index {
-                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                object: Box::new(expr(ExprKind::Bool(true))),
                 index: Box::new(expr(ExprKind::Int(0))),
             }),
             &mut locals,
@@ -9708,7 +9766,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("non-indexable assignment targets should fail")
         .message
-        .contains("cannot index non-Array, list, or dict value"));
+        .contains("cannot be changed through an index"));
 
     let mut locals = HashMap::from([(
         "nums".to_string(),
@@ -25476,7 +25534,7 @@ def main():
 }
 
 #[test]
-fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unavailable() {
+fn owned_slices_reject_unsupported_bases_and_scalars_have_no_index() {
     for source in [
         "def main():\n    value: int32 = 1\n    print(value[:])\n",
         "def main():\n    values = {1, 2}\n    print(values[:])\n",
@@ -25494,8 +25552,10 @@ fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unav
         );
     }
 
-    let indexed = crate::check_source("def main():\n    print(\"text\"[0])\n")
-        .expect_err("str scalar indexing remains unavailable");
+    crate::check_source("def main():\n    print(\"text\"[0])\n")
+        .expect("a str index reads one character");
+    let indexed =
+        crate::check_source("def main():\n    print(true[0])\n").expect_err("a bool has no index");
     assert!(indexed.message.contains("cannot index"));
 }
 
