@@ -118,3 +118,12 @@ endianness, every single code unit, every valid surrogate pair, and all
 17 expected lines of the codec program on both backends. The new codec
 uses no additional library. Its UTF-16 workload took 11.432 ms against
 10.341 ms for Rust and 13.882 ms for Python.
+
+On November 18, the materialized set union benchmark took 4.493 ms in Aura,
+16.457 ms in Rust and 5.699 ms in Python across seven rotated runs. Large
+sets of scalar or string keys can share backing storage while preserving
+the order and independence of both inputs and the result. Tests cover
+removed entries, membership, iteration in both directions, chained unions,
+mutation and owned class values. Immediate writes to the union took 10.7%
+longer in the separate mutation workload. The benchmark README records the
+before-and-after timings for all three downstream operations.

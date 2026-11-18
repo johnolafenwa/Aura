@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-17
+Last updated: 2026-11-18
 
 ## Collections, text, and numbers (step 1 of 3 complete)
 
@@ -21,8 +21,9 @@ Last updated: 2026-11-17
   union and UTF-16. The compiler and runtime use a scalar integer math entry.
 - The measured ASCII index and UTF-16 round trip now complete ahead of
   Python and within the Rust target. The benchmark notes give the source
-  shape, check totals and measurements. Materialized set union remains
-  under performance investigation.
+  shape, check totals and measurements. Materialized set union took
+  4.493 ms against 16.457 ms in Rust and 5.699 ms in Python. The first
+  write to a shared union took 10.7% longer in the mutation benchmark.
 
 ## The `image` module (complete)
 
