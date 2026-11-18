@@ -443,14 +443,15 @@ def count_where(values: list[int64], keep: Check) -> int64:
             total += 1
     return total
 
-def slower_than(limit: own int64) -> Check:
-    return Check(lambda ms: ms > limit)
+def slower_than(limit: int64) -> Check:
+    return lambda ms: ms > limit
 
 def main():
     durations = [12, 1840, 35, 410, 7]
     over_a_second = slower_than(1000)
     print(count_where(durations, over_a_second))
     print(count_where(durations, slower_than(30)))
+    print(count_where(durations, lambda ms: ms < 10))
     print(durations.filter(over_a_second))
 ```
 
@@ -460,55 +461,88 @@ def main():
 $ aura run slow.au
 1
 3
+1
 [1840]
 ```
 
-A `Check` holds a closure together with its environment. You make one by
-calling the type with a lambda, `Check(lambda ms: ...)`, which is called
-*packing*. Packing is always written out. Assigning a bare lambda to a `Check`
-binding is rejected with `AU2015` and a message saying that a lambda becomes a
-`Callable` only through the constructor. The reason is that a packed closure
-is a different kind of value from a thin one: it owns an environment, it is
-not a copy value, and it can't be cloned. Aura wants that change visible where
-it happens.
+A `Check` holds a closure together with its environment. A lambda written
+where a `Check` is expected becomes one: the `return` in `slower_than` and the
+third call to `count_where` both do it. This is called *packing*. The `Check`
+type tells the lambda what its parameter and result types are, as a `def(...)`
+type would.
 
-Once packed, the closure can go where thin function values go: into
-parameters like `keep`, out of functions like `slower_than`, into fields and
-lists. `slower_than` is a function that builds functions, and each one it
-returns remembers its own limit. `count_where` borrows `over_a_second` with a
-shared parameter, so we can use it again afterward, and `filter` accepts it
-too.
+A packed closure is a different kind of value from a thin one. It owns an
+environment, it is not a copy value, and it can't be cloned. That is why the
+two have different types, and why the type you write decides which one you
+get.
 
-`slower_than` takes its parameter as `own int64`. Try it with a bare `limit:
-int64` and the compiler explains why:
+A packed closure can go where thin function values go: into parameters like
+`keep`, out of functions like `slower_than`, into fields and lists.
+`slower_than` is a function that builds functions, and each one it returns
+remembers its own limit. `count_where` borrows `over_a_second` with a shared
+parameter, so we can use it again afterward, and `filter` accepts it too.
 
-```aura check-fail:AU3002
+Here are closures in a field and in a list:
+
+```aura
 type Check = Callable[def(int64) -> bool]
 
-def slower_than(limit: int64) -> Check:
-    return Check(lambda ms: ms > limit)
+class Rule:
+    name: str
+    matches: Check
 
 def main():
-    over_a_second = slower_than(1000)
-    print(over_a_second(1840))
+    limit = 100
+    rules = [
+        Rule(name="slow", matches=lambda ms: ms > limit),
+        Rule(name="instant", matches=lambda ms: ms == 0),
+    ]
+    for rule in rules:
+        print(f"{rule.name}: {rule.matches(1840)}")
+
+    checks: list[Check] = [lambda ms: ms > limit, lambda ms: ms % 2 == 0]
+    print(checks.len())
+```
+
+<span class="caption">Listing 13-6: Closures stored in a field and in a list</span>
+
+```console
+$ aura run slow.au
+slow: true
+instant: false
+2
+```
+
+`slower_than` captures its parameter `limit`. An `int64` is a copy value, so
+the lambda takes its own copy when it is created. A parameter that is not a
+copy value is different:
+
+```aura check-fail:AU3002
+type Check = Callable[def(str) -> bool]
+
+def named(wanted: str) -> Check:
+    return lambda service: service == wanted
+
+def main():
+    is_api = named("api")
+    print(is_api("api"))
 ```
 
 ```console
 $ aura check slow.au
-error[AU3002]: lambda cannot capture shared parameter `limit` by value
- --> slow.au:4:34
+error[AU3002]: lambda cannot capture shared parameter `wanted` by value
+ --> slow.au:4:39
   |
-4 |     return Check(lambda ms: ms > limit)
-  |                                  ^
-  = related slow.au:3:17: shared parameter `limit` is declared here
-  = help: clone `limit` into an owned local before creating the lambda, or declare the enclosing parameter as `own int64`
+4 |     return lambda service: service == wanted
+  |                                       ^
+  = related slow.au:3:11: shared parameter `wanted` is declared here
+  = help: clone `wanted` into an owned local before creating the lambda, or declare the enclosing parameter as `own str`
 ```
 
-A bare parameter is shared access to a value the caller still owns, even when
-the type is a copy value. A lambda without a capture list takes its captures
-by value, and Aura doesn't let it turn a borrowed parameter into a value of its
-own without saying so. Taking the parameter as `own` makes `slower_than` the
-owner of its argument, and then the lambda is free to keep it.
+A bare parameter is shared access to a value the caller still owns. A lambda
+without a capture list takes its captures by value, and it cannot take a
+string the caller still owns. Taking the parameter as `own str` makes `named`
+the owner of its argument, and then the lambda is free to keep it.
 
 ## Closures over records
 
@@ -569,7 +603,7 @@ def main():
     print(sum(requests.map(lambda request: request.ms)))
 ```
 
-<span class="caption">Listing 13-6: Filtering, sorting, and mapping a list of class values</span>
+<span class="caption">Listing 13-7: Filtering, sorting, and mapping a list of class values</span>
 
 ```console
 $ aura run slow.au

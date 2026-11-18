@@ -61,6 +61,7 @@ date of that decision, not the state of the implementation today.
 - [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
 - [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
 - [29-ffi-v2-graphics-design-checkpoint.md](29-ffi-v2-graphics-design-checkpoint.md): FFI v2 for graphics libraries and the raylib package
+- [30-first-class-closures-design-checkpoint.md](30-first-class-closures-design-checkpoint.md): storing closures and closures with statement bodies
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

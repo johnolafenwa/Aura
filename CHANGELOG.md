@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+- Language: a closure is stored without ceremony. A lambda, a function, a
+  bound method, or a local that holds a closure packs where a
+  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
+  binding, an argument, a field, a list, set, or dictionary element, a
+  `return`, and each arm of a conditional or `match` expression. A type
+  alias called as a constructor is no longer needed, and `AU2015` no longer
+  reports implicit erased storage. The constructor stays valid and is still
+  how a packed value is restricted to a weaker contract.
+- Language: a lambda without a capture list captures a Copy parameter of
+  the enclosing function by value, so `def make(n: int64)` can return
+  `lambda value: value + n`. A parameter that is not Copy still needs `own`
+  or a clone and reports `AU3002`.
+
 - C callbacks accept NUL-terminated UTF-8 text. Declare the parameter
   as `cstr` in the foreign signature and `str` in the named Aura
   function. A null pointer or invalid UTF-8 raises `AU4005`.

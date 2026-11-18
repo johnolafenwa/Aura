@@ -202,10 +202,14 @@ fn generic_functions_return_unions_of_their_type_parameters() {
 }
 
 #[test]
-fn owned_callable_types_pack_only_through_their_constructor() {
+fn owned_callable_types_pack_a_value_written_at_a_typed_destination() {
+    check_source(
+        "def helper():\n    pass\ndef main():\n    callback: Callable[def() -> None] = helper\n    callback()\n",
+    )
+    .expect("a function value packs where owned callable storage is expected");
     rejects(
-        "def helper():\n    pass\ndef main():\n    callback: Callable[def() -> None] = helper\n",
-        "implicit erased storage",
+        "def helper(count: int64 = 1):\n    pass\ndef main():\n    callback: Callable[def(count: int64) -> None] = helper\n",
+        "to restrict the value",
     );
 }
 

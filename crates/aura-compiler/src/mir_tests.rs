@@ -16371,6 +16371,113 @@ fn exported_functions_are_listed_with_their_c_symbols() {
         .is_none());
 }
 
+const CALLABLE_DESTINATION_PROGRAM: &str = r#"
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+class Button:
+    label: str
+    on_click: Callable[def() -> str]
+
+def double(value: int64) -> int64:
+    return value * 2
+
+def make_adder(amount: int64) -> Callable[def(value: int64) -> int64]:
+    return (lambda value: value + amount)
+
+def apply(step: Callable[def(value: int64) -> int64], start: int64) -> int64:
+    return step(start)
+
+def pick(flag: bool, amount: int64) -> Callable[def(value: int64) -> int64]:
+    return (lambda value: value + amount) if flag else double
+
+def maybe(flag: bool, amount: int64) -> Callable[def() -> int64] | None:
+    if flag:
+        return lambda: amount
+    return None
+
+def main():
+    print(make_adder(5)(1))
+    print(apply(lambda value: value * 3, 4))
+    print(apply(double, 4))
+    name = "save"
+    button = Button(label="Save", on_click=lambda: f"{name} clicked")
+    print(button.on_click())
+    scale = 10
+    steps: list[Callable[def(value: int64) -> int64]] = [lambda value: value + scale, double]
+    for step in steps:
+        print(step(2))
+    mut table: dict[str, Callable[def(value: int64) -> int64]] = {}
+    table["add"] = lambda value: value + scale
+    print(table["add"](1))
+    held = lambda: scale + 1
+    stored: Callable[def() -> int64] = held
+    print(stored())
+    packed = make_adder(1)
+    same: Callable[def(value: int64) -> int64] = packed
+    print(same(1))
+    mut bound: Callable[mut def() -> int64] = Counter(total=40).bump
+    print(bound())
+    print(pick(true, 2)(10))
+    print(pick(false, 2)(10))
+    squares: list[Callable[def() -> int64]] = [lambda: index * index for index in range(3)]
+    for square in squares:
+        print(square())
+    match maybe(true, 9):
+        case None:
+            print("none")
+        case _:
+            print("some")
+"#;
+
+#[test]
+fn callable_destination_packs_values_at_every_typed_site() {
+    let output = crate::run_source(CALLABLE_DESTINATION_PROGRAM)
+        .expect("callable values pack at typed destinations");
+    assert_eq!(
+        output.stdout,
+        "6\n12\n8\nsave clicked\n12\n4\n11\n11\n2\n41\n12\n20\n0\n1\n4\nsome\n"
+    );
+}
+
+#[test]
+fn callable_destination_lowers_to_the_packing_instruction() {
+    let module = crate::lower_source_to_mir(CALLABLE_DESTINATION_PROGRAM)
+        .expect("callable values pack at typed destinations");
+    let packs = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function lowers")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::CallableAdapt {
+                            destination: Type::Callable(_),
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    assert_eq!(packs("make_adder"), 1);
+    assert_eq!(packs("pick"), 2);
+    assert_eq!(packs("maybe"), 1);
+    // A value that is packed already moves without a second packing.
+    assert_eq!(packs("apply"), 0);
+}
+
 #[test]
 fn comprehension_element_loans_end_inside_their_iteration() {
     let module = crate::lower_source_to_mir(
