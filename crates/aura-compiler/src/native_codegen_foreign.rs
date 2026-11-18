@@ -118,6 +118,81 @@ pub(super) fn module_callbacks(module: &MirModule) -> Vec<CallbackKey> {
     found
 }
 
+/// The C string parameters that can live until the callback returns. Every
+/// use must be an operation that reads its input and returns an independent
+/// scalar. An argument passed to another function or stored elsewhere uses
+/// the ordinary owned heap representation. Limit the number of Rust frames
+/// needed to hold scoped strings during a callback.
+fn local_callback_texts(function: &MirFunction, callback: &CCallback) -> Option<u64> {
+    if function.params.len() != callback.params.len() || function.receiver.is_some() {
+        return None;
+    }
+    let text_type = Type::named("str");
+    let mut mask = 0u64;
+    let mut names = HashSet::new();
+    for (i, (input, param)) in callback.params.iter().zip(&function.params).enumerate() {
+        if input.text {
+            if input.pointer || param.passing != MirReceiverKind::Borrow || param.ty != text_type {
+                return None;
+            }
+            mask |= 1u64.checked_shl(u32::try_from(i).ok()?)?;
+            names.insert(param.name.as_str());
+        }
+    }
+    if mask == 0 || mask.count_ones() > 8 {
+        return None;
+    }
+    let names_text = |place: &str| names.contains(place.split(['.', '[']).next().unwrap_or(place));
+    let string_operand = |word: &Operand| match word {
+        Operand::String(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .any(|local| &local.name == place && local.ty == text_type),
+        _ => false,
+    };
+    let inspects = |value: &Rvalue| {
+        reads_operands_only(value)
+            && match value {
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Str(_),
+                            ..
+                        },
+                    ..
+                } => true,
+                Rvalue::Binary { left, right, .. } => string_operand(left) && string_operand(right),
+                _ => false,
+            }
+    };
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            if matches!(inst, Instruction::Assign { target, .. } if names_text(target)) {
+                return None;
+            }
+            let mut mentioned = Vec::new();
+            crate::mir::instruction_place_mentions(inst, &mut mentioned);
+            if !mentioned.into_iter().any(names_text) {
+                continue;
+            }
+            match inst {
+                Instruction::Release { place } | Instruction::Retain { place }
+                    if names.contains(place.as_str()) => {}
+                Instruction::Assign { value, .. } if inspects(value) => {}
+                _ => return None,
+            }
+        }
+        if crate::mir::terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .any(names_text)
+        {
+            return None;
+        }
+    }
+    Some(mask)
+}
+
 /// The C signature of a callback's entry code, and the signature of its
 /// body, which takes the address of the call's frame.
 pub(super) fn callback_signatures(callback: &CCallback) -> (Signature, Signature) {
@@ -196,12 +271,30 @@ impl NativeCodegen<'_> {
     pub(super) fn define_callback_thunks(&mut self) -> std::result::Result<(), String> {
         for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
             let (entry, body) = callback_signatures(&callback);
+            let local = self
+                .module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| local_callback_texts(f, &callback));
             self.define_body(
                 entry_id,
                 &entry,
                 &format!("callback entry for `{name}`"),
                 |codegen, builder| {
-                    codegen.emit_callback_entry(builder, &callback, body_id);
+                    let local = match local {
+                        Some(mask) => Some((
+                            mask,
+                            string_data_id(
+                                builder.module(),
+                                &mut codegen.string_data,
+                                name.as_bytes(),
+                            )?,
+                            name.len(),
+                        )),
+                        None => None,
+                    };
+                    codegen.emit_callback_entry(builder, &callback, body_id, local);
                     Ok(())
                 },
             )?;
@@ -213,18 +306,19 @@ impl NativeCodegen<'_> {
                 |codegen, builder| {
                     // A `cstr` parameter is copied into a `str` for the
                     // call, and the copy is released after it.
-                    let text = match callback.params.iter().any(|param| param.text) {
-                        true => Some(CallbackText {
-                            copy: codegen.runtime[RuntimeFn::FfiCallbackText],
-                            name: string_data_id(
-                                builder.module(),
-                                &mut codegen.string_data,
-                                name.as_bytes(),
-                            )?,
-                            name_length: name.len(),
-                        }),
-                        false => None,
-                    };
+                    let text =
+                        match local.is_none() && callback.params.iter().any(|param| param.text) {
+                            true => Some(CallbackText {
+                                copy: codegen.runtime[RuntimeFn::FfiCallbackText],
+                                name: string_data_id(
+                                    builder.module(),
+                                    &mut codegen.string_data,
+                                    name.as_bytes(),
+                                )?,
+                                name_length: name.len(),
+                            }),
+                            false => None,
+                        };
                     emit_callback_body(builder, &callback, target, text);
                     Ok(())
                 },
@@ -241,6 +335,7 @@ impl NativeCodegen<'_> {
         builder: &mut dyn FunctionBackend,
         callback: &CCallback,
         body_id: FuncHandle,
+        local: Option<(u64, DataHandle, usize)>,
     ) {
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
@@ -251,7 +346,11 @@ impl NativeCodegen<'_> {
         let count = callback.params.len();
         // The guarded body records each completed text copy after the result
         // word. The entry owns the copies even if conversion or the call traps.
-        let texts = callback.params.iter().filter(|param| param.text).count();
+        let texts = if local.is_none() {
+            callback.params.iter().filter(|param| param.text).count()
+        } else {
+            0
+        };
         let frame_words = count + 1 + texts;
         let slot = builder.create_sized_stack_slot(frame_words as u32 * 8, 3);
         let frame = builder.stack_addr(types::I64, slot, 0);
@@ -281,8 +380,17 @@ impl NativeCodegen<'_> {
 
         let body = builder.import_function(body_id);
         let body = builder.func_addr(types::I64, body);
-        let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
-        builder.call(guard, &[body, frame]);
+        if let Some((mask, name, length)) = local {
+            let mask = builder.iconst(types::I64, mask as i64);
+            let data = builder.import_data(name);
+            let name = builder.symbol_value(types::I64, data);
+            let length = builder.iconst(types::I64, length as i64);
+            let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackLocalTextGuard]);
+            builder.call(guard, &[body, frame, mask, name, length]);
+        } else {
+            let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
+            builder.call(guard, &[body, frame]);
+        }
         if texts != 0 {
             let release = builder.import_function(self.runtime[RuntimeFn::FfiReleaseCallbackText]);
             for index in (count + 1)..frame_words {
@@ -796,8 +904,13 @@ impl FunctionCompiler<'_> {
                             word,
                             &record,
                             layout.size(),
-                            descriptor,
-                            length,
+                            (descriptor, length),
+                            match &args[index].value {
+                                Operand::Place(place) => {
+                                    self.ffi_list_length_hints.get(place).copied()
+                                }
+                                _ => None,
+                            },
                         )
                     } else {
                         let packed = self
@@ -1522,8 +1635,8 @@ impl FunctionCompiler<'_> {
         list: Val,
         record: &super::plain::PlainRecord,
         stride: usize,
-        descriptor: Val,
-        length: Val,
+        (descriptor, length): (Val, Val),
+        literal_count: Option<usize>,
     ) -> (Val, Val) {
         let direct_layout = aura_runtime::native_runtime::direct_list_layout();
         let fast = self.builder.create_block();
@@ -1542,6 +1655,29 @@ impl FunctionCompiler<'_> {
         let capacity = aura_runtime::native_runtime::foreign_calls::FFI_STRUCT_SCRATCH_BYTES;
         let slot = self.builder.create_sized_stack_slot(capacity as u32, 3);
         let scratch = self.builder.stack_addr(types::I64, slot, 0);
+        // A matching small literal can be copied as native words. The actual
+        // count is checked here even if the source list has been reassigned
+        // or resized. Its C layout matched the native whole-word stride above.
+        if let Some((words, expected)) = literal_count.and_then(|n| {
+            let bytes = n.checked_mul(stride)?;
+            (bytes > 0 && bytes <= capacity && bytes.is_multiple_of(8)).then_some((bytes / 8, n))
+        }) {
+            let fixed = self.builder.create_block();
+            let general = self.builder.create_block();
+            let same = self.builder.icmp_imm(IntCC::Equal, count, expected as i64);
+            self.builder.brif(same, fixed, &[], general, &[]);
+            self.builder.switch_to_block(fixed);
+            self.builder.seal_block(fixed);
+            for i in 0..words {
+                let offset = (i * 8) as i32;
+                let value = self.builder.load(types::I64, MemFlags::new(), data, offset);
+                self.builder.store(MemFlags::new(), value, scratch, offset);
+            }
+            let no_heap = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join, &[scratch, no_heap]);
+            self.builder.switch_to_block(general);
+            self.builder.seal_block(general);
+        }
         let copied = self
             .builder
             .call(

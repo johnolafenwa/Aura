@@ -12,6 +12,9 @@ use crate::mir::{instruction_place_mentions, terminator_place_mentions};
 /// The exact body of a numeric union accessor. Returning a computed value
 /// after a reinterpretation is not a projection of the C bytes.
 pub(super) fn numeric_projection(function: &MirFunction) -> Option<(String, usize, FfiScalar)> {
+    if function.receiver != Some(MirReceiverKind::Borrow) || !function.params.is_empty() {
+        return None;
+    }
     let [block] = function.blocks.as_slice() else {
         return None;
     };

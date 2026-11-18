@@ -23,6 +23,13 @@ resource managers exit. The callback entry releases its references to the
 converted strings on each path. A retained string follows the ordinary
 Aura reference lifetime.
 
+When the compiler can prove that a callback only inspects its text
+arguments, the native entry holds each owned string in a stack frame for
+the call. Returning or unwinding drops each string, including any copied
+before a later argument fails UTF-8 validation. A callback that passes a
+string to another function or stores it uses the ordinary heap ownership
+path.
+
 ## Rationale
 
 GLFW owns its error description and may reuse the buffer. A copy gives

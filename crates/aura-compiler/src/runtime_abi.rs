@@ -436,6 +436,7 @@ runtime_functions! {
     FfiUnpackStructs => ("aura_direct_ffi_unpack_structs", [I64, I64, I64, I64, I64, I64], None),
     FfiReleaseStructs => ("aura_direct_ffi_release_structs", [I64], None),
     FfiCallbackGuard => ("aura_direct_ffi_callback_guard", [I64, I64], None),
+    FfiCallbackLocalTextGuard => ("aura_direct_ffi_callback_local_text_guard", [I64, I64, I64, I64, I64], None),
     FfiCallbackText => ("aura_direct_ffi_callback_text", [I64, I64, I64], Some(I64)),
     FfiReleaseCallbackText => ("aura_direct_ffi_release_callback_text", [I64], None),
     FfiCallbackCheck => ("aura_direct_ffi_callback_check", [], None),

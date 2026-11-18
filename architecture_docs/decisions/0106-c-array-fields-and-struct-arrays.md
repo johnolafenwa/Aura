@@ -42,7 +42,10 @@ needed one of three things:
   runtime pack and unpack values with `c_values.rs` and `c_layout.rs`.
   Native code passes plain structs in registers or memory according to the
   host ABI. For a read-only struct pointer it can copy native list storage
-  when each scalar offset, width and stride matches C. For a small struct
+  when each scalar offset, width and stride matches C. For a small list built
+  from a literal, the native code checks the current list length before copying
+  a fixed number of words into the private call buffer. If the list changed
+  length, the copy uses its current size. For a small struct
   holding a single scalar array, it checks the field's representation and
   length before copying its bytes. A union's byte field uses the same check.
   Other values use the runtime conversion and its diagnostics.

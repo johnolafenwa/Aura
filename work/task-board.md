@@ -73,9 +73,10 @@ Last updated: 2026-11-18
 - The FFI v2 benchmark covers struct arrays, fixed array fields, union
   reads, and UTF-8 callbacks. Native record arrays with a matching C
   layout copy directly into a call buffer. C-filled union lists used only
-  for numeric member reads can reuse those bytes. Latest CPU medians were
-  3.42×, 2.18×, 1.23× and 4.87× Rust's respectively. The struct-array
-  ratio was 2.69× in the prior run. All four beat Python ctypes.
+  for numeric member reads can reuse those bytes. A callback that only reads
+  its text inputs can hold the owned strings on its stack. The latest nine-run
+  CPU medians were 1.71×, 2.66×, 1.29× and 3.42× Rust’s respectively.
+  All four beat Python ctypes in the previous three-way comparison.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
 
 ## First-class closures (in progress)

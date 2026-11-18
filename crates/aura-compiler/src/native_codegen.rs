@@ -2612,6 +2612,7 @@ impl<'a> NativeCodegen<'a> {
             current_snapshot_instruction: 0,
             pending_snapshot_pads: Vec::new(),
             union_read_buffers: BTreeMap::new(),
+            ffi_list_length_hints: HashMap::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
@@ -3972,6 +3973,7 @@ struct FunctionCompiler<'a> {
     /// loops, with each one's target and snapshots, filled once it is done.
     pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
     union_read_buffers: BTreeMap<String, foreign_reads::Buffer>,
+    ffi_list_length_hints: HashMap<String, usize>,
     /// Set for the next `emit_class_check` of a confined instance.
     skip_class_check: bool,
     /// The `mut` arguments and receivers the MIR moves into their call,
@@ -5238,6 +5240,21 @@ impl<'a> FunctionCompiler<'a> {
         self.layout_scratch.consumers = consuming_operands(
             crate::mir::ownership::operand_roles_with(instruction, &borrowed),
         );
+        if let Instruction::Assign {
+            target,
+            value:
+                Rvalue::VecLiteral {
+                    elements,
+                    element_type: Type::Named(name, _),
+                    ..
+                },
+        } = instruction
+        {
+            if self.classes.contains_key(name) {
+                self.ffi_list_length_hints
+                    .insert(target.clone(), elements.len());
+            }
+        }
         // A reinitialised or released list no longer denotes C's prior bytes.
         if !self.union_read_buffers.is_empty() {
             let replaced = match instruction {
