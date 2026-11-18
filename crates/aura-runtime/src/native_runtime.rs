@@ -1490,7 +1490,16 @@ impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
         // first write to a list gives it room.
-        let (access, elements, len, _, holders) = list_view_of(&value);
+        let view = list_view_of(&value);
+        Self::with_view(value, runtime_type_name, view)
+    }
+
+    #[inline]
+    fn with_view(
+        value: Value,
+        runtime_type_name: Option<RuntimeName>,
+        (access, elements, len, _, holders): (u32, usize, usize, u32, usize),
+    ) -> Self {
         Self {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
@@ -3013,6 +3022,9 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     result
 }
 
+const EMPTY_VALUE_VIEW: (u32, usize, usize, u32, usize) =
+    (DirectListAccess::None as u32, 0, 0, 0, 0);
+
 /// The access code, element address, length, room for in-place appends,
 /// and holder count address of a `list` value or an `Array`, or `None` and
 /// zeros for any other value. The storage is on the heap, so the address
@@ -3077,7 +3089,7 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
         // writes its fields at their offsets in the block.
         Value::Instance(instance) => match instance.fields.typed() {
             Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0, 0),
-            None => (DirectListAccess::None as u32, 0, 0, 0, 0),
+            None => EMPTY_VALUE_VIEW,
         },
         // A variant kept in its enum's layout: generated code tests the
         // variant's index and reads its payloads at their offsets in the
@@ -3089,9 +3101,9 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
                 (typed.layout().access(), typed.data(), typed.variant(), 0, 0)
             }
             VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0, 0),
-            VariantPayloads::Values(_) => (DirectListAccess::None as u32, 0, 0, 0, 0),
+            VariantPayloads::Values(_) => EMPTY_VALUE_VIEW,
         },
-        _ => (DirectListAccess::None as u32, 0, 0, 0, 0),
+        _ => EMPTY_VALUE_VIEW,
     }
 }
 
