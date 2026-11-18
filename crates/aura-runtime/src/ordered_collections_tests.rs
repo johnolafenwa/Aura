@@ -130,6 +130,29 @@ fn btree_lookup_range_drain_and_cow() {
 }
 
 #[test]
+fn default_map_matches_the_constructor_and_float_keys_use_the_same_order_for_equality() {
+    let empty = Value::CollectionStore(Store::default());
+    let constructed = call(new, vec![number(3)]);
+    assert_eq!(empty, constructed);
+
+    let with_keys = |state, zero, nan| {
+        let state = call(map_put, vec![state, Value::Float(zero), number(3)]);
+        call(map_put, vec![state, Value::Float(nan), number(7)])
+    };
+    let map = with_keys(empty, -0.0, f64::NAN);
+    let other_nan = f64::from_bits(f64::NAN.to_bits() + 1);
+    let other = with_keys(constructed, 0.0, other_nan);
+    assert_eq!(map, other);
+    assert_eq!(
+        call(map_get, vec![map.clone(), Value::Float(other_nan)]),
+        lookup(Some(number(7)))
+    );
+    let replaced = call(map_put, vec![map, Value::Float(0.0), number(11)]);
+    assert_eq!(call(len, vec![replaced.clone()]), number(2));
+    assert_ne!(replaced, other);
+}
+
+#[test]
 fn operations_reject_wrong_storage_and_arguments() {
     for (function, arity) in [
         (new as host_builtins::HostBuiltinFn, 1),
@@ -325,6 +348,33 @@ fn map_host_and_word_operations_preserve_overwrites_and_snapshots() {
             lookup(Some(number(12)))
         );
     }
+}
+
+#[test]
+fn word_map_operations_reject_wide_keys_and_values_without_truncation() {
+    let value = IntegerValue::from_typed_signed(i128::from(i64::MAX) + 1, IntegerKind::Int128)
+        .expect("the value fits int128");
+    let wide = Value::Int(value);
+    let general = call(
+        map_put,
+        vec![call(new, vec![number(3)]), number(0), wide.clone()],
+    );
+    let general = store(general).unwrap();
+    assert_eq!(
+        general.read_i64(I64Op::MapGet, 0).unwrap_err().code,
+        "AU4001"
+    );
+    assert_eq!(
+        call(map_get, vec![Value::CollectionStore(general), number(0)]),
+        lookup(Some(wide.clone()))
+    );
+
+    let packed = Value::CollectionStore(I64Op::MapSet.new_store(false));
+    for (key, value) in [(wide.clone(), number(1)), (number(1), wide)] {
+        let error = map_put(vec![packed.clone(), key, value], None).unwrap_err();
+        assert_eq!(error.code, "AU4001");
+    }
+    assert_eq!(call(len, vec![packed]), number(0));
 }
 
 #[test]
