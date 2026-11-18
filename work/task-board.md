@@ -20,7 +20,8 @@ Last updated: 2026-11-17
   string, nested callable and wide captures independently of their creating
   task. The complete tool runner and decorated functions free every box.
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
-  Benchmark measurements are in `benchmarks/closures/README.md`.
+  The six release workloads took 0.15 to 2.74 times the Rust wall time.
+  Measurements and checksums are in `benchmarks/closures/README.md`.
 - Remaining: step 2, a `def` statement inside a function for closures with
   statement bodies (ADR-0116).
 
