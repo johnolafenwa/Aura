@@ -155,8 +155,10 @@ A decoded image has the channels its file has:
 A file's header can claim any size, so a few bytes can ask for gigabytes.
 The module reads the size from the header and refuses a larger image with
 `image.Error.TooLarge` before it decodes anything. `read` and `decode` allow
-268,435,456 pixels. When files come from outside the program, pass the
-largest image the program is prepared to hold to `decode_up_to`:
+268,435,456 pixels. A JPEG can be up to 65,535 pixels wide or tall. For
+example, a 20,000 by 1 image counts as 20,000 pixels. When files come
+from outside the program, pass the largest image the program is prepared
+to hold to `decode_up_to`:
 
 ```aura
 import fs

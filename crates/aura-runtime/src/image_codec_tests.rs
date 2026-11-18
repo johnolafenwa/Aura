@@ -163,6 +163,28 @@ fn jpeg_chroma_subsampling_averages_the_four_pixel_colors() {
 }
 
 #[test]
+fn jpeg_reads_long_narrow_images_within_the_requested_pixel_budget() {
+    for (width, height) in [(20_000, 1), (1, 20_000)] {
+        let data = vec![148; width * height];
+        let file = encode_jpeg(width, height, 1, &data, 90).expect("encodes");
+        let info = header(&file).expect("JPEG info reads");
+        assert_eq!((info.width, info.height, info.channels), (width, height, 1));
+        let pixels = decode(&file, data.len()).expect("within the caller's pixel budget");
+        assert_eq!(pixels.data, data);
+
+        // The header is enough to reject the decode before any scan is read.
+        let start = jpeg_layout(&file).expect("baseline JPEG").scan_data.start;
+        let limit = data.len() - 1;
+        assert_eq!(
+            decode(&file[..start], limit).expect_err("exceeds the pixel budget"),
+            ImageError::TooLarge {
+                limit_pixels: limit
+            }
+        );
+    }
+}
+
+#[test]
 fn jpeg_quality_trades_size() {
     let data = gradient(64, 64, 3);
     let small = encode_jpeg(64, 64, 3, &data, 20).expect("encodes");

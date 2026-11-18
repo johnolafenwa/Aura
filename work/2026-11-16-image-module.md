@@ -76,3 +76,9 @@ difference of 254. The regression checks that the decoded cells are neutral.
 The strip layout, quality range, grayscale support, and image-size limits
 are covered by the codec tests. Timings and sample conditions are in
 `benchmarks/image_codec/README.md`.
+
+Both JPEG header readers now accept legal long, narrow images. A 20,000 by
+1 file previously hit the underlying decoder's 16,384-pixel side limit
+before Aura considered its 20,000-pixel area. The regression checks both
+orientations on the interpreter and native backend, and distinguishes the
+successful decode from a caller's 19,999-pixel limit.

@@ -161,12 +161,7 @@ pub fn header(data: &[u8]) -> Result<Header, ImageError> {
             let info = reader.info();
             (info.width as usize, info.height as usize, channels)
         }
-        Format::Jpeg => {
-            let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
-            decoder.decode_headers().map_err(jpeg_decode_error)?;
-            let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
-            (width, height, jpeg_output_channels(&decoder))
-        }
+        Format::Jpeg => jpeg_header(data)?,
         Format::Pnm => {
             let header = PnmHeader::parse(data)?;
             (header.width, header.height, header.channels())
@@ -307,22 +302,30 @@ fn jpeg_decode_error(error: zune_jpeg::errors::DecodeErrors) -> ImageError {
     }
 }
 
-fn jpeg_output_channels(decoder: &zune_jpeg::JpegDecoder<ZCursor<&[u8]>>) -> usize {
-    match decoder.input_colorspace() {
-        Some(zune_jpeg::zune_core::colorspace::ColorSpace::Luma) => 1,
+fn jpeg_header(data: &[u8]) -> Result<(usize, usize, usize), ImageError> {
+    use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+
+    // A JPEG side occupies 16 bits. Aura checks the combined pixel count
+    // before it allocates the decoded frame.
+    let options = DecoderOptions::default()
+        .set_max_width(usize::from(u16::MAX))
+        .set_max_height(usize::from(u16::MAX));
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+    decoder.decode_headers().map_err(jpeg_decode_error)?;
+    let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
+    let channels = match decoder.input_colorspace() {
+        Some(ColorSpace::Luma) => 1,
         _ => 3,
-    }
+    };
+    Ok((width, height, channels))
 }
 
 fn decode_jpeg(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     use zune_jpeg::zune_core::colorspace::ColorSpace;
     use zune_jpeg::zune_core::options::DecoderOptions;
 
-    let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
-    decoder.decode_headers().map_err(jpeg_decode_error)?;
-    let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
+    let (width, height, channels) = jpeg_header(data)?;
     let pixels = checked_pixels(width, height, limit_pixels)?;
-    let channels = jpeg_output_channels(&decoder);
     let colorspace = if channels == 1 {
         ColorSpace::Luma
     } else {
