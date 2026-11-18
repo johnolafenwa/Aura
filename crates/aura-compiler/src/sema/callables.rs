@@ -1854,7 +1854,6 @@ impl<'a> FunctionChecker<'a> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn type_check_function_value_args(
         &self,
         params: &[FunctionParamContract],
@@ -1875,6 +1874,7 @@ impl<'a> FunctionChecker<'a> {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn type_check_function_value_args_with_receiver(
         &self,
         params: &[FunctionParamContract],
