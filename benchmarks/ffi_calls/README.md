@@ -112,47 +112,36 @@ a checked copy of the C string. Rust borrows and validates it with
 
 ### FFI v2 results
 
-Linux x86-64, 2026-11-17. Each row gives median nanoseconds per operation
-from three runs on one pinned CPU. The order of the three implementations
-rotated each run. Compilation and input construction finished before timing.
-The Aura program used LLVM's `default<O3>` pipeline and the release runtime.
-The Rust compiler frontend for Aura was built in the dev profile. Rust used
-`rustc -C opt-level=3`. Other compilations on the host account for some of
-the difference between process CPU and elapsed time.
+Linux x86-64, 2026-11-18. Each row gives median nanoseconds per operation
+from five runs on one pinned CPU. Aura, Rust and Python rotated through
+first, second and third position. Each implementation checked its result.
+The native Aura program used LLVM’s `default<O3>` pipeline and the release
+runtime. The Aura compiler executable used the Rust dev profile. Rust used
+`rustc -C opt-level=3`. Other workloads on the host accounted for some of
+the difference between elapsed time and process CPU time.
 
 | Case | Aura CPU | Rust CPU | ctypes CPU | Aura elapsed | Rust elapsed | ctypes elapsed |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `struct_array` | 18.87 | 7.02 | 1003.41 | 20.62 | 10.74 | 2072.74 |
-| `array_field` | 7.82 | 3.13 | 760.16 | 9.77 | 4.88 | 1692.03 |
-| `union_read` | 6.74 | 0.48 | 212.24 | 7.85 | 0.51 | 415.52 |
-| `text_callback` | 112.78 | 24.59 | 1100.07 | 176.81 | 48.48 | 1865.62 |
+| `struct_array` | 12.89 | 6.39 | 1084.81 | 11.74 | 6.45 | 1834.55 |
+| `array_field` | 8.22 | 2.75 | 936.22 | 9.11 | 3.27 | 1090.24 |
+| `union_read` | 0.93 | 0.46 | 217.50 | 0.91 | 0.48 | 352.25 |
+| `text_callback` | 105.73 | 26.80 | 1300.92 | 131.43 | 44.06 | 1920.14 |
 
-The first run put the struct array and fixed array field at 2.69 and 2.49
-times Rust's CPU time. The ordinary indexed union getter checked the storage
-and length of the byte field before loading the member. A malformed value
-entered the getter's diagnostic frame. Six alternating runs measured 8.94 ns
-per read before eliding that frame on valid input and 5.62 ns afterwards.
+CPU and elapsed samples were separate series. The text callback took
+3.94 times Rust’s CPU time and 2.98 times its elapsed time.
 
-A later native build kept the private C writeback array until the last use
-of an exclusively read union list. Numeric indexed reads measured 0.82 ns
-in Aura, 0.67 ns in Rust, and 216.12 ns in Python ctypes. Eight alternating
-pairs with the same runtime measured 4.54 ns for the previous getter and
-0.78 ns for the packed read. The compiler uses the ordinary list when a
-later operation can escape or change its elements. Out-of-range indices and
-malformed union bytes report the same diagnostics as the interpreter.
+Nine additional runs rotated two versions of the Aura program with Rust.
+After checking the length and native record layout, the newer program
+copied small record lists directly into the private call buffer. The
+median fell from 15.74 to 11.00 ns of process CPU time, with Rust at
+6.43 ns. Holding read-only callback arguments in scoped storage reduced
+the text callback from 120.52 to 87.39 ns, with Rust at 25.54 ns.
 
-In this repeat the other CPU medians for Aura / Rust / ctypes were
-17.81 / 5.21 / 1127.81 ns for struct arrays, 7.50 / 3.44 / 797.16 ns for
-fixed array fields, and 114.26 / 23.44 / 1098.63 ns for text callbacks.
-The struct-array ratio moved between 2.69× and 3.42× across the two runs.
-The text callback took 4.87 times Rust’s CPU time in this run.
-
-
-On 2026-11-18, nine runs rotated the previous Aura binary, the new
-Aura binary and the Rust binary on the same CPU. Matching small record
-lists copied directly into the private call buffer. Callbacks that only
-inspect their text arguments kept the owned strings on the stack.
-The medians were 15.74 / 11.00 / 6.43 ns for the record list and
-120.52 / 87.39 / 25.54 ns for the callback. The new Aura and Rust
-binaries took 7.54 / 2.84 ns for the fixed array field and 0.76 / 0.59 ns
-for the union read.
+Earlier paired measurements isolated the cost of the numeric union getter.
+Eliding its diagnostic frame on valid input reduced the median from 8.94
+to 5.62 ns across six alternating runs. Reusing the private C writeback
+array for an exclusively read list reduced the median from 4.54 to
+0.78 ns across eight alternating pairs. The compiler uses the ordinary
+list when a later operation can escape or change its elements. Invalid
+indices and malformed union bytes produce the same diagnostics and call
+frames as the interpreter.

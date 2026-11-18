@@ -495,8 +495,9 @@ def main() -> int32:
   byte other than `0` or `1` fails with `AU4001`.
 
 A class with an array field is passed and returned under the rules of the
-table above. It crosses through the runtime, which copies each element, so
-it costs more per call than a class of scalars.
+table above. The native backend checks the length and can copy a small
+scalar array directly from matching list storage. Nested and mixed
+layouts use the runtime’s element conversion.
 
 #### Arrays Of Structs
 
@@ -612,9 +613,11 @@ Name` for a pointer the function writes through, as a field, as an array
 element, and through `ptr[Name]`. By value it is passed the way the
 platform's convention passes a C union of those members.
 
-Reading a member costs a runtime call that copies the union's bytes, so a
-loop that reads several members of one event pays for each. Bind a member
-to a name when it is read more than once.
+A native numeric member read checks the union’s byte storage and length
+before loading the scalar. When C fills a list of unions and its only
+later uses read numeric members, native code can keep the private C
+array for those reads. A member with a nested layout uses the runtime
+conversion.
 
 ### Callbacks
 
@@ -880,7 +883,7 @@ never appears in source-visible output or diagnostics.
 | `AU3004` | An invalid scalar, view, C text, pointer, struct, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
 | `AU4001` | A non-canonical C boolean: the byte a function returned, stored through a `mut bool` or a `mut ptr[bool]`, or left in a `bool` field of a struct, was neither `0` nor `1`. |
-| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle or `cstr` result, a `cstr` result that is not UTF-8, a `cstr` argument that holds a NUL byte, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
+| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle result, a null or invalid UTF-8 `cstr` result or callback argument, an outgoing `cstr` with an embedded NUL, an incorrect array-field or union byte count, and interpreter library, symbol or marshalling failures. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
 stop before entry, and post-call failures are raised after return.
@@ -911,11 +914,13 @@ find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
 loads to find the list's elements. A struct argument or result costs a
-store and a load for each field. A struct with an array field and a
-`ptr[Name]` list cost a runtime call that copies each element. A union
-costs a runtime call when it crosses and when a member is read. A callback costs about 4 ns more
-than a C function pointer, for the frame that guards the C caller against
-a failure.
+store and a load for each field. A `ptr[Name]` list uses a private C
+array. Native code can copy a matching record layout directly. The cost
+of a union read depends on the member and its storage. A scalar-only
+callback measured about 4 ns more than a C function pointer. A text
+callback also validates UTF-8 and copies the string before the Aura body
+runs. The benchmark source, reproduction commands and results are in
+`benchmarks/ffi_calls/README.md`.
 
 The interpreter loads libraries and looks up symbols on Linux, macOS, and
 Windows. Aura does not silently select a different ABI. The declaration must
