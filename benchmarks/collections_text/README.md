@@ -39,3 +39,28 @@ the original compiler, 13.506 ms with preselected encoding names, and
 11.432 ms with the updated decoder. Rust took 10.341 ms and Python took
 13.882 ms. The loop did 400,000 round trips per process. All three
 implementations returned the same character count, 89,600,000.
+
+## Materialized set union
+
+On Linux x86-64, seven rotated runs of `set_union` took 4.493 ms in Aura,
+16.457 ms in Rust, and 5.699 ms in Python. The previous Aura implementation
+took 16.576 ms on the same input. Each implementation returned 384,000.
+The new runtime determines membership and insertion order at union creation.
+Large sets of scalar or string keys can share their backing storage until
+one of the participating sets changes.
+
+A separate process CPU comparison took 5.451 ms for Aura, 16.027 ms for
+Rust and 5.150 ms for Python. The former Aura implementation took
+12.264 ms in that run.
+
+A second comparison shuffled the input and removed entries before each
+union. Process CPU times include the operation following the union.
+
+| Operation on the union | Previous Aura (ms) | Updated Aura (ms) |
+| --- | ---: | ---: |
+| Membership lookup | 13.102 | 4.221 |
+| Consume every entry in order | 22.405 | 19.701 |
+| Remove, add, check membership and read length | 16.350 | 18.100 |
+
+The first mutation copies the storage. It cost 10.7% on the immediate-write
+workload. The three checksums agreed with the previous implementation.

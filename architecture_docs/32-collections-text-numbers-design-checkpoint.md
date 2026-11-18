@@ -1,9 +1,9 @@
 # Collections, Text, And Numbers Design Checkpoint
 
-Status: **Step 1 accepted 2026-11-16 as ADR-0110, ADR-0111, and
-ADR-0112.** Steps 2 and 3 are planned here and proceed on the defaults
-below. The choices marked "owner's call" stay open to change until
-release.
+ADR-0110 through ADR-0112 record the text, set and math features.
+ADR-0113 records the numeric types, and ADR-0117 records the deque, heap,
+sorted map and sorted set. The three steps are implemented on the
+integration candidate. The original design choices follow.
 
 The 0.16 survey of missing language features listed, as item 6:
 

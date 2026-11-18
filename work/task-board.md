@@ -113,7 +113,7 @@ took 2.80 times Rust for deque, 1.03 for heap, 2.02 for sorted map and
 diagnostics on both backends. Hosted platform checks are in progress.
 See `2026-11-17-ordered-collections.md`.
 
-## Collections, text, and numbers (steps 1 and 2 of 3 complete)
+## Collections, text, and numbers (three steps implemented)
 
 - Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
   survey. The plan is
@@ -124,18 +124,23 @@ See `2026-11-17-ordered-collections.md`.
 - Verification: runtime and compiler library tests, fixtures recorded on
   both backends, `check_doc_examples.py`, and the extension grammar tests.
 - Step 2 adds BigInt, Decimal and Complex (ADR-0113). All six measured
-  workloads beat Python and took at most 1.46 times Rust’s time. Tests
+  workloads in the 21-run feature comparison beat Python and took at most
+  1.46 times Rust’s time. In the first integrated Linux run, Fibonacci
+  took 6.779 ms in Aura and 6.455 ms in Python. Tests
   and measurements are in [the numbers work note](2026-11-17-numbers.md).
-  Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
-  the cost of list operations on a class field is removed.
+- Step 3 adds `Deque`, `Heap`, `SortedMap` and `SortedSet` under ADR-0117.
+  The [ordered collections work note](2026-11-17-ordered-collections.md)
+  records the fixtures, storage and four benchmark workloads.
 - The language server suite passes all 158 tests on Linux after updating
   the set completion list and checking its result and argument types.
 - Four cross-language workloads cover integer math, ASCII indexing, set
   union and UTF-16. The compiler and runtime use a scalar integer math entry.
 - The measured ASCII index and UTF-16 round trip now complete ahead of
   Python and within the Rust target. The benchmark notes give the source
-  shape, check totals and measurements. Materialized set union remains
-  under performance investigation.
+  shape, check totals and measurements. Materialized union took 4.493 ms
+  in Aura, 16.457 ms in Rust and 5.699 ms in Python by elapsed time. A
+  process CPU run took 5.451 ms in Aura and 5.150 ms in Python. The
+  first write to a shared union cost 10.7% on the mutation workload.
 
 ## Three compiler defects from the book sections (complete)
 
