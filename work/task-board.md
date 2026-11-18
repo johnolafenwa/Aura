@@ -95,8 +95,8 @@ Last updated: 2026-11-17
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
   The six release workloads took 0.15 to 2.74 times the Rust wall time.
   Measurements and checksums are in `benchmarks/closures/README.md`.
-- Local functions with statement bodies and recursion are in development
-  under ADR-0116. See `2026-11-17-local-functions.md` for verification.
+- Local functions support statement bodies and shared recursion under
+  ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
 ## Ordered collections (verification in progress)
 
