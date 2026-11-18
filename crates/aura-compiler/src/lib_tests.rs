@@ -3571,13 +3571,17 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
+    use std::os::unix::fs::OpenOptionsExt;
+
     let _guard = lock_io_example();
     let temp = TempDir::new("aura-async-file-io");
     let fifo_path = temp.path().join("events.fifo");
     let ready_path = temp.path().join("ready.txt");
+    let connected_path = temp.path().join("reader-connected.txt");
     let fifo_literal = escape_aura_string(&fifo_path.display().to_string());
     let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let read_timeout = crate::hosted_ci_timing_limit(StdDuration::from_secs(2));
+    let connected_literal = escape_aura_string(&connected_path.display().to_string());
+    let watchdog = crate::hosted_ci_timing_limit(StdDuration::from_secs(30));
 
     let status = Command::new("mkfifo")
         .arg(&fifo_path)
@@ -3596,8 +3600,9 @@ def wait_for_text(path: str):
         case Result.Err(err):
             print(err)
 
-def mark_ready(path: str):
-    sleep(20ms)
+def mark_ready(connected: str, path: str):
+    while not fs.exists(connected):
+        sleep(1ms)
     match fs.write_string(path, "ready"):
         case Result.Ok(_):
             pass
@@ -3607,8 +3612,8 @@ def mark_ready(path: str):
 def main() -> int32:
     with TaskGroup() as group:
         reader = group.start(wait_for_text, "{fifo_path}")
-        group.start_soon(mark_ready, "{ready_path}")
-        match reader.result(timeout={read_timeout_ms}ms):
+        group.start_soon(mark_ready, "{connected_path}", "{ready_path}")
+        match reader.result():
             case TaskResult.Ready(_):
                 pass
             case TaskResult.Error(_message):
@@ -3621,33 +3626,38 @@ def main() -> int32:
 "#,
         fifo_path = fifo_literal,
         ready_path = ready_literal,
-        read_timeout_ms = read_timeout.as_millis()
+        connected_path = connected_literal
     );
 
-    let writer_path = fifo_path.clone();
-    let writer = thread::spawn(move || {
-        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(500)));
-        let mut fifo = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(writer_path)
-            .expect("fifo writer should open the fifo");
-        fifo.write_all(b"ping").expect("fifo writer should succeed");
-    });
-
     let handle = thread::spawn(move || run_source(&source));
-    let ready_deadline =
-        Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_millis(350));
-    let mut ready_seen = false;
-    while Instant::now() < ready_deadline {
-        if ready_path.exists() {
-            ready_seen = true;
-            break;
+    // A write-only FIFO open succeeds only once a reader is waiting. Keep
+    // the writer open and empty while the other Aura task marks its progress.
+    let connect_deadline = Instant::now() + watchdog;
+    let mut writer = loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo_path)
+        {
+            Ok(writer) => break writer,
+            Err(error)
+                if error.raw_os_error() == Some(libc::ENXIO)
+                    && !handle.is_finished()
+                    && Instant::now() < connect_deadline =>
+            {
+                thread::sleep(StdDuration::from_millis(5));
+            }
+            Err(error) => panic!("the Aura reader should open the FIFO: {error}"),
         }
+    };
+    fs::write(connected_path, "connected").expect("signal the waiting Aura task");
+    let ready_deadline = Instant::now() + watchdog;
+    while !ready_path.exists() && Instant::now() < ready_deadline {
         thread::sleep(StdDuration::from_millis(5));
     }
-
-    writer.join().expect("fifo writer thread should join");
+    let ready_seen = ready_path.exists();
+    writer.write_all(b"ping").expect("release the FIFO reader");
+    drop(writer);
     let output = handle
         .join()
         .expect("async file I/O runtime thread should join")
