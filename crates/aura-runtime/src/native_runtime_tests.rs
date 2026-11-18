@@ -42,6 +42,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
+/// A call depth that takes several doublings of the frame stack to reach.
+const DEEP_CALLS: usize = 256;
+
+/// Makes the machine stack look used up to the frame stack's next check,
+/// until the guard drops.
+fn exhausted_machine_stack() -> crate::runtime_value::ThreadStackBounds {
+    crate::runtime_value::enter_stack_floor_for_test(usize::MAX / 2)
+}
+
 fn string_value(text: &str) -> *mut OpaqueValue {
     super::aura_direct_string_literal(text.as_ptr(), text.len())
 }
@@ -56,6 +65,269 @@ fn float_value(value: f64) -> *mut OpaqueValue {
 
 fn bool_value(value: bool) -> *mut OpaqueValue {
     super::aura_direct_box_bool(i64::from(value))
+}
+
+#[test]
+fn recovered_formatted_assertion_keeps_each_calls_message() {
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(2, 1, b"values.au", b"validate");
+        let make = |message: &str| unsafe {
+            let text = boxed_value(Value::string(message.to_string()));
+            let result = super::aura_direct_recover_formatted_assertion(descriptor, text, 3, 5, 0);
+            super::aura_direct_release_value(text);
+            result
+        };
+        let first = make("negative -7");
+        let second = make("negative -8");
+        for (result, expected) in [(first, "negative -7"), (second, "negative -8")] {
+            let payload = super::aura_direct_variant_take_payload(result, 0);
+            unsafe {
+                super::aura_direct_release_value(result);
+                super::with_value(payload, |value| {
+                    let Value::Instance(trap) = value else {
+                        panic!("trap instance");
+                    };
+                    assert_eq!(
+                        trap.fields.get("message").unwrap().as_ref(),
+                        &Value::string(expected)
+                    );
+                    assert_eq!(
+                        trap.fields.get("path").unwrap().as_ref(),
+                        &Value::string("values.au")
+                    );
+                });
+                super::aura_direct_release_value(payload);
+            }
+        }
+    });
+}
+
+#[test]
+fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
+    // Program teardown clears its frozen values; isolate it from other
+    // runtime tests which initialize independent programs.
+    const HELPER: &str = "recovered_scalar_shared_result";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("native_runtime::tests::recovered_scalar_assertion_shares_its_result_and_copies_the_trap")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(4, 1, b"validate.au", b"validate");
+        static CELL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let message = b"invalid cost";
+        let address = descriptor as usize;
+        let start = std::sync::Barrier::new(2);
+        let read = || {
+            start.wait();
+            unsafe {
+                super::aura_direct_recover_assertion_cell(
+                    &CELL,
+                    address as *const _,
+                    message.as_ptr(),
+                    message.len(),
+                    8,
+                    5,
+                    0,
+                ) as usize
+            }
+        };
+        let (left, right) = std::thread::scope(|scope| {
+            let first = scope.spawn(read);
+            let second = scope.spawn(read);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_eq!(left, right);
+        let result = left as *mut OpaqueValue;
+        assert!(super::direct_value_is_frozen(result));
+        unsafe {
+            super::with_value(result, |value| {
+                let Value::EnumVariant(variant) = value else {
+                    panic!("result variant");
+                };
+                assert_eq!(variant.variant_name, "Err");
+                let payload = variant.payloads.get(0).unwrap();
+                let Value::Instance(trap) = payload.as_ref() else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("code").unwrap().as_ref(),
+                    &Value::string("AU4001")
+                );
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+                assert_eq!(
+                    trap.fields.get("path").unwrap().as_ref(),
+                    &Value::string("validate.au")
+                );
+                let fields = trap.fields.map();
+                assert!(
+                    matches!(&fields["frames"], Value::Vec(frames) if frames.elements.to_vec() == [Value::string("validate at 4:1")])
+                );
+            });
+        }
+        let first = super::aura_direct_variant_take_payload(result, 0);
+        let second = super::aura_direct_variant_payload(result, 0);
+        unsafe {
+            super::value_mut(first, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                trap.fields
+                    .insert("message", Value::string("changed"))
+                    .unwrap();
+            });
+            super::with_value(second, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+            });
+            super::aura_direct_release_value(first);
+            super::aura_direct_release_value(second);
+            super::aura_direct_release_value(result);
+        }
+        super::clear_direct_module_constants();
+        assert_eq!(CELL.load(std::sync::atomic::Ordering::Acquire), 0);
+    });
+}
+
+// Exercise the portable recovery ABI used when the backend cannot emit an
+// in-place jump buffer. Each argument buffer owns one reference per handle.
+fn call_recovered_thunk(thunk: super::NativeThunk, args: &[*mut OpaqueValue]) -> Value {
+    let count = args.len() as i64;
+    let buffer = super::aura_direct_arg_buffer_new(count);
+    for (index, arg) in args.iter().enumerate() {
+        super::aura_direct_arg_buffer_store(buffer, index as i64, *arg as i64);
+    }
+    unsafe {
+        let result = super::aura_direct_start_task_call(
+            thunk as usize as i64,
+            buffer,
+            count,
+            super::DIRECT_START_RECOVERS,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        );
+        super::consume_value(result)
+    }
+}
+
+#[test]
+fn recovered_thunk_restores_the_caller_and_releases_arguments_on_success_and_trap() {
+    unsafe extern "C-unwind" fn trap(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::yield_now_with_runtime_scheduler();
+        super::aura_direct_assert_fail(0, 14, 5, 0)
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let argument = int_value(29);
+            let expected = unsafe { value_ref(argument) };
+            let ok = || crate::runtime_value::result_ok(expected.clone());
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+
+            let Value::EnumVariant(error) = call_recovered_thunk(trap, &[argument]) else {
+                panic!("expected Result.Err");
+            };
+            assert_eq!(error.variant_name, "Err");
+            let payload = error.payloads.get(0).unwrap();
+            let Value::Instance(trap) = payload.as_ref() else {
+                panic!("expected control.Trap");
+            };
+            let fields = trap.fields.map();
+            assert_eq!(fields["code"], Value::string("AU4001"));
+            assert_eq!(fields["message"], Value::string("assertion failed"));
+            assert_eq!(fields["line"], Value::Int(IntegerValue::from_i64(14)));
+            assert_eq!(fields["column"], Value::Int(IntegerValue::from_i64(5)));
+
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+            assert_eq!(unsafe { &*argument }.ref_count.load(Ordering::Acquire), 1);
+            unsafe { release_value(argument) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn recovered_thunk_propagates_cancellation_through_an_outer_recovered_call() {
+    unsafe extern "C-unwind" fn cancel(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::cancel_current_lightweight_task_boundary()
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        let task = spawn_lightweight_task(|| {
+            // Cancellation must cross the in-place caller without jumping to its
+            // trap handler. The buffer remains live until this task exits.
+            let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+            unsafe { super::aura_direct_recover_begin(outer.as_mut_ptr(), 1) };
+            call_recovered_thunk(cancel, &[]);
+            panic!("a cancelled recovered call returned");
+        })?;
+        let status = task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(2)), None)
+            .unwrap();
+        assert!(matches!(status, TaskWaitStatus::Cancelled), "{status:?}");
+        Ok(Value::Unit)
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn recovered_calls_move_owned_values_across_nested_boundaries() {
+    super::with_direct_task_runtime_scope(|| {
+        let argument = super::boxed_value(Value::string("owned argument"));
+        let count =
+            || super::with_direct_task_runtime_state(|state| state.owned_values().count(argument));
+        assert_eq!(count(), 1);
+        let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        let mut inner = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        // Both calls finish normally, so neither jump buffer is resumed.
+        unsafe {
+            assert_eq!(super::aura_direct_recover_begin(outer.as_mut_ptr(), 41), 41);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_begin(inner.as_mut_ptr(), 42), 42);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            super::aura_direct_recover_adopt(std::ptr::null_mut());
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            super::aura_direct_release_value(argument);
+        }
+        assert!(super::with_direct_task_runtime_state(|state| state
+            .owned_values()
+            .is_empty()));
+    });
 }
 
 #[test]
@@ -12146,9 +12418,11 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
                 }
             }
             "direct-call-depth" => unsafe {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
                 }
+                let _exhausted = exhausted_machine_stack();
+                super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
             },
             _ => {}
         }
@@ -12162,7 +12436,7 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
         ),
         (
             "direct-call-depth",
-            "maximum call depth of 256 exceeded while calling `recurse`",
+            "call stack exhausted while calling `recurse`",
         ),
     ] {
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -16291,7 +16565,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
                         }
                         let _ = task_release.recv_with_cancellation(None, None);
                         assert_eq!(
-                            super::direct_runtime_call_frames(),
+                            super::direct_runtime_call_frames().0,
                             vec![RuntimeCallFrame {
                                 function,
                                 span: runtime_source_span(&path, index + 1, 1),
@@ -16402,7 +16676,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                                 stack,
                                 "a task keeps one frame stack across yields"
                             );
-                            let frames = super::direct_runtime_call_frames();
+                            let frames = super::direct_runtime_call_frames().0;
                             assert_eq!(frames.len(), level + 1);
                             for (offset, frame) in frames.iter().enumerate() {
                                 let expected = level - offset;
@@ -16424,7 +16698,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                         for remaining in (0..descriptors.len()).rev() {
                             unsafe { generated_exit(stack) };
                             super::aura_direct_yield_now();
-                            assert_eq!(super::direct_runtime_call_frames().len(), remaining);
+                            assert_eq!(super::direct_runtime_call_frames().0.len(), remaining);
                         }
                         Value::Unit
                     }))
@@ -16498,7 +16772,7 @@ fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
             super::aura_direct_take_returned_view_projection(projection.as_ptr(), projection.len());
         assert_eq!(selected, 0);
         unsafe { super::aura_direct_exit_call() };
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
         assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
 
@@ -16608,7 +16882,7 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("call-frame probe should complete");
@@ -16889,7 +17163,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             0,
             "entering a descriptor frame must not materialize diagnostics"
         );
-        let frames = super::direct_runtime_call_frames();
+        let frames = super::direct_runtime_call_frames().0;
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].function, "helper");
         assert_eq!(frames[0].span.path.as_deref(), Some("/workspace/main.au"));
@@ -16899,7 +17173,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("descriptor frame probe should complete");
@@ -17001,24 +17275,28 @@ fn native_runtime_frame_descriptor_depth_limit_names_the_function() {
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_frame(address as *const _);
                     }
+                }
+                let _exhausted = exhausted_machine_stack();
+                unsafe {
+                    super::aura_direct_enter_frame(address as *const _);
                 }
                 Value::Unit
             }))
         })
     })
-    .expect_err("the call past the depth limit should trap");
+    .expect_err("the call that finds the stack exhausted should trap");
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(7, 3)));
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
+    assert_eq!(diagnostic.omitted_call_frames, None);
     assert_eq!(diagnostic.call_frames[0].function, "recurse");
 }
 
@@ -17086,7 +17364,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
     let diagnostic = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for index in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for index in 0..DEEP_CALLS {
                     let function: &'static str =
                         Box::leak(format!("accepted_{index}").into_boxed_str());
                     unsafe {
@@ -17101,6 +17379,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
                     }
                 }
                 let attempted = b"rejected";
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call_with_frame(
                         400,
@@ -17117,7 +17396,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
         })
     })
     .expect_err("the rejected call should fail at the scheduler boundary");
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
     assert_eq!(
         diagnostic
             .call_frames
@@ -19829,7 +20108,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_call(1, 1, b"recurse".as_ptr(), b"recurse".len());
                     }
@@ -19845,6 +20124,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
                     cleanup_args,
                     1,
                 );
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call(2, 1, b"rejected".as_ptr(), b"rejected".len());
                 }
@@ -19853,20 +20133,20 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
             }))
         })
     })
-    .expect_err("the saturated call chain should fail at the task boundary");
+    .expect_err("the exhausted call chain should fail at the task boundary");
     assert_eq!(
         diagnostic.message,
-        "maximum call depth of 256 exceeded while calling `rejected`"
+        "call stack exhausted while calling `rejected`"
     );
     assert_eq!(
         unsafe { value_ref(witness) },
-        Value::String("cleanup skipped".to_string().into()),
-        "a cleanup registered at the saturated depth must not enter its callback"
+        Value::String("cleanup invoked".to_string().into()),
+        "a cleanup registered where the stack ran out still runs, in the reserve the trap kept"
     );
     assert_eq!(
         unsafe { &*witness }.ref_count.load(Ordering::SeqCst),
         1,
-        "skipping the callback must still release its retained argument snapshot"
+        "the callback must release its retained argument snapshot"
     );
     unsafe {
         release_value(witness);
@@ -20907,13 +21187,13 @@ fn native_runtime_discarded_frame_state_is_absent_when_the_same_task_key_is_reus
                 b"old_child".len(),
             );
         }
-        assert_eq!(super::direct_runtime_call_frames().len(), 1);
+        assert_eq!(super::direct_runtime_call_frames().0.len(), 1);
         assert_eq!(super::direct_runtime_task_ancestry().len(), 1);
 
         super::discard_current_direct_task_runtime_state();
         super::with_direct_task_runtime_scope(|| {
             assert!(
-                super::direct_runtime_call_frames().is_empty(),
+                super::direct_runtime_call_frames().0.is_empty(),
                 "a reused task identity must start with no retired call frames"
             );
             assert!(
@@ -22957,7 +23237,7 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     // SAFETY: the test owns the stack until it frees it below.
     let storage = unsafe { &mut *stack.as_ptr() };
     assert!(!storage.pop_call());
-    assert!(storage.materialize_innermost_first().is_empty());
+    assert!(storage.materialize_innermost_first().0.is_empty());
     for index in 0..3 {
         storage.push_owned(Box::new(DirectRuntimeCallFrame {
             function: DirectFrameText::shared(format!("frame{index}")),
@@ -22965,14 +23245,17 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
         }));
     }
     assert_eq!(storage.len(), 3);
-    let innermost_first = storage.materialize_innermost_first();
+    let innermost_first = storage.materialize_innermost_first().0;
     assert_eq!(innermost_first[0].function, "frame2");
     assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
     assert!(storage.pop_call());
-    assert_eq!(storage.materialize_innermost_first()[0].function, "frame1");
+    assert_eq!(
+        storage.materialize_innermost_first().0[0].function,
+        "frame1"
+    );
     assert!(storage.pop_call());
     assert_eq!(storage.len(), 1);
-    assert_eq!(storage.materialize_innermost_first().len(), 1);
+    assert_eq!(storage.materialize_innermost_first().0.len(), 1);
     assert!(storage.pop_call());
     assert!(!storage.pop_call());
     // SAFETY: nothing uses the stack after this.
@@ -23762,19 +24045,30 @@ fn direct_call_depth_overflow_reports_the_call_site_and_uses_the_program_path() 
     let source = "def main() -> int32:\n    return 0\n";
     super::aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
     let diagnostic = capture_direct_boundary_diagnostic(|| unsafe {
-        for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+        for _ in 0..1_000 {
             super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
         }
+        let _exhausted = exhausted_machine_stack();
+        super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
     });
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
+    assert_eq!(diagnostic.code, "AU4005");
     assert_eq!(diagnostic.span, Some(Span::new(2, 3)));
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    // A chain this deep keeps its two ends and counts the calls between.
+    assert_eq!(
+        diagnostic.call_frames.len(),
+        2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+    );
+    assert_eq!(
+        diagnostic.omitted_call_frames,
+        Some((
+            super::frame_stack::DIRECT_TRACE_FRAMES_PER_END,
+            1_000 - 2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+        ))
+    );
 }
 
 #[test]

@@ -1,0 +1,5 @@
+error[AU2004]: `control.recover` takes no type arguments; its result type comes from the function it runs
+ --> crates/aura-compiler/tests/fixtures/check-fail/control_recover_type_args.au:7:17
+  |
+7 |     _ = control.recover[int64](identity, 3)
+  |                 ^

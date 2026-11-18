@@ -585,6 +585,8 @@ whose shallow stack use you have measured. It is not the default.
 | `metrics.increment` | `(name: str, value: int64) -> None` |
 | `metrics.get` | `(name: str) -> int64` |
 | `metrics.reset` | `() -> None` |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | `code`, `message`, `path`, `line`, `column`, `frames` and `describe()`. See [Recovering From Traps](/manual/failure-recovery). |
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters. A missing name reads as zero.

@@ -1,0 +1,5 @@
+error[AU2004]: `control.recover` expects a function followed by its arguments
+ --> crates/aura-compiler/tests/fixtures/check-fail/control_recover_missing_target.au:4:17
+  |
+4 |     _ = control.recover()
+  |                 ^

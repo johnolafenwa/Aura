@@ -433,28 +433,32 @@ fn traces_stay_exact_when_tasks_switch_in_the_middle_of_recursion() {
     let _ = fs::remove_file(&path);
 }
 
-/// The MIR interpreter runs out of task stack before this depth, with
-/// `AU4005`, so only the direct backend reaches the depth limit here.
+/// A task's calls are bounded by its own stack: the task that never stops
+/// descending fails alone, with a chain that names only its own calls.
 #[test]
-fn the_direct_depth_limit_counts_each_task_alone_while_tasks_switch() {
+fn a_task_exhausts_its_own_stack_while_tasks_switch() {
     let source = "def left(depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return depth\n    return right(depth + 1, target)\n\ndef right(depth: int64, target: int64) -> int64:\n    yield_now()\n    if depth == target:\n        return depth\n    return left(depth + 1, target)\n\ndef dive(depth: int64) -> int64:\n    yield_now()\n    return dive(depth + 1)\n\ndef main() -> int32:\n    with TaskGroup() as group:\n        for index in range(40):\n            group.start_soon(left, 1, 100 + index)\n        group.start_soon(dive, 1)\n    return 0\n";
     let path = write_source("task-switch-depth", source);
     let report = run_json_path(&path, "direct");
     let diagnostic = &report["diagnostics"][0];
-    assert_eq!(diagnostic["code"], "AU4001", "{diagnostic}");
+    assert_eq!(diagnostic["code"], "AU4005", "{diagnostic}");
     assert_eq!(
         diagnostic["message"],
-        "maximum call depth of 256 exceeded while calling `dive`"
+        "call stack exhausted while calling `dive`"
     );
     let frames = diagnostic["call_frames"]
         .as_array()
         .expect("call frames should be an array");
     assert_eq!(frames.len(), 256, "{diagnostic}");
+    assert!(
+        diagnostic["call_frames_omitted"].as_u64().unwrap_or(0) > 0,
+        "a chain deeper than it keeps counts the calls it left out: {diagnostic}"
+    );
     for frame in frames {
         assert_eq!(
             frame,
             &serde_json::json!({"function": "dive", "span": point_span(&path, 13, 1)}),
-            "the other tasks' calls must not count toward this task's depth"
+            "the other tasks' calls must not appear in this task's chain"
         );
     }
     assert_eq!(

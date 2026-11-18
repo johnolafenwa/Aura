@@ -1,0 +1,18 @@
+enter caller
+enter work
+exit work
+inner trap
+enter work
+exit work
+value 3
+enter work
+exit work
+inner trap
+enter work
+exit work
+value 6
+enter work
+exit work
+named AU4001
+exit caller
+done

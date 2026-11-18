@@ -29,6 +29,86 @@ use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
 #[test]
+fn recover_emits_checked_messages_and_general_call_boundaries() {
+    let source = include_str!("../tests/fixtures/run-pass/control_recover_call_chains.au");
+    let mir = lower_source_to_mir(source).expect("the recovery calls should lower");
+    let object = emit_unoptimized_object(&mir).expect("the recovery calls should emit");
+    let symbols = exact_referenced_symbols(&object);
+
+    for required in [
+        "aura_direct_recover_assertion_cell",
+        "aura_direct_recover_formatted_assertion",
+    ] {
+        assert!(symbols.contains(required), "missing {required}");
+    }
+    if cfg!(unix) {
+        // The intervening ordinary calls need a general recovery boundary.
+        for required in [
+            "aura_direct_recover_begin",
+            "aura_direct_recover_end",
+            "aura_direct_recover_trapped",
+        ] {
+            assert!(symbols.contains(required), "missing {required}");
+        }
+    }
+}
+
+#[test]
+fn recovered_scalar_bodies_require_total_work_outside_a_failed_check() {
+    let source = r#"
+def check(x: int64) -> int64:
+    assert x >= 0, "negative"
+    return x
+
+def formatted(x: int64) -> int64:
+    assert x >= 0, f"bad {x}"
+    return x
+
+def scalar_to_string(x: int64) -> int64:
+    assert x >= 0, str(x)
+    return x
+
+def trapping_format(x: int64) -> int64:
+    assert x != 0, f"ratio {10 // x}"
+    return x
+
+def divide(x: int64) -> int64:
+    return 12 // x
+
+def effect(x: int64) -> int64:
+    print(x)
+    return x
+
+def loop_bound(x: int64) -> int64:
+    mut found = 0
+    for i in range(x):
+        found = i
+    return found
+"#;
+    let module = lower_source_to_mir(source).expect("validation functions lower");
+    for (name, eligible) in [
+        ("check", true),
+        ("formatted", true),
+        ("scalar_to_string", true),
+        ("trapping_format", false),
+        ("divide", false),
+        ("effect", false),
+        ("loop_bound", false),
+    ] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        assert_eq!(
+            super::checked_scalar_leaf(function, &HashMap::new()),
+            eligible,
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
     use super::{direct_view_maps_equivalent, DirectViewAlternative};
     let a = DirectViewAlternative {
@@ -2489,6 +2569,7 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
                 instructions: vec![Instruction::Assign {
                     target: "dead_task".to_string(),
                     value: Rvalue::StartTask {
+                        recover: false,
                         returns_handle: false,
                         result_is_copy: true,
                         stack_size: None,
@@ -9070,6 +9151,7 @@ def main() -> int32:
             Instruction::Assign {
                 target: "test_task".to_string(),
                 value: Rvalue::StartTask {
+                    recover: false,
                     returns_handle: true,
                     result_is_copy: true,
                     stack_size: None,
@@ -9151,6 +9233,7 @@ def main() -> int32:
     borrowed_main_mut.blocks[0].instructions[1] = Instruction::Assign {
         target: "test_task".to_string(),
         value: Rvalue::StartTask {
+            recover: false,
             returns_handle: true,
             result_is_copy: true,
             stack_size: None,
@@ -9226,6 +9309,7 @@ def main() -> int32:
         invalid_main.blocks[0].instructions[1] = Instruction::Assign {
             target: "test_task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -11246,6 +11330,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         .expect("MovePlace should remain valid for a consuming assignment");
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::MovePlace("stack_bytes".to_string())),
@@ -11262,6 +11347,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
@@ -11278,6 +11364,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),

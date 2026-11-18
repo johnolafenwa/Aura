@@ -516,6 +516,56 @@ def main() -> int32:
 }
 
 #[test]
+fn recover_analysis_reports_its_signature_and_the_selected_targets_result() {
+    let members = complete_source(
+        "import control\n\ndef main():\n    control.\n",
+        3,
+        12,
+        Some('.'),
+    )
+    .expect("control module completion");
+    let recover = members
+        .iter()
+        .find(|entry| entry.name == "recover")
+        .expect("recover completion");
+    assert_eq!(
+        recover.detail,
+        "recover(function, arguments...) -> Result[T, control.Trap]"
+    );
+
+    let analysis = analyze_source(
+        r#"import control
+type Work = TaskCallable[def() -> int64]
+def named() -> bool:
+    return true
+def main():
+    flag = control.recover(named)
+    number = control.recover(Work(lambda: 7))
+    print(flag)
+    print(number)
+"#,
+    );
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    for expected in [
+        "function recover(function, arguments...) -> Result[T, control.Trap]",
+        "binding flag: Result[bool, control.Trap]",
+        "binding number: Result[int64, control.Trap]",
+    ] {
+        assert!(
+            analysis
+                .occurrences
+                .iter()
+                .any(|item| item.hover.contains(expected)),
+            "missing hover for {expected}"
+        );
+    }
+}
+
+#[test]
 fn math_analysis_completes_and_hovers_the_exact_public_surface() {
     let member_source = "import math\n\ndef main():\n    math.\n";
     let completions = complete_source(member_source, 3, 9, Some('.'))

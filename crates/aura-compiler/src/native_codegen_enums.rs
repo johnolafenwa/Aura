@@ -322,17 +322,45 @@ impl FunctionCompiler<'_> {
         variant_name: &str,
         payloads: &[Operand],
     ) -> std::result::Result<Option<ValueRef>, String> {
+        self.construct_variant_in_place_with(
+            ty,
+            variant_name,
+            payloads.len(),
+            |this, index, direct| this.load_operand_for_target(&payloads[index], direct),
+        )
+    }
+
+    /// As `construct_variant_in_place`, with payloads that are already
+    /// values of this function.
+    pub(super) fn construct_variant_in_place_from_values(
+        &mut self,
+        ty: &Type,
+        variant_name: &str,
+        payloads: &[ValueRef],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        self.construct_variant_in_place_with(ty, variant_name, payloads.len(), |_, index, _| {
+            Ok(payloads[index].clone())
+        })
+    }
+
+    fn construct_variant_in_place_with(
+        &mut self,
+        ty: &Type,
+        variant_name: &str,
+        payload_count: usize,
+        mut payload: impl FnMut(&mut Self, usize, &DirectType) -> std::result::Result<ValueRef, String>,
+    ) -> std::result::Result<Option<ValueRef>, String> {
         let Some(record) = self.enum_record_of(&DirectType::Opaque(ty.clone()))? else {
             return Ok(None);
         };
         let Some(variant) = record.variant_index(variant_name) else {
             return Ok(None);
         };
-        if record.payload_count(variant) != payloads.len() {
+        if record.payload_count(variant) != payload_count {
             return Ok(None);
         }
-        let mut slots = Vec::with_capacity(payloads.len());
-        for index in 0..payloads.len() {
+        let mut slots = Vec::with_capacity(payload_count);
+        for index in 0..payload_count {
             let payload_ty = record.payload_type(variant, index).clone();
             let direct =
                 direct_type(&payload_ty, &self.classes).unwrap_or(DirectType::Opaque(payload_ty));
@@ -352,8 +380,8 @@ impl FunctionCompiler<'_> {
         let object = built.values[0];
         // A new variant is confined and keeps its payloads in place.
         let block = self.class_block(object);
-        for (payload, (direct, slot)) in payloads.iter().zip(slots) {
-            let loaded = self.load_operand_for_target(payload, &direct)?;
+        for (index, (direct, slot)) in slots.into_iter().enumerate() {
+            let loaded = payload(self, index, &direct)?;
             let loaded = self.coerce_value(loaded, &direct)?;
             match slot.kind {
                 SlotKind::Leaves(leaves) => {

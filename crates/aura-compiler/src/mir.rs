@@ -244,6 +244,18 @@ fn reduction_element_type(ty: &Type) -> Option<Type> {
     }
 }
 
+/// One task start as written: `group.start(target, args...)` and its
+/// variants, or `control.recover(target, args...)`, which has no group.
+struct TaskStartCall<'a> {
+    group: Option<&'a Expr>,
+    stack_size: Option<&'a Expr>,
+    target: &'a Expr,
+    target_args: &'a [Argument],
+    returns_handle: bool,
+    callee_span: crate::diag::Span,
+    span: crate::diag::Span,
+}
+
 fn grouped_specialization(callee: &Expr) -> Option<&Expr> {
     let ExprKind::Group(inner) = &callee.kind else {
         return None;
@@ -1203,6 +1215,12 @@ pub enum Rvalue {
         from: Option<String>,
     },
     StartTask {
+        /// True for `control.recover` (ADR-0104): the function runs to its
+        /// end before this instruction completes, and the value is a
+        /// `Result` that holds its return value or the parts of its trap.
+        /// `task_group` is unit and no task is started.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        recover: bool,
         returns_handle: bool,
         result_is_copy: bool,
         stack_size: Option<Operand>,
@@ -22673,6 +22691,85 @@ impl<'a> Lowerer<'a> {
     /// and scheduler operations used by handwritten Aura code. The runtime
     /// adapters here validate only the host timer boundary and checked
     /// backoff doubling; callbacks never cross a second host ABI.
+    /// Lowers a task start, or a `control.recover` call when the call has
+    /// no group, into `result`.
+    fn lower_task_start(&mut self, call: TaskStartCall<'_>, result: &str) {
+        let target = self
+            .resolve_task_start_target(call.target)
+            .expect("task-group start should lower from a supported callable target");
+        let target = self.specialize_task_start_target(target, call.target_args, call.callee_span);
+        let function_type = target.function_type();
+        let function = match target.function_name.as_ref() {
+            Some(name) => Operand::Function {
+                name: name.clone(),
+                signature: Box::new(function_type.clone()),
+            },
+            None => {
+                // A factory-produced or otherwise stored task
+                // target already carries TaskCallable storage and
+                // its Transfer proof. Preserve that representation
+                // until StartTask consumes it; the thin function
+                // contract is only a contextual type for a lambda
+                // or thin function value.
+                let source_expected = match self.infer_expr_type(call.target) {
+                    Some(actual @ Type::Callable(_)) => actual,
+                    _ => function_type,
+                };
+                self.lower_expr_at_sequence_point(call.target, Some(&source_expected))
+            }
+        };
+        let group = match call.group {
+            Some(group) => self.lower_expr_at_sequence_point(group, None),
+            None => Operand::Unit,
+        };
+        let stack_size = call.stack_size.map(|stack_size| {
+            self.lower_expr_at_sequence_point(stack_size, Some(&Type::named("int64")))
+        });
+        // A task capture outlives this call expression. Copy values are
+        // snapshotted and non-copy values are transferred into the task,
+        // regardless of whether the eventual target parameter is a shared
+        // borrow or an owning parameter.
+        let capture_contracts = target
+            .param_contracts
+            .iter()
+            .cloned()
+            .map(|mut param| {
+                param.passing = ReceiverKind::Value;
+                param
+            })
+            .collect::<Vec<_>>();
+        let lowered_args =
+            self.lower_function_value_args(call.target_args, &capture_contracts, call.callee_span);
+        self.emit(Instruction::Assign {
+            target: result.to_owned(),
+            value: Rvalue::StartTask {
+                recover: call.group.is_none(),
+                returns_handle: call.returns_handle,
+                result_is_copy: type_is_copy_in_program(&target.return_type, self.program),
+                stack_size,
+                task_group: group,
+                function,
+                args: lowered_args,
+                span: call.span,
+            },
+        });
+    }
+
+    /// Which half of a `control.recover` call `callee` names, with the
+    /// expression that names the module.
+    fn control_recover_callee<'e>(&self, callee: &'e Expr) -> Option<(&'e Expr, bool)> {
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        let raw = match field.as_str() {
+            crate::sema::recover::RECOVER => false,
+            crate::sema::recover::RECOVER_RAW => true,
+            _ => return None,
+        };
+        (self.infer_module_path(object).as_deref() == Some(crate::sema::recover::MODULE))
+            .then_some((&**object, raw))
+    }
+
     fn lower_control_retry_call(
         &mut self,
         expr: &Expr,
@@ -25741,6 +25838,25 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_type_param_associated_call(expr, callee, args) {
             return value;
         }
+        if self.control_recover_callee(callee).is_some() {
+            // The runtime builds the whole `Result[T, control.Trap]`, so
+            // the call is one instruction. Its type is the type of the two
+            // calls the checker read it as (see `sema::recover`).
+            let temp = self.new_temp_for_expr(expr);
+            self.lower_task_start(
+                TaskStartCall {
+                    group: None,
+                    stack_size: None,
+                    target: &args[0].value,
+                    target_args: &args[1..],
+                    returns_handle: true,
+                    callee_span: callee.span,
+                    span: expr.span,
+                },
+                &temp,
+            );
+            return Operand::Place(temp);
+        }
         let temp = expected
             .cloned()
             .map(|ty| self.new_typed_temp(ty))
@@ -26523,80 +26639,18 @@ impl<'a> Lowerer<'a> {
                 ) {
                     let has_stack_override =
                         matches!(field.as_str(), "start_with_stack" | "start_soon_with_stack");
-                    let target_index = usize::from(has_stack_override);
-                    let first_target_arg = target_index + 1;
-                    let target = self
-                        .resolve_task_start_target(&args[target_index].value)
-                        .expect("task-group start should lower from a supported callable target");
-                    let target = self.specialize_task_start_target(
-                        target,
-                        &args[first_target_arg..],
-                        callee.span,
-                    );
-                    let function_type = target.function_type();
-                    let function = match target.function_name.as_ref() {
-                        Some(name) => Operand::Function {
-                            name: name.clone(),
-                            signature: Box::new(function_type.clone()),
-                        },
-                        None => {
-                            // A factory-produced or otherwise stored task
-                            // target already carries TaskCallable storage and
-                            // its Transfer proof. Preserve that representation
-                            // until StartTask consumes it; the thin function
-                            // contract is only a contextual type for a lambda
-                            // or thin function value.
-                            let source_expected =
-                                match self.infer_expr_type(&args[target_index].value) {
-                                    Some(actual @ Type::Callable(_)) => actual,
-                                    _ => function_type,
-                                };
-                            self.lower_expr_at_sequence_point(
-                                &args[target_index].value,
-                                Some(&source_expected),
-                            )
-                        }
-                    };
-                    let group = self.lower_expr_at_sequence_point(object, None);
-                    let stack_size = has_stack_override.then(|| {
-                        self.lower_expr_at_sequence_point(
-                            &args[0].value,
-                            Some(&Type::named("int64")),
-                        )
-                    });
-                    // A task capture outlives this call expression. Copy values are
-                    // snapshotted and non-copy values are transferred into the task,
-                    // regardless of whether the eventual target parameter is a shared
-                    // borrow or an owning parameter.
-                    let capture_contracts = target
-                        .param_contracts
-                        .iter()
-                        .cloned()
-                        .map(|mut param| {
-                            param.passing = ReceiverKind::Value;
-                            param
-                        })
-                        .collect::<Vec<_>>();
-                    let lowered_args = self.lower_function_value_args(
-                        &args[first_target_arg..],
-                        &capture_contracts,
-                        callee.span,
-                    );
-                    self.emit(Instruction::Assign {
-                        target: temp.clone(),
-                        value: Rvalue::StartTask {
+                    self.lower_task_start(
+                        TaskStartCall {
+                            group: Some(object),
+                            stack_size: has_stack_override.then(|| &args[0].value),
+                            target: &args[usize::from(has_stack_override)].value,
+                            target_args: &args[usize::from(has_stack_override) + 1..],
                             returns_handle: matches!(field.as_str(), "start" | "start_with_stack"),
-                            result_is_copy: type_is_copy_in_program(
-                                &target.return_type,
-                                self.program,
-                            ),
-                            stack_size,
-                            task_group: group,
-                            function,
-                            args: lowered_args,
+                            callee_span: callee.span,
                             span: expr.span,
                         },
-                    });
+                        &temp,
+                    );
                     return Operand::Place(temp);
                 }
 
@@ -29000,6 +29054,21 @@ impl<'a> Lowerer<'a> {
             }
             if let Some(ty) = self.type_param_associated_call_type(expr) {
                 return Some(ty);
+            }
+            match self.control_recover_callee(callee) {
+                Some((module, false)) => {
+                    return self.infer_expr_type(&crate::sema::recover::desugar_recover_call(
+                        module, args, expr.span,
+                    ));
+                }
+                Some((_, true)) => {
+                    let (target, target_args) = args.split_first()?;
+                    let target = self.resolve_task_start_target(&target.value)?;
+                    let target =
+                        self.specialize_task_start_target(target, target_args, callee.span);
+                    return Some(crate::sema::recover::raw_result_type(target.return_type));
+                }
+                None => {}
             }
             match self.curried_callee_hint(callee, args, None) {
                 Some(Type::Callable(callable)) => return Some(callable.return_type),

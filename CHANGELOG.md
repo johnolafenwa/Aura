@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- `control.recover(function, arguments...)` returns the function's value in
+  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
+  current task and cleans up its own scopes on failure.
+- Recursive calls can continue past 256 frames. A call that exhausts the
+  available stack traps with AU4005. Deep diagnostics record how many
+  intervening calls were omitted.
 - Examples: `examples/packages/raylib` binds the raylib graphics library
   through FFI. A script in the package generates the binding from
   raylib's own API description, and it covers 556 of raylib 6.0's 600

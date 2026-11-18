@@ -887,6 +887,9 @@ fn check_function(
                 | Rvalue::TraitObjectHolds { .. }
                 | Rvalue::TraitObjectTake { .. } => Some(("uses a trait object".to_string(), "")),
                 Rvalue::Try { .. } => Some(("uses `try`".to_string(), "")),
+                Rvalue::StartTask { recover: true, .. } => {
+                    Some(("calls `control.recover`".to_string(), ""))
+                }
                 Rvalue::StartTask { .. } => Some(("starts a task".to_string(), "")),
                 Rvalue::VecLiteral { .. } | Rvalue::SetLiteral { .. } | Rvalue::MapLiteral { .. } => {
                     Some(("builds a collection".to_string(), ""))

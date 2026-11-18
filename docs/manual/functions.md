@@ -557,7 +557,7 @@ def main():
 
 `main` takes no parameters and returns exactly `int32` or `None`. A returned `int32` becomes the requested host exit status. `None` means success. An imported function named `main` stays an ordinary imported function. A file cannot combine a local `main` with executable top-level statements.
 
-[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the 256-call runtime depth limit.
+[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the call depth rule.
 
 ## Grammar
 
@@ -637,7 +637,7 @@ Aura has none of these:
 
 [Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
 
-Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
+Nested calls are limited by the stack they run on ([Call Depth](/manual/failure-recovery#call-depth)). The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 

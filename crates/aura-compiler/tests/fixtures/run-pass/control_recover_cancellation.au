@@ -1,0 +1,57 @@
+import control
+
+
+class LogExit:
+    name: str
+
+    def __enter__(mut self):
+        pass
+
+    def __exit__(mut self):
+        print("exit " + self.name)
+
+
+def attempt() -> Result[int64, str]:
+    print("unexpected attempt")
+    return Ok(41)
+
+
+def wait(ready: Queue[int64], release: Queue[int64]) -> int64:
+    with guard = LogExit("callee"):
+        _ = ready.put(1)
+        _ = release.get(timeout=10s)
+        _ = control.retry(attempt)
+        print("unexpected retry return")
+    return 0
+
+
+def work(ready: Queue[int64], release: Queue[int64], named: bool) -> int64:
+    with guard = LogExit("caller"):
+        if named:
+            _ = control.recover(wait, ready=ready, release=release)
+        else:
+            _ = control.recover(wait, ready, release)
+        print("unexpected recover return")
+    return 0
+
+
+def run_case(named: bool):
+    ready = Queue[int64]()
+    release = Queue[int64]()
+    with group = TaskGroup():
+        task = group.start(work, ready, release, named)
+        match ready.get(timeout=10s):
+            case QueueReceive.Item(_):
+                group.cancel()
+            case _:
+                print("worker not ready")
+        match task.result(timeout=10s):
+            case TaskResult.Cancelled:
+                print("cancelled")
+            case _:
+                print("unexpected task result")
+
+
+def main():
+    run_case(false)
+    run_case(true)

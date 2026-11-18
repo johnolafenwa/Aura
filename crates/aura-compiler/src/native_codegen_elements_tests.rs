@@ -527,6 +527,7 @@ fn a_loan_of_the_lent_field_ends_the_element_loan_where_it_is_used() {
         Instruction::Assign {
             target: "%t_closure".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -777,6 +778,7 @@ fn a_payload_whose_scrutinee_a_task_reaches_is_not_lent() {
         Instruction::Assign {
             target: "%t_task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -980,6 +982,7 @@ fn a_scrutinee_a_task_reaches_has_no_view() {
         Instruction::Assign {
             target: "%t_task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,

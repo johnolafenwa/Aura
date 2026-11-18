@@ -1,0 +1,36 @@
+import control
+import time
+
+
+def checked(value: int64) -> int64:
+    assert value >= 0, "negative input"
+    return value
+
+
+def main() -> None:
+    passes: int64 = 10000000
+    failures: int64 = 100000
+    samples: list[int64] = [(i * 37) % 257 for i in range(256)]
+    mut sum: int64 = 0
+    mut start = time.monotonic()
+    for i in range(passes):
+        match control.recover(checked, samples[i & 255]):
+            case Ok(value):
+                sum += value
+            case Err(trap):
+                assert false, trap.describe()
+    elapsed = (time.monotonic() - start).to_seconds() * 1000.0
+    assert sum == 1276406149
+    print(f"success {passes} {elapsed} {sum}")
+
+    mut trapped: int64 = 0
+    start = time.monotonic()
+    for i in range(failures):
+        match control.recover(checked, -samples[i & 255] - 1):
+            case Ok(value):
+                assert false, "expected a trap"
+            case Err(trap):
+                trapped += 1
+    trap_ms = (time.monotonic() - start).to_seconds() * 1000.0
+    assert trapped == failures
+    print(f"trap {failures} {trap_ms} {trapped}")

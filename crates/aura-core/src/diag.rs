@@ -60,6 +60,9 @@ pub struct DiagnosticDetails {
     pub help: Vec<String>,
     pub edits: Vec<DiagnosticEdit>,
     pub call_frames: Vec<RuntimeCallFrame>,
+    /// The calls left out of the middle of a deep call chain: how many of
+    /// `call_frames` come before the gap, and how many calls the gap holds.
+    pub omitted_call_frames: Option<(usize, usize)>,
     pub task_ancestry: Vec<RuntimeTaskFrame>,
     pub render_path: Option<String>,
     pub render_source: Option<String>,
@@ -499,6 +502,40 @@ pub struct RuntimeCallFrame {
     pub span: RuntimeSourceSpan,
 }
 
+/// The calls a rendered call chain shows from each end of a chain that was
+/// too deep to keep whole.
+const RENDERED_CALLS_PER_END: usize = 8;
+
+/// Joins `frames`, innermost first, into one line. With a `gap` of
+/// `(before, omitted)`, the line shows a few calls from each end and counts
+/// the rest, the `omitted` calls the trap did not keep among them.
+fn render_call_chain(frames: &[RuntimeCallFrame], gap: Option<(usize, usize)>) -> String {
+    let render = |frames: &[RuntimeCallFrame]| {
+        frames
+            .iter()
+            .map(|frame| format!("{} at {}", frame.function, frame.span.start))
+            .collect::<Vec<_>>()
+            .join(" -> ")
+    };
+    let Some((before, omitted)) = gap else {
+        return render(frames);
+    };
+    let before = before.min(frames.len());
+    let (inner, outer) = frames.split_at(before);
+    let inner_shown = inner.len().min(RENDERED_CALLS_PER_END);
+    let outer_shown = outer.len().min(RENDERED_CALLS_PER_END);
+    let hidden = omitted + (inner.len() - inner_shown) + (outer.len() - outer_shown);
+    let mut parts = Vec::new();
+    if inner_shown > 0 {
+        parts.push(render(&inner[..inner_shown]));
+    }
+    parts.push(format!("... {hidden} more calls ..."));
+    if outer_shown > 0 {
+        parts.push(render(&outer[outer.len() - outer_shown..]));
+    }
+    parts.join(" -> ")
+}
+
 /// The name prefix of the function that holds a generator's body.
 pub const GENERATOR_BODY_PREFIX: &str = "__aura_generator_body_";
 
@@ -706,8 +743,16 @@ pub struct StructuredDiagnostic {
     pub edits: Vec<StructuredEdit>,
     #[serde(default)]
     pub call_frames: Vec<StructuredRuntimeCallFrame>,
+    /// The calls left out between the innermost and the outermost calls of
+    /// `call_frames`. Present only for a call chain too deep to list.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub call_frames_omitted: usize,
     #[serde(default)]
     pub task_ancestry: Vec<StructuredRuntimeTaskFrame>,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 impl Span {
@@ -812,6 +857,11 @@ impl StructuredDiagnostic {
                 item.finish();
             },
         );
+        if self.call_frames_omitted > 0 {
+            object
+                .field("call_frames_omitted")
+                .push_str(&self.call_frames_omitted.to_string());
+        }
         json_text::push_array(
             object.field("task_ancestry"),
             &self.task_ancestry,
@@ -847,6 +897,7 @@ impl Diagnostic {
                 help: Vec::new(),
                 edits: Vec::new(),
                 call_frames: Vec::new(),
+                omitted_call_frames: None,
                 task_ancestry: Vec::new(),
                 render_path: None,
                 render_source: None,
@@ -962,6 +1013,13 @@ impl Diagnostic {
         true
     }
 
+    /// Records that `omitted` calls were left out of `call_frames` after
+    /// its first `before` entries, because the call chain was too deep to
+    /// keep whole.
+    pub fn set_omitted_call_frames(&mut self, before: usize, omitted: usize) {
+        self.details.omitted_call_frames = (omitted > 0).then_some((before, omitted));
+    }
+
     pub fn structured(&self, path: &str) -> StructuredDiagnostic {
         let path = match self.trap_module_path(path) {
             Some(frame_path) => display_source_path(frame_path),
@@ -1001,6 +1059,7 @@ impl Diagnostic {
                     applicability: edit.applicability.clone(),
                 })
                 .collect(),
+            call_frames_omitted: self.omitted_call_frames.map_or(0, |(_, omitted)| omitted),
             call_frames: visible_call_frames(&self.call_frames)
                 .into_iter()
                 .map(|frame| StructuredRuntimeCallFrame {
@@ -1038,6 +1097,17 @@ impl Diagnostic {
 
     pub fn partial_stdout(&self) -> Option<&str> {
         self.partial_stdout.as_deref()
+    }
+
+    /// The gap of a shortened call chain, counted in the frames a
+    /// diagnostic shows.
+    fn shown_call_chain_gap(&self) -> Option<(usize, usize)> {
+        let (before, omitted) = self.omitted_call_frames?;
+        let before = before.min(self.call_frames.len());
+        Some((
+            visible_call_frames(&self.call_frames[..before]).len(),
+            omitted,
+        ))
     }
 
     /// A runtime trap inside a function from another module carries that
@@ -1097,11 +1167,7 @@ impl Diagnostic {
             if let Some(span) = self.span {
                 name_inlined_generator(&mut frames, span, source);
             }
-            let frames = frames
-                .iter()
-                .map(|frame| format!("{} at {}", frame.function, frame.span.start))
-                .collect::<Vec<_>>()
-                .join(" -> ");
+            let frames = render_call_chain(&frames, self.shown_call_chain_gap());
             rendered.push_str(&format!(
                 "\n  = note: Aura call chain (innermost first): {frames}"
             ));
@@ -1192,10 +1258,9 @@ fn stable_code_for_message(message: &str) -> &'static str {
         "AU4003"
     } else if lower.contains("division by zero") || lower.contains("modulo by zero") {
         "AU4004"
-    } else if lower.starts_with("maximum call depth")
-        || lower.starts_with("runtime ")
-        || lower.contains("runtime trap")
-    {
+    } else if lower.starts_with("call stack exhausted") {
+        "AU4005"
+    } else if lower.starts_with("runtime ") || lower.contains("runtime trap") {
         "AU4001"
     } else if lower.starts_with("unknown ") || lower.contains("not found") {
         "AU2001"

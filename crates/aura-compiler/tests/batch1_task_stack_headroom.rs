@@ -5,8 +5,8 @@
 //! fault, and the root task that executes the program entry. A guard-page
 //! fault kills the test process, so each sweep is its own acceptance test.
 //!
-//! The direct backend has only the 256-call depth limit and no headroom
-//! probe, so these tests exercise the MIR interpreter alone.
+//! The direct backend checks its stack in generated code and is covered by
+//! the command's own tests, so these tests exercise the MIR interpreter.
 
 use aura_compiler::{lower_source_to_mir, run_mir};
 
@@ -16,7 +16,7 @@ const DEEP_SOURCE: &str = "def descend(depth: int64) -> int64:\n    if depth == 
 /// whose interpreter frames are the largest of the measured call shapes.
 const PACKED_DEFINITIONS: &str = "type Step = Callable[def(depth: int64) -> int64]\n\ndef descend(depth: int64) -> int64:\n    if depth == 0:\n        return 0\n    step = Step(lambda depth: descend(depth))\n    return step(depth - 1) + 1\n";
 
-const EXHAUSTED: &str = "task stack exhausted while calling";
+const EXHAUSTED: &str = "call stack exhausted while calling";
 const MINIMUM_STACK: usize = 262_144;
 /// The child capacity on which packed recursion to depth 12 crossed the
 /// guard page before the reserve was sized from measured transitions.
@@ -36,7 +36,7 @@ enum Outcome {
     Exhausted,
 }
 
-fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
+fn parse_sweep(stdout: &str) -> Vec<Outcome> {
     stdout
         .lines()
         .enumerate()
@@ -60,16 +60,6 @@ fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
                 message.contains("`descend`") || message.contains("`descend::__lambda_"),
                 "depth {depth} names the callee: {message}"
             );
-            let remaining = message
-                .split(": ")
-                .nth(1)
-                .and_then(|tail| tail.split(' ').next())
-                .and_then(|digits| digits.parse::<usize>().ok())
-                .unwrap_or_else(|| panic!("depth {depth} reports the remaining bytes: {message}"));
-            assert!(
-                remaining < stack,
-                "depth {depth} reports writable headroom below the requested {stack} bytes: {message}"
-            );
             Outcome::Exhausted
         })
         .collect()
@@ -78,7 +68,7 @@ fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
 fn run_sweep(stack: usize, max_depth: usize) -> Vec<Outcome> {
     let mir = lower_source_to_mir(&child_sweep_source(stack, max_depth)).expect("sweep lowers");
     let output = run_mir(&mir).expect("every child failure is observed by the parent");
-    let outcomes = parse_sweep(&output.stdout, stack);
+    let outcomes = parse_sweep(&output.stdout);
     assert_eq!(outcomes.len(), max_depth + 1, "{}", output.stdout);
     let first_failure = outcomes
         .iter()
@@ -107,7 +97,7 @@ fn exhausting_a_minimum_task_stack_reports_a_diagnostic() {
         output.stdout.contains("error")
             && output
                 .stdout
-                .contains("task stack exhausted while calling `descend`"),
+                .contains("call stack exhausted while calling `descend`"),
         "{}",
         output.stdout
     );
@@ -136,13 +126,13 @@ fn root_task_recursion_reports_a_diagnostic_instead_of_faulting() {
     // Starting one child makes the entry run as the root lightweight task on
     // its own coroutine stack, where the headroom probe is active.
     let source = format!(
-        "{PACKED_DEFINITIONS}\ndef idle() -> None:\n    return None\n\ndef main():\n    with TaskGroup() as group:\n        group.start_soon(idle)\n    print(descend(1000))\n"
+        "{PACKED_DEFINITIONS}\ndef idle() -> None:\n    return None\n\ndef main():\n    with TaskGroup() as group:\n        group.start_soon(idle)\n    print(descend(100000000))\n"
     );
     let mir = lower_source_to_mir(&source).expect("root recursion lowers");
-    let error = run_mir(&mir).expect_err("root recursion past both limits fails");
+    let error = run_mir(&mir).expect_err("root recursion past the stack fails");
     let message = error.to_string();
     assert!(
-        message.contains(EXHAUSTED) || message.contains("maximum call depth of 256 exceeded"),
-        "the root task ends with the stack or depth diagnostic: {message}"
+        message.contains(EXHAUSTED),
+        "the root task ends with the stack diagnostic: {message}"
     );
 }

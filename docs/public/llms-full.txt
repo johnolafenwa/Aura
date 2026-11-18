@@ -2251,6 +2251,8 @@ whose shallow stack use you have measured. It is not the default.
 | `metrics.increment` | `(name: str, value: int64) -> None` |
 | `metrics.get` | `(name: str) -> int64` |
 | `metrics.reset` | `() -> None` |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | `code`, `message`, `path`, `line`, `column`, `frames` and `describe()`. See [Recovering From Traps](/manual/failure-recovery). |
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters. A missing name reads as zero.
@@ -2575,13 +2577,13 @@ Aura has no assertion-stripping mode, optimization flag, environment switch, or 
 
 Message contents are kept exactly. The human diagnostic renderer adds its normal `error[AU4001]` prefix and source context. When the condition qualifies for introspection, it also adds the bounded operand notes.
 
-Assertion failure ends the current Aura execution path. It is not a catchable exception. Use `Result` for recoverable validation.
+A failed assertion ends the current call. An enclosing `control.recover`
+returns its diagnostic in `Err`. Use `Result` for expected validation
+failures. See [Recovering From Traps](/manual/failure-recovery).
 
 ## Status
 
 Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.16 includes the bounded two-operand diagnostic.
-
-Aura 0.16 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.
 
@@ -5865,8 +5867,8 @@ every Aura call:
   guard page, not from the start of the mapping. The guard page never counts
   as usable space.
 - A call that would leave less than the interpreter's headroom reserve traps
-  with `AU4005` ("task stack exhausted while calling ..."). The message names
-  the callee and the writable bytes that remain. The trap happens before any
+  with `AU4005` ("call stack exhausted while calling ..."). The message names
+  the callee. The trap happens before any
   frame can reach the guard page, so the task reports a diagnostic instead of
   faulting.
 - The reserve exceeds the stack that one interpreter call transition uses.
@@ -5874,18 +5876,22 @@ every Aura call:
   build keeps 128 KiB in reserve. A debug-assertion build keeps 224 KiB,
   because an unoptimized interpreter spends roughly 170-190 KiB of stack per
   Aura call.
-- Both reserves stay below the first-call headroom of the 256 KiB minimum, so
-  that minimum can always run one call. How many nested calls a given capacity
-  holds beyond that also depends on the build profile.
+- A function that can register a `with` exit may need another call's worth of
+  stack before it starts. Its `close` or `__exit__` can then run while the
+  frame that opened the resource is still unwinding. The exit method uses the
+  ordinary safety reserve. A 256 KiB task can run a simple entry function.
+  A task that opens resources or makes nested calls can need more stack.
 
-The root task that runs the program entry reserves a lazily mapped 16 MiB
-coroutine stack and is probed the same way. Deep root recursion reports either
-`AU4005` or the 256-call depth diagnostic, depending on the per-call cost.
-Both are diagnostics, not faults. A program that starts no task runs its entry
-on the 64 MiB runtime thread, where only the depth limit applies.
+The root task that runs the program entry is probed the same way on its own
+stack: 256 MiB under `aura run` and 64 MiB in a built program, both reserved
+and committed as they are touched. Deep recursion there reports `AU4005`, a
+diagnostic and not a fault.
 
-The direct backend has only its 256-call depth guard. It performs no headroom
-probe and never reports the `AU4005` stack-exhaustion diagnostic.
+A built program makes the same check at the entry of every function that can
+call itself, directly or through other functions, and reports the same
+`AU4005`. No count limits nested calls on either backend.
+[Recovering From Traps](/manual/failure-recovery#call-depth) has the measured
+depths.
 
 ### Scope Exit
 
@@ -6418,7 +6424,9 @@ worker-index or affinity-introspection API.
 **Stacks and depth.** Ordinary lightweight tasks request 768 KiB of writable
 coroutine stack. An explicit request is limited to 64 MiB. Requests are
 page-rounded and guard-protected. The MIR and direct entry thread reserves
-64 MiB. Nested Aura calls stop at 256 frames.
+64 MiB for a built program and 256 MiB under `aura run`. Nested Aura calls
+stop with `AU4005` when the stack they run on is exhausted
+([Call Depth](/manual/failure-recovery#call-depth)).
 
 **Blocking-I/O pool.** The process-wide pool works as follows:
 
@@ -7477,7 +7485,9 @@ and TOML metadata, counters, and structured events.
 
 ## Retry
 
-Import `control` for the eager retry helper:
+Import `control` for the eager retry helper. To run a function once and
+inspect a trap, use `control.recover`. [Recovering From Traps](/manual/failure-recovery)
+covers the call and its diagnostic fields.
 
 | API | Signature |
 | --- | --- |
@@ -7904,8 +7914,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact `int64` requests from 256 KiB through 64 MiB inclusive.
 - Accepted requests are rounded up to the host page size and guard-protected. Smaller and larger requests are rejected, not clamped.
 - The stack override API is provisional.
-- The MIR and direct runtime entry thread reserves 64 MiB. Maintained execution paths stop with a recursion-depth diagnostic after 256 nested Aura calls.
-- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. The direct backend has only the depth limit.
+- The program's first task has a 64 MiB stack in a built program and 256 MiB under `aura run`. No count limits nested calls: a call that would not fit on the running stack traps with `AU4005` ([Call Depth](/manual/failure-recovery#call-depth)). `aura run` reaches a much smaller depth than a built program, because one interpreted call costs about 11 KiB of stack.
+- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. A built program checks at the entry of every function that can call itself.
 - The 256 KiB lower bound is an opt-in minimum for measured shallow tasks, not a generally safe default. The complete compiled Aura HTTP example faulted when 256 KiB was the global default and succeeded with a 512 KiB default.
 - An isolated runtime protocol round trip succeeds with 256 KiB callers because it excludes compiled language-execution frames. It proves the service offload boundary, not a 256 KiB whole-program default.
 
@@ -8955,12 +8965,16 @@ Aura never clamps the request or silently substitutes the default.
 
 On the MIR backend, an Aura call traps with `AU4005` when it would leave less
 than the interpreter's headroom reserve on the running task's writable
-coroutine stack. The message reads "task stack exhausted while calling ...". It
-names the callee and the writable bytes that remain. The guard page below the
+coroutine stack. The guard page below the
 requested capacity does not count toward that headroom. The reserve is 128 KiB
-in an optimized interpreter build and 224 KiB in a debug-assertion build. The
-direct backend performs no headroom probe and has only its 256-call depth
-limit.
+in an optimized interpreter build and 224 KiB in a debug-assertion build.
+
+A built program traps with `AU4005` at the entry of a function that can call
+itself when less than 128 KiB of the running stack remains. The message on
+both backends reads "call stack exhausted while calling ..." and names the
+callee. No count limits nested calls.
+[Call Depth](/manual/failure-recovery#call-depth) specifies the rule and how
+long call chains are shortened in the diagnostic.
 
 **Runtime configuration.** `AU4006` reports invalid process runtime
 configuration. `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, and
@@ -10089,7 +10103,7 @@ A call evaluates and binds its arguments, then transfers control to the target b
 
 `return view [mut] place` hands one checked loan to the caller instead. The declaration's `from` slot fixes the loan's origin. The caller continues the exact selected projection with no unlock and relock, and no clone. Every other callee loan ends before control returns. A trap before the handoff transfers no loan.
 
-Each recursive Aura call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aura calls with a source diagnostic, so the host stack does not overflow.
+No count limits nested Aura calls. A call that would not fit on the stack it runs on traps with `AU4005`, so the host stack does not overflow. [Call Depth](/manual/failure-recovery#call-depth) specifies the check and the stack sizes.
 
 ## Loan Lifetime And Cleanup
 
@@ -11929,6 +11943,209 @@ Design record:
 [ADR-0039](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0039-comprehensions.md),
 [ADR-0047](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md),
 [ADR-0048](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md).
+
+## Source: docs/manual/failure-recovery.md
+
+# Recovering From Traps
+
+A trap is a failure nobody planned for: an index out of bounds, a failed
+`assert`, an integer overflow, a division by zero, an exhausted call stack.
+A trap ends the task unless a recovery call contains it. This page covers the two ways a program
+keeps going after one, and the rule that bounds how deeply calls may nest.
+
+Errors a program expects are not traps. They are `Result` values, and `try`
+or `?` passes them along. See
+[Enums And Pattern Matching](/manual/enums-and-match).
+
+## `control.recover`
+
+```aura
+import control
+
+def parse(text: str) -> int64:
+    assert len(text) > 0, "empty input"
+    return len(text)
+
+def main() -> None:
+    match control.recover(parse, ""):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.describe())
+```
+
+```text
+error[AU4001]: empty input (parse.au:4:5)
+```
+
+| API | Signature |
+| --- | --- |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | class with public fields `code: str`, `message: str`, `path: str`, `line: int64`, `column: int64`, `frames: list[str]` |
+| `Trap.describe` | `describe(self) -> str` |
+
+`control.recover(function, arguments...)` calls `function(arguments...)` and
+waits for it to end. `T` is the function's return type. The result is `Ok`
+with the return value, or `Err` with the trap that ended the call.
+
+Aura has no exceptions. There is no `raise` and no `try`/`except`, and a trap
+cannot carry a value of the program's choosing. `control.recover` is a
+boundary: the place where a program decides that a defect ends one unit of
+work and not the whole task.
+
+### The Trap Value
+
+| Field | Meaning |
+| --- | --- |
+| `code` | The diagnostic code, such as `AU4003`. [Diagnostics](/manual/diagnostics) lists them. |
+| `message` | The diagnostic's message without the code. |
+| `path` | The source file of the innermost call, or `""` when it is not known. |
+| `line`, `column` | The position of the operation that trapped, from 1, or 0 when it is not known. |
+| `frames` | The calls that were active inside the recovered call, innermost first, each written `function at line:column` with the position of the function's definition. |
+
+`describe()` returns one line: `error[CODE]: message (path:line:column)`.
+
+`frames` never names a call outside the recovered function. A chain deeper
+than 256 calls keeps its 128 innermost and 128 outermost calls, with one entry
+of the form `... N more calls ...` between them.
+
+### Typing Rules
+
+The function and its arguments follow the rules of `TaskGroup.start`
+([Concurrency](/manual/concurrency)), and the checker reports the same
+diagnostics for both:
+
+- The function is a named function, a lambda or closure, or a stored
+  `TaskCallable`.
+- Every argument type and the return type implement `Transfer`.
+- A parameter cannot be `mut`.
+- Arguments bind by position or by name, and a default fills an omitted one.
+
+`control.recover` takes no explicit type arguments. `recover` is not a
+function value: it can be called, and it cannot be stored or passed.
+
+### Ownership
+
+A non-Copy argument moves into the call, exactly as it moves into a started
+task. A Copy argument is copied. A closure's captures move with the closure.
+A failed call leaves its external effects in place. For example, text it
+printed stays on stdout and values sent to a queue stay sent.
+
+When the call traps, everything it owned is released, including the
+arguments. A caller that needs a value afterwards passes a copy, such as
+`text.clone()` or `items.copy()`.
+
+These rules are what make recovery safe. The caller never holds a view or a
+half-written value that the failed call was in the middle of changing.
+
+### Runtime Semantics
+
+On a trap inside the call:
+
+1. The `with` exits registered inside the call run, innermost first, as they
+   do when a task fails. An exit that fails adds a note to the trap.
+2. Every value the call owned is released.
+3. The trap becomes the `Err` value, and the caller continues.
+
+The caller's own calls, `with` scopes and values are untouched.
+
+The call runs to its end before `control.recover` returns. It runs in the
+calling task: it starts no task, needs no `TaskGroup`, and blocking
+operations inside it suspend the calling task as usual.
+
+The callee observes the calling task's cancellation. A cancellation-aware
+operation can return a value such as `QueueReceive.Cancelled`, which the
+callee can handle. An actual task exit propagates through the recovery
+call. The same applies to `sys.exit`.
+
+A call may itself call `control.recover`. Each recovery returns the traps of
+its own call.
+
+A trap inside a task the call started is that task's failure, reported by its
+`TaskGroup` under the usual rules. It becomes the recovered call's trap only
+when the group's scope exit raises it there.
+
+### Tasks Or `control.recover`
+
+A started task already contains a trap: `task.result()` returns
+`TaskResult.Error(message)` and the parent continues. Use a task when the
+work should run concurrently, needs a timeout, or should be cancellable.
+Use `control.recover` when the work should run here and now. It costs far
+less than a task, and it reports the code, position and call chain, where
+`TaskResult.Error` carries only the message.
+
+### Limits
+
+- A generator cannot be passed in or returned, because a generator is not
+  `Transfer`.
+- In a built program a named function called with positional arguments runs
+  on the caller's stack. A closure, a stored `TaskCallable`, a call with named
+  or default arguments, and every call on Windows run on a 16 MiB stack of
+  their own. The stack is reserved, and a page costs memory once it is
+  touched.
+- A freestanding build rejects `control.recover` (`AU2052`).
+- `aura verify` proves the function's `requires` at the call and knows
+  nothing about the `Result` it returns.
+
+## Call Depth
+
+Stack space bounds nested calls. A
+call that would not fit traps:
+
+```text
+error[AU4005]: call stack exhausted while calling `walk`
+ --> tree.au:1:1
+  = note: Aura call chain (innermost first): walk at 1:1 -> walk at 1:1 -> ... 23,480 more calls ... -> walk at 1:1 -> main at 9:1
+  = help: the calls are nested too deeply for this task's stack; a task started with `start_with_stack` gets a larger one
+```
+
+It is an ordinary trap: `with` exits run, a task that hits it fails alone,
+and `control.recover` returns it.
+
+| Where the calls run | Stack | Nested calls of a small function |
+| --- | --- | --- |
+| The program's first task, built program | 64 MiB | about 2,000,000 |
+| The program's first task, `aura run` | 256 MiB | about 20,000 |
+| A started task | 768 KiB by default, or the size given to `start_with_stack` | about 20,000 built, about 60 under `aura run` |
+| Inside `control.recover` | the caller's stack, or 16 MiB of its own (see Limits above) | the caller's remaining depth, or about 500,000 |
+
+The counts are measurements of a one-argument function on x86-64 Linux, not
+guarantees. A call's cost depends on its locals, and under `aura run` on how
+the interpreter itself was built. Stacks are reserved, not committed.
+
+A built program checks the stack at the entry of every function that can
+call itself, directly or through other functions. Other functions pay
+nothing. `aura run` checks at every call.
+
+### Call Chains In Diagnostics
+
+A trap keeps at most the 128 innermost and the 128 outermost active calls.
+The rendered chain shows 8 from each end. Structured output
+(`--format json`) lists the kept calls in `call_frames` and adds
+`call_frames_omitted`, the number of calls left out of the middle, when it is
+not zero.
+
+## Diagnostics
+
+| Code | Condition |
+| --- | --- |
+| `AU2002` | An argument does not match the function's parameter, or the function is not callable. |
+| `AU2004` | `control.recover` was given explicit type arguments. |
+| `AU3001` | The caller reuses an owned argument after moving it into the call. |
+| `AU3002` | The target takes a `mut` parameter. |
+| `AU3008` | An argument, capture or return type cannot cross a task boundary. |
+| `AU2052` | A freestanding build calls `control.recover`. |
+| `AU4005` | A call would not fit on the stack, or the stack for a recovered call cannot be allocated. |
+
+## Backend Support
+
+`control.recover` and the stack rule behave the same under `aura run` and in
+built programs. The measured depths differ, as the table above shows.
+
+## Status
+
+See the Unreleased section of the changelog for availability. ADR-0104 records the recovery design and ADR-0105
+the call depth rule.
 
 ## Source: docs/manual/ffi.md
 
@@ -13780,7 +13997,7 @@ def main():
 
 `main` takes no parameters and returns exactly `int32` or `None`. A returned `int32` becomes the requested host exit status. `None` means success. An imported function named `main` stays an ordinary imported function. A file cannot combine a local `main` with executable top-level statements.
 
-[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the 256-call runtime depth limit.
+[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the call depth rule.
 
 ## Grammar
 
@@ -13860,7 +14077,7 @@ Aura has none of these:
 
 [Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
 
-Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
+Nested calls are limited by the stack they run on ([Call Depth](/manual/failure-recovery#call-depth)). The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 
@@ -40774,12 +40991,12 @@ raise, without reading every function it calls.
 
 Aura splits failures into two kinds and gives each its own mechanism. A failure
 that means the program itself is wrong, such as an index out of range or a
-broken invariant, is a *trap*: the current task stops at once, cleanup runs,
-and the diagnostic points at the line that failed. A failure that a working
+broken invariant, is a *trap*. Cleanup runs and the diagnostic points at the
+line that failed. A trap ends the task unless a caller used
+`control.recover` to contain it. A failure that a working
 program should expect, such as bad input or a missing file, is a value. The
 function returns a `Result`, its signature says so, and the compiler makes the
-caller decide what to do with it. There is no third route. Aura has no
-exceptions, no `raise`, and no way to catch a trap.
+caller decide what to do with it.
 
 In this chapter we'll write a small loader for a settings file made of `key =
 value` lines. The first version trusts its input and traps when the input is
@@ -40878,13 +41095,13 @@ workers -> 4
 1
 ```
 
-The final `1` comes from `echo $?`. A trapped program always exits with status
-1, so a shell script or a CI job knows that something went wrong.
+The final `1` comes from `echo $?`. An unhandled trap in the main task
+gives the program exit status 1, so a shell script can detect the failure.
 
 ## What traps
 
 Index errors aren't the only failures that trap. Every one of the following
-stops the task with a diagnostic, and none of them can be ignored by accident.
+produces a diagnostic. An unhandled trap ends the current task.
 
 Integer arithmetic is checked. If a result doesn't fit its type, Aura traps
 with `AU4002` instead of wrapping around:
@@ -41026,7 +41243,7 @@ world, as we'll see in [To trap or not to trap](/book/ch09-03-to-trap-or-not).
 
 ## What happens when a task traps
 
-A trap stops the task it happens in. It doesn't stop instantly, though: before
+By default a trap stops the task it happens in. It doesn't stop instantly, though: before
 the task ends, Aura runs any cleanup that the task had registered with `with`.
 Here's a lock file that has to be removed however the block ends:
 
@@ -41110,45 +41327,37 @@ The second task trapped on the same `parts[1]` as before. Its trap became a
 `TaskResult.Error` value in `main`, and `main` carried on. This is how a server
 keeps running when one request handler hits a bug: the handler's task is the
 unit that fails. Don't worry about the task group syntax yet; [Chapter
-15](/book/ch15-00-concurrency) builds it up properly. The point here is the
-boundary. A trap always ends a whole task, and the only place you can observe
-it is from outside that task.
+15](/book/ch15-00-concurrency) explains how tasks work together.
 
-## No catching
+## Recovering a call
 
-If you've written Python, you may be reaching for `try` and `except` to wrap
-`parse_line` and recover from the bad line. Aura doesn't have them, and the
-compiler tells you so:
+Suppose our loader calls a parser supplied by a plug-in. We want to record
+which lines the parser failed on and keep reading. We can give the parser
+one line at a time with `control.recover`. Let's reuse the first version of
+`parse_line` so we can see what happens to its indexing trap.
 
-```aura check-fail:AU2005
-def parse_port(text: str) -> int64:
-    try:
-        return int(text)
-    except ValueError:
-        return 8080
-```
+<<< ../../examples/error_handling/recover.au{aura}
 
 ```console
-$ aura check src/main.au
-error[AU2005]: `try`/`except` is not supported; use `Result` with `match` today
- --> src/main.au:2:5
-  |
-2 |     try:
-  |     ^
+$ aura run examples/error_handling/recover.au
+port -> 9000
+skipping verbose (AU4003)
+workers -> 4
 ```
 
-There is no way, inside a task, to catch a trap and continue. Aura does this
-deliberately. A trap means the program reached a state its author didn't plan
-for. Code that catches every failure and carries on tends to carry on with
-half-updated data, and the real bug shows up later somewhere unrelated. By
-making traps uncatchable, Aura guarantees that when one happens you see it, at
-the line where it happened, with the values that caused it.
+We pass the function itself, then the arguments it will receive. The loop
+borrows each line, so we clone the string to give the parser an owned copy.
+`control.recover` runs it in the current task. When the parser returns its
+pair, we receive `Ok(pair)`. When the missing equals sign leads it past the
+end of the list, cleanup runs inside the call and we receive `Err(trap)`.
+Our loop can inspect the code, message, location and call chain before
+moving on to the next line. An earlier print or write still happened.
 
-That leaves our settings loader in an awkward spot. A line without `=` isn't a
-bug in our program. It's a mistake in a file that some person wrote, and a good
-loader should report it politely and keep its own state intact. For failures
-like that, Aura has a second mechanism, and it's the subject of the next
-section.
+If we own the parser, a line without an equals sign is something we can
+detect and explain to the person who wrote the file. In the next section
+we'll give our parser a return type that says exactly what can go wrong.
+The [Manual](/manual/failure-recovery) has the rules for passing values
+across a recovery call.
 
 ## Source: docs/book/ch09-02-recoverable-errors.md
 
@@ -41722,7 +41931,7 @@ section.
 
 # To trap or not to trap
 
-You now have two ways for a function to fail. It can trap, which ends the task
+You now have two ways for a function to fail. It can trap, which ends the current call
 with a diagnostic, or it can return `Result.Err`, which hands the problem to
 its caller. Neither is better in general. Each one makes a different promise,
 and choosing well is mostly a matter of asking one question about the failure:
@@ -41879,11 +42088,10 @@ gives you the list of places to decide.
 Tests are the third place, and there trapping is the whole mechanism. A failed
 `assert` in a test is how the test reports failure, as [Chapter
 11](/book/ch11-00-testing) shows. Tests also push in the other direction,
-though. Aura's test runner has no way to say "this case should trap", because
-nothing in Aura can catch a trap. A function that returns `Result.Err` for bad
-input can be tested directly: call it and match on the error. That makes
-`Result` the easier design to test, which is one more reason to use it at your
-program's edges.
+though. When a trap is part of the contract, a test can call the function
+through `control.recover` and assert on the diagnostic code in the `Err`
+arm. For an expected error, call the function directly and match on its
+`Result`. That lets the test use the same error type as the caller.
 
 ## A few rules of thumb
 
@@ -41928,10 +42136,10 @@ next reader that ignoring the error was a decision, not an oversight.
 
 ## Summary
 
-Aura gives failures two shapes. A trap stops the current task at the line that
-failed, runs cleanup, and reports a diagnostic with a code, the values
-involved, and the call chain. Traps can't be caught, which keeps bugs from
-hiding. A `Result[T, E]` is an ordinary value that carries either a success or
+At a trap, Aura runs cleanup and reports a diagnostic with the code,
+location and call chain. The task ends unless a call to `control.recover`
+contains the failure. A `Result[T, E]` is an ordinary value that carries
+either a success or
 an error. The compiler makes you look inside it before using the success,
 `match` makes you handle both cases, and `try` passes an error up to the
 caller, changing its type only through a `From` conversion you wrote. A small
@@ -66340,11 +66548,12 @@ see every place it happens.
 `is None` and `is not None`. The compiler narrows the type after the test, so
 there is no `Optional` unwrapping to do by hand.
 
-Some failures are not recoverable values: an index out of range, a failed
-`assert`, integer overflow, division by zero. Those *trap*, stopping the task
-with an `AU40xx` diagnostic and an Aura call chain, much like an uncaught
-exception would. The difference is that you cannot catch a trap, so it is
-reserved for bugs, not for conditions a program should handle.
+An index out of range, a failed `assert`, integer overflow and division by
+zero each raise a *trap*. A trap ends the task by default and reports an
+`AU40xx` diagnostic with a call chain. At a plug-in or request boundary
+we can use `control.recover(function, arguments...)`. It runs the function
+in the current task and returns either its value in `Ok` or its diagnostic
+in `Err`. [Chapter 9](/book/ch09-01-traps) builds a working example.
 
 ## Classes, without inheritance
 
