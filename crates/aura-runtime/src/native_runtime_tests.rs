@@ -29848,6 +29848,59 @@ fn a_native_mutex_moves_the_same_collection_box_between_tasks() {
 }
 
 #[test]
+fn failed_native_shared_map_reads_poison_the_cell_and_preserve_the_diagnostic() {
+    use crate::runtime_value::{MapValue, SharedType, SyncValue};
+
+    let malformed = SyncValue::cell(Value::Map(MapValue {
+        key_type: SharedType::named("int64"),
+        value_type: SharedType::named("uint64"),
+        entries: vec![(
+            Value::Int(IntegerValue::from_i64(7)),
+            Value::Int(IntegerValue::from_u64(u64::MAX)),
+        )]
+        .into(),
+    }));
+    let word_map = malformed.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(word_map));
+            let mut output = 0;
+            unsafe { super::aura_direct_sync_map_get_word(handle, 7, &mut output) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the stored value cannot be returned as an int64 word");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "sync.Map.get expected an int64 value");
+    assert!(malformed.is_poisoned().unwrap());
+
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(malformed));
+            super::aura_direct_sync_cell_take_word(handle, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a later reader must observe the poisoned cell");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("poisoned"));
+
+    let wrong_type = SyncValue::cell(Value::Unit);
+    let boxed_map = wrong_type.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(boxed_map));
+            super::aura_direct_sync_map_get_int64(handle, 7);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the generic lookup also validates dictionary storage");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("dictionary"));
+    assert!(wrong_type.is_poisoned().unwrap());
+}
+
+#[test]
 fn direct_sync_helpers_report_a_wrong_handle_and_a_failed_step() {
     use crate::runtime_value::SyncValue;
     let failure = |run: fn()| {
@@ -29875,6 +29928,17 @@ fn direct_sync_helpers_report_a_wrong_handle_and_a_failed_step() {
     assert_eq!(
         failure(|| super::aura_direct_sync_cell_put(bool_value(true), bool_value(true))),
         "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+            super::aura_direct_sync_cell_put(cell, std::ptr::null_mut());
+        }),
+        "direct runtime received a null opaque value pointer"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_map_set_index_int64_pair(std::ptr::null_mut(), 7, 9)),
+        "direct runtime received a null opaque value pointer"
     );
     // A cell is not an atom, an overflow traps, and a cell that is not
     // locked takes no value back.
