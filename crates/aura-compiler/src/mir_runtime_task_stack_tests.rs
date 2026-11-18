@@ -88,6 +88,23 @@ const SHAPES: &[Shape] = &[
         definitions: "def descend[T](depth: int64, marker: T) -> int64:\n    if depth == 0:\n        return 0\n    return descend[T](depth - 1, marker) + 1\n",
         start_arguments: "descend[str], 12, \"marker\"",
     },
+    Shape {
+        name: "resource close per level",
+        definitions: r#"
+class Step:
+    depth: int64
+
+    def close(mut self):
+        if self.depth > 0:
+            _ = descend(self.depth - 1)
+
+def descend(depth: int64) -> int64:
+    with step = Step(depth=depth):
+        pass
+    return depth
+"#,
+        start_arguments: "descend, 12",
+    },
 ];
 
 const TASK_RESULT_MATCH: &str = "        match task.result(timeout=60s):\n            case TaskResult.Ready(value):\n                print(f\"ready {value}\")\n            case TaskResult.Error(message):\n                print(f\"error {message}\")\n            case TaskResult.TimedOut:\n                print(\"timed out\")\n            case TaskResult.Cancelled:\n                print(\"cancelled\")\n";
@@ -262,6 +279,82 @@ fn root_task_recursion_is_a_diagnostic_before_the_stack_can_fault() {
         error.message.contains("call stack exhausted while calling"),
         "{error}"
     );
+}
+
+#[test]
+fn exhausting_task_stacks_closes_each_resource_and_manager_in_order() {
+    let source = r#"
+class Inner:
+    depth: int64
+
+    def close(mut self):
+        print(f"inner {self.depth}")
+
+class Resource:
+    depth: int64
+
+    def close(mut self):
+        with inner = Inner(depth=self.depth):
+            print(f"close {self.depth}")
+
+class Manager:
+    depth: int64
+
+    def __exit__(mut self):
+        print(f"exit {self.depth}")
+
+def descend(depth: int64) -> int64:
+    with outer = Resource(depth=depth), inner = Manager(depth=depth):
+        print(depth)
+        return descend(depth + 1)
+
+def main():
+    for size in range(655360, 786433, 4096):
+        with group = TaskGroup():
+            job = group.start_with_stack(size, descend, 0)
+            match job.result():
+                case TaskResult.Error(message):
+                    print(message)
+                case _:
+                    print("unexpected outcome")
+"#;
+    let mir = lower_source_to_mir(source).expect("recursive scopes lower");
+    let output = run_mir(&mir).expect("the parent observes each stack exhaustion");
+    let mut lines = output.stdout.lines().peekable();
+    for size in (655360..=786432).step_by(4096) {
+        let mut entered = 0;
+        while lines
+            .peek()
+            .is_some_and(|line| line.parse::<usize>().is_ok())
+        {
+            assert_eq!(lines.next().unwrap(), entered.to_string(), "stack {size}");
+            entered += 1;
+        }
+        assert!(entered > 0, "stack {size} should enter at least one scope");
+        for depth in (0..entered).rev() {
+            assert_eq!(
+                lines.next().unwrap(),
+                format!("exit {depth}"),
+                "stack {size}"
+            );
+            assert_eq!(
+                lines.next().unwrap(),
+                format!("close {depth}"),
+                "stack {size}"
+            );
+            assert_eq!(
+                lines.next().unwrap(),
+                format!("inner {depth}"),
+                "stack {size}"
+            );
+        }
+        assert_eq!(
+            lines.next(),
+            Some("call stack exhausted while calling `descend`"),
+            "stack {size}"
+        );
+    }
+    assert!(lines.next().is_none());
 }
 
 #[test]
