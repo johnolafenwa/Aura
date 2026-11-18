@@ -693,9 +693,9 @@ fn adding_magnitudes_propagates_carries_and_cancels_opposite_signs() {
             a + b
         );
     }
-    // Carry crosses one full eight-digit group and the uneven tail.
-    let left = (BigInt::one() << 704usize) - 1;
-    let right = (BigInt::one() << 520usize) + 1;
+    // Carry crosses a sixteen-word group, then continues into the uneven tail.
+    let left = (BigInt::one() << 1408usize) - 1;
+    let right = (BigInt::one() << 1032usize) + 1;
     assert_eq!(
         unwire(&add_big_words(&wire(&left, 0), &wire(&right, 0)).unwrap()).0,
         &left + &right
