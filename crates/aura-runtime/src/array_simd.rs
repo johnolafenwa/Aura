@@ -507,10 +507,11 @@ const MATMUL_THREAD_WORK: usize = 1 << 21;
 /// The most threads a matrix product runs on.
 const MATMUL_MAX_THREADS: usize = 16;
 
-/// The threads the Array kernels may use: `AURA_ARRAY_THREADS` when it is
+/// The threads the Array kernels and the image codecs may use:
+/// `AURA_ARRAY_THREADS` when it is
 /// a positive number, and otherwise the CPUs the process may run on, up
 /// to [`MATMUL_MAX_THREADS`].
-fn array_thread_limit() -> usize {
+pub(crate) fn array_thread_limit() -> usize {
     static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *LIMIT.get_or_init(|| {
         thread_limit_for(
