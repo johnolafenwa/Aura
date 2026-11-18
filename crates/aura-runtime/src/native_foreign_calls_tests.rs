@@ -735,6 +735,26 @@ fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task(
 }
 
 #[test]
+fn a_scoped_callback_with_no_text_preserves_its_scalar_arguments() {
+    unsafe extern "C-unwind" fn increment(frame: *mut u64) {
+        unsafe { *frame += 1 };
+    }
+
+    let mut word = 13;
+    unsafe {
+        super::aura_direct_ffi_callback_local_text_guard(
+            increment,
+            &mut word,
+            0,
+            b"increment".as_ptr(),
+            9,
+        );
+    }
+    super::aura_direct_ffi_callback_check();
+    assert_eq!(word, 14);
+}
+
+#[test]
 fn scoped_callback_strings_copy_their_input_and_leave_the_scalar_slots_in_place() {
     unsafe extern "C-unwind" fn inspect(frame: *mut u64) {
         let words = unsafe { slice::from_raw_parts_mut(frame, 5) };
