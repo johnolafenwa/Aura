@@ -14,6 +14,8 @@ Last updated: 2026-11-17
   `benchmarks/image_codec` against Rust and Pillow.
   The documentation build and both dependency audits pass with the pinned glob matcher.
 - Left out: 16-bit samples, metadata, other formats, drawing.
+- JPEG encoding averages the colour in 2 by 2 pixel groups.
+  `benchmarks/image_codec/README.md` records the release comparison.
 
 ## Three compiler defects from the book sections (complete)
 

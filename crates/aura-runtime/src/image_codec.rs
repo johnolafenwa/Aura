@@ -383,30 +383,30 @@ fn encode_jpeg_on(
     quality: u8,
     threads: usize,
 ) -> Result<Vec<u8>, ImageError> {
+    use libjpeg_turbo_rs::{PixelFormat, Subsampling};
+
     let (jpeg_width, jpeg_height) = match (u16::try_from(width), u16::try_from(height)) {
         (Ok(width), Ok(height)) => (width, height),
         _ => return Err(unsupported("JPEG holds at most 65535 pixels a side")),
     };
-    let color =
+    let (color, sampling) =
         match channels {
-            1 => jpeg_encoder::ColorType::Luma,
-            3 => jpeg_encoder::ColorType::Rgb,
+            1 => (PixelFormat::Grayscale, Subsampling::S444),
+            3 => (PixelFormat::Rgb, Subsampling::S420),
             _ => return Err(unsupported(
                 "JPEG has no alpha channel: convert the image with `to_rgb()` or `to_gray()` first",
             )),
         };
     let encode = |rows: &[u8], height: u16| {
-        let mut output = Vec::with_capacity(rows.len() / 6 + 1024);
-        let mut encoder = jpeg_encoder::Encoder::new(&mut output, quality);
-        // What libjpeg and Pillow do at these qualities: colour at half
-        // resolution both ways.
-        if channels == 3 {
-            encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
-        }
-        encoder
-            .encode(rows, jpeg_width, height, color)
-            .map(|()| output)
-            .map_err(jpeg_failed)
+        libjpeg_turbo_rs::compress(
+            rows,
+            usize::from(jpeg_width),
+            usize::from(height),
+            color,
+            quality,
+            sampling,
+        )
+        .map_err(|error| invalid(format!("JPEG encoding failed: {error}")))
     };
 
     // A strip is a whole number of block rows, so its data is exactly what
@@ -449,10 +449,6 @@ fn encode_jpeg_on(
 
 fn jpeg_without_frame() -> ImageError {
     invalid("the JPEG has no frame header")
-}
-
-fn jpeg_failed(error: jpeg_encoder::EncodingError) -> ImageError {
-    invalid(format!("JPEG encoding failed: {error}"))
 }
 
 fn jpeg_strip_failed() -> ImageError {

@@ -16985,9 +16985,10 @@ made for PNG. Use them when speed matters more than size.
 **JPEG** is smaller and loses detail. `quality` runs from `1`, the smallest
 file, to `100`, the closest to the original. JPEG holds gray and colour
 only. An image with alpha is `image.Error.Unsupported`: call `to_rgb()` or
-`to_gray()` first, which states that the alpha is dropped. Colour is stored
-at half resolution in both directions, as most JPEG files are. A side longer
-than 65,535 pixels is `image.Error.Unsupported`.
+`to_gray()` first, which states that the alpha is dropped. JPEG stores
+brightness at full resolution and averages the colour of each 2 by 2 group
+of pixels (4:2:0 sampling). A side longer than 65,535 pixels is
+`image.Error.Unsupported`.
 
 **PPM** is uncompressed and trivial to parse, which makes it useful for
 tests and for tools that read nothing else. An image with alpha is

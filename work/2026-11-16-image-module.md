@@ -65,3 +65,14 @@ failed the audit. The lockfile pins the patched `@ryotsu/picomatch`
 4.0.7-a fork until upstream ships a fixed release. Both npm and Cargo
 audits pass locally. All 11 documentation-site tests pass, and
 VitePress builds and renders the site with the pinned package.
+
+
+## JPEG encoding on 2026-11-18
+
+The pure Rust `libjpeg-turbo-rs` encoder averages colour across each 2 by 2
+group of RGB pixels. On a red, green, blue, and white checkerboard, the
+previous top-left filter produced a red cast, with a maximum channel
+difference of 254. The regression checks that the decoded cells are neutral.
+The strip layout, quality range, grayscale support, and image-size limits
+are covered by the codec tests. Timings and sample conditions are in
+`benchmarks/image_codec/README.md`.

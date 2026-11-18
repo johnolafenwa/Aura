@@ -143,6 +143,26 @@ fn jpeg_round_trips_gray_and_rgb_within_tolerance() {
 }
 
 #[test]
+fn jpeg_chroma_subsampling_averages_the_four_pixel_colors() {
+    let colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+    let data: Vec<u8> = (0..16)
+        .flat_map(|y| (0..16).flat_map(move |x| colors[(y % 2) * 2 + x % 2]))
+        .collect();
+    let file = encode_jpeg(16, 16, 3, &data, 95).expect("encodes");
+    let pixels = decode(&file, NO_LIMIT).expect("decodes");
+    // Every 2x2 cell is neutral on average. It retains its individual
+    // lightness values without taking its color from the top-left red pixel.
+    assert!(pixels.data.chunks_exact(3).all(|rgb| {
+        let brightest = rgb[0].max(rgb[1]).max(rgb[2]);
+        let darkest = rgb[0].min(rgb[1]).min(rgb[2]);
+        brightest - darkest <= 3
+    }));
+    let red_lightness = pixels.data[0];
+    let white_lightness = pixels.data[3 * 17];
+    assert!(white_lightness.saturating_sub(red_lightness) > 100);
+}
+
+#[test]
 fn jpeg_quality_trades_size() {
     let data = gradient(64, 64, 3);
     let small = encode_jpeg(64, 64, 3, &data, 20).expect("encodes");
@@ -702,13 +722,8 @@ fn encoder_and_frame_faults_are_invalid_data_with_the_cause() {
     assert!(
         message(png_failed(png::EncodingError::LimitsExceeded)).starts_with("PNG encoding failed")
     );
-    assert!(message(jpeg_failed(
-        jpeg_encoder::EncodingError::ZeroImageDimensions {
-            width: 0,
-            height: 1,
-        }
-    ))
-    .starts_with("JPEG encoding failed"));
+    let error = encode_jpeg(0, 1, 3, &[], 90).expect_err("zero width cannot be encoded");
+    assert!(message(error).starts_with("JPEG encoding failed"));
     assert!(message(jpeg_strip_failed()).contains("strip"));
     assert_eq!(
         message(jpeg_without_frame()),
