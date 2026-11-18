@@ -12,9 +12,11 @@ Last updated: 2026-11-18
 - ADR-0103, the manual and Chapter 15 describe shared state. Runtime,
   verifier, CLI and editor regressions cover lock release, handle transfer
   and the multi-task example.
-- The uncontended integer lock takes 36.5 ns per update. Native Aura
-  took 1.10–2.59 times the Rust time and beat CPython on every
-  [shared-state workload](../benchmarks/shared_state/README.md).
+- The uncontended integer lock took 36.5 ns per update on four pinned
+  CPUs. Aura finished ahead of CPython on all six workloads on that
+  machine. The dedicated integration runner measured 823 ms in Aura,
+  288 ms in Rust and 494 ms in CPython for the four-task mutex.
+  [Shared-state measurements](../benchmarks/shared_state/README.md)
 
 - Combined verification with failure recovery covers a mutex held by the caller
   and a second mutex abandoned by a recovered call. See the shared-state note.

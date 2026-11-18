@@ -42,3 +42,22 @@ All checksums matched.
 The uncontended integer lock took 36.5 ns per increment, including
 acquire and release. The four-task cache took 1.22 times the Rust
 time for the same four million lookups.
+
+## Dedicated integration runner
+
+The combined Linux x86-64 release at `248ffb7e` produced the following
+median wall times in three runs. Each implementation returned the same
+checksums as the four-core run above. The Aura scheduler used four workers.
+
+| Workload | Aura (ms) | Rust (ms) | Python (ms) |
+| --- | ---: | ---: | ---: |
+| `lock` | 74 | 54 | 503 |
+| `atomic` | 203 | 148 | 2,522 |
+| `dict` | 140 | 51 | 588 |
+| `lock_shared` | 823 | 288 | 494 |
+| `atomic_shared` | 595 | 430 | 2,511 |
+| `cache_shared` | 876 | 348 | 30,755 |
+
+The four-task mutex took 2.86 times the Rust time and 1.67 times the
+Python time on this runner. The other five workloads finished sooner
+in Aura than in Python. [GitHub Actions measurements](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634681)

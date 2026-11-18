@@ -139,3 +139,8 @@ CPUs and checked all six workloads. The uncontended integer lock took
 36.5 ns per acquisition and update. The four-task cache took
 1.22 times the Rust time. The full measurements and workload
 checksums are in [the benchmark report](../benchmarks/shared_state/README.md).
+
+A dedicated Linux runner tested the combined release at `248ffb7e`.
+The four-task mutex took 823 ms in Aura, 288 ms in Rust and 494 ms in
+CPython. All three programs reported 4,000,000 increments. The four-task
+cache took 876 ms, 348 ms and 30,755 ms respectively.
