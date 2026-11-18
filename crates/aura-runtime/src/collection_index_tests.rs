@@ -972,9 +972,22 @@ fn shared_union_reads_and_writes_preserve_order_and_source_snapshots() {
     assert!(second.union(&union).contains_key(&int(-7)));
     let dense = snapshot.clone().into_vec();
     assert!(snapshot.iter().eq(&dense));
-    second.clear();
-    assert!(second.is_empty());
+    let copy = SetElements::cloned_from(dense, &snapshot);
+    assert!(snapshot.iter().eq(copy.iter()));
+    assert_eq!(copy.find(&int(191)), Some(&int(191)));
+
+    let mut cleared = snapshot.clone();
+    assert!(cleared.is_shared());
+    assert_eq!(cleared.capacity(), cleared.len());
+    assert_eq!(cleared.as_ptr(), snapshot.as_ptr());
+    cleared.clear();
+    assert!(cleared.is_empty());
     assert!(!snapshot.is_empty());
+
+    let mut reserved = snapshot.clone();
+    reserved.try_reserve(256).unwrap();
+    assert!(reserved.capacity() >= reserved.len() + 256);
+    assert!(reserved.iter().eq(snapshot.iter()));
 }
 
 #[test]
