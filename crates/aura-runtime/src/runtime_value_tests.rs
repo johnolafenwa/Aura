@@ -3286,6 +3286,10 @@ fn adr0038_closure_capture_access_recovers_poisoned_loan_bookkeeping() {
     let repeatable = Arc::new(ClosureEnvironment::new(vec![mutable_capture(3)], false));
     let poison_target = Arc::clone(&repeatable);
     let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pending = poison_target
+            .pending
+            .lock()
+            .expect("fresh pending captures");
         let _guard = poison_target
             .captures
             .lock()
@@ -3309,6 +3313,14 @@ fn adr0038_closure_capture_access_recovers_poisoned_loan_bookkeeping() {
     assert_eq!(borrowed[0].source_place.as_deref(), Some("state.counter"));
     assert!(borrowed[0].mutable);
     assert_eq!(borrowed[0].value, Value::Int(IntegerValue::from_i64(4)));
+
+    assert_eq!(repeatable.capture_count(), 1);
+    let moved = repeatable.take_captures().expect("capture remains owned");
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].source_place.as_deref(), Some("state.counter"));
+    assert_eq!(moved[0].value, Value::Int(IntegerValue::from_i64(4)));
+    assert_eq!(repeatable.capture_count(), 0);
+    assert!(repeatable.take_captures().is_none());
 
     let consuming = Arc::new(ClosureEnvironment::new(vec![mutable_capture(7)], true));
     let poison_target = Arc::clone(&consuming);
