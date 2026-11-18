@@ -39,3 +39,19 @@ medians were 220 ms for the Aura local function, 80 ms for Rust and
 10,872 ms for Python. All 159 language-server tests passed again. On a
 busy-worker repeat of the documentation suite, eight of the 1,096 examples
 hit their 30-second process limit. Each passed when rerun on a reserved CPU.
+
+## November 18 native calls
+
+Native invoke adapters keep their shape descriptor across calls and update
+captured values in the environment. The compiler uses a pointer-relative
+address to reach inline captures. The optimized local-function and lambda
+loops both call their known targets directly. Fourteen fixtures covering
+capture modes, stored and returned callables, tasks, recursion and temporary
+values matched all 81 expected output lines on MIR and native execution.
+
+The benchmark passes the same runtime seed and count to Aura, Rust and
+Python. The default 48-million-call loops returned 473,089. Three full
+runs measured median wall times of 386 ms for the named Aura function,
+388 ms for the Aura lambda, 296 ms for Rust and 18,443 ms for Python.
+See [the benchmark notes](../benchmarks/closures/README.md) for the
+separate process CPU measurements.
