@@ -1420,6 +1420,12 @@ fn pattern_contains_variant_shape(pattern: &Pattern) -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalFunctionBinding {
+    Declaration,
+    RecursiveCall,
+}
+
 #[derive(Clone)]
 struct LocalBinding {
     ty: Type,
@@ -1450,6 +1456,7 @@ struct LocalBinding {
     /// mutable-call closure category, so mutable access to these places is
     /// rejected even when the outer binding was declared `mut`.
     captured: bool,
+    local_function: Option<LocalFunctionBinding>,
     /// Present only for an explicit ADR-0038 view binding. Match and loop
     /// borrows continue to use the older provenance fields without becoming
     /// first-class views.
@@ -1463,6 +1470,34 @@ struct LocalBinding {
     /// Facts invalidated by a later mutation, retained so a stale member use
     /// reports AU2014 with the test and invalidation spans.
     stale_narrowing: BTreeMap<ProjectionPath, StaleNarrowing>,
+}
+
+impl LocalBinding {
+    fn local_function(ty: Type) -> Self {
+        Self {
+            ty,
+            assignable: false,
+            mutable_place: false,
+            managed_resource: false,
+            passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrowed_at: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
+            shared_match_scrutinee: None,
+            moved: false,
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
+            captured: false,
+            local_function: Some(LocalFunctionBinding::RecursiveCall),
+            view: None,
+            closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1640,6 +1675,10 @@ struct FunctionChecker<'a> {
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
+    /// Captures a local function has moved on a returning branch. A
+    /// returned branch does not otherwise contribute its move state to
+    /// the statements that follow it.
+    local_return_moves: Option<Rc<RefCell<BTreeSet<String>>>>,
     closure_owner: ClosureOwner,
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
@@ -2849,6 +2888,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
+            local_return_moves: None,
             closure_owner: ClosureOwner::TopLevel,
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2894,6 +2934,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -2943,6 +2984,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -2988,6 +3030,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3033,6 +3076,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3060,10 +3104,11 @@ impl<'a> FunctionChecker<'a> {
 
     /// Whether this checker is checking a class initializer's body.
     fn checks_initializer(&self) -> bool {
-        matches!(
-            &self.closure_owner,
-            ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
-        )
+        self.local_return_moves.is_none()
+            && matches!(
+                &self.closure_owner,
+                ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
+            )
     }
 
     fn with_closure_owner(mut self, owner: ClosureOwner) -> Self {
@@ -3856,6 +3901,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -3989,6 +4035,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -4021,6 +4068,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -4666,6 +4714,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        local_function: None,
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
@@ -5093,6 +5142,7 @@ impl<'a> FunctionChecker<'a> {
                             moved_fields: BTreeMap::new(),
                             frozen_places: BTreeMap::new(),
                             shared_match_places: BTreeMap::new(),
+                            local_function: None,
                             captured: false,
                             view: Some(ViewBinding {
                                 kind,
@@ -5354,6 +5404,17 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(value) = &return_stmt.value {
                             self.consume_value_expr(value, locals)?;
                         }
+                    }
+                    if let Some(moves) = &self.local_return_moves {
+                        moves.borrow_mut().extend(
+                            locals
+                                .iter()
+                                .filter(|(_, binding)| {
+                                    binding.captured
+                                        && (binding.moved || !binding.moved_fields.is_empty())
+                                })
+                                .map(|(name, _)| name.clone()),
+                        );
                     }
                     flow = BlockFlow::AlwaysReturns;
                     break;
@@ -5926,6 +5987,7 @@ impl<'a> FunctionChecker<'a> {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -6476,6 +6538,11 @@ impl<'a> FunctionChecker<'a> {
                 assign.span,
                 locals,
             )?;
+            if existing.captured && existing.assignable && existing.passing == ReceiverKind::Value {
+                self.mutated_captures
+                    .borrow_mut()
+                    .insert(binding_name.clone());
+            }
             if !existing.assignable && !existing.mutable_place {
                 if existing
                     .borrow_origin
@@ -6674,7 +6741,18 @@ impl<'a> FunctionChecker<'a> {
                 ..
             }
         );
-        if contextual_capturing_closure && mutable_repeatable_closure && !assign.mutable {
+        let local_function = matches!(
+            &assign.value.kind,
+            ExprKind::Lambda {
+                body: crate::ast::ClosureBody::Function { .. },
+                ..
+            }
+        );
+        if contextual_capturing_closure
+            && mutable_repeatable_closure
+            && !assign.mutable
+            && !local_function
+        {
             return Err(Diagnostic::coded_at(
                 "AU3003",
                 assign.span,
@@ -6754,6 +6832,7 @@ impl<'a> FunctionChecker<'a> {
                         moved_fields: BTreeMap::new(),
                         frozen_places: BTreeMap::new(),
                         shared_match_places: BTreeMap::new(),
+                        local_function: None,
                         captured: false,
                         view: None,
                         closure_loans: Vec::new(),
@@ -6818,6 +6897,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -6847,6 +6927,7 @@ impl<'a> FunctionChecker<'a> {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: local_function.then_some(LocalFunctionBinding::Declaration),
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -8190,6 +8271,13 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Name(name) if name == "None" => Ok(Type::Unit),
             ExprKind::Name(name) => {
                 if let Some(binding) = locals.get(name) {
+                    if binding.local_function == Some(LocalFunctionBinding::RecursiveCall) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2005",
+                            expr.span,
+                            "a local function can use itself only as the target of a direct call",
+                        ));
+                    }
                     self.ensure_pattern_binding_not_stale(name, expr.span, binding)?;
                     self.ensure_place_readable(
                         &PlacePath::root(name.clone()),
@@ -11272,6 +11360,25 @@ impl<'a> FunctionChecker<'a> {
         // Recover the same direct-call specialization only when the indexed
         // object is known to be a returned-view callable; ordinary runtime
         // indexing remains untouched.
+        if let Some(binding) = grouped_name(callee).and_then(|name| locals.get(name)) {
+            if binding.local_function == Some(LocalFunctionBinding::RecursiveCall) {
+                let Type::Function {
+                    params,
+                    return_type,
+                } = binding.ty.clone()
+                else {
+                    unreachable!("a recursive local function has its declared signature");
+                };
+                return self.type_check_function_value_args(
+                    &params,
+                    &return_type,
+                    args,
+                    span,
+                    locals,
+                    expected,
+                );
+            }
+        }
         self.check_recursive_call(callee, args, locals)?;
         let grouped = grouped_expr(callee);
         let mut grouped_specialization_base = None;
@@ -17379,6 +17486,12 @@ impl<'a> FunctionChecker<'a> {
                         if call_kind == ClosureCallKind::Consuming {
                             self.consume_value_expr(base_callee, locals)?;
                         } else if call_kind == ClosureCallKind::MutableRepeatable
+                            && !grouped_name(base_callee)
+                                .and_then(|name| locals.get(name))
+                                .is_some_and(|binding| {
+                                    binding.local_function
+                                        == Some(LocalFunctionBinding::Declaration)
+                                })
                             && !self.is_mutable_place(base_callee, locals)?
                         {
                             return Err(Diagnostic::coded_at(

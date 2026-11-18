@@ -1,0 +1,6 @@
+def main() -> None:
+    mut count = 0
+    def step() -> int64:
+        count += 1
+        return count
+    step = step

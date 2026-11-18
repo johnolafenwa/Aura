@@ -12337,6 +12337,8 @@ struct Lowerer<'a> {
     /// The MIR name of the function whose arguments are being lowered next,
     /// so an omitted default calls that function's generated default helper.
     default_helper_owner: Option<String>,
+    /// A local function's lexical name and the shared captures forwarded by direct recursion.
+    recursive_local: Option<(String, ClosureInfo)>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -12617,6 +12619,7 @@ impl<'a> Lowerer<'a> {
             function_name,
             module_name,
             default_helper_owner: None,
+            recursive_local: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -13426,7 +13429,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         params: &[crate::ast::LambdaParam],
-        body: &Expr,
+        body: &crate::ast::ClosureBody,
     ) -> Operand {
         let info = self
             .closure_info_at(expr.span)
@@ -13498,12 +13501,22 @@ impl<'a> Lowerer<'a> {
         // The body is lowered as a `return` statement, so the hidden loans
         // its expression takes (`lambda: items[0].area()` lends `items[0]`
         // to the call) end before the function returns.
-        let stmt = Stmt::Return(crate::ast::ReturnStmt {
-            value: Some(body.clone()),
-            view: None,
-            span: body.span,
-        });
-        lowerer.lower_stmts(std::slice::from_ref(&stmt));
+        match body {
+            crate::ast::ClosureBody::Expression(expr) => {
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some((**expr).clone()),
+                    view: None,
+                    span: expr.span,
+                });
+                lowerer.lower_stmts(std::slice::from_ref(&stmt));
+            }
+            crate::ast::ClosureBody::Function { name, statements } => {
+                if !params.iter().any(|param| param.name == *name) {
+                    lowerer.recursive_local = Some((name.clone(), info.clone()));
+                }
+                lowerer.lower_stmts(statements);
+            }
+        }
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
@@ -25799,6 +25812,14 @@ impl<'a> Lowerer<'a> {
             .then(|| crate::sema::substitute_type(returned, &substitutions))
     }
 
+    /// The enclosing local function's environment is passed directly on a
+    /// recursive call. Its name never occupies a local slot.
+    fn recursive_local_call(&self, callee: &Expr) -> Option<&ClosureInfo> {
+        let (name, info) = self.recursive_local.as_ref()?;
+        matches!(&grouped_mir_expr(callee).kind, ExprKind::Name(called) if called == name)
+            .then_some(info)
+    }
+
     fn lower_call(
         &mut self,
         expr: &Expr,
@@ -25806,6 +25827,28 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(info) = self.recursive_local_call(callee).cloned() {
+            let mut forwarded = info
+                .captures
+                .iter()
+                .map(|capture| MirArg {
+                    name: None,
+                    value: Operand::Place(self.render_local_name(&capture.name)),
+                    writeback_place: None,
+                })
+                .collect::<Vec<_>>();
+            forwarded.extend(self.lower_function_value_args(args, &info.params, callee.span));
+            let target = self.new_typed_temp(info.return_type);
+            self.emit(Instruction::Assign {
+                target: target.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(self.function_name.to_string()),
+                    args: forwarded,
+                    type_args: Default::default(),
+                },
+            });
+            return Operand::Place(target);
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.infer_expr_type(object).is_some_and(
                 |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
@@ -29138,6 +29181,9 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(info) = self.recursive_local_call(callee) {
+                return Some(info.return_type.clone());
+            }
             if let Some(alias_ty) = self.thin_callable_alias_target(callee) {
                 return Some(alias_ty);
             }

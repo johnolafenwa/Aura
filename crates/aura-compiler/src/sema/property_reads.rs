@@ -336,7 +336,10 @@ impl Rewriter<'_> {
                 self.expr(condition, false);
                 self.expr(else_expr, false);
             }
-            ExprKind::Lambda { body, .. } => self.expr(body, false),
+            ExprKind::Lambda { body, .. } => match body {
+                crate::ast::ClosureBody::Expression(value) => self.expr(value, false),
+                crate::ast::ClosureBody::Function { statements, .. } => self.block(statements),
+            },
             ExprKind::Call {
                 callee: target,
                 args,

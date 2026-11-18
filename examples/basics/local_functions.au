@@ -1,0 +1,36 @@
+type Counter = Callable[mut def() -> int64]
+type Walk = Callable[def(depth: int64) -> int64]
+
+
+def counter(start: int64) -> Counter:
+    mut count = start
+    def bump() -> int64:
+        count += 1
+        return count
+    return bump
+
+
+def walker(base: int64) -> Walk:
+    def walk(depth: int64) -> int64:
+        if depth == 0:
+            return base
+        return 1 + walk(depth - 1)
+    return walk
+
+
+def main() -> None:
+    mut next = counter(3)
+    print(next())
+    print(next())
+    walk = walker(11)
+    print(walk(3))
+    def factorial(value: int64) -> int64:
+        if value <= 1:
+            return 1
+        return value * factorial(value - 1)
+    print(factorial(5))
+    mut value = 7
+    def add[mut value](*, amount: int64) -> None:
+        value += amount
+    add(amount=4)
+    print(value)

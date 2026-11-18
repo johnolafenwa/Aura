@@ -1,0 +1,11 @@
+def consume(values: own list[int64]) -> int64:
+    return values.len()
+
+
+def main() -> None:
+    values = [1, 2]
+    def once[own values](depth: int64) -> int64:
+        if depth == 0:
+            return consume(values)
+        return once(depth - 1)
+    print(once(2))

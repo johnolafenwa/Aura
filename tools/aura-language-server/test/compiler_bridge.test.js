@@ -7112,3 +7112,32 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     }
   }
 });
+
+test("compiler bridge resolves a local function's parameter and captured binding", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-local-function-"));
+  const lines = [
+    "def main() -> None:",
+    "    base: int64 = 4",
+    "    def add(value: int64) -> int64:",
+    "        return value + base",
+    "    print(add(3))",
+    ""
+  ];
+  try {
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const uri = `file://${path.join(tempRoot, "main.au")}`;
+    const analysis = await analyzeWithCompiler(uri, lines.join("\n"));
+    assert.deepEqual(analysis.diagnostics, []);
+    for (const [name, line] of [["value", 2], ["base", 1]]) {
+      const read = analysis.occurrences.find(
+        (item) => item.line === 3 && item.start_character === lines[3].indexOf(name)
+      );
+      assert.equal(read?.definition.line, line, name);
+      assert.equal(read?.definition.start_character, lines[line].indexOf(name), name);
+      assert.match(read.hover, /int64/);
+    }
+  } finally {
+    setWorkspaceRoots([repoRoot]);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

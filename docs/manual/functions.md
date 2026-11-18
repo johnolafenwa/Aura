@@ -561,7 +561,7 @@ def main():
 
 ## Grammar
 
-[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Ordinary functions are module items. Nested function declarations are not accepted. [Closures](/manual/closures) specifies expression lambdas.
+[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Module functions are items. A local `def` binds a closure in the enclosing function. A lambda creates a closure in an expression. [Closures](/manual/closures)
 
 ## Typing Rules
 
@@ -632,16 +632,15 @@ Aura has none of these:
 - trait-object function interactions
 - Aura variadic functions
 - overloads
-- nested functions
 - mutable-parameter task targets
 
-[Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
+Written function types express bare shared, `mut`, and `own` parameter contracts. Local functions use those same parameter modes. [Closures](/manual/closures)
 
 Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 
-The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. By-value expression closures are implemented.
+The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. Lambdas and local functions support captures.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 

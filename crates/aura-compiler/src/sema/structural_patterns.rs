@@ -192,6 +192,7 @@ impl FunctionChecker<'_> {
                             moved_fields: BTreeMap::new(),
                             frozen_places: BTreeMap::new(),
                             shared_match_places: BTreeMap::new(),
+                            local_function: None,
                             captured: false,
                             view: None,
                             closure_loans: Vec::new(),

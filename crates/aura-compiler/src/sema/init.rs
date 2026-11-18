@@ -413,7 +413,12 @@ impl<'a> InitializerChecker<'a> {
                     .iter()
                     .flatten()
                     .any(|capture| capture.name == "self")
-                    || expr_mentions_self(body)
+                    || match body {
+                        crate::ast::ClosureBody::Expression(value) => expr_mentions_self(value),
+                        crate::ast::ClosureBody::Function { statements, .. } => {
+                            super::block_references_name(statements, "self")
+                        }
+                    }
                 {
                     return self.require_whole(state, expr.span);
                 }
@@ -565,7 +570,14 @@ pub(super) fn visit_expr(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
             visit_expr(then_expr, visit);
             visit_expr(else_expr, visit);
         }
-        ExprKind::Lambda { body, .. } => visit_expr(body, visit),
+        ExprKind::Lambda {
+            body: crate::ast::ClosureBody::Expression(value),
+            ..
+        } => visit_expr(value, visit),
+        ExprKind::Lambda {
+            body: crate::ast::ClosureBody::Function { .. },
+            ..
+        } => {}
         ExprKind::Call { callee, args } => {
             visit_expr(callee, visit);
             for argument in args {

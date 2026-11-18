@@ -1,0 +1,18 @@
+type Shared = Callable[def(take: bool) -> int64]
+
+
+def consume(values: own list[int64]) -> int64:
+    return values.len()
+
+
+def make(values: own list[int64]) -> Shared:
+    def read[own values](take: bool) -> int64:
+        if take:
+            return consume(values)
+        return 0
+    return read
+
+
+def main() -> None:
+    read = make([2])
+    print(read(true))

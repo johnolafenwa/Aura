@@ -7,6 +7,8 @@ in this file.
 
 ## Unreleased
 
+- A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
+
 - Language: a closure is stored without ceremony. A lambda, a function, a
   bound method, or a local that holds a closure packs where a
   `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
