@@ -11536,10 +11536,12 @@ fn task_group_cleanup_probe_waits_for_a_child_parked_on_blocking_io() {
 #[test]
 fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     let channel = ChannelValue::new();
-    let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
-    assert_eq!(
-        wait_task_ready(&task).expect("snapshot dependency task should complete"),
-        Value::Unit
+    let task = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    super::complete_lightweight_task_state(
+        &task.inner,
+        TaskExecutionResult::Ready(Ok(Value::Unit)),
     );
 
     let task_weak = Arc::downgrade(&task.inner);
@@ -11561,14 +11563,11 @@ fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     drop(registration);
     drop(task);
     drop(channel);
-    for _ in 0..100 {
-        if task_weak.upgrade().is_none() {
-            break;
-        }
-        thread::yield_now();
-    }
     assert!(task_weak.upgrade().is_none());
     assert!(channel_weak.upgrade().is_none());
+    assert!(snapshot.task_waits[0].upgrade().is_none());
+    assert!(snapshot.recv_channels[0].upgrade().is_none());
+    assert!(snapshot.send_channels[0].upgrade().is_none());
 }
 
 #[test]
