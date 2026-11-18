@@ -61,3 +61,10 @@ chain. A pop now carries its method's definition position so the error
 can record the same frame as MIR. The fixtures exercise an empty deque
 and a drained heap. Ubuntu also caught two missing sibling-module
 qualifiers in the confinement test.
+
+The dedicated GitHub Ubuntu runner measured the release built at
+`1171e6c0` on 2026-11-18. Aura took 2.80 times Rust for deque, 1.03
+for heap, 2.02 for map and 1.87 for set. All four beat Python. On a
+shared-host repeat of the `c9fc4b7c` release, the wall-time ratios for
+map and set exceeded three, at 3.08 and 3.98. The full measurements
+and clocks are in the benchmark README. [Hosted results](https://github.com/johnolafenwa/Aura/actions/runs/44201719086/job/134465583204)
