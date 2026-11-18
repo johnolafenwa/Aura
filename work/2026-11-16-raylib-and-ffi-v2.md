@@ -233,3 +233,14 @@ scoped header and 93.61 ns with a worker header. The latter was faster
 in 15 pairs. The implementation keeps the scoped header and avoids a
 persistent per-worker value. A native C probe ran 1,000 nested
 callback pairs, checking that both strings retained their original bytes.
+
+The scoped callback skips list and array layout discovery for its strings
+and calls the body immediately after copying the last selected argument. Its
+C-string validation, owned bytes, nesting and unwind guard are shared
+with the previous implementation. Independent paired probes with ASCII,
+Unicode, two short strings and four heap strings reduced median process
+CPU time by 14.5% to 21.1%. Native allocation probes observed exactly
+one release of the 2 KiB copy after both normal return and unwind, and
+1,000 nested callback pairs preserved the inner and outer strings.
+The benchmark README records the full-program comparisons against Rust
+and Python.
