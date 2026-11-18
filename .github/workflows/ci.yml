@@ -436,6 +436,9 @@ jobs:
       - name: Check the libraries the compiler loads
         run: python3 scripts/check-aura-libraries.py target/release/aura
 
+      - name: Check native executable contents and sizes
+        run: python3 scripts/check-native-binaries.py
+
       - name: Package the release archive
         shell: bash
         run: |
@@ -470,9 +473,6 @@ jobs:
           path: aura-v*.tar.gz
           retention-days: 1
           if-no-files-found: error
-
-      - name: Check native executable contents and sizes
-        run: python3 scripts/check-native-binaries.py
 
       - name: Build the Debian package and install it with apt-get
         if: runner.os == 'Linux'
