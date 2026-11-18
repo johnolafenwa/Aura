@@ -505,16 +505,12 @@ impl SyncValue {
 
     /// Adds `delta` and returns the new value. An overflow traps after the
     /// stored word has wrapped.
+    #[inline]
     pub fn add(&self, delta: i64) -> Result<i64> {
         let previous = self
             .as_atom("sync.__aura_atom_add")?
             .fetch_add(delta, Ordering::SeqCst);
-        previous.checked_add(delta).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4002",
-                "integer overflow in `sync.AtomicInt.add`: the stored value has wrapped",
-            )
-        })
+        previous.checked_add(delta).ok_or_else(atomic_add_overflow)
     }
 
     pub fn swap(&self, value: i64) -> Result<i64> {
@@ -532,6 +528,15 @@ impl SyncValue {
     }
 }
 
+#[cold]
+fn atomic_add_overflow() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4002",
+        "integer overflow in `sync.AtomicInt.add`: the stored value has wrapped",
+    )
+}
+
+#[cold]
 fn wrong_handle(call: &str, expected: &str, found: &str) -> Diagnostic {
     Diagnostic::coded(
         "AU4001",

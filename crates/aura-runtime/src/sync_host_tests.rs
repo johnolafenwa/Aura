@@ -182,6 +182,14 @@ fn an_atom_add_that_overflows_traps() {
     let error = atom.add(1).expect_err("an overflow");
     assert_eq!(error.code, "AU4002");
     assert_eq!(atom.load().expect("an atom"), i64::MIN);
+
+    let copy = atom.clone();
+    let underflow = std::thread::spawn(move || copy.add(-1).unwrap_err())
+        .join()
+        .expect("the other thread completed the add");
+    assert_eq!(underflow.code, "AU4002");
+    assert_eq!(underflow.message, error.message);
+    assert_eq!(atom.load().expect("the same atomic word"), i64::MAX);
 }
 
 #[test]
