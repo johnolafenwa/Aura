@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-17
+Last updated: 2026-11-18
 
 ## The `image` module (complete)
 
@@ -45,7 +45,9 @@ Last updated: 2026-11-17
   for numeric member reads can reuse those bytes. A callback that only reads
   its text inputs can hold the owned strings on its stack. The latest nine-run
   CPU medians were 1.71×, 2.66×, 1.29× and 3.42× Rust’s respectively.
-  All four beat Python ctypes in the previous three-way comparison.
+  All four beat Python ctypes in a separate five-run comparison. The
+  expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
+  GLFW and SQLite.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
 
 ## Three compiler defects from the book sections (complete)

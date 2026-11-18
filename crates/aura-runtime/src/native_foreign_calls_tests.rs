@@ -773,6 +773,47 @@ fn scoped_callback_strings_copy_their_input_and_leave_the_scalar_slots_in_place(
 }
 
 #[test]
+fn nested_scoped_callbacks_keep_the_outer_string_until_the_body_returns() {
+    unsafe extern "C-unwind" fn compare(frame: *mut u64) {
+        let words = unsafe { slice::from_raw_parts_mut(frame, 3) };
+        assert_ne!(words[0], words[1]);
+        assert_eq!(rendered(words[0] as *mut OpaqueValue), "nested");
+        assert_eq!(rendered(words[1] as *mut OpaqueValue), "outer");
+        words[2] = 1;
+    }
+    unsafe extern "C-unwind" fn outer(frame: *mut u64) {
+        let words = unsafe { slice::from_raw_parts_mut(frame, 2) };
+        let mut nested = [c"nested".as_ptr() as u64, words[0], 0];
+        unsafe {
+            super::aura_direct_ffi_callback_local_text_guard(
+                compare,
+                nested.as_mut_ptr(),
+                1,
+                b"compare".as_ptr(),
+                7,
+            )
+        };
+        super::aura_direct_ffi_callback_check();
+        assert_eq!(rendered(words[0] as *mut OpaqueValue), "outer");
+        words[1] = nested[2];
+    }
+    for _ in 0..2 {
+        let mut frame = [c"outer".as_ptr() as u64, 0];
+        unsafe {
+            super::aura_direct_ffi_callback_local_text_guard(
+                outer,
+                frame.as_mut_ptr(),
+                1,
+                b"outer".as_ptr(),
+                5,
+            )
+        };
+        super::aura_direct_ffi_callback_check();
+        assert_eq!(frame[1], 1);
+    }
+}
+
+#[test]
 fn a_callback_copies_the_c_text_it_receives() {
     let function = "show";
     unsafe {
