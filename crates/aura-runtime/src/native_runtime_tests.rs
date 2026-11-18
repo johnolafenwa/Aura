@@ -30921,3 +30921,40 @@ fn direct_char_at_reads_one_character_and_traps_out_of_range() {
         assert!(trap.message.contains("is out of range for a string of"));
     }
 }
+
+#[test]
+fn native_numbers_read_borrowed_limbs_and_return_modular_powers_in_one_word() {
+    use crate::list_elements::ListElements;
+    let words = |digits: Vec<u64>| {
+        Value::Vec(VecValue::new(
+            Type::named("uint64"),
+            ListElements::Uint64(digits.into()),
+        ))
+    };
+    let left = super::boxed_value(words(vec![1, 0, 0, 0, u64::MAX]));
+    let sum = super::aura_direct_big_add_words(left, left);
+    assert_eq!(
+        unsafe { take_value(sum) },
+        words(vec![1, 0, 0, 0, u64::MAX - 1, 1])
+    );
+    assert_eq!(
+        unsafe { take_value(left) },
+        words(vec![1, 0, 0, 0, u64::MAX])
+    );
+    assert_eq!(super::aura_direct_small_pow_mod(-2, 3, -5), -3);
+}
+
+#[test]
+fn native_decimal_result_slot_is_written_only_for_compact_answers() {
+    let mut out = [7, 9];
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(0, i64::MAX, 0, 1, 0, &mut out),
+        0
+    );
+    assert_eq!(out, [7, 9]);
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(1, -25, -2, 4, 0, &mut out),
+        1
+    );
+    assert_eq!(out, [-1, 0]);
+}

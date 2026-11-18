@@ -829,3 +829,22 @@ def main() -> None:
     assert_eq!(direct.closure_environments, 1);
     assert_eq!(direct.callable_overflow_allocations, 1);
 }
+
+#[test]
+fn small_bigint_arithmetic_keeps_the_loop_accumulator_inline() {
+    let sample = |count: u64| {
+        let source = format!(
+            "from numbers import BigInt\n\ndef main() -> None:\n    mut total = BigInt.from_int(0)\n    for i in range({count}):\n        total = total + BigInt.from_int(i)\n    print(str(total))\n"
+        );
+        let (out, stats) = run_with_stats("repr-small-bigint", &source, "direct");
+        assert_eq!(out, format!("{}\n", count * (count - 1) / 2));
+        stats
+    };
+    let short = sample(16);
+    let long = sample(256);
+    assert_eq!(
+        long.opaque_boxes, short.opaque_boxes,
+        "additional small additions allocate no boxes"
+    );
+    assert_eq!(long.union_payload_boxes, short.union_payload_boxes);
+}

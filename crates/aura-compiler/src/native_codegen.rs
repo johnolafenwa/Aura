@@ -481,6 +481,25 @@ struct PlainClassField {
 }
 
 impl DirectType {
+    /// A number wraps one union field. Its tag and payload travel as the
+    /// class's own words, so only its large member holds a reference.
+    fn owned_union(&self) -> Option<&DirectUnionType> {
+        let union = match self {
+            Self::Union(union) => union,
+            Self::PlainClass(class) => {
+                let [field] = class.fields.as_slice() else {
+                    return None;
+                };
+                let Self::Union(union) = &field.ty else {
+                    return None;
+                };
+                union
+            }
+            _ => return None,
+        };
+        union.owns_handles().then_some(union)
+    }
+
     fn abi_types(&self) -> Vec<ScalarType> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
@@ -3227,6 +3246,7 @@ fn function_op_arg_layout(op: FunctionOp, index: usize) -> FunctionOpArgLayout {
         FunctionOp::RngNew
         | FunctionOp::RandomSecureInt
         | FunctionOp::RandomSecureBytes
+        | FunctionOp::SmallPowMod
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
         | FunctionOp::DurationMinutes
@@ -3264,6 +3284,7 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
         | FunctionOp::TimeFailed
         | FunctionOp::RegexIsMatch => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
         FunctionOp::RandomSecureInt
+        | FunctionOp::SmallPowMod
         | FunctionOp::MonotonicTimeMs
         | FunctionOp::TimeParsedSeconds
         | FunctionOp::TimeParsedNanos
@@ -4193,17 +4214,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn temporary_owns_union(&self, value: &ValueRef) -> bool {
-        matches!(value.ty, DirectType::Union(_))
+        value.ty.owned_union().is_some()
             && self.layout_scratch.unions.contains_key(&value.values[0])
     }
 
     fn mark_temporary_union_owned(&mut self, value: &ValueRef) {
-        if let DirectType::Union(union) = &value.ty {
-            if union.owns_handles() {
-                self.layout_scratch
-                    .unions
-                    .insert(value.values[0], (value.values.clone(), union.clone()));
-            }
+        if let Some(union) = value.ty.owned_union() {
+            self.layout_scratch
+                .unions
+                .insert(value.values[0], (value.values.clone(), union.clone()));
         }
     }
 
@@ -4265,8 +4284,7 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_union_owned(value);
             return value.values.clone();
         }
-        if let DirectType::Union(union) = &value.ty {
-            let union = union.clone();
+        if let Some(union) = value.ty.owned_union().cloned() {
             self.retain_union_words(&union, &value.values);
         }
         value.values.clone()
@@ -4407,7 +4425,7 @@ impl<'a> FunctionCompiler<'a> {
     fn transfer_values(&mut self, value: &ValueRef) -> Vec<Val> {
         match &value.ty {
             DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
-            DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
+            ty if ty.owned_union().is_some() => self.transfer_union_words(value),
             DirectType::Callable(_) => self.transfer_callable_words(value),
             _ => value.values.clone(),
         }
@@ -4433,11 +4451,11 @@ impl<'a> FunctionCompiler<'a> {
         {
             return Ok(());
         }
+        if let Some(union) = ty.owned_union() {
+            self.release_union_words(union, &words);
+            return Ok(());
+        }
         match &ty {
-            DirectType::Union(union) => {
-                let union = union.clone();
-                self.release_union_words(&union, &words);
-            }
             DirectType::Callable(_) => self.release_callable_words(&words),
             _ if self.lent_places.contains(name) => {
                 let owned = self.owned_lent_word(words[0]);
@@ -5243,13 +5261,13 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(ty),
                 }
             }
-            DirectType::Union(union) if union.owns_handles() => {
+            ty if ty.owned_union().is_some() => {
                 if self.temporary_owns_union(&value) {
                     self.clear_temporary_union_owned(&value);
                     value
                 } else {
-                    let union = union.clone();
-                    self.retain_union_words(&union, &value.values);
+                    let union = ty.owned_union().expect("matched an owning union");
+                    self.retain_union_words(union, &value.values);
                     let fresh = self.fresh_words(value);
                     self.retained_unions.insert(fresh.values[0]);
                     fresh
@@ -8146,6 +8164,48 @@ impl<'a> FunctionCompiler<'a> {
             );
             return Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")));
         }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            && left.ty == right.ty
+            && left.ty.scalar_kind().is_none()
+        {
+            if let DirectType::PlainClass(class) = left.ty.clone() {
+                // A Copy class is equal field by field, each field under
+                // the rule of its own type.
+                let mut equal = self.builder.iconst(types::I64, 1);
+                let mut at = 0;
+                for field in &class.fields {
+                    let words = field.ty.abi_types().len();
+                    let field_equal = self.compile_binary(
+                        BinaryOp::Eq,
+                        ValueRef {
+                            values: left.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        ValueRef {
+                            values: right.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        span,
+                        ArithmeticTrap::None,
+                    )?;
+                    equal = self.builder.band(equal, field_equal.values[0]);
+                    at += words;
+                }
+                let result = if op == BinaryOp::Eq {
+                    equal
+                } else {
+                    self.builder.bxor_imm(equal, 1)
+                };
+                return Ok(ValueRef {
+                    values: vec![result],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                });
+            }
+            // Any other inline value: the runtime compares the boxed forms.
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            return self.compile_binary(op, left, right, span, trap);
+        }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(lhs), Some(rhs)) if lhs == rhs && lhs.is_narrow_integer() => {
                 self.compile_narrow_binary(lhs, op, left.values[0], right.values[0], span, trap)
@@ -9404,9 +9464,7 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_call_result_owned(&mut self, value: &ValueRef) {
         match &value.ty {
             DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(value)
-            }
+            ty if ty.owned_union().is_some() => self.mark_temporary_union_owned(value),
             DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
             _ => {}
         }
@@ -12490,6 +12548,13 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::TypeParam(_))
                 {
                     return self.unbox_inline_union(&union, value.values[0]);
+                }
+            }
+            if matches!(&value.ty, DirectType::PlainClass(_)) && value.ty.owned_union().is_some() {
+                let boxed_ty = DirectType::Opaque(direct_type_to_type(&value.ty));
+                if union.members.iter().any(|member| member.ty == boxed_ty) {
+                    let boxed = self.ensure_opaque(value)?;
+                    return self.coerce_value_at(boxed, target, span);
                 }
             }
             // A bare member value lifts into the union it is a member of
@@ -15972,14 +16037,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             });
             let value = writebacks.last().expect("just pushed writeback");
-            match &value.ty {
-                DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-                DirectType::Union(union) if union.owns_handles() => {
-                    self.mark_temporary_union_owned(value)
-                }
-                DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
-                _ => {}
-            }
+            self.mark_call_result_owned(value);
             cursor += count;
         }
         let result = ValueRef {
@@ -15987,14 +16045,7 @@ impl<'a> FunctionCompiler<'a> {
             ty: result_ty,
         };
         // The callee exported one owned reference; the caller adopts it.
-        match &result.ty {
-            DirectType::Callable(_) => self.mark_temporary_callable_owned(&result),
-            DirectType::Opaque(_) => self.mark_temporary_opaque_owned(&result),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(&result)
-            }
-            _ => {}
-        }
+        self.mark_call_result_owned(&result);
         Ok((result, writebacks))
     }
 
@@ -16116,6 +16167,88 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Keep compact arithmetic in the caller. Both operands are borrowed and
+    /// the scalar branch owns no handles. The ordinary method performs every
+    /// promotion and supplies its usual owned result on the other branch.
+    fn call_numeric_method(
+        &mut self,
+        name: &str,
+        receiver: &DirectType,
+        callee: FuncRef,
+        args: &[Val],
+    ) -> Vec<Val> {
+        let operation = match name {
+            "Add[numbers.BigInt, numbers.BigInt] for numbers.BigInt.add"
+            | "Add[numbers.Decimal, numbers.Decimal] for numbers.Decimal.add" => BinaryOp::Add,
+            "Sub[numbers.BigInt, numbers.BigInt] for numbers.BigInt.sub" => BinaryOp::Sub,
+            "Mul[numbers.BigInt, numbers.BigInt] for numbers.BigInt.mul"
+            | "Mul[numbers.Decimal, numbers.Decimal] for numbers.Decimal.mul" => BinaryOp::Mul,
+            _ => return self.builder.call(callee, args).results,
+        };
+        let Some(union) = receiver.owned_union() else {
+            return self.builder.call(callee, args).results;
+        };
+        let scalar_index = union.members.iter().position(|member| {
+            member.ty == DirectType::Scalar(ScalarKind::Int64)
+                || matches!(&member.ty, DirectType::PlainClass(class) if class.class_name == "numbers.SmallDecimal")
+        });
+        let Some(scalar_index) = scalar_index else {
+            return self.builder.call(callee, args).results;
+        };
+        let count = receiver.value_count();
+        debug_assert_eq!(args.len(), 2 * count);
+        let (left, right) = args.split_at(count);
+        let fallback = self.builder.create_block();
+        let done = self.builder.create_block();
+        for _ in 0..count {
+            self.builder.append_block_param(done, types::I64);
+        }
+        let tag = self.builder.iconst(types::I64, scalar_index as i64);
+        let a_small = self.builder.icmp(IntCC::Equal, left[0], tag);
+        let b_small = self.builder.icmp(IntCC::Equal, right[0], tag);
+        let both_small = self.builder.band(a_small, b_small);
+        if count == 2 {
+            let (value, overflow) = match operation {
+                BinaryOp::Add => self.builder.sadd_overflow(left[1], right[1]),
+                BinaryOp::Sub => self.builder.ssub_overflow(left[1], right[1]),
+                _ => self.builder.smul_overflow(left[1], right[1]),
+            };
+            let fits = self.builder.icmp_imm(IntCC::Equal, overflow, 0);
+            let inline = self.builder.band(both_small, fits);
+            self.builder
+                .brif(inline, done, &[tag, value], fallback, &[]);
+        } else {
+            let calculate = self.builder.create_block();
+            let found = self.builder.create_block();
+            self.builder.brif(both_small, calculate, &[], fallback, &[]);
+            self.builder.switch_to_block(calculate);
+            self.builder.seal_block(calculate);
+            let slot = self.builder.create_sized_stack_slot(16, 3);
+            let out = self.builder.stack_addr(types::I64, slot, 0);
+            let multiply = self
+                .builder
+                .iconst(types::I64, i64::from(operation == BinaryOp::Mul));
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::SmallDecimalBinary],
+                &[multiply, left[1], left[2], right[1], right[2], out],
+            );
+            let fits = self.builder.icmp_imm(IntCC::NotEqual, call.results[0], 0);
+            self.builder.brif(fits, found, &[], fallback, &[]);
+            self.builder.switch_to_block(found);
+            self.builder.seal_block(found);
+            let coefficient = self.builder.load(types::I64, MemFlags::new(), out, 0);
+            let exponent = self.builder.load(types::I64, MemFlags::new(), out, 8);
+            self.builder.jump(done, &[tag, coefficient, exponent]);
+        }
+        self.builder.switch_to_block(fallback);
+        self.builder.seal_block(fallback);
+        let result = self.builder.call(callee, args).results;
+        self.builder.jump(done, &result);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.block_params(done)
+    }
+
     /// Calls the method `function` MIR resolved for a member call, with
     /// the receiver first. A `mut self` receiver writes back to its place.
     fn compile_method_call(
@@ -16219,8 +16352,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-        let inst = self.builder.call(func_ref, &lowered_args);
-        let results = inst.results;
+        let results =
+            self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
         if keeps_shape {
@@ -16684,6 +16817,47 @@ impl<'a> FunctionCompiler<'a> {
                     ),
                     other => (other.clone(), direct_type_to_type(other)),
                 };
+                if object.ty == DirectType::Scalar(ScalarKind::Int64)
+                    && matches!(
+                        op,
+                        ScalarOp::WrappingAdd
+                            | ScalarOp::WrappingSub
+                            | ScalarOp::WrappingMul
+                            | ScalarOp::SaturatingAdd
+                            | ScalarOp::SaturatingSub
+                            | ScalarOp::SaturatingMul
+                    )
+                {
+                    let rhs = self.load_operand_for_target(&argument.value, &target)?;
+                    let rhs = self.coerce_value(rhs, &target)?.values[0];
+                    let lhs = object.values[0];
+                    let value = match op {
+                        ScalarOp::WrappingAdd => self.builder.iadd(lhs, rhs),
+                        ScalarOp::WrappingSub => self.builder.isub(lhs, rhs),
+                        ScalarOp::WrappingMul => self.builder.imul(lhs, rhs),
+                        _ => {
+                            let (result, overflow) = match op {
+                                ScalarOp::SaturatingAdd => self.builder.sadd_overflow(lhs, rhs),
+                                ScalarOp::SaturatingSub => self.builder.ssub_overflow(lhs, rhs),
+                                _ => self.builder.smul_overflow(lhs, rhs),
+                            };
+                            let sign = if op == ScalarOp::SaturatingMul {
+                                self.builder.bxor(lhs, rhs)
+                            } else {
+                                lhs
+                            };
+                            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, sign, 0);
+                            let min = self.builder.iconst(types::I64, i64::MIN);
+                            let max = self.builder.iconst(types::I64, i64::MAX);
+                            let limit = self.builder.select(negative, min, max);
+                            self.builder.select(overflow, limit, result)
+                        }
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: target,
+                    });
+                }
                 let left = self.ensure_opaque(object)?;
                 let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
                 let mut words = vec![left.values[0], right.values[0]];
@@ -20347,8 +20521,7 @@ fn direct_ffi_type_for_source(
 fn layout_owns_handles(ty: &DirectType) -> bool {
     match ty {
         DirectType::Opaque(_) | DirectType::Callable(_) => true,
-        DirectType::Union(union) => union.owns_handles(),
-        DirectType::Scalar(_) | DirectType::PlainClass(_) => false,
+        other => other.owned_union().is_some(),
     }
 }
 
@@ -20389,7 +20562,18 @@ fn direct_type_inner(
                         matches!(candidate, Type::Named(name, _) if classes.contains_key(name))
                     })
                     .unwrap_or_else(|| member.clone());
-                members.push(direct_type_inner(&resolved, classes, visiting)?);
+                let layout = direct_type_inner(&resolved, classes, visiting)?;
+                // A union payload holds at most one layer of ownership
+                // tags. Box a number at this boundary and recover its
+                // private storage words on the next concrete read.
+                let layout = if matches!(&layout, DirectType::PlainClass(_))
+                    && layout.owned_union().is_some()
+                {
+                    DirectType::Opaque(resolved)
+                } else {
+                    layout
+                };
+                members.push(layout);
             }
             Some(DirectType::Union(DirectUnionType::new(ty.clone(), members)))
         }
@@ -20425,12 +20609,12 @@ fn direct_type_inner(
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     };
-                    let owns_handles = match &field_ty {
-                        DirectType::Opaque(_) | DirectType::Callable(_) => true,
-                        DirectType::Union(union) => union.owns_handles(),
-                        _ => false,
-                    };
-                    if owns_handles {
+                    let numeric_storage =
+                        matches!(name.as_str(), "numbers.BigInt" | "numbers.Decimal")
+                            && class.fields.len() == 1
+                            && field.name == "storage"
+                            && matches!(field_ty, DirectType::Union(_));
+                    if layout_owns_handles(&field_ty) && !numeric_storage {
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     }

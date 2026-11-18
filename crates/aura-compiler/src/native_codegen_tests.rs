@@ -1121,6 +1121,32 @@ def main():
 }
 
 #[test]
+fn word_arithmetic_for_exact_numbers_stays_unboxed() {
+    let source = "\
+def grow(value: int64, rhs: int64) -> int64:
+    return value.wrapping_mul(rhs).saturating_add(rhs).saturating_sub(value)
+
+def main() -> None:
+    print(grow(9223372036854775807, 2))
+";
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(!referenced
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_width_binary")));
+}
+
+#[test]
+fn compact_numeric_arithmetic_emits_scalar_decimal_calls() {
+    let source = include_str!("../tests/fixtures/run-pass/numbers_word_arithmetic.au");
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(referenced
+        .iter()
+        .any(|symbol| symbol.contains("aura_direct_small_decimal_binary")));
+}
+
+#[test]
 fn direct_dynamic_binary_opcodes_match_the_runtime_abi() {
     for (operator, opcode) in [
         (BinaryOp::Add, 0),
@@ -18080,4 +18106,38 @@ def main() -> None:
         object_contains_symbol(&object, "aura_direct_closure_value_deferred"),
         "the shape's box adapter keeps the inline words"
     );
+}
+
+#[test]
+fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
+    let big = Type::named("numbers.BigInt");
+    let words = Type::Named("list".into(), vec![Type::named("uint64")]);
+    let storage = Type::normalize_union(
+        vec![Type::named("int64"), words],
+        "numbers",
+        &Default::default(),
+    )
+    .unwrap();
+    let classes = HashMap::from([(
+        "numbers.BigInt".into(),
+        crate::mir::MirClass {
+            name: "numbers.BigInt".into(),
+            type_params: vec![],
+            fields: vec![class_field("storage", storage)],
+            methods: vec![],
+            copy: false,
+        },
+    )]);
+    let ty = direct_type(&big, &classes).unwrap();
+    assert!(matches!(ty, DirectType::PlainClass(_)));
+    assert!(super::layout_owns_handles(&ty));
+    assert_eq!(ty.abi_types(), vec![types::I64, types::I64]);
+    let optional = aura_core::types::optional_type(big.clone());
+    let Some(DirectType::Union(optional)) = direct_type(&optional, &classes) else {
+        panic!("a concrete optional is inline");
+    };
+    assert!(optional
+        .members
+        .iter()
+        .any(|member| member.ty == DirectType::Opaque(big.clone())));
 }
