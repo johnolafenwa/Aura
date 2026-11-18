@@ -76,9 +76,10 @@ Last updated: 2026-11-18
   reads, and UTF-8 callbacks. Native record arrays with a matching C
   layout copy directly into a call buffer. C-filled union lists used only
   for numeric member reads can reuse those bytes. A callback that only reads
-  its text inputs can hold the owned strings on its stack. The latest nine-run
-  CPU medians were 1.71×, 2.66×, 1.29× and 3.42× Rust’s respectively.
-  All four beat Python ctypes in a separate five-run comparison. The
+  its text inputs can hold the owned strings on its stack. All four workloads
+  beat Python ctypes on the dedicated Linux runner at `5f111af1`. The text
+  callback took 32.64 ns in Aura, 9.61 ns in Rust and 378.88 ns in Python.
+  The other three were within three times the Rust time. The
   expanded 35-case FFI suite passed under Xvfb with real raylib, SDL2,
   GLFW and SQLite.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
