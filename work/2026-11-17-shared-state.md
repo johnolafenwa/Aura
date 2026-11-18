@@ -164,3 +164,12 @@ The cross-backend waiter fixture uses a queue to signal when the owner
 holds the mutex. Two other tasks request the same mutex and can proceed
 once the owner receives a release signal. It checks all three completions
 and the value published by the last release.
+
+The complete runtime suite passed all 1,365 tests with the file-cache
+fixture on tmpfs. The native waiter fixture matched its golden output in
+five runs each with one, two and four workers. The dedicated combined
+release at `1033d521` measured 158 ms for the four-task mutex, against
+97 ms for Rust and 822 ms for CPython. On `5f111af1` the corresponding
+figures were 502, 104 and 838 ms. Uncontended lock and atomic performance
+on the new runner remained above three times the Rust time. The benchmark
+report includes every workload and the local CPU and wall comparisons.

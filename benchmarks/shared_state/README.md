@@ -43,38 +43,33 @@ The uncontended integer lock took 36.5 ns per increment, including
 acquire and release. The four-task cache took 1.22 times the Rust
 time for the same four million lookups.
 
-## Dedicated integration runner
+## Dedicated integration runners
 
-The combined Linux x86-64 release at `248ffb7e` produced the following
-median wall times in three runs. Each implementation returned the same
-checksums as the four-core run above. The Aura scheduler used four workers.
+Each column gives median milliseconds in Aura / Rust / Python over
+three runs on its own Linux x86-64 runner. Aura used four scheduler
+workers. All programs produced matching checksums. The third release
+backs off while borrowing a contended native mutex handle.
 
-| Workload | Aura (ms) | Rust (ms) | Python (ms) |
+| Workload | `248ffb7e` | `5f111af1` | `1033d521` |
 | --- | ---: | ---: | ---: |
-| `lock` | 74 | 54 | 503 |
-| `atomic` | 203 | 148 | 2,522 |
-| `dict` | 140 | 51 | 588 |
-| `lock_shared` | 823 | 288 | 494 |
-| `atomic_shared` | 595 | 430 | 2,511 |
-| `cache_shared` | 876 | 348 | 30,755 |
+| `lock` | 74 / 54 / 503 | 80 / 20 / 860 | 82 / 22 / 897 |
+| `atomic` | 203 / 148 / 2,522 | 257 / 47 / 4,306 | 238 / 53 / 4,447 |
+| `dict` | 140 / 51 / 588 | 199 / 51 / 950 | 201 / 69 / 957 |
+| `lock_shared` | 823 / 288 / 494 | 502 / 104 / 838 | 158 / 97 / 822 |
+| `atomic_shared` | 595 / 430 / 2,511 | 388 / 344 / 4,179 | 324 / 311 / 4,107 |
+| `cache_shared` | 876 / 348 / 30,755 | 261 / 318 / 38,821 | 267 / 360 / 37,684 |
 
-The four-task mutex took 2.86 times the Rust time and 1.67 times the
-Python time on this runner. The other five workloads finished sooner
-in Aura than in Python. [GitHub Actions measurements](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634681)
+The four-task mutex finished behind Python on the first runner. On the
+third runner, it completed four million increments in 158 ms, 1.63 times
+the Rust time and 5.20 times faster than CPython. The uncontended lock
+took 20.5 ns per update. The uncontended lock and atomic counter took
+3.73 and 4.49 times the Rust time on that runner. The guarded dictionary
+and the three four-task workloads each took less than three times the
+Rust time. [First run](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634681) · [Second run](https://github.com/johnolafenwa/Aura/actions/runs/44212212238/job/134502108609) · [Third run](https://github.com/johnolafenwa/Aura/actions/runs/44219534330/job/134523303042)
 
-A second dedicated x86-64 job at `5f111af1` also took three measurements
-per workload with four Aura workers. The Rust compiler was 1.95.0 and
-Python was 3.12.3. These medians give the three times on that runner.
-
-| Workload | Aura (ms) | Rust (ms) | Python (ms) |
-| --- | ---: | ---: | ---: |
-| `lock` | 80 | 20 | 860 |
-| `atomic` | 257 | 47 | 4,306 |
-| `dict` | 199 | 51 | 950 |
-| `lock_shared` | 502 | 104 | 838 |
-| `atomic_shared` | 388 | 344 | 4,179 |
-| `cache_shared` | 261 | 318 | 38,821 |
-
-On this runner Aura finished all six workloads ahead of Python. Against
-Rust, the first four took 4.00, 5.47, 3.90 and 4.83 times as long respectively.
-[GitHub Actions measurements](https://github.com/johnolafenwa/Aura/actions/runs/44212212238/job/134502108609)
+Local results varied with other builds on the machine. In ten
+alternating runs on four CPUs, the median four-task mutex wall time
+went from 685 to 698 ms and process CPU from 264.5 to 327 ms when
+comparing the prior scoped Linux release with the local backoff
+runtime. The cache wall time went from 994.5 to 959 ms and process CPU
+from 439 to 363.5 ms. These local runs used the same native frontend.
