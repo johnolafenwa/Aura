@@ -162,3 +162,19 @@ release at `1033d521` measured 158 ms for the four-task mutex, against
 figures were 502, 104 and 838 ms. Uncontended lock and atomic performance
 on the new runner remained above three times the Rust time. The benchmark
 report includes every workload and the local CPU and wall comparisons.
+
+## Checked Atomic Addition
+
+Profiling exposed an out-of-line checked-add call and error construction
+in the native atomic path. The inlined operation still updates the same
+shared word with a sequentially consistent fetch-and-add. Both workers
+in the overflow regression observe the wrapped value, including when a
+negative delta underflows it. Wrong-handle diagnostics keep their
+original function names and codes.
+
+The public loop took 106.0 instructions per increment after the change,
+down from 124.0. In the five-round CPU comparison the prior Aura, new
+Aura, Rust and CPython figures were 486, 418, 228 and 19,113 ms for
+20 million increments. The focused runtime suite passed 26 tests.
+A task overflow followed by a task underflow matched the MIR output
+and the native output at one, two and four workers.
