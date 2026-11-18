@@ -75,6 +75,21 @@ fn binary(op: i64, left: &str, right: &str) -> Result<Value> {
 const HUGE: &str = "123456789012345678901234567890123456789";
 
 #[test]
+fn significant_digit_division_checks_the_exponent_after_rounding() {
+    let limit = MAX_EXPONENT as i64;
+    assert_eq!(
+        dec_text(dec_binary(3, ("12", limit - 1), ("1", 0), 1, 0)),
+        format!("1e{limit}")
+    );
+    // Both exponents are representable. Their difference fits in i64,
+    // but dropping the last digit of 12 would add one to i64::MAX.
+    let error = dec_binary(3, ("12", limit), ("1", 1 - limit), 1, 0)
+        .expect_err("exponent overflow during rounding");
+    assert_eq!(error.code, "AU4002");
+    assert_eq!(error.message, "`numbers.Decimal` exponent overflow");
+}
+
+#[test]
 fn big_binary_computes_every_operation() {
     assert_eq!(
         big_text(binary(0, "9223372036854775807", "1")),

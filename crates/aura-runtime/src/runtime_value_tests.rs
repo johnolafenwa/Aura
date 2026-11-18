@@ -1141,6 +1141,27 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
 }
 
 #[test]
+fn integer_array_construction_checks_untyped_literal_bounds_at_the_element() {
+    for (name, largest) in [("int32", i32::MAX as u128), ("int64", i64::MAX as u128)] {
+        let literal = |magnitude| Value::Int(IntegerValue::from_literal(magnitude));
+        let error = ArrayValue::from_values(
+            &Type::named(name),
+            Box::new([2]),
+            vec![literal(largest), literal(largest + 1)],
+        )
+        .expect_err("a literal outside the element type must not wrap");
+        assert_eq!(error.code, "AU4007");
+        assert_eq!(
+            error.message,
+            format!(
+                "array {name} storage requires {name} scalar at flat index 1, found {}",
+                largest + 1
+            )
+        );
+    }
+}
+
+#[test]
 fn array_containing_language_copies_preserve_reachable_structure_and_independence() {
     fn source_array(values: &[i32]) -> Value {
         Value::Array(
