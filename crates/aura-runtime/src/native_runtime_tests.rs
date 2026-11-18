@@ -30873,6 +30873,44 @@ fn inline_callable_test_words(capture: i64) -> [i64; 4] {
 }
 
 #[test]
+fn stored_callable_abi_preserves_ownership_on_invalid_capture_count_and_diagnoses_null_reads() {
+    let function = inline_callable_test_function();
+    let address = function as usize;
+    let invalid_count = capture_direct_boundary_diagnostic(move || {
+        let words = inline_callable_test_words(41);
+        super::aura_direct_closure_value_deferred(
+            address as *mut OpaqueValue,
+            words.as_ptr(),
+            -1,
+            7,
+            0,
+        );
+    });
+    assert_eq!(invalid_count.code, "AU4001");
+    assert_eq!(invalid_count.message, "invalid closure capture count");
+    // Validating the count precedes taking ownership of the boxed function.
+    assert!(matches!(
+        unsafe { super::value_ref(function) },
+        Value::Function(_)
+    ));
+    unsafe { release_value(function) };
+
+    let missing_function = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_function_callable(std::ptr::null_mut(), 7);
+    });
+    let missing_list = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_vec_callable(std::ptr::null_mut(), 0, 7);
+    });
+    for diagnostic in [missing_function, missing_list] {
+        assert_eq!(diagnostic.code, "AU4001");
+        assert_eq!(
+            diagnostic.message,
+            "direct runtime received a null opaque value pointer"
+        );
+    }
+}
+
+#[test]
 fn native_runtime_boxed_closure_keeps_its_inline_callable() {
     let result = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
