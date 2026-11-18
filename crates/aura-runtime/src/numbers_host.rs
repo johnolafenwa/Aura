@@ -456,37 +456,37 @@ pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
     } else {
         (&b, &a)
     };
-    // Allocate the output once. Updating initialized digits in place keeps
-    // capacity and allocator checks out of the carry chain.
+    // The copy preserves the longer operand’s unmatched high words. Read
+    // both addends independently so the carry loop can write sums from registers.
     let mut result = Vec::with_capacity(longer.len() + 1);
     result.extend_from_slice(longer);
     result[..HEADER].copy_from_slice(&[1, negative, 0, 0]);
     let (common, remaining) = result[HEADER..].split_at_mut(shorter.len() - HEADER);
     #[inline]
-    fn add_digit(carry: u8, digit: &mut u64, rhs: u64) -> u8 {
+    fn add_digit(carry: u8, lhs: u64, rhs: u64, out: &mut u64) -> u8 {
         #[cfg(target_arch = "x86_64")]
         {
-            std::arch::x86_64::_addcarry_u64(carry, *digit, rhs, digit)
+            std::arch::x86_64::_addcarry_u64(carry, lhs, rhs, out)
         }
         #[cfg(not(target_arch = "x86_64"))]
         {
-            let (value, next) = digit.carrying_add(rhs, carry != 0);
-            *digit = value;
+            let (value, next) = lhs.carrying_add(rhs, carry != 0);
+            *out = value;
             u8::from(next)
         }
     }
     let mut carry = 0;
-    // The fixed group lets the compiler carry the processor flag through
-    // consecutive digits before the loop comparison changes it.
-    let (groups, tail) = common.as_chunks_mut::<8>();
-    let (rhs_groups, rhs_tail) = shorter[HEADER..].as_chunks::<8>();
-    for (group, rhs) in groups.iter_mut().zip(rhs_groups) {
-        for index in 0..8 {
-            carry = add_digit(carry, &mut group[index], rhs[index]);
+    // A fixed group carries the processor flag through consecutive digits.
+    let (groups, tail) = common.as_chunks_mut::<16>();
+    let (lhs_groups, lhs_tail) = longer[HEADER..shorter.len()].as_chunks::<16>();
+    let (rhs_groups, rhs_tail) = shorter[HEADER..].as_chunks::<16>();
+    for ((out, lhs), rhs) in groups.iter_mut().zip(lhs_groups).zip(rhs_groups) {
+        for index in 0..16 {
+            carry = add_digit(carry, lhs[index], rhs[index], &mut out[index]);
         }
     }
-    for (digit, &rhs) in tail.iter_mut().zip(rhs_tail) {
-        carry = add_digit(carry, digit, rhs);
+    for ((out, &lhs), &rhs) in tail.iter_mut().zip(lhs_tail).zip(rhs_tail) {
+        carry = add_digit(carry, lhs, rhs, out);
     }
     for digit in remaining {
         if carry == 0 {
