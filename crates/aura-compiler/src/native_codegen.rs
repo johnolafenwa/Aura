@@ -2332,6 +2332,8 @@ impl<'a> NativeCodegen<'a> {
             current_snapshot_label: String::new(),
             current_snapshot_instruction: 0,
             pending_snapshot_pads: Vec::new(),
+            union_read_buffers: BTreeMap::new(),
+            ffi_list_length_hints: HashMap::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
@@ -2370,6 +2372,7 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
         compiler.builder.seal_all_blocks();
@@ -3672,6 +3675,8 @@ struct FunctionCompiler<'a> {
     /// The blocks the terminator being compiled jumps through to enter
     /// loops, with each one's target and snapshots, filled once it is done.
     pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
+    union_read_buffers: BTreeMap<String, foreign_reads::Buffer>,
+    ffi_list_length_hints: HashMap<String, usize>,
     /// Set for the next `emit_class_check` of a confined instance.
     skip_class_check: bool,
     /// The `mut` arguments and receivers the MIR moves into their call,
@@ -4727,6 +4732,14 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.compile_union_buffer_read(block, instruction_index)? {
+                skipped = 3;
+                continue;
+            }
+            if self.compile_lent_element_getter(block, instruction_index)? {
+                skipped = 2;
+                continue;
+            }
             if let Some(fused) =
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
@@ -4827,6 +4840,38 @@ impl<'a> FunctionCompiler<'a> {
         self.layout_scratch.consumers = consuming_operands(
             crate::mir::ownership::operand_roles_with(instruction, &borrowed),
         );
+        if let Instruction::Assign {
+            target,
+            value:
+                Rvalue::VecLiteral {
+                    elements,
+                    element_type: Type::Named(name, _),
+                    ..
+                },
+        } = instruction
+        {
+            if self.classes.contains_key(name) {
+                self.ffi_list_length_hints
+                    .insert(target.clone(), elements.len());
+            }
+        }
+        // A reinitialised or released list no longer denotes C's prior bytes.
+        if !self.union_read_buffers.is_empty() {
+            let replaced = match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VecLiteral { .. },
+                } => Some(target),
+                Instruction::Release { place } => Some(place),
+                _ => None,
+            };
+            if let Some(buffer) = replaced
+                .and_then(|place| self.union_read_buffers.get(place))
+                .copied()
+            {
+                self.release_union_buffer(buffer);
+            }
+        }
         let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
         if compiled.is_ok()
             && self.deferred_element_retain.is_some()
@@ -5926,6 +5971,14 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         releases: &[String],
     ) -> std::result::Result<(), String> {
+        for buffer in self
+            .union_read_buffers
+            .values()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            self.release_union_buffer(buffer);
+        }
         let mut return_values = self.transfer_values(&value);
         self.emit_pending_cleanups_for(true, false)?;
         self.append_writeback_return_values(&mut return_values)?;
@@ -17917,6 +17970,44 @@ fn small_leaf(function: &MirFunction) -> bool {
             <= LEAF_INLINE_INSTRUCTIONS
 }
 
+/// Reading a numeric member of a C union borrows the receiver's bytes.
+/// The common path is a checked load. FFI packing enters the omitted frame
+/// if the bytes need the runtime's conversion or size diagnostic.
+fn reads_numeric_c_union_member(instruction: &Instruction) -> bool {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee: CallTarget::Extern(call),
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return false;
+    };
+    let ([param], [arg], Some(result)) = (
+        call.params.as_slice(),
+        args.as_slice(),
+        &call.c_struct_result,
+    ) else {
+        return false;
+    };
+    let [field] = result.fields.as_slice() else {
+        return false;
+    };
+    let crate::c_layout::CFieldKind::Scalar(scalar) = field.kind else {
+        return false;
+    };
+    call.symbol == crate::ffi::REINTERPRET_SYMBOL
+        && param.passing == MirReceiverKind::Borrow
+        && !param.pointer
+        && param.c_struct.as_ref().is_some_and(|layout| layout.union)
+        && matches!(&arg.value, Operand::Place(place) if place == "self")
+        && !result.union
+        && scalar != crate::ffi::FfiScalar::Bool
+}
+
 /// The body rule of `frameless_leaf`.
 fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     fn words_only(ty: &DirectType) -> bool {
@@ -17963,7 +18054,9 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
         let mut mentions = Vec::new();
         for block in &function.blocks {
             for instruction in &block.instructions {
-                crate::mir::instruction_place_mentions(instruction, &mut mentions);
+                if !reads_numeric_c_union_member(instruction) {
+                    crate::mir::instruction_place_mentions(instruction, &mut mentions);
+                }
             }
             mentions.extend(crate::mir::terminator_place_mentions(&block.terminator));
         }
@@ -18003,6 +18096,7 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
                 | Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::SourceName { .. } => true,
+                Instruction::Assign { .. } if reads_numeric_c_union_member(instruction) => true,
                 Instruction::Assign { value, .. } => match value {
                     Rvalue::Use(operand) => plain_operand(operand),
                     Rvalue::Binary {
@@ -20467,6 +20561,8 @@ mod elements;
 mod enums;
 #[path = "native_codegen_foreign.rs"]
 mod foreign;
+#[path = "native_codegen_foreign_reads.rs"]
+mod foreign_reads;
 #[path = "native_codegen_freestanding.rs"]
 mod freestanding;
 #[cfg(test)]

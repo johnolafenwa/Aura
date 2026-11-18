@@ -549,33 +549,81 @@ pub(crate) fn ffi_struct_layout(
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> Option<crate::c_layout::CStruct> {
-    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::c_layout::{CField, CStruct};
     let class = ffi_struct(ty, classes)?;
     // The layout carries the name the type goes by here, which is the name
     // an instance of the class carries.
     let Type::Named(name, _) = ty else {
         return None;
     };
-    let fields = class
+    // A union is laid out from its members, which another class of the
+    // same module holds as fields.
+    let holder = match &class.decl.c_union {
+        Some(members) => classes
+            .values()
+            .find(|other| other.decl.name == *members && other.module_name == class.module_name)?,
+        None => class,
+    };
+    let fields = holder
         .decl
         .fields
         .iter()
         .map(|field| {
-            let ty = &class.fields.get(&field.name)?.ty;
-            let kind = match ffi_scalar(ty) {
-                Some(scalar) => CFieldKind::Scalar(scalar),
-                None => CFieldKind::Struct(ffi_struct_layout(ty, classes)?),
-            };
+            let ty = &holder.fields.get(&field.name)?.ty;
+            let lengths = holder.decl.c_arrays.get(&field.name);
             Some(CField {
                 name: field.name.clone(),
-                kind,
+                kind: ffi_field_kind(ty, lengths.map_or(&[], Vec::as_slice), classes)?,
             })
         })
         .collect::<Option<Vec<_>>>()?;
     Some(CStruct {
         name: name.clone(),
         fields,
+        union: class.decl.c_union.is_some(),
     })
+}
+
+/// What a field of type `ty` holds in C. `lengths` has one length for each
+/// `list` layer of an `array[T, N]` field, the outer one first.
+fn ffi_field_kind(
+    ty: &Type,
+    lengths: &[usize],
+    classes: &BTreeMap<String, ClassInfo>,
+) -> Option<crate::c_layout::CFieldKind> {
+    use crate::c_layout::CFieldKind;
+    if let Some((length, inner)) = lengths.split_first() {
+        let Type::Named(name, args) = ty else {
+            return None;
+        };
+        let [element] = args.as_slice() else {
+            return None;
+        };
+        if name != "list" {
+            return None;
+        }
+        let element = ffi_field_kind(element, inner, classes)?;
+        return Some(CFieldKind::Array(Box::new(element), *length));
+    }
+    match ffi_scalar(ty) {
+        Some(scalar) => Some(CFieldKind::Scalar(scalar)),
+        None => Some(CFieldKind::Struct(ffi_struct_layout(ty, classes)?)),
+    }
+}
+
+/// The C layout of the elements a `ptr[Name]` parameter points to, when
+/// `ty` is the `list[Name]` the parser wrote for it and `Name` is an
+/// `extern "C" class`.
+pub(crate) fn ffi_struct_elements_layout(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+) -> Option<crate::c_layout::CStruct> {
+    match ty {
+        Type::Named(name, args) if name == "list" && args.len() == 1 => {
+            ffi_struct_layout(&args[0], classes)
+        }
+        _ => None,
+    }
 }
 
 /// Checks that every field of the `extern "C" class` `class` has a type C
@@ -584,21 +632,42 @@ pub(crate) fn validate_ffi_struct_fields(
     class: &ClassInfo,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
+    // The class of a union holds bytes. Its members are the fields of
+    // another class, which is checked as itself.
+    if class.decl.c_union.is_some() {
+        return Ok(());
+    }
+    let (what, part, owner) = match crate::ast::c_union_of_members_class(&class.decl.name) {
+        Some(union) => ("union", "member", union),
+        None => ("class", "field", class.decl.name.as_str()),
+    };
     for field in &class.decl.fields {
         let info = &class.fields[&field.name];
-        if ffi_scalar_type(&info.ty) || ffi_struct(&info.ty, classes).is_some() {
+        // An array field holds scalars or classes, under any number of
+        // `list` layers the parser wrote for `array[T, N]`.
+        let mut element = &info.ty;
+        for _ in class.decl.c_arrays.get(&field.name).into_iter().flatten() {
+            if let Type::Named(_, args) = element {
+                element = args.first().unwrap_or(element);
+            }
+        }
+        if ffi_scalar_type(element) || ffi_struct(element, classes).is_some() {
             continue;
         }
+        let found = match class.decl.c_arrays.get(&field.name) {
+            Some(_) => format!("is an array of `{element}`"),
+            None => format!("has type `{}`", info.ty),
+        };
         return Err(Diagnostic::coded_at(
             "AU2002",
             field.span,
             format!(
-                "field `{}` of `extern \"C\"` class `{}` has type `{}`, which has no C layout",
-                field.name, class.decl.name, info.ty
+                "{part} `{}` of `extern \"C\"` {what} `{owner}` {found}, which has no C layout",
+                field.name
             ),
         )
         .with_help(
-            "a C struct holds fixed-width scalars and other `extern \"C\"` classes; keep a pointer to anything else in an opaque handle",
+            "a C struct or union holds fixed-width scalars, `extern \"C\"` classes and unions, and `array[T, N]` fields of those; keep a pointer to anything else in a `uint64` or an opaque handle",
         ));
     }
     Ok(())
@@ -687,7 +756,7 @@ fn validate_ffi_callback(
     ty: &Type,
     span: crate::diag::Span,
 ) -> Result<()> {
-    let help = "a callback takes fixed-width scalars, `mut` scalars for pointers to one, and returns a scalar or `None`";
+    let help = "a callback takes fixed-width scalars, `mut` scalars for pointers to one, and `cstr` for C text, and returns a scalar or `None`";
     if mode != ParamMode::Default {
         return Err(Diagnostic::coded_at(
             "AU3004",
@@ -708,7 +777,11 @@ fn validate_ffi_callback(
         .with_help(help));
     };
     for (index, param) in params.iter().enumerate() {
-        if !ffi_scalar_type(&param.ty) {
+        // The parser wrote `str` for a `cstr` parameter, and refused a
+        // `str` written there.
+        let text =
+            param.ty == Type::named("str") && param.passing != crate::ast::ReceiverKind::BorrowMut;
+        if !text && !ffi_scalar_type(&param.ty) {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 span,
@@ -763,16 +836,21 @@ fn validate_ffi_parameter(
     let pointer = pointer || array;
     // The parser writes `ptr[T]` as `list[T]`, so the type has one argument.
     if let (true, Type::Named(_, elements)) = (pointer, ty) {
-        if !elements.iter().all(ffi_scalar_type) {
+        // A `ptr[Name]` passes a list of `extern "C"` classes as a C array.
+        let structs = !array
+            && elements
+                .iter()
+                .all(|element| ffi_struct(element, classes).is_some());
+        if !structs && !elements.iter().all(ffi_scalar_type) {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 span,
                 format!(
-                    "pointer parameter `{param_name}` must point to a fixed-width scalar type"
+                    "pointer parameter `{param_name}` must point to a fixed-width scalar type or an `extern \"C\"` class"
                 ),
             )
             .with_help(
-                "write `ptr[float64]`, `ptr[int32]`, or another scalar element type; the argument is a list of that type",
+                "write `ptr[float64]`, `ptr[int32]`, or `ptr[Name]` for an `extern \"C\"` class `Name`; the argument is a list of that type",
             ));
         }
         if mode == ParamMode::Own {

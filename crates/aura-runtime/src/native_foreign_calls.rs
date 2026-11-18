@@ -19,11 +19,16 @@ use std::str;
 use aura_core::diag::Diagnostic;
 
 use super::{
-    boxed_value, runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut,
-    value_type_name, with_value, OpaqueValue,
+    allocate_box, boxed_value, register_direct_owned_value, release_untracked_value,
+    runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut, value_type_name,
+    with_value, OpaqueValue,
 };
-use crate::list_elements::ListForm;
-use crate::runtime_value::{ArrayValue, FfiHandleDrop, FfiHandleValue, Value, VecValue};
+use crate::c_layout::CStruct;
+use crate::c_values::{self, CValueError};
+use crate::list_elements::{ListElements, ListForm};
+use crate::runtime_value::{
+    ArrayValue, FfiHandleDrop, FfiHandleValue, InstanceFields, TypedFields, Value, VecValue,
+};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -654,11 +659,9 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
 }
 
 thread_local! {
-    /// The failure of a callback that ran under the foreign call this
-    /// thread is in. `aura_direct_ffi_callback_check` raises it again when
-    /// the foreign function has returned.
-    static CALLBACK_FAILURE: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> =
-        const { std::cell::RefCell::new(None) };
+    /// Most workers never receive a failed C callback. This hint keeps
+    /// ordinary foreign calls on those workers from looking up task state.
+    static MAY_HAVE_CALLBACK_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Runs the body of a callback that C code called. `body` is generated
@@ -679,12 +682,132 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     body: unsafe extern "C-unwind" fn(*mut u64),
     frame: *mut u64,
 ) {
-    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+    with_callback_guard(|| unsafe { body(frame) });
+}
+
+fn with_callback_guard(body: impl FnOnce()) {
+    let previous = super::with_direct_task_runtime_state(|state| {
+        if state.foreign_callback_failure.is_some() {
+            return None;
+        }
+        Some(
+            state
+                .foreign_callback_cleanup_base
+                .replace(state.cleanup_stack.len()),
+        )
+    });
+    let Some(previous) = previous else {
         return;
+    };
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    super::with_direct_task_runtime_state(|state| {
+        state.foreign_callback_cleanup_base = previous;
+        if let Err(payload) = outcome {
+            state.foreign_callback_failure = Some(payload);
+            MAY_HAVE_CALLBACK_FAILURE.set(true);
+        }
+    });
+}
+
+/// Calls a callback whose uses of its string arguments only inspect them.
+/// Each validated string owns its bytes in a Rust stack frame until the
+/// callback returns or unwinds. The ordinary Aura release of a parameter
+/// leaves that frame in charge of the value.
+///
+/// # Safety
+///
+/// As for [`aura_direct_ffi_callback_guard`]. Every set bit names a C
+/// string argument and the compiler proved that no such value escapes.
+/// The function name is static UTF-8 data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C" fn aura_direct_ffi_callback_local_text_guard(
+    body: unsafe extern "C-unwind" fn(*mut u64),
+    frame: *mut u64,
+    text_mask: u64,
+    function: *const u8,
+    function_length: usize,
+) {
+    unsafe fn call_with_text(
+        body: unsafe extern "C-unwind" fn(*mut u64),
+        frame: *mut u64,
+        mask: u64,
+        function: *const u8,
+        function_length: usize,
+    ) {
+        if mask == 0 {
+            unsafe { body(frame) };
+            return;
+        }
+        let index = mask.trailing_zeros() as usize;
+        // SAFETY: generated code supplied a frame word for every selected argument.
+        let slot = unsafe { frame.add(index) };
+        let text = match unsafe { crate::ffi::checked_callback_text(*slot as usize) } {
+            Ok(text) => text,
+            Err(error) => foreign_call_failure(
+                unsafe { metadata_text(function, function_length) },
+                "AU4005",
+                error,
+            ),
+        };
+        let mut local = OpaqueValue::new(Value::String(text.into()), None);
+        *local.ref_count.get_mut() = super::FROZEN_REFERENCES;
+        *local.shared_lock.get_mut() = std::ptr::from_ref(&super::FROZEN_VALUE_LOCK).cast_mut();
+        // SAFETY: the remaining arguments and callback run inside this frame.
+        // The callback only reads this pointer. Both return and unwind drop the value.
+        unsafe {
+            *slot = std::ptr::from_mut(&mut local) as u64;
+            call_with_text(body, frame, mask & (mask - 1), function, function_length);
+        }
     }
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
-    if let Err(payload) = outcome {
-        CALLBACK_FAILURE.set(Some(payload));
+
+    with_callback_guard(|| unsafe {
+        call_with_text(body, frame, text_mask, function, function_length)
+    });
+}
+
+/// A new `str` that holds a copy of the C text a callback received.
+/// `function` names the Aura function the callback runs. The ordinary
+/// parameter reference belongs to the task. The callback entry holds a
+/// second reference and releases it after the guarded body returns or traps.
+///
+/// # Safety
+///
+/// `text` is null or points to NUL-terminated bytes, and the function
+/// name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
+    text: *const c_char,
+    function: *const u8,
+    function_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        match crate::ffi::checked_callback_text(text as usize) {
+            Ok(text) => {
+                // Publish both references together. The task releases its
+                // argument in the normal way, even if another call retains it.
+                let mut boxed = OpaqueValue::new(Value::String(text.into()), None);
+                *boxed.ref_count.get_mut() = 2;
+                let pointer = allocate_box(boxed);
+                register_direct_owned_value(pointer);
+                pointer
+            }
+            Err(failure) => {
+                foreign_call_failure(metadata_text(function, function_length), "AU4005", failure)
+            }
+        }
+    })
+}
+
+/// Releases the callback entry's reference to its converted C text.
+///
+/// # Safety
+///
+/// `text` is null or came from that function and has not been freed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_callback_text(text: *mut OpaqueValue) {
+    if !text.is_null() {
+        // SAFETY: the entry owns this reference outside the task's ledger.
+        unsafe { release_untracked_value(text) }
     }
 }
 
@@ -692,11 +815,335 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
 /// has just returned, when there is one.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
-    if let Some(payload) = CALLBACK_FAILURE.take() {
-        std::panic::resume_unwind(payload);
+    if MAY_HAVE_CALLBACK_FAILURE.get() {
+        if let Some(payload) =
+            super::with_direct_task_runtime_state(|state| state.foreign_callback_failure.take())
+        {
+            // A nested C call may have just returned to another Aura callback.
+            // Unwind that callback's own exits before its C caller resumes.
+            task_runtime_boundary(|| {
+                match payload.downcast::<super::LightweightTaskFailureSignal>() {
+                    Ok(signal) => runtime_diagnostic_error(signal.0),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            });
+        }
     }
 }
 
 #[cfg(test)]
 #[path = "native_foreign_calls_tests.rs"]
 mod tests;
+
+/// The C layout generated code describes as JSON in its data. A call site
+/// passes the same bytes every time, so the layout is read once per
+/// address.
+///
+/// # Safety
+///
+/// `descriptor` and `length` describe text generated code holds in its
+/// data for the life of the program.
+unsafe fn foreign_layout(descriptor: *const u8, length: usize) -> &'static CStruct {
+    type Layouts = std::collections::HashMap<usize, (Box<str>, &'static CStruct)>;
+    static LAYOUTS: std::sync::Mutex<Option<Layouts>> = std::sync::Mutex::new(None);
+    // SAFETY: the caller's contract.
+    let text = unsafe { metadata_text(descriptor, length) };
+    let mut layouts = LAYOUTS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let layouts = layouts.get_or_insert_with(Default::default);
+    if let Some((known, layout)) = layouts.get(&(descriptor as usize)) {
+        if **known == *text {
+            return layout;
+        }
+    }
+    let Ok(layout) = serde_json::from_str::<CStruct>(text) else {
+        runtime_error("a foreign call names a C layout that does not read");
+    };
+    let layout = layout.interned();
+    layouts.insert(descriptor as usize, (text.into(), layout));
+    layout
+}
+
+fn c_value_failure(symbol: &str, error: CValueError) -> ! {
+    match error {
+        CValueError::BadBool(byte) => foreign_call_failure(
+            symbol,
+            "AU4001",
+            crate::ffi::FfiError::NonCanonicalBoolReturn(byte),
+        ),
+        other => runtime_diagnostic_error(Diagnostic::coded(other.code(), other.to_string())),
+    }
+}
+
+/// Writes the class instance `value` at `slot` in the C layout that
+/// `descriptor` describes. Generated code calls this for a class with an
+/// array field or a union, whose value is not one word per scalar.
+///
+/// # Safety
+///
+/// `value` is a live value, `descriptor` is as [`foreign_layout`] needs,
+/// and `slot` has room for one struct of the layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_struct(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *mut u8,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts_mut(slot, layout.size());
+        if let Err(error) = with_value(value, |value| c_values::pack(value, layout, bytes)) {
+            c_value_failure(&layout.name, error)
+        }
+    })
+}
+
+/// A new instance for the C struct at `slot`, which the foreign function
+/// `symbol` returned.
+///
+/// # Safety
+///
+/// `descriptor` is as [`foreign_layout`] needs, `slot` holds one struct of
+/// the layout, and the symbol name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_struct(
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts(slot, layout.size());
+        match c_values::unpack(layout, bytes) {
+            Ok(value) => boxed_value(value),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        }
+    })
+}
+
+/// Sets every field of the instance `value` from the C struct at `slot`,
+/// which the foreign function `symbol` wrote through a pointer.
+///
+/// # Safety
+///
+/// As [`aura_direct_ffi_unpack_struct`], and `value` is a live value its
+/// caller holds exclusively.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_struct_into(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts(slot, layout.size());
+        let read = match c_values::unpack(layout, bytes) {
+            Ok(Value::Instance(read)) => read,
+            Ok(_) => runtime_error("a C struct did not read back as an instance"),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        };
+        value_mut(value, |value| {
+            let Value::Instance(instance) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a class instance, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            for (name, field) in read.fields.iter() {
+                if let Err(error) = instance.fields.insert(name, field.into_owned()) {
+                    runtime_error(error);
+                }
+            }
+        })
+    })
+}
+
+/// The task owns the buffer through its handle. A trap while packing another
+/// parameter or writing back a C result still releases it with the task ledger.
+#[repr(C, align(16))]
+struct StructArrayHeader {
+    bytes: usize,
+    owner: *mut OpaqueValue,
+}
+
+fn structs_block(bytes: usize) -> std::alloc::Layout {
+    bytes
+        .checked_add(std::mem::size_of::<StructArrayHeader>())
+        .and_then(|size| {
+            std::alloc::Layout::from_size_align(size, std::mem::align_of::<StructArrayHeader>())
+                .ok()
+        })
+        .unwrap_or_else(|| runtime_error("a C struct array is too large"))
+}
+
+unsafe extern "C" fn free_structs_block(block: *mut c_void) {
+    // SAFETY: the owning handle's final release is the only deallocation.
+    let header = unsafe { &*block.cast::<StructArrayHeader>() };
+    unsafe { std::alloc::dealloc(block.cast(), structs_block(header.bytes)) };
+}
+
+/// Stack storage available to one private copy of a read-only struct array.
+pub const FFI_STRUCT_SCRATCH_BYTES: usize = 128;
+
+/// Copies records whose native layout and stride match C into private storage.
+/// The result is null for an empty list, `scratch` for a small list, or a
+/// heap array the caller frees with [`aura_direct_ffi_release_structs`].
+///
+/// # Safety
+///
+/// `data` holds `length` initialized bytes and does not overlap `scratch`,
+/// which has room for [`FFI_STRUCT_SCRATCH_BYTES`] bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_copy_structs(
+    data: *const u8,
+    length: usize,
+    scratch: *mut u8,
+) -> *mut u8 {
+    if length == 0 {
+        return std::ptr::null_mut();
+    }
+    let array = if length <= FFI_STRUCT_SCRATCH_BYTES {
+        scratch
+    } else {
+        allocate_structs(length, free_structs_block)
+    };
+    // SAFETY: the destination has room for the complete source.
+    unsafe { std::ptr::copy_nonoverlapping(data, array, length) };
+    array
+}
+
+fn allocate_structs(length: usize, release: FfiHandleDrop) -> *mut u8 {
+    // SAFETY: the checked layout contains the header and the whole array.
+    unsafe {
+        let header = std::alloc::alloc(structs_block(length)).cast::<StructArrayHeader>();
+        if header.is_null() {
+            runtime_error("a C struct array could not be allocated");
+        }
+        header.write(StructArrayHeader {
+            bytes: length,
+            owner: std::ptr::null_mut(),
+        });
+        let handle = FfiHandleValue::owned(String::new(), header.cast(), Some(release))
+            .expect("the checked C array allocation is non-null");
+        (*header).owner = boxed_value(Value::FfiHandle(handle));
+        header.add(1).cast()
+    }
+}
+
+/// A new C array of the layout `descriptor` describes that holds the
+/// elements of the list `value`, or null for an empty list. The caller
+/// frees it with [`aura_direct_ffi_release_structs`].
+///
+/// # Safety
+///
+/// `value` is a live value and `descriptor` is as [`foreign_layout`]
+/// needs.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_structs(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+) -> *mut u8 {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = match with_value(value, |value| c_values::pack_elements(value, layout)) {
+            Ok(bytes) => bytes,
+            Err(error) => c_value_failure(&layout.name, error),
+        };
+        if bytes.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let array = allocate_structs(bytes.len(), free_structs_block);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), array, bytes.len());
+        array
+    })
+}
+
+/// Replaces the elements of the list `value` with those of `array`, which
+/// the foreign function `symbol` wrote through a `mut ptr[Name]`.
+///
+/// # Safety
+///
+/// As [`aura_direct_ffi_pack_structs`]; `array` is what that function
+/// returned for `value`, `value` is held exclusively, and the symbol name
+/// is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_structs(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    array: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    if array.is_null() {
+        return;
+    }
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let length = (*array.cast::<StructArrayHeader>().sub(1)).bytes;
+        let read = match c_values::unpack_elements(layout, slice::from_raw_parts(array, length)) {
+            Ok(Value::Vec(read)) => read,
+            Ok(_) => runtime_error("a C struct array did not read back as a list"),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        };
+        value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a mut pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            // A list of generated class instances can keep using its native
+            // field offsets after C fills it. Decode the entire array first:
+            // one invalid member must leave every element of the list alone.
+            let mut elements = read.elements;
+            let class = match &vector.elements {
+                ListElements::Values(_) | ListElements::Boxes(_) => {
+                    vector.elements.first().and_then(|first| match &*first {
+                        Value::Instance(instance) => {
+                            instance.fields.typed().map(TypedFields::layout)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(class) = class.filter(|class| class.class_name() == layout.name) {
+                for element in elements.values_mut() {
+                    if let Value::Instance(instance) = element {
+                        let fields = std::mem::take(instance.fields.map_mut());
+                        instance.fields = TypedFields::from_map(class, fields)
+                            .map_or_else(InstanceFields::Map, InstanceFields::Typed);
+                    }
+                }
+            }
+            if matches!(vector.elements, ListElements::Boxes(_)) {
+                // A borrowed element already had a stable box before C ran.
+                // Let generated code borrow the replacements the same way.
+                let _ = elements.lend(0);
+            }
+            vector.elements = elements;
+        })
+    })
+}
+
+/// Frees a C array [`aura_direct_ffi_pack_structs`] returned.
+///
+/// # Safety
+///
+/// `array` is null or a pointer that function returned, not yet freed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) {
+    if array.is_null() {
+        return;
+    }
+    // SAFETY: only a live allocation produced by allocate_structs reaches here.
+    let owner = unsafe { (*array.cast::<StructArrayHeader>().sub(1)).owner };
+    unsafe { super::aura_direct_release_value(owner) };
+}

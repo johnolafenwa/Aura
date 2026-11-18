@@ -51,7 +51,7 @@ pub(super) struct ForeignScalar {
     /// How the narrow C type fills a full register.
     extension: Extension,
     /// The Aura scalar the value is on this side.
-    kind: ScalarKind,
+    pub(super) kind: ScalarKind,
 }
 
 pub(super) fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
@@ -116,6 +116,81 @@ pub(super) fn module_callbacks(module: &MirModule) -> Vec<CallbackKey> {
     }
     found.sort_by_cached_key(|(name, signature)| format!("{name} {signature:?}"));
     found
+}
+
+/// The C string parameters that can live until the callback returns. Every
+/// use must be an operation that reads its input and returns an independent
+/// scalar. An argument passed to another function or stored elsewhere uses
+/// the ordinary owned heap representation. Limit the number of Rust frames
+/// needed to hold scoped strings during a callback.
+fn local_callback_texts(function: &MirFunction, callback: &CCallback) -> Option<u64> {
+    if function.params.len() != callback.params.len() || function.receiver.is_some() {
+        return None;
+    }
+    let text_type = Type::named("str");
+    let mut mask = 0u64;
+    let mut names = HashSet::new();
+    for (i, (input, param)) in callback.params.iter().zip(&function.params).enumerate() {
+        if input.text {
+            if input.pointer || param.passing != MirReceiverKind::Borrow || param.ty != text_type {
+                return None;
+            }
+            mask |= 1u64.checked_shl(u32::try_from(i).ok()?)?;
+            names.insert(param.name.as_str());
+        }
+    }
+    if mask == 0 || mask.count_ones() > 8 {
+        return None;
+    }
+    let names_text = |place: &str| names.contains(place.split(['.', '[']).next().unwrap_or(place));
+    let string_operand = |word: &Operand| match word {
+        Operand::String(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .any(|local| &local.name == place && local.ty == text_type),
+        _ => false,
+    };
+    let inspects = |value: &Rvalue| {
+        reads_operands_only(value)
+            && match value {
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Str(_),
+                            ..
+                        },
+                    ..
+                } => true,
+                Rvalue::Binary { left, right, .. } => string_operand(left) && string_operand(right),
+                _ => false,
+            }
+    };
+    for block in &function.blocks {
+        for inst in &block.instructions {
+            if matches!(inst, Instruction::Assign { target, .. } if names_text(target)) {
+                return None;
+            }
+            let mut mentioned = Vec::new();
+            crate::mir::instruction_place_mentions(inst, &mut mentioned);
+            if !mentioned.into_iter().any(names_text) {
+                continue;
+            }
+            match inst {
+                Instruction::Release { place } | Instruction::Retain { place }
+                    if names.contains(place.as_str()) => {}
+                Instruction::Assign { value, .. } if inspects(value) => {}
+                _ => return None,
+            }
+        }
+        if crate::mir::terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .any(names_text)
+        {
+            return None;
+        }
+    }
+    Some(mask)
 }
 
 /// The C signature of a callback's entry code, and the signature of its
@@ -196,12 +271,30 @@ impl NativeCodegen<'_> {
     pub(super) fn define_callback_thunks(&mut self) -> std::result::Result<(), String> {
         for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
             let (entry, body) = callback_signatures(&callback);
+            let local = self
+                .module
+                .functions
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| local_callback_texts(f, &callback));
             self.define_body(
                 entry_id,
                 &entry,
                 &format!("callback entry for `{name}`"),
                 |codegen, builder| {
-                    codegen.emit_callback_entry(builder, &callback, body_id);
+                    let local = match local {
+                        Some(mask) => Some((
+                            mask,
+                            string_data_id(
+                                builder.module(),
+                                &mut codegen.string_data,
+                                name.as_bytes(),
+                            )?,
+                            name.len(),
+                        )),
+                        None => None,
+                    };
+                    codegen.emit_callback_entry(builder, &callback, body_id, local);
                     Ok(())
                 },
             )?;
@@ -210,8 +303,23 @@ impl NativeCodegen<'_> {
                 body_id,
                 &body,
                 &format!("callback body for `{name}`"),
-                |_, builder| {
-                    emit_callback_body(builder, &callback, target);
+                |codegen, builder| {
+                    // A `cstr` parameter is copied into a `str` for the
+                    // call, and the copy is released after it.
+                    let text =
+                        match local.is_none() && callback.params.iter().any(|param| param.text) {
+                            true => Some(CallbackText {
+                                copy: codegen.runtime[RuntimeFn::FfiCallbackText],
+                                name: string_data_id(
+                                    builder.module(),
+                                    &mut codegen.string_data,
+                                    name.as_bytes(),
+                                )?,
+                                name_length: name.len(),
+                            }),
+                            false => None,
+                        };
+                    emit_callback_body(builder, &callback, target, text);
                     Ok(())
                 },
             )?;
@@ -227,6 +335,7 @@ impl NativeCodegen<'_> {
         builder: &mut dyn FunctionBackend,
         callback: &CCallback,
         body_id: FuncHandle,
+        local: Option<(u64, DataHandle, usize)>,
     ) {
         let entry = builder.create_block();
         builder.append_block_params_for_function_params(entry);
@@ -235,10 +344,20 @@ impl NativeCodegen<'_> {
         let arguments = builder.block_params(entry);
         let flags = MemFlags::trusted();
         let count = callback.params.len();
-        let slot = builder.create_sized_stack_slot((count as u32 + 1) * 8, 3);
+        // The guarded body records each completed text copy after the result
+        // word. The entry owns the copies even if conversion or the call traps.
+        let texts = if local.is_none() {
+            callback.params.iter().filter(|param| param.text).count()
+        } else {
+            0
+        };
+        let frame_words = count + 1 + texts;
+        let slot = builder.create_sized_stack_slot(frame_words as u32 * 8, 3);
         let frame = builder.stack_addr(types::I64, slot, 0);
         let zero = builder.iconst(types::I64, 0);
-        builder.store(flags, zero, frame, count as i32 * 8);
+        for index in count..frame_words {
+            builder.store(flags, zero, frame, index as i32 * 8);
+        }
         // A null pointer argument reads and writes this word instead.
         let spare = builder.create_sized_stack_slot(8, 3);
         let spare = builder.stack_addr(types::I64, spare, 0);
@@ -261,8 +380,24 @@ impl NativeCodegen<'_> {
 
         let body = builder.import_function(body_id);
         let body = builder.func_addr(types::I64, body);
-        let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
-        builder.call(guard, &[body, frame]);
+        if let Some((mask, name, length)) = local {
+            let mask = builder.iconst(types::I64, mask as i64);
+            let data = builder.import_data(name);
+            let name = builder.symbol_value(types::I64, data);
+            let length = builder.iconst(types::I64, length as i64);
+            let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackLocalTextGuard]);
+            builder.call(guard, &[body, frame, mask, name, length]);
+        } else {
+            let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
+            builder.call(guard, &[body, frame]);
+        }
+        if texts != 0 {
+            let release = builder.import_function(self.runtime[RuntimeFn::FfiReleaseCallbackText]);
+            for index in (count + 1)..frame_words {
+                let copy = builder.load(types::I64, flags, frame, index as i32 * 8);
+                builder.call(release, &[copy]);
+            }
+        }
 
         for (index, address) in pointees {
             let scalar = foreign_scalar(callback.params[index].scalar.ffi_type())
@@ -282,6 +417,15 @@ impl NativeCodegen<'_> {
     }
 }
 
+/// What a callback's body needs to pass C text to its function: the
+/// runtime function that copies the text, and the
+/// name of the Aura function, for the report of text that is not valid.
+pub(super) struct CallbackText {
+    copy: FuncHandle,
+    name: DataHandle,
+    name_length: usize,
+}
+
 /// The code the guard runs: it calls the Aura function `target` with the
 /// words of the frame, and stores the result and what the function wrote
 /// to its `mut` parameters back to the frame.
@@ -289,6 +433,7 @@ pub(super) fn emit_callback_body(
     builder: &mut dyn FunctionBackend,
     callback: &CCallback,
     target: FuncHandle,
+    text: Option<CallbackText>,
 ) {
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
@@ -297,13 +442,31 @@ pub(super) fn emit_callback_body(
     let frame = builder.block_params(entry)[0];
     let flags = MemFlags::trusted();
     let count = callback.params.len();
+    let text = text.map(|text| {
+        let name = builder.import_data(text.name);
+        (
+            builder.import_function(text.copy),
+            builder.symbol_value(types::I64, name),
+            builder.iconst(types::I64, text.name_length as i64),
+        )
+    });
+    let mut next_copy = count + 1;
     let arguments = callback
         .params
         .iter()
         .enumerate()
         .map(|(index, param)| {
             let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
-            builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8)
+            let word = builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8);
+            match (text, param.text) {
+                (Some((copy, name, length)), true) => {
+                    let copy = builder.call(copy, &[word, name, length]).results[0];
+                    builder.store(flags, copy, frame, next_copy as i32 * 8);
+                    next_copy += 1;
+                    copy
+                }
+                _ => word,
+            }
         })
         .collect::<Vec<_>>();
     let target = builder.import_function(target);
@@ -333,6 +496,12 @@ pub(super) fn foreign_param_type(
     }
     if param.c_string {
         return Ok(DirectFfiType::scalar(c_string_type(&param.ty)));
+    }
+    if let (true, Some(layout)) = (param.pointer, &param.c_struct) {
+        // `ptr[Name]` points to the first struct of a run.
+        return Ok(DirectFfiType::scalar(FfiType::StructPointer(
+            layout.interned(),
+        )));
     }
     if param.pointer {
         // `ptr[T]` lowers to `list[T]`, and `T` is a scalar.
@@ -368,22 +537,7 @@ pub(super) fn foreign_param_type(
 
 /// The list access code of a list that keeps `scalar` elements unboxed.
 fn scalar_list_access(scalar: crate::ffi::FfiScalar) -> i64 {
-    use crate::ffi::FfiScalar as Scalar;
-    use aura_runtime::native_runtime::DirectListAccess as Access;
-    let access = match scalar {
-        Scalar::Bool => Access::Bool,
-        Scalar::I8 => Access::Int8,
-        Scalar::I16 => Access::Int16,
-        Scalar::I32 => Access::Int32,
-        Scalar::I64 => Access::Int64,
-        Scalar::U8 => Access::Uint8,
-        Scalar::U16 => Access::Uint16,
-        Scalar::U32 => Access::Uint32,
-        Scalar::U64 => Access::Uint64,
-        Scalar::F32 => Access::Float32,
-        Scalar::F64 => Access::Float64,
-    };
-    access as i64
+    i64::from(scalar.list_form().access())
 }
 
 /// The boundary type of the result of a foreign call.
@@ -433,8 +587,12 @@ enum ForeignWriteback {
     /// word at this address. The name is the handle's opaque type, and the
     /// last value is what the place held when the call began.
     Handle(String, Type, Val, Val),
-    /// The struct in the C copy at this address.
-    Struct(&'static CStruct, Val),
+    /// The struct in the C copy at this address. The value is what was
+    /// passed.
+    Struct(&'static CStruct, Val, ValueRef),
+    /// The structs in the C array at this address, which take the place
+    /// of the elements of the list that was passed.
+    Structs(&'static CStruct, Val, ValueRef),
 }
 
 /// The convention foreign calls follow on the machine being built for.
@@ -495,6 +653,12 @@ impl ForeignArguments {
             let indirect = self.signature.indirects.iter().find(|(at, _)| *at == index);
             match (indirect, ty) {
                 (Some((_, Indirect::ByValue { .. })), _) => {}
+                // A struct AArch64 put on the stack ends the use of the
+                // registers of its kind.
+                (Some((_, Indirect::Aggregate { element, .. })), _) => match element {
+                    ScalarType::F32 | ScalarType::F64 => float = 8,
+                    _ => general = 8,
+                },
                 // AArch64 has a register of its own for a result's address.
                 (Some((_, Indirect::Result { .. })), _) => {
                     general += usize::from(abi == CAbi::SysV64);
@@ -527,6 +691,10 @@ impl FunctionCompiler<'_> {
                 call.symbol,
                 args.len()
             ));
+        }
+
+        if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
+            return self.compile_reinterpret(call, args, target);
         }
 
         let mut loaded = Vec::with_capacity(args.len());
@@ -577,7 +745,13 @@ impl FunctionCompiler<'_> {
                 FfiType::Out(scalar) => scalar.ffi_type(),
                 other => other,
             };
-            let is_struct = matches!(by_value, FfiType::Struct(_) | FfiType::StructPointer(_));
+            // A class of scalars crosses as its words. Any other struct,
+            // and a list of structs, crosses as a value the runtime packs.
+            let is_struct = !param.pointer
+                && matches!(
+                    by_value,
+                    FfiType::Struct(layout) | FfiType::StructPointer(layout) if layout.is_plain()
+                );
             let value = if foreign_scalar(by_value).is_some() || is_struct {
                 value
             } else {
@@ -633,6 +807,7 @@ impl FunctionCompiler<'_> {
         let mut text_copies = Vec::new();
         let mut list_copies = Vec::new();
         let mut flag_lists = Vec::new();
+        let mut struct_arrays = Vec::new();
         let mut writebacks = Vec::new();
         let mut given_up = Vec::new();
         for (index, (operand, place)) in loaded.into_iter().enumerate() {
@@ -706,15 +881,64 @@ impl FunctionCompiler<'_> {
                 }
                 FfiType::Struct(layout) => {
                     let slot = self.foreign_struct_slot(layout);
-                    self.store_foreign_struct(layout, &value, slot);
+                    self.store_foreign_struct(layout, &value, slot)?;
                     self.push_foreign_struct(layout, slot, &mut arguments)?;
                     continue;
                 }
+                FfiType::StructPointer(layout) if call.params[index].pointer => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let mut fast_record = None;
+                    if call.params[index].passing != MirReceiverKind::BorrowMut && layout.is_plain()
+                    {
+                        let element = ensure_direct_type(
+                            &Type::named(&layout.name),
+                            &self.classes,
+                            "foreign struct array element",
+                        )?;
+                        fast_record = self
+                            .plain_record(&element)?
+                            .filter(|record| record.matches_c_layout(layout));
+                    }
+                    let (array, allocation) = if let Some(record) = fast_record {
+                        self.copy_foreign_record_list(
+                            word,
+                            &record,
+                            layout.size(),
+                            (descriptor, length),
+                            match &args[index].value {
+                                Operand::Place(place) => {
+                                    self.ffi_list_length_hints.get(place).copied()
+                                }
+                                _ => None,
+                            },
+                        )
+                    } else {
+                        let packed = self
+                            .builder
+                            .call(
+                                self.runtime[RuntimeFn::FfiPackStructs],
+                                &[word, descriptor, length],
+                            )
+                            .results[0];
+                        (packed, packed)
+                    };
+                    arguments.push_word(array);
+                    let cached = place
+                        .as_ref()
+                        .is_some_and(|(name, _)| self.union_read_buffers.contains_key(name));
+                    if !cached {
+                        struct_arrays.push(allocation);
+                    }
+                    if call.params[index].passing != MirReceiverKind::BorrowMut {
+                        continue;
+                    }
+                    ForeignWriteback::Structs(layout, array, value)
+                }
                 FfiType::StructPointer(layout) => {
                     let slot = self.foreign_struct_slot(layout);
-                    self.store_foreign_struct(layout, &value, slot);
+                    self.store_foreign_struct(layout, &value, slot)?;
                     arguments.push_word(slot);
-                    ForeignWriteback::Struct(layout, slot)
+                    ForeignWriteback::Struct(layout, slot, value)
                 }
                 ffi_type => {
                     if ffi_type == FfiType::OpaqueHandle
@@ -768,7 +992,7 @@ impl FunctionCompiler<'_> {
                 .call(self.runtime[RuntimeFn::FfiReleaseCString], &[copy]);
         }
         for copy in list_copies {
-            self.release_foreign_list_copy(copy);
+            self.release_foreign_allocation(copy, RuntimeFn::ReleaseValue);
         }
         // A C function can leave any byte in a `bool` it writes through.
         for list in flag_lists {
@@ -796,12 +1020,58 @@ impl FunctionCompiler<'_> {
                     );
                     self.foreign_nullable(handle.results[0], &union_type)?
                 }
-                ForeignWriteback::Struct(layout, slot) => {
+                ForeignWriteback::Struct(layout, slot, _) if layout.is_plain() => {
                     self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
+                }
+                // The runtime sets the fields of the instance that was
+                // passed, and the elements of the list that was passed.
+                ForeignWriteback::Struct(layout, slot, value) => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStructInto],
+                        &[
+                            value.values[0],
+                            descriptor,
+                            length,
+                            slot,
+                            symbol_ptr,
+                            symbol_len,
+                        ],
+                    );
+                    value
+                }
+                ForeignWriteback::Structs(layout, array, value) => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStructs],
+                        &[
+                            value.values[0],
+                            descriptor,
+                            length,
+                            array,
+                            symbol_ptr,
+                            symbol_len,
+                        ],
+                    );
+                    if let Some(buffer) = self.union_read_buffers.get(&place).copied() {
+                        self.release_union_buffer(buffer);
+                        let count = match buffer.literal_count {
+                            Some(n) => self.builder.iconst(types::I64, n as i64),
+                            None => self.emit_list_len(value.values[0], false),
+                        };
+                        self.builder.def_var(buffer.data, array);
+                        self.builder.def_var(buffer.count, count);
+                    }
+                    value
                 }
             };
             let writeback = self.coerce_value(value, &expected)?;
             self.store_place(&place, writeback)?;
+        }
+        for array in struct_arrays {
+            self.release_foreign_allocation(array, RuntimeFn::FfiReleaseStructs);
         }
 
         // A callback that failed under this call, or under an earlier one
@@ -827,7 +1097,17 @@ impl FunctionCompiler<'_> {
                             .store(MemFlags::trusted(), *value, slot, offset);
                     }
                 }
-                self.load_foreign_struct(layout, slot, return_direct.clone(), &call.symbol)?
+                if layout.is_plain() {
+                    self.load_foreign_struct(layout, slot, return_direct.clone(), &call.symbol)?
+                } else {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    let instance = self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStruct],
+                        &[descriptor, length, slot, symbol_ptr, symbol_len],
+                    );
+                    self.owned_opaque_result(vec![instance.results[0]], call.return_type.clone())
+                }
             }
             (Some(scalar), _) => {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
@@ -848,6 +1128,68 @@ impl FunctionCompiler<'_> {
         self.coerce_value(result, target)
     }
 
+    /// A member of an `extern "C" union` read or stored: the bytes of the
+    /// one struct argument, read as the struct of the result. No C
+    /// function is called. Where the argument is shorter than the result,
+    /// the rest is zero.
+    fn compile_reinterpret(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let (from, to) = match (call.params.as_slice(), &call.c_struct_result) {
+            (
+                [MirExternParam {
+                    c_struct: Some(from),
+                    pointer: false,
+                    passing: MirReceiverKind::Borrow | MirReceiverKind::Value,
+                    ..
+                }],
+                Some(to),
+            ) => (from.interned(), to.interned()),
+            _ => {
+                return Err(format!(
+                    "direct backend reads `{}` only from one C struct into another",
+                    call.name
+                ));
+            }
+        };
+        let expected = ensure_direct_type(
+            &call.params[0].ty,
+            &self.classes,
+            &format!("extern parameter `{}`", call.params[0].name),
+        )?;
+        let value = self.load_operand_for_target(&args[0].value, &expected)?;
+        let value = self.coerce_value(value, &expected)?;
+        let value = if from.is_plain() {
+            value
+        } else {
+            self.ensure_opaque(value)?
+        };
+        let label = crate::ffi::reinterpret_label(&call.name);
+        let slot = self.foreign_struct_slot(if from.size() >= to.size() { from } else { to });
+        self.store_foreign_struct(from, &value, slot)?;
+        let return_direct = ensure_direct_type(
+            &call.return_type,
+            &self.classes,
+            &format!("extern return from `{}`", call.name),
+        )?;
+        let result = if to.is_plain() {
+            self.load_foreign_struct(to, slot, return_direct.clone(), &label)?
+        } else {
+            let (descriptor, length) = self.foreign_layout_descriptor(to)?;
+            let (symbol_ptr, symbol_len) = self.string_constant(label.as_bytes())?;
+            let instance = self.builder.call(
+                self.runtime[RuntimeFn::FfiUnpackStruct],
+                &[descriptor, length, slot, symbol_ptr, symbol_len],
+            );
+            self.owned_opaque_result(vec![instance.results[0]], call.return_type.clone())
+        };
+        let result = self.coerce_value(result, &return_direct)?;
+        self.coerce_value(result, target)
+    }
+
     /// The address of a new zeroed stack slot that holds one `layout`
     /// struct. The slot is a whole number of 8-byte words, so a register's
     /// piece of the struct loads and stores as one word.
@@ -863,15 +1205,149 @@ impl FunctionCompiler<'_> {
         address
     }
 
-    /// Stores the class value `value` at `slot` in the C layout. A class
-    /// value has one word per scalar field, in the order of the layout.
-    fn store_foreign_struct(&mut self, layout: &CStruct, value: &ValueRef, slot: Val) {
+    /// The JSON text of `layout` in the program's data, which the runtime
+    /// reads to pack and unpack a struct that is not one word per scalar.
+    fn foreign_layout_descriptor(
+        &mut self,
+        layout: &CStruct,
+    ) -> std::result::Result<(Val, Val), String> {
+        let text = serde_json::to_string(layout)
+            .map_err(|error| format!("direct backend cannot describe a C layout: {error}"))?;
+        self.string_constant(text.as_bytes())
+    }
+
+    /// Stores the class value `value` at `slot` in the C layout. A value
+    /// of a class of scalars has one word per scalar field, in the order
+    /// of the layout. Any other class is an instance the runtime packs.
+    fn store_foreign_struct(
+        &mut self,
+        layout: &CStruct,
+        value: &ValueRef,
+        slot: Val,
+    ) -> std::result::Result<(), String> {
+        if !layout.is_plain() {
+            let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+            let fast = self.copy_foreign_array_field(layout, value, slot)?;
+            self.push_frameless_frame();
+            self.builder.call(
+                self.runtime[RuntimeFn::FfiPackStruct],
+                &[value.values[0], descriptor, length, slot],
+            );
+            if self.frameless_descriptor.is_some() {
+                self.builder.call(self.runtime[RuntimeFn::ExitCall], &[]);
+            }
+            if let Some(done) = fast {
+                self.builder.jump(done, &[]);
+                self.builder.switch_to_block(done);
+                self.builder.seal_block(done);
+            }
+            return Ok(());
+        }
         for (leaf, word) in layout.leaves().iter().zip(&value.values) {
             let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
             let narrow = self.foreign_scalar_argument(&scalar, *word);
             self.builder
                 .store(MemFlags::trusted(), narrow, slot, leaf.offset as i32);
         }
+        Ok(())
+    }
+
+    /// Copies a single fixed-width scalar array straight from its list into
+    /// the C slot. A union uses this same path for its byte field. Every
+    /// missing field, length mismatch or other storage form falls through
+    /// to the conversion that implements the diagnostics.
+    fn copy_foreign_array_field(
+        &mut self,
+        layout: &CStruct,
+        value: &ValueRef,
+        slot: Val,
+    ) -> std::result::Result<Option<Blk>, String> {
+        use crate::c_layout::{CFieldKind, UNION_BYTES_FIELD};
+        use crate::ffi::FfiScalar;
+
+        let (name, scalar, count) = if layout.union {
+            (UNION_BYTES_FIELD, FfiScalar::U8, layout.size())
+        } else {
+            let [field] = layout.fields.as_slice() else {
+                return Ok(None);
+            };
+            let CFieldKind::Array(element, count) = &field.kind else {
+                return Ok(None);
+            };
+            let CFieldKind::Scalar(scalar) = element.as_ref() else {
+                return Ok(None);
+            };
+            (field.name.as_str(), *scalar, *count)
+        };
+        let bytes = count * scalar.size();
+        // The constant-size loads below are for small by-value aggregates.
+        if bytes > 128 || bytes == 0 {
+            return Ok(None);
+        }
+        let array = DirectType::Opaque(Type::Named(
+            "list".into(),
+            vec![aura_runtime::c_values::kind_type(&CFieldKind::Scalar(
+                scalar,
+            ))],
+        ));
+        let Some((_, field)) = self.class_slot(&value.ty, &[name], &array)? else {
+            return Ok(None);
+        };
+        let object = value.values[0];
+        let has_class = self.builder.create_block();
+        let has_field = self.builder.create_block();
+        let copy = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.set_cold_block(slow);
+        self.emit_class_check(object, field.access, slow, has_class);
+        self.builder.switch_to_block(has_class);
+        self.builder.seal_block(has_class);
+        let block = self.class_block(object);
+        let list = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, field.offset);
+        self.builder.brif(list, has_field, &[], slow, &[]);
+        self.builder.switch_to_block(has_field);
+        self.builder.seal_block(has_field);
+        let view = aura_runtime::native_runtime::direct_list_layout();
+        let access = self
+            .builder
+            .uload32(MemFlags::trusted(), list, view.access_offset);
+        let matches = self
+            .builder
+            .icmp_imm(IntCC::Equal, access, scalar_list_access(scalar));
+        let held = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), list, view.len_offset);
+        let right_len = self.builder.icmp_imm(IntCC::Equal, held, count as i64);
+        let ready = self.builder.band(matches, right_len);
+        self.builder.brif(ready, copy, &[], slow, &[]);
+        self.builder.switch_to_block(copy);
+        self.builder.seal_block(copy);
+        let data = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), list, view.elements_offset);
+        // C padding was zeroed with the slot. Copy just the occupied bytes,
+        // allowing a byte or narrow scalar array to have any alignment.
+        let mut offset = 0;
+        for (width, ty) in [
+            (8, types::I64),
+            (4, types::I32),
+            (2, types::I16),
+            (1, types::I8),
+        ] {
+            while offset + width <= bytes {
+                let word = self.builder.load(ty, MemFlags::new(), data, offset as i32);
+                self.builder
+                    .store(MemFlags::new(), word, slot, offset as i32);
+                offset += width;
+            }
+        }
+        self.builder.jump(done, &[]);
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        Ok(Some(done))
     }
 
     /// The class value of type `ty` for the C struct at `slot`, which the
@@ -911,6 +1387,21 @@ impl FunctionCompiler<'_> {
                     let value = self.builder.load(ty, MemFlags::trusted(), slot, offset);
                     arguments.push(ty, Extension::None, value);
                 }
+            }
+            // AArch64 passes the pieces as one array, which LLVM keeps
+            // together on the stack.
+            CArgument::Stack if abi == CAbi::Aapcs64 => {
+                let CPassing::Registers(pieces) = layout.passing(abi) else {
+                    return Err(format!(
+                        "direct backend cannot pass C struct `{}` on the stack",
+                        layout.name
+                    ));
+                };
+                arguments.push_word(slot);
+                arguments.mark_last(Indirect::Aggregate {
+                    element: piece_type(pieces[0]).1,
+                    count: pieces.len() as u32,
+                });
             }
             CArgument::Stack => {
                 arguments.push_word(slot);
@@ -1136,18 +1627,96 @@ impl FunctionCompiler<'_> {
         (pointer, copy)
     }
 
+    /// Copies native records with a matching C layout to a private buffer.
+    /// A boxed or shared list takes the ordinary field conversion path.
+    /// The second result is the allocation to release, or zero for scratch.
+    fn copy_foreign_record_list(
+        &mut self,
+        list: Val,
+        record: &super::plain::PlainRecord,
+        stride: usize,
+        (descriptor, length): (Val, Val),
+        literal_count: Option<usize>,
+    ) -> (Val, Val) {
+        let direct_layout = aura_runtime::native_runtime::direct_list_layout();
+        let fast = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let join = self.builder.create_block();
+        let pointer = self.builder.append_block_param(join, types::I64);
+        let allocation = self.builder.append_block_param(join, types::I64);
+        self.builder.set_cold_block(slow);
+        self.emit_plain_list_check(list, record, &direct_layout, slow, fast);
+
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let count = self.list_view_word(list, super::list_snapshots::ViewWord::Len);
+        let data = self.list_view_word(list, super::list_snapshots::ViewWord::Elements);
+        let bytes = self.builder.imul_imm(count, stride as i64);
+        let capacity = aura_runtime::native_runtime::foreign_calls::FFI_STRUCT_SCRATCH_BYTES;
+        let slot = self.builder.create_sized_stack_slot(capacity as u32, 3);
+        let scratch = self.builder.stack_addr(types::I64, slot, 0);
+        // A matching small literal can be copied as native words. The actual
+        // count is checked here even if the source list has been reassigned
+        // or resized. Its C layout matched the native whole-word stride above.
+        if let Some((words, expected)) = literal_count.and_then(|n| {
+            let bytes = n.checked_mul(stride)?;
+            (bytes > 0 && bytes <= capacity && bytes.is_multiple_of(8)).then_some((bytes / 8, n))
+        }) {
+            let fixed = self.builder.create_block();
+            let general = self.builder.create_block();
+            let same = self.builder.icmp_imm(IntCC::Equal, count, expected as i64);
+            self.builder.brif(same, fixed, &[], general, &[]);
+            self.builder.switch_to_block(fixed);
+            self.builder.seal_block(fixed);
+            for i in 0..words {
+                let offset = (i * 8) as i32;
+                let value = self.builder.load(types::I64, MemFlags::new(), data, offset);
+                self.builder.store(MemFlags::new(), value, scratch, offset);
+            }
+            let no_heap = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join, &[scratch, no_heap]);
+            self.builder.switch_to_block(general);
+            self.builder.seal_block(general);
+        }
+        let copied = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::FfiCopyStructs],
+                &[data, bytes, scratch],
+            )
+            .results[0];
+        let heap = self.builder.icmp(IntCC::NotEqual, copied, scratch);
+        let null = self.builder.iconst(types::I64, 0);
+        let owned = self.builder.select(heap, copied, null);
+        self.builder.jump(join, &[copied, owned]);
+
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        let packed = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::FfiPackStructs],
+                &[list, descriptor, length],
+            )
+            .results[0];
+        self.builder.jump(join, &[packed, packed]);
+
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        (pointer, allocation)
+    }
+
     /// Releases the list the runtime made to lay a pointer argument's
     /// elements out as a C array. A list that lent its own elements made
     /// none, which is the common case, so the release sits on a cold path.
-    fn release_foreign_list_copy(&mut self, copy: Val) {
+    pub(super) fn release_foreign_allocation(&mut self, copy: Val, helper: RuntimeFn) {
         let release = self.builder.create_block();
         let done = self.builder.create_block();
         self.builder.set_cold_block(release);
         self.builder.brif(copy, release, &[], done, &[]);
         self.builder.switch_to_block(release);
         self.builder.seal_block(release);
-        self.builder
-            .call(self.runtime[RuntimeFn::ReleaseValue], &[copy]);
+        self.builder.call(self.runtime[helper], &[copy]);
         self.builder.jump(done, &[]);
         self.builder.switch_to_block(done);
         self.builder.seal_block(done);
@@ -1184,7 +1753,7 @@ impl FunctionCompiler<'_> {
     /// The Aura word of a scalar a foreign function returned. A C function
     /// may leave the bits of a register above a narrow result undefined, so
     /// the word is extended here from the narrow value.
-    fn foreign_scalar_result(
+    pub(super) fn foreign_scalar_result(
         &mut self,
         scalar: &ForeignScalar,
         raw: Val,

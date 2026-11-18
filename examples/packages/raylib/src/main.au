@@ -1,0 +1,130 @@
+"""A brick game: a window, 2D drawing, text, and keyboard and mouse input.
+
+Move the paddle with the left and right arrow keys, `A` and `D`, or the
+mouse. Run it from the package directory:
+
+    aura run src/main.au
+"""
+
+import demo
+import raylib
+
+SCREEN_WIDTH: int32 = 800
+SCREEN_HEIGHT: int32 = 450
+COLUMNS: int64 = 10
+ROWS: int64 = 5
+BRICK_WIDTH: float32 = 72.0
+BRICK_HEIGHT: float32 = 22.0
+PADDLE_WIDTH: float32 = 110.0
+PADDLE_SPEED: float32 = 420.0
+BALL_RADIUS: float32 = 9.0
+
+
+def brick(index: int64) -> raylib.Rectangle:
+    """The place of the brick `index`, counted along the rows."""
+    column = (index % COLUMNS) as float32
+    row = (index // COLUMNS) as float32
+    return raylib.Rectangle(
+        x=20.0 + column * (BRICK_WIDTH + 4.0),
+        y=50.0 + row * (BRICK_HEIGHT + 4.0),
+        width=BRICK_WIDTH,
+        height=BRICK_HEIGHT,
+    )
+
+
+def brick_color(index: int64) -> raylib.Color:
+    row = index // COLUMNS
+    if row == 0:
+        return raylib.RED
+    if row == 1:
+        return raylib.ORANGE
+    if row == 2:
+        return raylib.GOLD
+    if row == 3:
+        return raylib.LIME
+    return raylib.SKYBLUE
+
+
+def move_paddle(x: float32, seconds: float32) -> float32:
+    """The paddle's left edge after one frame of input."""
+    mut moved = x
+    if raylib.IsKeyDown(raylib.KEY_LEFT) or raylib.IsKeyDown(raylib.KEY_A):
+        moved = moved - PADDLE_SPEED * seconds
+    if raylib.IsKeyDown(raylib.KEY_RIGHT) or raylib.IsKeyDown(raylib.KEY_D):
+        moved = moved + PADDLE_SPEED * seconds
+    drift = raylib.GetMouseDelta()
+    if drift.x != 0.0:
+        moved = raylib.GetMousePosition().x - PADDLE_WIDTH / 2.0
+    limit = (SCREEN_WIDTH as float32) - PADDLE_WIDTH
+    if moved < 0.0:
+        return 0.0
+    if moved > limit:
+        return limit
+    return moved
+
+
+def main() -> int32:
+    raylib.SetTraceLogLevel(raylib.LOG_WARNING)
+    raylib.InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Aura and raylib: bricks")
+    limit = demo.frame_limit()
+    if limit == 0:
+        raylib.SetTargetFPS(60)
+
+    mut standing: list[bool] = [true for _ in range(COLUMNS * ROWS)]
+    mut paddle_x: float32 = 345.0
+    mut ball = raylib.Vector2(x=400.0, y=300.0)
+    mut speed = raylib.Vector2(x=200.0, y=-240.0)
+    mut score = 0
+    mut frame = 0
+    # The last places of the ball, oldest first, drawn as its trail.
+    mut trail: list[raylib.Vector2] = []
+
+    while not demo.finished(frame, limit):
+        # A fixed step keeps a test run the same on every machine.
+        seconds: float32 = 1.0 / 60.0
+        paddle_x = move_paddle(paddle_x, seconds)
+        paddle = raylib.Rectangle(x=paddle_x, y=410.0, width=PADDLE_WIDTH, height=14.0)
+
+        ball.x = ball.x + speed.x * seconds
+        ball.y = ball.y + speed.y * seconds
+        if ball.x < BALL_RADIUS or ball.x > (SCREEN_WIDTH as float32) - BALL_RADIUS:
+            speed.x = -speed.x
+        if ball.y < BALL_RADIUS:
+            speed.y = -speed.y
+        if ball.y > (SCREEN_HEIGHT as float32) + BALL_RADIUS:
+            ball = raylib.Vector2(x=400.0, y=300.0)
+            speed = raylib.Vector2(x=200.0, y=-240.0)
+        if speed.y > 0.0 and raylib.CheckCollisionCircleRec(ball, BALL_RADIUS, paddle):
+            speed.y = -speed.y
+            speed.x = (ball.x - (paddle_x + PADDLE_WIDTH / 2.0)) * 5.0
+        for index in range(COLUMNS * ROWS):
+            if standing[index] and raylib.CheckCollisionCircleRec(
+                ball,
+                BALL_RADIUS,
+                brick(index),
+            ):
+                standing[index] = false
+                speed.y = -speed.y
+                score = score + 10
+                break
+
+        raylib.BeginDrawing()
+        raylib.ClearBackground(raylib.RAYWHITE)
+        for index in range(COLUMNS * ROWS):
+            if standing[index]:
+                raylib.DrawRectangleRec(brick(index), brick_color(index))
+        raylib.DrawRectangleRounded(paddle, 0.6, 8, raylib.DARKBLUE)
+        trail.append(ball)
+        if len(trail) > 12:
+            trail.pop(0)
+        raylib.DrawLineStrip(trail, len(trail) as int32, raylib.PINK)
+        raylib.DrawCircleV(ball, BALL_RADIUS, raylib.MAROON)
+        raylib.DrawText(f"score {score}", 20, 14, 24, raylib.DARKGRAY)
+        raylib.DrawText("arrows, A and D, or the mouse", 470, 18, 18, raylib.GRAY)
+        raylib.EndDrawing()
+        frame = frame + 1
+
+    demo.save_frame()
+    raylib.CloseWindow()
+    print(f"score {score} after {frame} frames")
+    return 0

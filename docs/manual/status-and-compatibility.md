@@ -74,7 +74,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 ### Foreign Functions
 
 - Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
-- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list or an Array, C structs of scalars, pointer-length str and byte views, NUL-terminated `cstr` text, opaque handles, and callbacks that name a top-level function over scalars.
+- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to elements of lists or Arrays, C structs with scalar or fixed-size array fields, C unions, pointer-length text and byte views, NUL-terminated `cstr` text, and opaque handles. A named top-level callback accepts scalars, pointers to one scalar, and `cstr` parameters.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.

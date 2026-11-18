@@ -82,3 +82,77 @@ In `callback` the C function calls the function it is handed once. Rust
 passes an `extern "C" fn`, and Python a `CFUNCTYPE` or `ffi.callback`
 wrapper of a lambda. Aura's 4 ns over Rust is the frame its entry packs and
 the guard that keeps a failure from unwinding through C.
+
+## Struct Arrays, Array Fields, Unions, And Text Callbacks
+
+Build a release compiler and run the four FFI v2 comparisons.
+
+```sh
+cargo build --release -p aura -p aura-runtime
+bash benchmarks/ffi_calls/run.sh v2
+```
+
+Each implementation builds its input once. Each timed loop runs two million
+iterations and checks the accumulated result. Times include loop overhead.
+All three read the same nanosecond clock from the fixture C library. The
+default measures wall time. Set `AURA_FFI_BENCH_CLOCK=cpu` to measure
+process CPU time when sharing the host with other work.
+
+| Case | Work in one iteration |
+| --- | --- |
+| `struct_array` | Pass four two-field records to C. C sums their eight signed 32-bit coordinates. |
+| `array_field` | Pass a struct by value. C sums its four inline signed 32-bit integers. |
+| `union_read` | Read a signed 32-bit member of one of four unions populated by C before timing. |
+| `text_callback` | Call C with a named function. The callback counts the Unicode scalars in `café`. |
+
+Aura gives C a private copy of a struct list. Rust and ctypes pass the
+address of a C-layout array they already hold. In the callback, Aura owns
+a checked copy of the C string. Rust borrows and validates it with
+`CStr::to_str`. Python decodes the bytes passed by ctypes.
+
+### FFI v2 results
+
+Linux x86-64, 2026-11-17. Each row gives median nanoseconds per operation
+from three runs on one pinned CPU. The order of the three implementations
+rotated each run. Compilation and input construction finished before timing.
+The Aura program used LLVM's `default<O3>` pipeline and the release runtime.
+The Rust compiler frontend for Aura was built in the dev profile. Rust used
+`rustc -C opt-level=3`. Other compilations on the host account for some of
+the difference between process CPU and elapsed time.
+
+| Case | Aura CPU | Rust CPU | ctypes CPU | Aura elapsed | Rust elapsed | ctypes elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `struct_array` | 18.87 | 7.02 | 1003.41 | 20.62 | 10.74 | 2072.74 |
+| `array_field` | 7.82 | 3.13 | 760.16 | 9.77 | 4.88 | 1692.03 |
+| `union_read` | 6.74 | 0.48 | 212.24 | 7.85 | 0.51 | 415.52 |
+| `text_callback` | 112.78 | 24.59 | 1100.07 | 176.81 | 48.48 | 1865.62 |
+
+The first run put the struct array and fixed array field at 2.69 and 2.49
+times Rust's CPU time. The ordinary indexed union getter checked the storage
+and length of the byte field before loading the member. A malformed value
+entered the getter's diagnostic frame. Six alternating runs measured 8.94 ns
+per read before eliding that frame on valid input and 5.62 ns afterwards.
+
+A later native build kept the private C writeback array until the last use
+of an exclusively read union list. Numeric indexed reads measured 0.82 ns
+in Aura, 0.67 ns in Rust, and 216.12 ns in Python ctypes. Eight alternating
+pairs with the same runtime measured 4.54 ns for the previous getter and
+0.78 ns for the packed read. The compiler uses the ordinary list when a
+later operation can escape or change its elements. Out-of-range indices and
+malformed union bytes report the same diagnostics as the interpreter.
+
+In this repeat the other CPU medians for Aura / Rust / ctypes were
+17.81 / 5.21 / 1127.81 ns for struct arrays, 7.50 / 3.44 / 797.16 ns for
+fixed array fields, and 114.26 / 23.44 / 1098.63 ns for text callbacks.
+The struct-array ratio moved between 2.69× and 3.42× across the two runs.
+The text callback took 4.87 times Rust’s CPU time in this run.
+
+
+On 2026-11-18, nine runs rotated the previous Aura binary, the new
+Aura binary and the Rust binary on the same CPU. Matching small record
+lists copied directly into the private call buffer. Callbacks that only
+inspect their text arguments kept the owned strings on the stack.
+The medians were 15.74 / 11.00 / 6.43 ns for the record list and
+120.52 / 87.39 / 25.54 ns for the callback. The new Aura and Rust
+binaries took 7.54 / 2.84 ns for the fixed array field and 0.76 / 0.59 ns
+for the union read.

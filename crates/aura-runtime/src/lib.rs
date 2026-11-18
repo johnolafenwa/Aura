@@ -18,6 +18,7 @@ pub mod array_simd;
 pub mod array_views;
 pub mod bytes_codec;
 pub mod c_layout;
+pub mod c_values;
 pub mod collection_index;
 pub mod ffi;
 pub mod gzip_codec;

@@ -2301,6 +2301,59 @@ def main():
 }
 
 #[test]
+fn ffi_callbacks_take_c_text_as_a_borrowed_str() {
+    check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr, count: int32) -> int32) -> None
+
+def show(word: str, count: int32) -> int32:
+    print(word)
+    return count
+
+def main():
+    each(show)
+"#,
+    )
+    .expect("a callback takes C text");
+
+    // The text is borrowed for the call, so a function that takes it by
+    // another mode is not that callback.
+    let owned = check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr) -> None) -> None
+
+def keep(word: own str) -> None:
+    print(word)
+
+def main():
+    each(keep)
+"#,
+    )
+    .expect_err("a callback borrows its text");
+    assert_eq!(owned.code, "AU2015", "{}", owned.message);
+
+    let result = check_ffi_source_for_test(
+        r#"extern "C" def bad(make: def() -> cstr) -> None
+"#,
+    )
+    .expect_err("a callback does not return text");
+    assert_eq!(
+        result.message,
+        "a callback cannot return `cstr`: nothing would own the text once the function returns"
+    );
+    let list = check_ffi_source_for_test(
+        r#"extern "C" def bad(visit: def(words: list[int32]) -> None) -> None
+"#,
+    )
+    .expect_err("a callback takes scalars and text");
+    assert!(
+        list.help
+            .iter()
+            .any(|help| help.contains("`cstr` for C text")),
+        "{:?}",
+        list.help
+    );
+}
+
+#[test]
 fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
     let rejected = [
         (
@@ -2328,7 +2381,7 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: def(str) -> int32) -> None
+            r#"extern "C" def bad(value: def(mut cstr) -> int32) -> None
 "#,
             "parameter 1 of callback `value` cannot cross the C boundary as `str`",
             "AU2002",
@@ -7920,6 +7973,8 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         span: Span::new(1, 1),
         doc: None,
         c_layout: false,
+        c_arrays: Default::default(),
+        c_union: None,
     }
 }
 
@@ -33191,6 +33246,266 @@ def run() -> None:
 }
 
 #[test]
+fn ffi_lays_out_unions_from_their_members() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+    name: array[uint8, 4]
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    ratio: float64
+    padding: array[uint8, 24]
+
+extern "C" class Holder:
+    tag: int32
+    event: Event
+
+extern "C" def poll(event: mut Event) -> bool
+extern "C" def push(event: Event) -> int32
+extern "C" def last() -> Event
+extern "C" def hold(holder: Holder) -> int32
+extern "C" def fill(events: mut ptr[Event], count: int32) -> None
+
+def run() -> int32:
+    mut event = Event()
+    if poll(event):
+        return event.key.code
+    made = Event.from_key(Key(kind=1, code=2, name=[0, 0, 0, 0]))
+    mut events = [Event.from_kind(1), Event.from_ratio(0.5), Event.from_padding(made.padding)]
+    fill(events, 3)
+    holder = Holder(tag=1, event=last())
+    return push(made) + hold(holder) + (len(event.bytes) as int32)
+"#,
+    )
+    .expect("unions should check");
+    let event = program.extern_functions["push"].c_struct_params[0]
+        .as_ref()
+        .expect("a union crosses as a struct does");
+    assert!(event.union && event.holds_union() && !event.is_plain());
+    assert_eq!(event.name, "Event");
+    assert_eq!((event.size(), event.align()), (24, 8));
+    assert_eq!(
+        event
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["kind", "key", "ratio", "padding"]
+    );
+    assert_eq!(
+        program.extern_functions["last"].c_struct_result.as_ref(),
+        Some(event)
+    );
+    assert_eq!(
+        program.extern_functions["fill"].c_struct_params[0].as_ref(),
+        Some(event)
+    );
+    let holder = program.extern_functions["hold"].c_struct_params[0]
+        .as_ref()
+        .expect("a class that holds a union crosses");
+    assert_eq!((holder.size(), holder.align()), (32, 8));
+    assert!(!program.classes["Event"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+    // The default of the bytes is as long as the union.
+    let Some(Expr {
+        kind: ExprKind::Comprehension { clauses, .. },
+        ..
+    }) = &program.classes["Event"].decl.fields[0].default
+    else {
+        panic!("the bytes of a union default to a comprehension");
+    };
+    let ExprKind::Call { args, .. } = &clauses[0].iterable.kind else {
+        panic!("the comprehension runs over a range");
+    };
+    assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
+
+    for (source, message, code) in [
+        (
+            "extern \"C\" union U:\n    name: str\n",
+            "member `name` of `extern \"C\"` union `U` has type `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    names: array[str, 2]\n",
+            "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+            "",
+            "",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
+            "use of moved value `u`",
+            "AU3001",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source).expect_err("the union is misused");
+        assert!(error.message.contains(message), "{}", error.message);
+        if !code.is_empty() {
+            assert_eq!(error.code, code, "{}", error.message);
+        }
+    }
+}
+
+#[test]
+fn ffi_admits_array_fields_and_struct_arrays() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    name: array[int8, 8]
+    corners: array[Point, 2]
+    grid: array[array[int16, 3], 2]
+
+extern "C" class Holder:
+    id: int32
+    shape: Shape
+
+extern "C" def area(s: Shape) -> float32
+extern "C" def make(tag: uint8) -> Shape
+extern "C" def grow(s: mut Shape) -> None
+extern "C" def hold(h: Holder) -> int32
+extern "C" def total(points: ptr[Point], count: int32) -> float32
+extern "C" def shift(points: mut ptr[Point], count: int32) -> None
+extern "C" def retag(shapes: mut ptr[Shape], count: int32) -> None
+
+def run() -> float32:
+    mut shape = make(1)
+    grow(shape)
+    shape.name[0] = 65
+    first = shape.corners[0]
+    mut points = [first, Point(x=1.0, y=2.0)]
+    shift(points, 2)
+    mut shapes = [make(2)]
+    retag(shapes, 1)
+    holder = Holder(id=1, shape=make(3))
+    return area(shape) + total(points, 2) + (hold(holder) as float32)
+"#,
+    )
+    .expect("array fields and struct arrays should check");
+    use crate::c_layout::CFieldKind;
+    use crate::ffi::FfiScalar;
+    let area = &program.extern_functions["area"];
+    let shape = area.c_struct_params[0].as_ref().expect("a struct");
+    assert_eq!(
+        shape.fields[1].kind,
+        CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::I8)), 8)
+    );
+    let CFieldKind::Array(corner, 2) = &shape.fields[2].kind else {
+        panic!("corners is an array of two");
+    };
+    assert!(matches!(&**corner, CFieldKind::Struct(point) if point.name == "Point"));
+    assert_eq!(
+        shape.fields[3].kind,
+        CFieldKind::Array(
+            Box::new(CFieldKind::Array(
+                Box::new(CFieldKind::Scalar(FfiScalar::I16)),
+                3
+            )),
+            2
+        )
+    );
+    assert_eq!((shape.size(), shape.align()), (40, 4));
+    assert!(!shape.is_plain());
+    assert_eq!(
+        program.extern_functions["make"].c_struct_result.as_ref(),
+        Some(shape)
+    );
+    // A `ptr[Name]` parameter carries the layout of one element.
+    let total = &program.extern_functions["total"];
+    assert_eq!(
+        total.c_struct_params[0].as_ref().map(|point| point.size()),
+        Some(8)
+    );
+    assert!(total.c_struct_params[1].is_none());
+    assert_eq!(
+        program.extern_functions["retag"].c_struct_params[0].as_ref(),
+        Some(shape)
+    );
+    // A class with an array field is not Copy, and neither is its holder.
+    assert!(program.classes["Point"].decl.copy);
+    assert!(!program.classes["Shape"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+
+    let rejected = [
+        (
+            r#"extern "C" class P:
+    names: array[str, 2]
+"#,
+            "field `names` of `extern \"C\"` class `P` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    values: list[int32]
+"#,
+            "field `values` of `extern \"C\"` class `P` has type `list[int32]`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(p: ptr[str]) -> None
+"#,
+            "pointer parameter `p` must point to a fixed-width scalar type or an `extern \"C\"` class",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: own ptr[P]) -> None
+"#,
+            "pointer parameter `p` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" def use(p: P) -> None
+def run() -> None:
+    p = P(v=[1, 2])
+    q = p
+    use(p)
+"#,
+            "use of moved value `p`",
+            "AU3001",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" class H:
+    p: P
+extern "C" def use(h: H) -> None
+def run() -> None:
+    h = H(p=P(v=[1, 2]))
+    k = h
+    use(h)
+"#,
+            "use of moved value `h`",
+            "AU3001",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported array use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"
@@ -33277,6 +33592,11 @@ class Counter:
     let bad_declarations = [
         (
             "extern \"C\" def bad(f: def(text: str) -> None) -> None\n",
+            "a callback takes text as `cstr`",
+            "AU1101",
+        ),
+        (
+            "extern \"C\" def bad(f: def(text: mut cstr) -> None) -> None\n",
             "parameter 1 of callback `f` cannot cross the C boundary as `str`",
             "AU2002",
         ),

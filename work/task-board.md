@@ -29,6 +29,39 @@ Last updated: 2026-11-17
   The documentation build and both dependency audits pass with the pinned glob matcher.
 - Left out: 16-bit samples, metadata, other formats, drawing.
 
+## raylib graphics and FFI v2 (in progress)
+
+- Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
+  additions that C graphics libraries need: array fields, unions, and
+  arrays of structs. The design is in
+  `architecture_docs/29-ffi-v2-graphics-design-checkpoint.md`, and the
+  note is `2026-11-16-raylib-and-ffi-v2.md`.
+- Done: step 1, `examples/packages/raylib` on the FFI of 0.16: a generated
+  binding, a brick game, a 3D scene, and a picture program, with
+  acceptance tests on both backends and a CI step that installs raylib and
+  a virtual display.
+- Done: step 2 (ADR-0106): `array[T, N]` fields, `ptr[Name]` for arrays of
+  structs, AArch64 struct arguments that overflow the registers, and a fix
+  for a struct placed on the stack when only the other kind of register
+  had run out. The binding now covers 587 of raylib 6.0's 600 functions.
+- Verification: unit tests in the runtime and compiler, and acceptance
+  tests against a C fixture library and raylib on both backends on x86-64
+  Linux under Xvfb. Not run on macOS, Windows, or arm64 here; the AArch64
+  call sequence was checked by reading the generated assembly.
+- Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
+  that runs an SDL event loop on both backends.
+- Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
+  acceptance test. The manual and chapter 18 cover the copying and
+  failure rules. Native callback cleanup also covers a trap in a callback.
+- The FFI v2 benchmark covers struct arrays, fixed array fields, union
+  reads, and UTF-8 callbacks. Native record arrays with a matching C
+  layout copy directly into a call buffer. C-filled union lists used only
+  for numeric member reads can reuse those bytes. A callback that only reads
+  its text inputs can hold the owned strings on its stack. The latest nine-run
+  CPU medians were 1.71×, 2.66×, 1.29× and 3.42× Rust’s respectively.
+  All four beat Python ctypes in the previous three-way comparison.
+  [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
+
 ## Three compiler defects from the book sections (complete)
 
 - Target: John's 2026-11-16 ask to fix the defects the book work found.

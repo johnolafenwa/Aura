@@ -220,6 +220,276 @@ fn maintained_sqlite_example_runs_with_backend_parity() {
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
 }
 
+/// Whether the host C toolchain links the raylib library.
+fn host_links_raylib() -> bool {
+    let scratch = TempPackage::new(false);
+    let c_file = scratch.path.join("probe.c");
+    fs::write(
+        &c_file,
+        "int GetRandomValue(int, int);\nint main(void) { return GetRandomValue(0, 0); }\n",
+    )
+    .expect("the probe source should be writable");
+    Command::new("cc")
+        .arg(&c_file)
+        .arg("-lraylib")
+        .arg("-o")
+        .arg(scratch.path.join("probe"))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Runs the raylib example program `name` on both backends in `directory`,
+/// with `settings` in the environment, and returns what each printed.
+fn run_raylib_example(name: &str, directory: &Path, settings: &[(&str, &str)]) -> (String, String) {
+    let source = repository_root()
+        .join("examples/packages/raylib/src")
+        .join(format!("{name}.au"));
+    let mir = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source)
+        .current_dir(directory)
+        .envs(settings.iter().copied())
+        .output()
+        .expect("the raylib example should start in the interpreter");
+    assert_success(&mir, "raylib example MIR run");
+
+    let binary = directory.join(format!("raylib-{name}-direct"));
+    let build = build_direct(&source, &binary);
+    assert_success(&build, "raylib example direct build");
+    let direct = Command::new(binary)
+        .current_dir(directory)
+        .envs(settings.iter().copied())
+        .output()
+        .expect("the raylib example direct binary should start");
+    assert_success(&direct, "raylib example direct run");
+    (
+        String::from_utf8_lossy(&mir.stdout).into_owned(),
+        String::from_utf8_lossy(&direct.stdout).into_owned(),
+    )
+}
+
+/// Whether the C compiler links `library`, with `probe` as a program that
+/// calls into it.
+fn host_links(library: &str, probe: &str) -> bool {
+    let scratch = TempPackage::new(false);
+    let c_file = scratch.path.join("probe.c");
+    fs::write(&c_file, probe).expect("the probe source should be writable");
+    Command::new("cc")
+        .arg(&c_file)
+        .arg(format!("-l{library}"))
+        .arg("-o")
+        .arg(scratch.path.join("probe"))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// SDL reports every event through one union. This program pushes three
+/// events and reads them back through `SDL_Event`.
+const SDL_EVENTS: &str = r#"extern "C" class Keysym:
+    scancode: int32
+    sym: int32
+    modifiers: uint16
+    unused: uint32
+
+
+extern "C" class KeyboardEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    state: uint8
+    repeat: uint8
+    padding2: uint8
+    padding3: uint8
+    keysym: Keysym
+
+
+extern "C" class UserEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    code: int32
+    data1: uint64
+    data2: uint64
+
+
+extern "C" class TextInputEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    text: array[uint8, 32]
+
+
+extern "C" union Event:
+    kind: uint32
+    key: KeyboardEvent
+    user: UserEvent
+    text: TextInputEvent
+    padding: array[uint8, 56]
+
+
+extern "C" def SDL_Init(flags: uint32) -> int32
+
+
+extern "C" def SDL_Quit() -> None
+
+
+extern "C" def SDL_PushEvent(event: mut Event) -> int32
+
+
+extern "C" def SDL_PollEvent(event: mut Event) -> int32
+
+
+extern "C" def SDL_PeepEvents(
+    events: mut ptr[Event],
+    count: int32,
+    action: int32,
+    low: uint32,
+    high: uint32,
+) -> int32
+
+
+SDL_INIT_EVENTS: uint32 = 16384
+SDL_KEYDOWN: uint32 = 768
+SDL_TEXTINPUT: uint32 = 771
+SDL_USEREVENT: uint32 = 32768
+SDL_ADDEVENT: int32 = 0
+
+
+def text_event(first: uint8, second: uint8) -> Event:
+    mut bytes: list[uint8] = [0 for _ in range(32)]
+    bytes[0] = first
+    bytes[1] = second
+    return Event.from_text(
+        TextInputEvent(kind=SDL_TEXTINPUT, timestamp=0, window=0, text=bytes)
+    )
+
+
+def main() -> int32:
+    if SDL_Init(SDL_INIT_EVENTS) != 0:
+        print("SDL did not start")
+        return 1
+    mut key = Event.from_key(
+        KeyboardEvent(
+            kind=SDL_KEYDOWN,
+            timestamp=0,
+            window=0,
+            state=1,
+            repeat=0,
+            padding2=0,
+            padding3=0,
+            keysym=Keysym(scancode=41, sym=27, modifiers=0, unused=0),
+        )
+    )
+    print(SDL_PushEvent(key))
+    mut more = [
+        Event.from_user(
+            UserEvent(
+                kind=SDL_USEREVENT,
+                timestamp=0,
+                window=0,
+                code=7,
+                data1=0,
+                data2=0,
+            )
+        ),
+        text_event(104, 105),
+    ]
+    print(SDL_PeepEvents(more, 2, SDL_ADDEVENT, 0, 65535))
+
+    mut event = Event()
+    while SDL_PollEvent(event) != 0:
+        if event.kind == SDL_KEYDOWN:
+            pressed = event.key
+            print(
+                f"key {pressed.keysym.sym} scancode {pressed.keysym.scancode} state {pressed.state}"
+            )
+        elif event.kind == SDL_USEREVENT:
+            print(f"user {event.user.code}")
+        elif event.kind == SDL_TEXTINPUT:
+            print(
+                f"text {event.text.text[0]} {event.text.text[1]} {event.text.text[2]}"
+            )
+    SDL_Quit()
+    return 0
+"#;
+
+#[test]
+fn sdl_events_cross_as_a_union_with_backend_parity() {
+    if !host_links(
+        "SDL2",
+        "int SDL_Init(unsigned);\nint main(void) { return SDL_Init(0); }\n",
+    ) {
+        eprintln!("the host has no SDL2 library to link; the test needs one");
+        return;
+    }
+    let package = TempPackage::new(true);
+    package.manifest("\n[ffi]\nlibraries = [\"SDL2\"]\n");
+    let source = package.source(SDL_EVENTS);
+    let mir = run_mir(&source);
+    assert_success(&mir, "SDL events on the interpreter");
+    let binary = package.path.join("sdl-events-direct");
+    assert_success(&build_direct(&source, &binary), "SDL events build");
+    let direct = Command::new(&binary)
+        .output()
+        .expect("the SDL events binary should start");
+    assert_success(&direct, "SDL events in a built program");
+    let expected = "1\n2\nkey 27 scancode 41 state 1\nuser 7\ntext 104 105 0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+/// Whether `path` holds a PNG image of more than a few bytes.
+fn is_png(path: &Path) -> bool {
+    fs::read(path).is_ok_and(|bytes| bytes.len() > 1000 && bytes.starts_with(b"\x89PNG\r\n"))
+}
+
+#[test]
+fn maintained_raylib_picture_runs_with_backend_parity() {
+    if !host_links_raylib() {
+        eprintln!("the host has no raylib library to link; the example needs one");
+        return;
+    }
+    let scratch = TempPackage::new(false);
+    let expected = "picture.png is 320 by 200\nthe sun is 255, 203, 0\n\
+                    the hill is 0, 158, 47\n\
+                    the grass is 0, 117, 44\n";
+    let (mir, direct) = run_raylib_example("picture", &scratch.path, &[]);
+    assert_eq!(mir, expected);
+    assert_eq!(direct, expected);
+    assert!(is_png(&scratch.path.join("picture.png")));
+}
+
+/// The window programs need a display. A Linux host has one when
+/// `DISPLAY` is set, which a virtual display such as Xvfb also does. Any
+/// other host opts in with `AURA_RAYLIB_WINDOW_TESTS=1`.
+fn host_shows_windows() -> bool {
+    std::env::var_os("AURA_RAYLIB_WINDOW_TESTS").is_some()
+        || (cfg!(target_os = "linux") && std::env::var_os("DISPLAY").is_some())
+}
+
+#[test]
+fn maintained_raylib_windows_draw_with_backend_parity() {
+    if !host_links_raylib() || !host_shows_windows() {
+        eprintln!("the host has no raylib library or no display; the examples need both");
+        return;
+    }
+    let scratch = TempPackage::new(false);
+    for (name, expected) in [
+        ("main", "score 10 after 90 frames\n"),
+        ("scene", "drew 90 frames\n"),
+    ] {
+        let shot = format!("{name}.png");
+        let settings = [
+            ("RAYLIB_DEMO_FRAMES", "90"),
+            ("RAYLIB_DEMO_SHOT", shot.as_str()),
+        ];
+        let (mir, direct) = run_raylib_example(name, &scratch.path, &settings);
+        assert_eq!(mir, expected, "{name} in the interpreter");
+        assert_eq!(direct, expected, "{name} as a native executable");
+        assert!(is_png(&scratch.path.join(&shot)), "{name} saved no frame");
+    }
+}
+
 #[test]
 fn maintained_getpid_example_runs_with_backend_parity() {
     let package = repository_root().join("examples/packages/ffi_getpid");
@@ -400,6 +670,7 @@ def main() -> int32:
 
 const FIXTURE_LIBRARY: &str = r#"
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -705,6 +976,136 @@ void fx_crate_keep(fx_crate **slot) { if (*slot) (*slot)->id += 100; }
 void fx_crate_swap(fx_crate **slot, int32_t id) { fx_crate_close(*slot); *slot = fx_crate_open(id); }
 Flag fx_bad_struct_flag(void) { Flag f; *(uint8_t *)&f.ok = 9; return f; }
 void fx_bad_struct_out(Flag *f) { *(uint8_t *)&f->ok = 9; }
+int64_t fx_spill_words(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f,
+                       int64_t g, Wide w, int64_t h) {
+    return a + b + c + d + e + f + g + 10 * w.lo + 100 * w.hi + 1000 * h;
+}
+double fx_spill_vec3(double a, double b, double c, double d, double e, double f, Vec3 v,
+                     float g, IPair p, double h) {
+    return a + b + c + d + e + f + 10.0 * v.x + 100.0 * v.y + 1000.0 * v.z + 10000.0 * g
+        + p.a + p.b + 100000.0 * h;
+}
+typedef struct { float x, y; } Pt;
+typedef struct { uint8_t tag; char name[8]; float weights[4]; Pt corners[2]; bool on[2]; } Shape;
+typedef struct { int32_t id; Shape shape; int16_t grid[2][3]; } Holder;
+typedef struct { double m[4]; } Quad;
+typedef struct { float v[2]; } FPair;
+typedef struct { uint64_t w[2]; } WPair;
+Shape fx_shape_make(uint8_t tag) {
+    Shape s; memset(&s, 0, sizeof s); s.tag = tag; memcpy(s.name, "shape", 6);
+    for (int i = 0; i < 4; i++) s.weights[i] = (float)(i + 1) * 0.5f;
+    s.corners[0] = (Pt){1, 2}; s.corners[1] = (Pt){3, 4}; s.on[1] = true;
+    return s;
+}
+float fx_shape_sum(Shape s) {
+    return s.weights[0] + s.weights[1] + s.weights[2] + s.weights[3] + s.tag
+        + s.corners[1].y + (s.on[0] ? 100 : 0) + (s.on[1] ? 1000 : 0);
+}
+void fx_shape_grow(Shape *s) { s->tag += 1; s->name[0] = 'S'; s->corners[1].y *= 2; s->weights[3] = 9; }
+int32_t fx_holder_sum(Holder h) {
+    return h.id + h.shape.tag + (int32_t)h.shape.corners[1].x + h.grid[0][0] + 10 * h.grid[1][2];
+}
+Holder fx_holder_make(int32_t id) {
+    Holder h; memset(&h, 0, sizeof h); h.id = id; h.shape = fx_shape_make((uint8_t)id);
+    for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) h.grid[r][c] = (int16_t)(r * 10 + c);
+    return h;
+}
+Quad fx_quad_scale(Quad q, double k) { for (int i = 0; i < 4; i++) q.m[i] *= k; return q; }
+FPair fx_fpair_swap(FPair p) { FPair r = {{p.v[1], p.v[0]}}; return r; }
+WPair fx_wpair_swap(WPair p) { WPair r = {{p.w[1], p.w[0]}}; return r; }
+double fx_spill_fpair(double a, double b, double c, double d, double e, double f, double g,
+                      FPair p, double h) {
+    return a + b + c + d + e + f + g + 10.0 * p.v[0] + 100.0 * p.v[1] + 1000.0 * h;
+}
+float fx_points_overwrite(Pt *points) {
+    float old = points[0].x;
+    points[0].x = -999.0f;
+    return old;
+}
+float fx_points_sum(const Pt *points, int32_t count) {
+    float total = 0; for (int i = 0; i < count; i++) total += points[i].x + points[i].y; return total;
+}
+void fx_points_shift(Pt *points, int32_t count, float by) {
+    for (int i = 0; i < count; i++) { points[i].x += by; points[i].y -= by; }
+}
+int32_t fx_shapes_tags(const Shape *shapes, int32_t count) {
+    int32_t total = 0; for (int i = 0; i < count; i++) total += shapes[i].tag; return total;
+}
+void fx_shapes_retag(Shape *shapes, int32_t count) {
+    for (int i = 0; i < count; i++) shapes[i].tag = (uint8_t)(i * 10);
+}
+bool fx_points_null(const Pt *points) { return points == NULL; }
+Shape fx_shape_bad_flag(void) { Shape s = fx_shape_make(1); *(uint8_t *)&s.on[0] = 5; return s; }
+void fx_shapes_bad_flag(Shape *shapes) { *(uint8_t *)&shapes[0].on[1] = 5; }
+
+typedef struct { uint32_t kind; int32_t code; uint8_t name[4]; } UKey;
+typedef struct { uint32_t kind; float x; float y; } UMove;
+typedef union { uint32_t kind; UKey key; UMove motion; double ratio; uint8_t padding[24]; } UEvent;
+typedef union { float f; uint32_t bits; } UBits;
+typedef union { float a; float b[2]; } UHfa;
+typedef union { bool on; uint8_t raw; } UFlag;
+typedef struct { int32_t tag; UEvent event; UBits bits[2]; } UHolder;
+UEvent fx_event_key(int32_t code) {
+    UEvent e; memset(&e, 0, sizeof e);
+    e.key.kind = 1; e.key.code = code; memcpy(e.key.name, "key", 4); return e;
+}
+int32_t fx_event_code(UEvent e) { return e.kind == 1 ? e.key.code : -1; }
+bool fx_event_poll(UEvent *out, int32_t round) {
+    if (round >= 2) return false;
+    memset(out, 0, sizeof *out);
+    out->motion.kind = 2; out->motion.x = 1.5f * (float)(round + 1); out->motion.y = -2.0f;
+    return true;
+}
+UBits fx_bits_of(float f) { UBits b; b.f = f; return b; }
+float fx_bits_float(UBits b) { return b.f; }
+UHfa fx_hfa_swap(UHfa h) { UHfa r; r.b[0] = h.b[1]; r.b[1] = h.b[0]; return r; }
+double fx_spill_hfa(double a, double b, double c, double d, double e, double f, double g,
+                    UHfa h, double i) {
+    return a + b + c + d + e + f + g + 10.0 * h.b[0] + 100.0 * h.b[1] + 1000.0 * i;
+}
+UHolder fx_uholder_make(int32_t tag) {
+    UHolder h; memset(&h, 0, sizeof h);
+    h.tag = tag; h.event = fx_event_key(tag * 2); h.bits[0].f = 1.0f; h.bits[1].bits = 7; return h;
+}
+int32_t fx_uholder_sum(UHolder h) {
+    return h.tag + h.event.key.code + (int32_t)h.bits[0].bits % 1000 + (int32_t)h.bits[1].bits;
+}
+int32_t fx_events_kinds(const UEvent *events, int32_t count) {
+    int32_t total = 0; for (int i = 0; i < count; i++) total += (int32_t)events[i].kind; return total;
+}
+void fx_events_number(UEvent *events, int32_t count, uint32_t first) {
+    for (int32_t i = 0; i < count; i++) events[i].kind = first + (uint32_t)i;
+}
+void fx_events_fill(UEvent *events, int32_t count) {
+    for (int i = 0; i < count; i++) events[i] = fx_event_key(i + 40);
+}
+UFlag fx_flag_raw(uint8_t raw) { UFlag f; f.raw = raw; return f; }
+
+int32_t fx_each_word(const char *text, int32_t (*visit)(int32_t index, const char *word)) {
+    char word[32]; int32_t total = 0, index = 0; size_t length = 0;
+    for (const char *at = text;; at++) {
+        if (*at == ' ' || *at == 0) {
+            word[length] = 0; total += visit(index++, word); length = 0;
+            if (*at == 0) break;
+        } else if (length < sizeof word - 1) word[length++] = *at;
+    }
+    return total;
+}
+void fx_log(void (*sink)(const char *message, double value, const char *unit)) {
+    sink("speed", 2.5, "m/s"); sink("", -1.0, "caf\xc3\xa9");
+}
+void fx_log_with_cleanup(void (*sink)(const char *, double, const char *)) {
+    fx_log(sink);
+    puts("C finished cleanup");
+    fflush(stdout);
+}
+void fx_text_null(void (*sink)(const char *message)) { sink(NULL); }
+void fx_text_bad(void (*sink)(const char *message)) { sink("\xff\xfe"); }
+void fx_text_bad_second(void (*sink)(const char *, const char *)) {
+    sink("first", "\xff");
+    puts("C finished cleanup");
+    fflush(stdout);
+}
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -917,6 +1318,116 @@ extern "C" def qsort(
     compare: def(a: mut int32, b: mut int32) -> int32
 ) -> None
 extern "C" def fx_bad_struct_out(f: mut Flag) -> None
+extern "C" def fx_spill_words(
+    a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64, w: Wide, h: int64
+) -> int64
+extern "C" def fx_spill_vec3(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, v: Vec3,
+    g: float32, p: IPair, h: float64
+) -> float64
+
+extern "C" class Pt:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    name: array[int8, 8]
+    weights: array[float32, 4]
+    corners: array[Pt, 2]
+    on: array[bool, 2]
+
+extern "C" class Holder:
+    id: int32
+    shape: Shape
+    grid: array[array[int16, 3], 2]
+
+extern "C" class Quad:
+    m: array[float64, 4]
+
+extern "C" class FPair:
+    v: array[float32, 2]
+
+extern "C" class WPair:
+    w: array[uint64, 2]
+
+extern "C" def fx_shape_make(tag: uint8) -> Shape
+extern "C" def fx_shape_sum(s: Shape) -> float32
+extern "C" def fx_shape_grow(s: mut Shape) -> None
+extern "C" def fx_holder_sum(h: Holder) -> int32
+extern "C" def fx_holder_make(id: int32) -> Holder
+extern "C" def fx_quad_scale(q: Quad, k: float64) -> Quad
+extern "C" def fx_fpair_swap(p: FPair) -> FPair
+extern "C" def fx_wpair_swap(p: WPair) -> WPair
+extern "C" def fx_spill_fpair(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
+    p: FPair, h: float64
+) -> float64
+extern "C" def fx_points_overwrite(points: ptr[Pt]) -> float32
+extern "C" def fx_points_sum(points: ptr[Pt], count: int32) -> float32
+extern "C" def fx_points_shift(points: mut ptr[Pt], count: int32, by: float32) -> None
+extern "C" def fx_shapes_tags(shapes: ptr[Shape], count: int32) -> int32
+extern "C" def fx_shapes_retag(shapes: mut ptr[Shape], count: int32) -> None
+extern "C" def fx_points_null(points: ptr[Pt]) -> bool
+extern "C" def fx_shape_bad_flag() -> Shape
+extern "C" def fx_shapes_bad_flag(shapes: mut ptr[Shape]) -> None
+
+extern "C" class UKey:
+    kind: uint32
+    code: int32
+    name: array[uint8, 4]
+
+extern "C" class UMove:
+    kind: uint32
+    x: float32
+    y: float32
+
+extern "C" union UEvent:
+    kind: uint32
+    key: UKey
+    motion: UMove
+    ratio: float64
+    padding: array[uint8, 24]
+
+extern "C" union UBits:
+    f: float32
+    bits: uint32
+
+extern "C" union UHfa:
+    a: float32
+    b: array[float32, 2]
+
+extern "C" union UFlag:
+    on: bool
+    raw: uint8
+
+extern "C" class UHolder:
+    tag: int32
+    event: UEvent
+    bits: array[UBits, 2]
+
+extern "C" def fx_event_key(code: int32) -> UEvent
+extern "C" def fx_event_code(e: UEvent) -> int32
+extern "C" def fx_event_poll(out: mut UEvent, round: int32) -> bool
+extern "C" def fx_bits_of(f: float32) -> UBits
+extern "C" def fx_bits_float(b: UBits) -> float32
+extern "C" def fx_hfa_swap(h: UHfa) -> UHfa
+extern "C" def fx_spill_hfa(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
+    h: UHfa, i: float64
+) -> float64
+extern "C" def fx_uholder_make(tag: int32) -> UHolder
+extern "C" def fx_uholder_sum(h: UHolder) -> int32
+extern "C" def fx_events_kinds(events: ptr[UEvent], count: int32) -> int32
+extern "C" def fx_events_fill(events: mut ptr[UEvent], count: int32) -> None
+extern "C" def fx_events_number(events: mut ptr[UEvent], count: int32, first: uint32) -> None
+extern "C" def fx_flag_raw(raw: uint8) -> UFlag
+extern "C" def fx_each_word(text: cstr, visit: def(index: int32, word: cstr) -> int32) -> int32
+extern "C" def fx_log(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
+extern "C" def fx_log_with_cleanup(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
+extern "C" def fx_text_null(sink: def(message: cstr) -> None) -> None
+extern "C" def fx_text_bad(sink: def(message: cstr) -> None) -> None
+extern "C" def fx_text_bad_second(sink: def(first: cstr, second: cstr) -> None) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -1293,11 +1804,8 @@ Array[float64](shape=[2], values=[3.0, 3.0])\n18.0\n60000.0\n";
 #[test]
 fn structs_cross_by_value_and_by_pointer_with_backend_parity() {
     // Seven floats leave one float register on AArch64, which a `Vec2`
-    // does not fit. C passes it whole on the stack there. A built program
-    // refuses the call, so that host runs the rest of the fixture and
-    // checks the refusal by itself.
-    let spill = "fx_spill_floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, b, 0.5)";
-    let refused = cfg!(target_arch = "aarch64");
+    // does not fit. C passes it whole on the stack there, and the float
+    // after it follows it there.
     let main = r#"
 class Scene:
     origin: Vec2
@@ -1412,25 +1920,7 @@ def main() -> int32:
     print(acc.y)
     return 0
 "#;
-    if refused {
-        let (package, source) = fixture_package(&format!(
-            "def main() -> int32:\n    b = Vec2(x=0.5, y=-0.25)\n    print({spill})\n    return 0\n"
-        ));
-        assert_success(&run_mir(&source), "the spilled struct on the interpreter");
-        let build = build_direct(&source, &package.path.join("ffi-fixture-spill"));
-        let stderr = String::from_utf8_lossy(&build.stderr);
-        assert!(!build.status.success(), "{stderr}");
-        assert!(
-            stderr.contains("struct `Vec2` does not fit the argument registers"),
-            "{stderr}"
-        );
-    }
-    let main = if refused {
-        main.replace(spill, "433.0")
-    } else {
-        main.to_string()
-    };
-    let (package, source) = fixture_package(&main);
+    let (package, source) = fixture_package(main);
     let (mir, direct) = run_on_both_backends(&package, &source);
     assert_success(&mir, "structs on the interpreter");
     assert_success(&direct, "structs in a built program");
@@ -1442,6 +1932,287 @@ def main() -> int32:
         100\n-1000\n7\n3.0\n20.0\n27.0\n47.5\n1000.0\n-2000.0\n";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn array_fields_and_struct_arrays_cross_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Scene:
+    shapes: list[Shape]
+    best: Shape
+
+def heaviest(shapes: list[Shape]) -> float32:
+    mut best: float32 = 0.0
+    for shape in shapes:
+        sum = fx_shape_sum(shape)
+        if sum > best:
+            best = sum
+    return best
+
+def main() -> int32:
+    mut made = fx_shape_make(7)
+    print(made.tag)
+    print(made.name)
+    print(made.weights)
+    print(made.corners[1].x)
+    print(made.on)
+    print(fx_shape_sum(made))
+    fx_shape_grow(made)
+    print(made.tag)
+    print(made.name[0])
+    print(made.corners[1].y)
+    print(made.weights[3])
+    made.weights[0] = 100.0
+    made.on[0] = true
+    made.corners[1] = Pt(x=0.0, y=0.5)
+    print(fx_shape_sum(made))
+
+    built = Shape(
+        tag=1,
+        name=[104, 105, 0, 0, 0, 0, 0, 0],
+        weights=[1.0, 2.0, 3.0, 4.0],
+        corners=[Pt(x=0.0, y=0.0), Pt(x=0.0, y=8.0)],
+        on=[false, false],
+    )
+    print(fx_shape_sum(built))
+
+    mut holder = fx_holder_make(3)
+    print(holder.grid)
+    print(holder.shape.name)
+    print(fx_holder_sum(holder))
+    holder.grid[1][2] = -5
+    holder.shape.tag = 40
+    print(fx_holder_sum(holder))
+
+    quad = fx_quad_scale(Quad(m=[1.0, 2.0, 3.0, 4.0]), 2.5)
+    print(quad.m)
+    print(fx_fpair_swap(FPair(v=[1.5, -2.5])).v)
+    print(fx_wpair_swap(WPair(w=[1, 18446744073709551615])).w)
+    print(fx_spill_fpair(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, FPair(v=[0.5, 0.25]), 2.0))
+    print(fx_spill_words(1, 2, 3, 4, 5, 6, 7, Wide(lo=3, hi=-4), 2))
+    print(fx_spill_vec3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, Vec3(x=0.5, y=0.25, z=2.0), 3.0, IPair(a=7, b=8), 1.0))
+
+    mut points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0), Pt(x=5.0, y=6.0)]
+    print(fx_points_sum(points, 3))
+    fx_points_shift(points, 3, 0.5)
+    print(points[0].x)
+    print(points[2].y)
+    print(fx_points_sum(points[1:], 2))
+    points.append(Pt(x=10.0, y=20.0))
+    print(fx_points_sum(points, 4))
+    empty: list[Pt] = []
+    print(fx_points_null(empty))
+    print(fx_points_null(points))
+    print(fx_points_sum(empty, 0))
+    mut none: list[Pt] = []
+    fx_points_shift(none, 0, 1.0)
+    print(len(none))
+
+    mut shapes = [fx_shape_make(1), fx_shape_make(2), fx_shape_make(3)]
+    print(fx_shapes_tags(shapes, 3))
+    fx_shapes_retag(shapes, 3)
+    print(shapes[2].tag)
+    print(shapes[1].name)
+    print(fx_shapes_tags(shapes, 3))
+    print(heaviest(shapes))
+    scene = Scene(shapes=shapes, best=fx_shape_make(9))
+    print(fx_shapes_tags(scene.shapes, 3) + (scene.best.tag as int32))
+
+    mut round = 0
+    mut total: float32 = 0.0
+    while round < 500:
+        total += fx_shape_sum(fx_shape_make((round % 200) as uint8))
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "array fields on the interpreter");
+    assert_success(&direct, "array fields in a built program");
+    let expected = "7\n[115, 104, 97, 112, 101, 0, 0, 0]\n[0.5, 1.0, 1.5, 2.0]\n3.0\n\
+        [false, true]\n1016.0\n8\n83\n8.0\n9.0\n1220.0\n19.0\n\
+        [[0, 1, 2], [10, 11, 12]]\n[115, 104, 97, 112, 101, 0, 0, 0]\n129\n-4\n\
+        [2.5, 5.0, 7.5, 10.0]\n[-2.5, 1.5]\n[18446744073709551615, 1]\n2058.0\n1658\n\
+        132066.0\n21.0\n1.5\n5.5\n18.0\n51.0\ntrue\nfalse\n0.0\n0\n6\n20\n\
+        [115, 104, 97, 112, 101, 0, 0, 0]\n30\n1029.0\n39\n549250.0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn union_array_reads_observe_fills_replacements_and_projected_writes() {
+    let (package, source) = fixture_package(
+        r#"
+def read_after_fill(events: mut list[UEvent], count: int32, index: int64, fill: bool) -> uint32:
+    if fill:
+        fx_events_number(events, count, 40)
+    return events[index].kind
+
+def refill(events: mut list[UEvent], count: int32) -> uint32:
+    fx_events_number(events, count, 10)
+    first = events[1].kind
+    fx_events_number(events, count, 30)
+    return first + events[2].kind
+
+def edit_bytes(events: mut list[UEvent], count: int32) -> uint32:
+    fx_events_number(events, count, 20)
+    events[1].bytes = UEvent.from_kind(97).bytes
+    return events[1].kind
+
+def main() -> int32:
+    mut events = [UEvent.from_kind(6), UEvent.from_kind(7), UEvent.from_kind(8)]
+    print(read_after_fill(events, 3, 1, false))
+    print(read_after_fill(events, 3, 2, true))
+    print(refill(events, 3))
+    print(edit_bytes(events, 3))
+    mut local = [UEvent(), UEvent()]
+    fx_events_number(local, 2, 50)
+    print(local[1].kind)
+    local = [UEvent.from_kind(91)]
+    print(local[0].kind)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    for output in [&mir, &direct] {
+        assert_success(output, "C union list reads");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "7\n42\n43\n97\n51\n91\n"
+        );
+    }
+}
+
+#[test]
+fn unions_cross_and_read_their_members_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+def kind_name(event: UEvent) -> str:
+    if event.kind == 1:
+        return f"key {event.key.code}"
+    if event.kind == 2:
+        return f"motion {event.motion.x} {event.motion.y}"
+    return "nothing"
+
+def main() -> int32:
+    mut event = UEvent()
+    print(len(event.bytes))
+    print(kind_name(event))
+    event = fx_event_key(65)
+    print(kind_name(event))
+    print(event.key.name)
+    print(fx_event_code(event))
+    print(event.padding[4])
+
+    mut round = 0
+    while fx_event_poll(event, round as int32):
+        print(kind_name(event))
+        round += 1
+    print(fx_event_code(event))
+
+    made = UEvent.from_key(UKey(kind=1, code=-9, name=[110, 0, 0, 0]))
+    print(fx_event_code(made))
+    print(UEvent.from_kind(1).bytes[:8])
+    print(UEvent.from_ratio(1.0).padding[6])
+    padded = UEvent.from_padding(made.padding)
+    print(padded.key.code)
+
+    bits = fx_bits_of(1.0)
+    print(bits.bits)
+    print(bits.f)
+    print(fx_bits_float(UBits.from_bits(1073741824)))
+    print(len(bits.bytes))
+
+    swapped = fx_hfa_swap(UHfa.from_b([1.5, -2.5]))
+    print(swapped.b)
+    print(swapped.a)
+    print(fx_spill_hfa(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, UHfa.from_b([0.5, 0.25]), 2.0))
+
+    mut holder = fx_uholder_make(5)
+    print(holder.event.key.code)
+    print(holder.bits[1].bits)
+    print(fx_uholder_sum(holder))
+    holder.event = UEvent.from_key(UKey(kind=1, code=100, name=[0, 0, 0, 0]))
+    holder.bits[1] = UBits.from_bits(50)
+    print(fx_uholder_sum(holder))
+
+    mut events = [UEvent(), UEvent.from_kind(3), UEvent.from_kind(4)]
+    print(fx_events_kinds(events, 3))
+    fx_events_fill(events, 3)
+    print(events[2].key.code)
+    print(fx_events_kinds(events, 3))
+
+    print(fx_flag_raw(1).on)
+    print(fx_flag_raw(0).on)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "unions on the interpreter");
+    assert_success(&direct, "unions in a built program");
+    let expected = "24\nnothing\nkey 65\n[107, 101, 121, 0]\n65\n65\nmotion 1.5 -2.0\n\
+        motion 3.0 -2.0\n-1\n-9\n[1, 0, 0, 0, 0, 0, 0, 0]\n240\n-9\n1065353216\n1.0\n2.0\n4\n\
+        [-2.5, 1.5]\n-2.5\n2058.0\n10\n7\n238\n371\n7\n42\n3\ntrue\nfalse\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn array_fields_that_do_not_fit_c_trap_with_backend_parity() {
+    for (body, code, message) in [
+        (
+            "    s = Shape(tag=1, name=[1, 2], weights=[1.0, 2.0, 3.0, 4.0], corners=[Pt(x=0.0, y=0.0), Pt(x=0.0, y=0.0)], on=[true, false])\n    print(fx_shape_sum(s))",
+            "AU4005",
+            "C array field `name` holds 8 element(s), but the list has 2",
+        ),
+        (
+            "    mut holder = fx_holder_make(1)\n    holder.grid[1] = [1, 2]\n    print(fx_holder_sum(holder))",
+            "AU4005",
+            "C array field `grid` holds 3 element(s), but the list has 2",
+        ),
+        (
+            "    mut shapes = [fx_shape_make(1)]\n    shapes[0].on = [true]\n    print(fx_shapes_tags(shapes, 1))",
+            "AU4005",
+            "C array field `on` holds 2 element(s), but the list has 1",
+        ),
+        (
+            "    mut event = UEvent()\n    event.bytes = [1, 2]\n    print(fx_event_code(event))",
+            "AU4005",
+            "C union `UEvent` is 24 byte(s), but its `bytes` list has 2",
+        ),
+        (
+            "    mut event = UEvent()\n    event.bytes.append(0)\n    print(event.kind)",
+            "AU4005",
+            "C union `UEvent` is 24 byte(s), but its `bytes` list has 25",
+        ),
+        (
+            "    flag = fx_flag_raw(2)\n    print(flag.raw)\n    print(flag.on)",
+            "AU4001",
+            "FFI call to `UFlag.on` failed",
+        ),
+        (
+            "    print(fx_shape_bad_flag().tag)",
+            "AU4001",
+            "FFI call to `fx_shape_bad_flag` failed",
+        ),
+        (
+            "    mut shapes = [fx_shape_make(1)]\n    fx_shapes_bad_flag(shapes)\n    print(shapes[0].tag)",
+            "AU4001",
+            "FFI call to `fx_shapes_bad_flag` failed",
+        ),
+    ] {
+        let (package, source) =
+            fixture_package(&format!("def main() -> int32:\n{body}\n    return 0\n"));
+        let (mir, direct) = run_on_both_backends(&package, &source);
+        for (output, backend) in [(&mir, "the interpreter"), (&direct, "a built program")] {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{backend}: {body}");
+            assert!(stderr.contains(code), "{backend}: {stderr}");
+            assert!(stderr.contains(message), "{backend}: {stderr}");
+        }
+    }
 }
 
 #[test]
@@ -1699,6 +2470,365 @@ not failing: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211, 22, 22, 22, 31]\
 ";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+/// Executes a native fixture with allocation and representation counters enabled.
+fn native_stats(
+    source: &Path,
+) -> (
+    Output,
+    aura_compiler::runtime_value::representation_stats::RepresentationStats,
+) {
+    use aura_compiler::runtime_value::representation_stats::RepresentationStats;
+
+    let output = Command::new(aura_bin())
+        .args(["run", "--backend", "direct"])
+        .arg(source)
+        .env("AURA_RUNTIME_STATS", "1")
+        .output()
+        .expect("the native program should start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (_, stats) = stderr
+        .lines()
+        .find_map(RepresentationStats::parse_report_line)
+        .unwrap_or_else(|| panic!("the native program should report allocation counts: {stderr}"));
+    (output, stats)
+}
+
+#[test]
+fn a_read_only_pointer_to_native_records_copies_their_storage() {
+    let (_package, source) = fixture_package(
+        r#"
+def main() -> int32:
+    mut points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0)]
+    mut total: float32 = 0.0
+    for i in range(64):
+        total += fx_points_sum(points, 2)
+    print(total)
+    print(fx_points_overwrite(points))
+    print(points[0].x)
+    points.append(Pt(x=9.0, y=10.0))
+    print(fx_points_sum(points, 3))
+    print(fx_points_overwrite(points))
+    print(points[0].x)
+    return 0
+"#,
+    );
+    let (direct, stats) = native_stats(&source);
+    assert_success(&direct, "passing native records to C");
+    assert_eq!(direct.stdout, b"640.0\n1.0\n1.0\n29.0\n1.0\n1.0\n");
+    // Each of the three source records can convert once. Repeated calls
+    // should never convert the existing elements again.
+    assert!(stats.conversions <= 3, "{stats:?}");
+    assert_eq!(stats.opaque_boxes, stats.freed_boxes);
+}
+
+#[test]
+fn a_trap_in_a_text_callback_releases_its_arguments() {
+    let fixture = r#"
+class Marker:
+    name: str
+
+    def close(mut self) -> None:
+        print(self.name)
+
+def inspect(text: str) -> int64:
+    return len(text)
+
+def log(message: str, value: float64, unit: str) -> None:
+    with inner = Marker(name="Aura callback cleanup"):
+        assert value < 0.0 or READ_MESSAGE < 0, "callback stopped"
+
+def main() -> int32:
+    with outer = Marker(name="Aura caller cleanup"):
+        fx_log_with_cleanup(log)
+    return 0
+"#;
+    for read in ["inspect(message)", "len(message)"] {
+        let (_package, source) = fixture_package(&fixture.replace("READ_MESSAGE", read));
+        let interpreted = run_mir(&source);
+        assert!(!interpreted.status.success());
+        assert_eq!(
+            interpreted.stdout,
+            b"Aura callback cleanup\nC finished cleanup\nAura caller cleanup\n"
+        );
+        let (direct, stats) = native_stats(&source);
+        assert_eq!(direct.stdout, interpreted.stdout);
+        let stderr = String::from_utf8_lossy(&direct.stderr);
+        assert!(
+            !direct.status.success() && stderr.contains("callback stopped"),
+            "{stderr}"
+        );
+        assert_eq!(stats.opaque_boxes, stats.freed_boxes, "{stderr}");
+    }
+}
+
+#[test]
+fn a_bad_second_text_argument_releases_the_first_and_returns_to_c() {
+    // The first callback passes the string to another operation. The second
+    // can only inspect it. Both must release the first converted argument.
+    for use_first in ["print(first)", "print(len(first))"] {
+        let (_package, source) = fixture_package(&format!(
+            "def sink(first: str, second: str) -> None:\n    {use_first}\n\n\
+            def main() -> int32:\n    fx_text_bad_second(sink)\n    return 0\n"
+        ));
+        let interpreted = run_mir(&source);
+        let (direct, stats) = native_stats(&source);
+        for output in [&interpreted, &direct] {
+            assert_eq!(output.stdout, b"C finished cleanup\n");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && stderr.contains("AU4005"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("not valid UTF-8"), "{stderr}");
+        }
+        assert_eq!(stats.opaque_boxes, stats.freed_boxes);
+    }
+}
+
+#[test]
+fn callbacks_take_c_text_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Tally:
+    words: list[str]
+
+def shout(word: str) -> str:
+    return word + "!"
+
+def visit(index: int32, word: str) -> int32:
+    kept = [word.clone(), shout(word)]
+    print(f"{index}: {word} {kept[1]} {len(word)}")
+    return len(word) as int32
+
+def log(message: str, value: float64, unit: str) -> None:
+    if message == "":
+        print(f"(none) {value} {unit}")
+    else:
+        print(f"{message} {value} {unit}")
+
+def count(index: int32, word: str) -> int32:
+    return 1
+
+def main() -> int32:
+    print(fx_each_word("the quick brown fox", visit))
+    fx_log(log)
+    mut round = 0
+    mut total = 0
+    while round < 2000:
+        total += fx_each_word("a bb ccc dddd eeeee", count) as int64
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "C text in callbacks on the interpreter");
+    assert_success(&direct, "C text in callbacks in a built program");
+    let expected = "0: the the! 3\n1: quick quick! 5\n2: brown brown! 5\n3: fox fox! 3\n16\n\
+        speed 2.5 m/s\n(none) -1.0 caf\u{e9}\n10000\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+
+    for (function, detail) in [
+        (
+            "fx_text_null",
+            "the C caller passed a null pointer as a cstr",
+        ),
+        (
+            "fx_text_bad",
+            "the C caller passed a cstr that is not valid UTF-8",
+        ),
+    ] {
+        let (package, source) = fixture_package(&format!(
+            "def sink(message: str) -> None:\n    print(message)\n\n\
+             def main() -> int32:\n    {function}(sink)\n    print(\"not reached\")\n    return 0\n"
+        ));
+        let (mir, direct) = run_on_both_backends(&package, &source);
+        for (backend, output) in [("mir", &mir), ("direct", &direct)] {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{backend}: {stdout}");
+            assert!(!stdout.contains("not reached"), "{backend}: {stdout}");
+            assert!(stderr.contains("AU4005"), "{backend}: {stderr}");
+            assert!(
+                stderr.contains("FFI call to `sink` failed"),
+                "{backend}: {stderr}"
+            );
+            assert!(stderr.contains(detail), "{backend}: {stderr}");
+        }
+    }
+}
+
+/// GLFW reports errors through a callback that takes C text, and reads a
+/// gamepad into a struct of two arrays.
+const GLFW_WINDOW: &str = r#"extern "C" opaque class Window
+
+
+extern "C" class GamepadState:
+    buttons: array[uint8, 15]
+    axes: array[float32, 6]
+
+
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def glfwSetErrorCallback(
+    callback: def(code: int32, description: cstr) -> None
+) -> uint64
+
+
+extern "C" def glfwInit() -> int32
+
+
+extern "C" def glfwTerminate() -> None
+
+
+extern "C" def glfwWindowHint(hint: int32, value: int32) -> None
+
+
+extern "C" def glfwCreateWindow(
+    width: int32,
+    height: int32,
+    title: cstr,
+    monitor: uint64,
+    share: uint64,
+) -> Window | None
+
+
+extern "C" def glfwDestroyWindow(window: own Window) -> None
+
+
+extern "C" def glfwGetWindowSize(
+    window: Window,
+    width: mut int32,
+    height: mut int32,
+) -> None
+
+
+extern "C" def glfwSetWindowSize(window: Window, width: int32, height: int32) -> None
+
+
+extern "C" def glfwPollEvents() -> None
+
+
+extern "C" def glfwGetKey(window: Window, key: int32) -> int32
+
+
+extern "C" def glfwWindowShouldClose(window: Window) -> int32
+
+
+extern "C" def glfwGetGamepadState(joystick: int32, state: mut GamepadState) -> int32
+
+
+extern "C" def glfwSetKeyCallback(
+    window: Window,
+    callback: def(
+        window: uint64,
+        key: int32,
+        scancode: int32,
+        action: int32,
+        mods: int32,
+    ) -> None,
+) -> uint64
+
+
+GLFW_VISIBLE: int32 = 131076
+GLFW_KEY_ESCAPE: int32 = 256
+
+
+def report(code: int32, description: str) -> None:
+    print(f"GLFW error {code}: {description}")
+
+
+def on_key(
+    window: uint64,
+    key: int32,
+    scancode: int32,
+    action: int32,
+    mods: int32,
+) -> None:
+    print(f"key {key}")
+
+
+def main() -> int32:
+    glfwSetErrorCallback(report)
+    # A call before `glfwInit` reports an error through the callback.
+    glfwWindowHint(GLFW_VISIBLE, 0)
+    if getenv("AURA_GLFW_WINDOW") is None:
+        return 0
+    if glfwInit() == 0:
+        print("no display")
+        return 0
+    glfwWindowHint(GLFW_VISIBLE, 0)
+    window = glfwCreateWindow(320, 200, "Aura", 0, 0)
+    if window is None:
+        print("no window")
+        glfwTerminate()
+        return 0
+    glfwSetKeyCallback(window, on_key)
+    mut width: int32 = 0
+    mut height: int32 = 0
+    glfwGetWindowSize(window, width, height)
+    print(f"window {width} by {height}")
+    glfwPollEvents()
+    print(glfwGetKey(window, GLFW_KEY_ESCAPE))
+    print(glfwWindowShouldClose(window))
+    mut state = GamepadState(
+        buttons=[0 for _ in range(15)],
+        axes=[0.0 for _ in range(6)],
+    )
+    print(glfwGetGamepadState(0, state))
+    print(len(state.axes))
+    glfwDestroyWindow(window)
+    glfwTerminate()
+    return 0
+"#;
+
+#[test]
+fn glfw_reports_errors_and_opens_a_window_with_backend_parity() {
+    if !host_links(
+        "glfw",
+        "int glfwInit(void);\nint main(void) { return glfwInit(); }\n",
+    ) {
+        eprintln!("the host has no GLFW library to link; the test needs one");
+        return;
+    }
+    let package = TempPackage::new(true);
+    package.manifest("\n[ffi]\nlibraries = [\"glfw\"]\n");
+    let source = package.source(GLFW_WINDOW);
+    // The program opens a window only where the host can show one.
+    let window: &[(&str, &str)] = match host_shows_windows() {
+        true => &[("AURA_GLFW_WINDOW", "1")],
+        false => &[],
+    };
+    let mir = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source)
+        .envs(window.iter().copied())
+        .output()
+        .expect("the GLFW program should start in the interpreter");
+    assert_success(&mir, "GLFW on the interpreter");
+    let binary = package.path.join("glfw-direct");
+    assert_success(&build_direct(&source, &binary), "GLFW build");
+    let direct = Command::new(&binary)
+        .envs(window.iter().copied())
+        .output()
+        .expect("the GLFW binary should start");
+    assert_success(&direct, "GLFW in a built program");
+    let (mir, direct) = (
+        String::from_utf8_lossy(&mir.stdout),
+        String::from_utf8_lossy(&direct.stdout),
+    );
+    assert_eq!(mir, direct);
+    // The first call comes before `glfwInit`, on every host.
+    assert!(
+        mir.starts_with("GLFW error 65537: The GLFW library is not initialized\n"),
+        "{mir}"
+    );
+    // The rest needs a display, which a host may lack.
+    if host_shows_windows() {
+        assert!(mir.ends_with("window 320 by 200\n0\n0\n0\n6\n"), "{mir}");
+    }
 }
 
 #[test]

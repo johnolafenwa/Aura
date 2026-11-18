@@ -10,11 +10,14 @@ use super::super::{
 };
 use super::{
     aura_direct_ffi_bad_bool, aura_direct_ffi_bytes_view, aura_direct_ffi_bytes_view_mut,
-    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_check_flags,
-    aura_direct_ffi_elements, aura_direct_ffi_elements_mut, aura_direct_ffi_handle,
-    aura_direct_ffi_handle_address, aura_direct_ffi_none, aura_direct_ffi_null_handle,
-    aura_direct_ffi_nullable_handle_address, aura_direct_ffi_release_bytes,
-    aura_direct_ffi_release_c_string, aura_direct_ffi_str_view, ForeignView,
+    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_callback_text,
+    aura_direct_ffi_check_flags, aura_direct_ffi_elements, aura_direct_ffi_elements_mut,
+    aura_direct_ffi_handle, aura_direct_ffi_handle_address, aura_direct_ffi_none,
+    aura_direct_ffi_null_handle, aura_direct_ffi_nullable_handle_address,
+    aura_direct_ffi_pack_struct, aura_direct_ffi_pack_structs, aura_direct_ffi_release_bytes,
+    aura_direct_ffi_release_c_string, aura_direct_ffi_release_callback_text,
+    aura_direct_ffi_release_structs, aura_direct_ffi_str_view, aura_direct_ffi_unpack_struct,
+    aura_direct_ffi_unpack_struct_into, aura_direct_ffi_unpack_structs, ForeignView,
 };
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::list_elements::{ListElements, ListForm};
@@ -700,6 +703,123 @@ fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     assert_eq!(later, [21, 42]);
 }
 
+#[test]
+fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task() {
+    use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    unsafe extern "C-unwind" fn fail(_: *mut u64) {
+        super::task_runtime_boundary(|| super::runtime_error("callback trapped"));
+    }
+    unsafe extern "C-unwind" fn nested(frame: *mut u64) {
+        unsafe { aura_direct_ffi_callback_guard(fail, frame) };
+        // The inner foreign call returned and can finish its own cleanup.
+        unsafe { frame.write(1) };
+        aura_direct_ffi_callback_check();
+    }
+
+    let returned = Arc::new(AtomicBool::new(false));
+    let from_c = Arc::clone(&returned);
+    let diagnostic = capture_diagnostic(move || {
+        let mut frame = 0;
+        unsafe { aura_direct_ffi_callback_guard(nested, &mut frame) };
+        assert_eq!(frame, 1);
+        from_c.store(true, Ordering::Relaxed);
+        aura_direct_ffi_callback_check();
+    });
+    assert!(returned.load(Ordering::Relaxed));
+    assert_eq!(diagnostic.message, "callback trapped");
+}
+
+#[test]
+fn scoped_callback_strings_copy_their_input_and_leave_the_scalar_slots_in_place() {
+    unsafe extern "C-unwind" fn inspect(frame: *mut u64) {
+        let words = unsafe { slice::from_raw_parts_mut(frame, 5) };
+        let first = words[0] as *mut OpaqueValue;
+        let second = words[2] as *mut OpaqueValue;
+        let mut view = ForeignView {
+            pointer: std::ptr::null(),
+            length: 0,
+        };
+        unsafe { aura_direct_ffi_str_view(first, &mut view) };
+        assert_ne!(view.pointer as u64, words[4]);
+        assert_eq!(view.length, 160);
+        assert_eq!(rendered(second), "café");
+        words[3] = words[1] + view.length as u64;
+        // Compiled Aura code can release an argument when it finishes with it.
+        unsafe {
+            aura_direct_release_value(first);
+            aura_direct_release_value(second);
+        }
+    }
+
+    let text = std::ffi::CString::new("ab".repeat(80)).unwrap();
+    let first = text.as_ptr() as u64;
+    let mut frame = [first, 7, c"café".as_ptr() as u64, 0, first];
+    unsafe {
+        super::aura_direct_ffi_callback_local_text_guard(
+            inspect,
+            frame.as_mut_ptr(),
+            0b101,
+            b"inspect".as_ptr(),
+            7,
+        )
+    };
+    super::aura_direct_ffi_callback_check();
+    assert_eq!(frame[3], 167);
+}
+
+#[test]
+fn a_callback_copies_the_c_text_it_receives() {
+    let function = "show";
+    unsafe {
+        let text =
+            aura_direct_ffi_callback_text(c"caf\u{e9}".as_ptr(), function.as_ptr(), function.len());
+        assert_eq!(rendered(text), "caf\u{e9}");
+        with_value(text, |value| {
+            let Value::String(text) = value else {
+                panic!("expected callback text")
+            };
+            assert_eq!(text.capacity(), crate::text::INLINE_CAPACITY);
+        });
+        let retained = aura_direct_retain_value(text);
+        aura_direct_release_value(text);
+        aura_direct_ffi_release_callback_text(text);
+        // A value retained by the Aura function outlives the callback.
+        assert_eq!(rendered(retained), "caf\u{e9}");
+        aura_direct_release_value(retained);
+        aura_direct_ffi_release_callback_text(std::ptr::null_mut());
+    }
+
+    type Work = fn();
+    let failures: [(Work, &str); 2] = [
+        (
+            || unsafe {
+                aura_direct_ffi_callback_text(std::ptr::null(), "show".as_ptr(), 4);
+            },
+            "the C caller passed a null pointer as a cstr",
+        ),
+        (
+            || unsafe {
+                aura_direct_ffi_callback_text(c"\xff".as_ptr(), "show".as_ptr(), 4);
+            },
+            "the C caller passed a cstr that is not valid UTF-8",
+        ),
+    ];
+    for (work, expected) in failures {
+        let diagnostic = capture_diagnostic(work);
+        assert_eq!(diagnostic.code, "AU4005", "{}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(expected) && diagnostic.message.contains("`show`"),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
 static RELEASED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
 unsafe extern "C" fn note_release(address: *mut c_void) {
@@ -892,4 +1012,412 @@ fn an_array_lends_its_elements_as_a_pointer() {
             "{message}"
         );
     }
+}
+
+/// The layout of `struct { bool on; uint8_t bytes[3]; }`, as generated
+/// code describes it, and an instance of it.
+fn flagged_layout() -> String {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::ffi::FfiScalar;
+    let layout = CStruct {
+        name: "Flagged".to_string(),
+        fields: vec![
+            CField {
+                name: "on".to_string(),
+                kind: CFieldKind::Scalar(FfiScalar::Bool),
+            },
+            CField {
+                name: "bytes".to_string(),
+                kind: CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), 3),
+            },
+        ],
+        union: false,
+    };
+    serde_json::to_string(&layout).expect("a layout serializes")
+}
+
+fn flagged(on: bool, bytes: &[u8]) -> Value {
+    use crate::runtime_value::{InstanceValue, RuntimeName};
+    Value::Instance(InstanceValue {
+        class_name: RuntimeName::from("Flagged".to_string()),
+        fields: [
+            ("on".to_string(), Value::Bool(on)),
+            (
+                "bytes".to_string(),
+                Value::Vec(VecValue::new(
+                    Type::named("uint8"),
+                    ListElements::from_uint8(bytes.to_vec()),
+                )),
+            ),
+        ]
+        .into(),
+    })
+}
+
+fn rendered(value: *mut OpaqueValue) -> String {
+    unsafe { with_value(value, |value| value.render()) }
+}
+
+#[test]
+fn matching_record_layouts_copy_to_private_stack_or_heap_storage() {
+    use super::{aura_direct_ffi_copy_structs, FFI_STRUCT_SCRATCH_BYTES};
+
+    let input = [47_u8; FFI_STRUCT_SCRATCH_BYTES + 1];
+    let mut scratch = [0_u8; FFI_STRUCT_SCRATCH_BYTES];
+    for length in [0, 1, FFI_STRUCT_SCRATCH_BYTES, input.len()] {
+        unsafe {
+            let copy = aura_direct_ffi_copy_structs(input.as_ptr(), length, scratch.as_mut_ptr());
+            if length == 0 {
+                assert!(copy.is_null());
+                continue;
+            }
+            assert_eq!(copy == scratch.as_mut_ptr(), length <= scratch.len());
+            assert_eq!(slice::from_raw_parts(copy, length), &input[..length]);
+            copy.write(19);
+            assert_eq!(input[0], 47);
+            if copy != scratch.as_mut_ptr() {
+                aura_direct_ffi_release_structs(copy);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_struct_with_an_array_field_is_packed_and_unpacked_by_the_runtime() {
+    let descriptor = flagged_layout();
+    let symbol = "probe";
+    unsafe {
+        let value = boxed_value(flagged(true, &[7, 8, 9]));
+        let mut slot = [0_u8; 8];
+        aura_direct_ffi_pack_struct(
+            value,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+        assert_eq!(&slot[..4], &[1, 7, 8, 9]);
+        // The same descriptor is read once and found again.
+        aura_direct_ffi_pack_struct(
+            value,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+
+        let back = aura_direct_ffi_unpack_struct(
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_ptr(),
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        assert_eq!(rendered(back), rendered(value));
+        aura_direct_release_value(back);
+
+        // What C wrote through a pointer lands in the instance passed.
+        let written = [0_u8, 1, 2, 3];
+        aura_direct_ffi_unpack_struct_into(
+            value,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            written.as_ptr(),
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        assert_eq!(rendered(value), flagged(false, &[1, 2, 3]).render());
+        aura_direct_release_value(value);
+    }
+
+    type Work = fn(&str);
+    let failures: [(Work, &str, &str); 6] = [
+        (
+            |descriptor| unsafe {
+                let value = boxed_value(flagged(true, &[7]));
+                let mut slot = [0_u8; 8];
+                aura_direct_ffi_pack_struct(
+                    value,
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    slot.as_mut_ptr(),
+                );
+            },
+            "AU4005",
+            "C array field `bytes` holds 3 element(s), but the list has 1",
+        ),
+        (
+            |descriptor| unsafe {
+                let slot = [2_u8, 0, 0, 0];
+                aura_direct_ffi_unpack_struct(
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    slot.as_ptr(),
+                    "probe".as_ptr(),
+                    5,
+                );
+            },
+            "AU4001",
+            "FFI call to `probe` failed",
+        ),
+        (
+            |descriptor| unsafe {
+                let value = boxed_value(flagged(true, &[7, 8, 9]));
+                let slot = [3_u8, 0, 0, 0];
+                aura_direct_ffi_unpack_struct_into(
+                    value,
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    slot.as_ptr(),
+                    "probe".as_ptr(),
+                    5,
+                );
+            },
+            "AU4001",
+            "FFI call to `probe` failed",
+        ),
+        (
+            |descriptor| unsafe {
+                let slot = [0_u8; 4];
+                aura_direct_ffi_unpack_struct_into(
+                    string_value("x"),
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    slot.as_ptr(),
+                    "probe".as_ptr(),
+                    5,
+                );
+            },
+            "",
+            "FFI argument expected a class instance, but received `str`",
+        ),
+        (
+            |_| unsafe {
+                let text = "not a layout";
+                let mut slot = [0_u8; 8];
+                aura_direct_ffi_pack_struct(
+                    string_value("x"),
+                    text.as_ptr(),
+                    text.len(),
+                    slot.as_mut_ptr(),
+                );
+            },
+            "",
+            "a foreign call names a C layout that does not read",
+        ),
+        (
+            |descriptor| unsafe {
+                aura_direct_ffi_pack_structs(
+                    string_value("x"),
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                );
+            },
+            "AU4005",
+            "FFI value for C type `list[Flagged]` has incompatible runtime shape",
+        ),
+    ];
+    for (work, code, expected) in failures {
+        let descriptor = descriptor.clone();
+        let diagnostic = capture_diagnostic(move || work(&descriptor));
+        if !code.is_empty() {
+            assert_eq!(diagnostic.code, code, "{}", diagnostic.message);
+        }
+        assert!(
+            diagnostic.message.contains(expected),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn an_invalid_c_writeback_releases_its_array_with_the_failed_task() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FREED: AtomicBool = AtomicBool::new(false);
+    unsafe extern "C" fn release(block: *mut c_void) {
+        FREED.store(true, Ordering::Relaxed);
+        unsafe { super::free_structs_block(block) };
+    }
+    unsafe extern "C-unwind" fn fail(_args: *const i64, _count: usize) -> *mut OpaqueValue {
+        let descriptor = flagged_layout();
+        let values = boxed_value(Value::Vec(VecValue::new(
+            Type::named("Flagged"),
+            ListElements::from(vec![flagged(true, &[1, 2, 3])]),
+        )));
+        let array = super::allocate_structs(4, release);
+        unsafe {
+            array.copy_from_nonoverlapping([9_u8, 1, 2, 3].as_ptr(), 4);
+            aura_direct_ffi_unpack_structs(
+                values,
+                descriptor.as_ptr(),
+                descriptor.len(),
+                array,
+                b"probe".as_ptr(),
+                5,
+            );
+        }
+        panic!("the corrupt boolean should trap")
+    }
+    let diagnostic =
+        super::super::run_direct_root_task(fail).expect_err("the C writeback should trap");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert!(
+        FREED.load(Ordering::Relaxed),
+        "the failed task must release the C array"
+    );
+}
+
+#[test]
+fn a_mutable_struct_array_keeps_native_field_access_after_c_writes_it() {
+    use crate::native_runtime::{register_class_layout, TypedFields, FIRST_CLASS_ACCESS};
+    use crate::runtime_value::InstanceFields;
+    use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
+
+    let class = Type::named("Flagged");
+    let env = LayoutEnv {
+        classes: [(
+            "Flagged".to_owned(),
+            ClassDefinition {
+                type_params: Vec::new(),
+                fields: vec![
+                    ("on".to_owned(), Type::named("bool")),
+                    (
+                        "bytes".to_owned(),
+                        Type::Named("list".into(), vec![Type::named("uint8")]),
+                    ),
+                ],
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let native = encode_descriptor(&class, &env).expect("a native class layout");
+    let native = register_class_layout(&native, FIRST_CLASS_ACCESS + 0x1100_0010).unwrap();
+    let Value::Instance(mut input) = flagged(true, &[1, 2, 3]) else {
+        unreachable!()
+    };
+    let fields = std::mem::take(input.fields.map_mut());
+    input.fields = InstanceFields::Typed(TypedFields::from_map(native, fields).unwrap());
+    let mut elements = ListElements::from(vec![Value::Instance(input)]);
+    elements.lend(0).expect("the caller borrows this element");
+    let values = boxed_value(Value::Vec(VecValue::new(class, elements)));
+    let descriptor = flagged_layout();
+    let symbol = b"set";
+    unsafe {
+        let array = aura_direct_ffi_pack_structs(values, descriptor.as_ptr(), descriptor.len());
+        array.copy_from_nonoverlapping([0_u8, 4, 5, 6].as_ptr(), 4);
+        aura_direct_ffi_unpack_structs(
+            values,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            array,
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        with_value(values, |value| {
+            let Value::Vec(list) = value else {
+                unreachable!()
+            };
+            assert!(matches!(list.elements, ListElements::Boxes(_)));
+            let first = list.elements.first().unwrap();
+            let Value::Instance(item) = &*first else {
+                unreachable!()
+            };
+            assert_eq!(
+                item.fields.typed().unwrap().layout().access(),
+                native.access()
+            );
+            assert_eq!(*first, flagged(false, &[4, 5, 6]));
+        });
+        aura_direct_ffi_release_structs(array);
+        aura_direct_release_value(values);
+    }
+}
+
+#[test]
+fn a_list_of_structs_crosses_as_a_c_array_the_runtime_owns() {
+    let descriptor = flagged_layout();
+    let symbol = "probe";
+    let list = |elements: Vec<Value>| {
+        boxed_value(Value::Vec(VecValue::new(
+            Type::named("Flagged"),
+            ListElements::from(elements),
+        )))
+    };
+    unsafe {
+        let values = list(vec![flagged(true, &[1, 2, 3]), flagged(false, &[4, 5, 6])]);
+        let array = aura_direct_ffi_pack_structs(values, descriptor.as_ptr(), descriptor.len());
+        assert_eq!(slice::from_raw_parts(array, 8), &[1, 1, 2, 3, 0, 4, 5, 6]);
+        // C rewrites the array, and the list takes what it left.
+        array.copy_from_nonoverlapping([0_u8, 9, 9, 9, 1, 8, 8, 8].as_ptr(), 8);
+        aura_direct_ffi_unpack_structs(
+            values,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            array,
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        let expected = list(vec![flagged(false, &[9, 9, 9]), flagged(true, &[8, 8, 8])]);
+        assert_eq!(rendered(values), rendered(expected));
+        aura_direct_ffi_release_structs(array);
+        aura_direct_release_value(expected);
+        aura_direct_release_value(values);
+
+        // An empty list is a null pointer, which needs no release.
+        let empty = list(Vec::new());
+        let array = aura_direct_ffi_pack_structs(empty, descriptor.as_ptr(), descriptor.len());
+        assert!(array.is_null());
+        aura_direct_ffi_unpack_structs(
+            empty,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            array,
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        aura_direct_ffi_release_structs(array);
+        aura_direct_release_value(empty);
+    }
+
+    let bad_bool = descriptor.clone();
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let values = boxed_value(Value::Vec(VecValue::new(
+            Type::named("Flagged"),
+            ListElements::from(vec![flagged(true, &[1, 2, 3])]),
+        )));
+        let array = aura_direct_ffi_pack_structs(values, bad_bool.as_ptr(), bad_bool.len());
+        array.write(9);
+        aura_direct_ffi_unpack_structs(
+            values,
+            bad_bool.as_ptr(),
+            bad_bool.len(),
+            array,
+            "probe".as_ptr(),
+            5,
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    let not_a_list = descriptor.clone();
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let values = boxed_value(Value::Vec(VecValue::new(
+            Type::named("Flagged"),
+            ListElements::from(vec![flagged(true, &[1, 2, 3])]),
+        )));
+        let array = aura_direct_ffi_pack_structs(values, not_a_list.as_ptr(), not_a_list.len());
+        aura_direct_ffi_unpack_structs(
+            string_value("x"),
+            not_a_list.as_ptr(),
+            not_a_list.len(),
+            array,
+            "probe".as_ptr(),
+            5,
+        );
+    });
+    assert!(
+        diagnostic
+            .message
+            .contains("FFI argument expected a list for a mut pointer, but received `str`"),
+        "{}",
+        diagnostic.message
+    );
 }

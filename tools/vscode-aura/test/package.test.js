@@ -460,12 +460,32 @@ test("extension highlights and snippets the maintained extern C surface", () => 
     ["extern", '"C"', "class", "Point"]
   );
   assert.equal(classRule.captures["4"].name, "entity.name.type.aura");
+  const unionRule = declarationRules.find(
+    (pattern) => pattern.name === "meta.definition.ffi.union.aura"
+  );
+  assert.ok(unionRule);
+  assert.deepEqual(
+    new RegExp(unionRule.match).exec('public extern "C" union Event:')?.slice(1),
+    ["extern", '"C"', "union", "Event"]
+  );
+  assert.equal(unionRule.captures["3"].name, "keyword.declaration.ffi.aura");
+  // `union` is a name anywhere else.
+  assert.equal(new RegExp(unionRule.match).test("union = merge(a, b)"), false);
   const typeRule = grammar.repository.types.patterns.find(
     (pattern) => pattern.name === "support.type.primitive.aura"
   );
   for (const ffiType of ["cstr", "ptr"]) {
     assert.equal(new RegExp(typeRule.match).test(ffiType), true);
   }
+  // `array` is a type only as the type of a field: `name: array[T, N]`.
+  const arrayRule = grammar.repository.types.patterns.find((pattern) =>
+    pattern.match.includes("array(?=")
+  );
+  assert.ok(arrayRule);
+  const arrayField = new RegExp(arrayRule.match, "g");
+  assert.equal("    params: array[float32, 4]".match(arrayField)?.length, 1);
+  assert.equal("    grid: array[array[int16, 3], 2]".match(arrayField)?.length, 2);
+  assert.equal("    total = array[0] + array[1]".match(arrayField), null);
   assert.deepEqual(snippets["Extern C function"].body, [
     'public extern "C" def ${1:name}(${2}) -> ${3:int32}'
   ]);

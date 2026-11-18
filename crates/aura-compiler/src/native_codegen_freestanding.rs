@@ -80,7 +80,9 @@ fn export_signature(function: &MirFunction) -> Option<CCallback> {
             .collect(),
         return_type: Box::new(function.return_type.clone()),
     };
+    // An exported function takes scalars. Text has no freestanding form.
     crate::mir_runtime::callback_signature(&ty)
+        .filter(|callback| callback.params.iter().all(|param| !param.text))
 }
 
 /// The marker of an emitter error that reports a construct a freestanding
@@ -190,7 +192,7 @@ impl NativeCodegen<'_> {
                 &body,
                 &format!("callback body for `{name}`"),
                 |_, builder| {
-                    foreign::emit_callback_body(builder, &callback, function);
+                    foreign::emit_callback_body(builder, &callback, function, None);
                     Ok(())
                 },
             )?;
