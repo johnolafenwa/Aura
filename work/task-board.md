@@ -2,6 +2,21 @@
 
 Last updated: 2026-11-18
 
+## Combined feature verification
+
+The Linux x86-64 package for `1a5c2eb0` passed 1,123 documentation examples
+and 162 language-server tests. The same source passed 2,212 compiler and
+1,474 runtime unit tests. Both Linux packages reproduced the final queued
+value after the producer exited and closed every entered scope before a
+stack-exhaustion diagnostic. [Combined checks and package results](https://github.com/johnolafenwa/Aura/pull/309)
+
+In the eight native benchmark suites, 38 of 40 workloads on this package
+ran faster than Python and within three times Rust. The C text callback took
+58.29 ns in Aura, 19.16 ns in Rust and 534.70 ns in Python. JPEG decoding
+took 10.2 ms in Aura, 9.7 ms in Rust and 9.5 ms in Pillow. The earlier
+hosted run met both targets on 39 of 40 and finished ahead of Python on all
+40. [Hosted benchmark run](https://github.com/johnolafenwa/Aura/actions/runs/44225018396)
+
 ## Failure recovery
 
 - Both backends implement `control.recover` and stack-bounded recursion.
@@ -66,7 +81,7 @@ Last updated: 2026-11-18
   18,443 ms for Python.
 
 
-## Ordered collections (verification in progress)
+## Ordered collections (implemented)
 
 Five fixtures pass on MIR and the direct backend, including custom ordering,
 snapshot independence, B-tree splits and merges, and moving stored values
@@ -74,7 +89,9 @@ that cannot be cloned. Editor completions and the manual examples pass.
 On the dedicated Linux runner all four int64 workloads beat Python. Aura
 took 2.80 times Rust for deque, 1.03 for heap, 2.02 for sorted map and
 1.87 for sorted set. Empty and drained collections produced matching
-diagnostics on both backends. Hosted platform checks are in progress.
+diagnostics on both backends. All 14 required checks passed on the scoped
+revision `37062702`, including the full ARM64 backend comparison and
+both coverage gates. [Hosted checks](https://github.com/johnolafenwa/Aura/pull/308/checks)
 See `2026-11-17-ordered-collections.md`.
 
 ## Collections, text, and numbers (three steps implemented)

@@ -90,3 +90,10 @@ pop, and map overwrites and removals while retaining a snapshot. All
 at `15438291`, the instrumented run exercised 10 more production
 functions or closures in `ordered_collections.rs`.
 [Ubuntu coverage report](https://github.com/johnolafenwa/Aura/actions/runs/44219781769/job/134518624198)
+
+All required checks passed on `37062702`. The new tests exercised ten
+previously untested storage functions. Linux x86-64 reported 97.38% function
+coverage and 96.56% line coverage. Apple Silicon reported 97.37% and
+96.55%. Physical Linux ARM64 passed the interpreter/native fixture matrix,
+and Windows passed 2,129 compiler and 1,324 runtime tests.
+[Linux verification](https://github.com/johnolafenwa/Aura/actions/runs/44237548247/job/134577368578) · [macOS verification](https://github.com/johnolafenwa/Aura/actions/runs/44237548247/job/134577368474)

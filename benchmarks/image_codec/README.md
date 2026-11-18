@@ -118,3 +118,11 @@ On the dedicated Linux runner at `92535bb9`, encoding took 1.9 ms in Aura,
 390,828 bytes respectively. Decoding took 6.9, 6.9 and 7.2 ms and each
 program produced the same checksum of 120.
 [Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497825)
+
+On the Linux x86-64 package at `1a5c2eb0`, JPEG encoding took 2.6 ms in
+Aura, 61.8 ms in Rust and 6.7 ms in Pillow. Decoding took 10.2, 9.7 and
+9.5 ms respectively, with the same checksum. The four-CPU runs rotated the
+process order. A separate 64-block comparison reused the parsed JPEG header
+with identical pixels, but its estimated change on this photo ranged from
+−3.06% to +3.49% at 95% confidence. The release uses the original decoder.
+[Package and comparison](https://github.com/johnolafenwa/Aura/pull/309)
