@@ -3402,8 +3402,11 @@ def main() -> int32:
 #[test]
 fn cancellation_wakes_sleep_tasks_promptly() {
     let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def sleeper(started: Queue[str], finished: Queue[str]) -> None:
     _ = started.put("sleep")
     sleep({blocked_sleep_ms}ms)
@@ -3422,33 +3425,34 @@ def wait_for_one(queue: Queue[str]):
 
 def main() -> int32:
     started = Queue[str]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         finished = Queue[str]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"sleep cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_sleep_ms = blocked_sleep.as_millis()
+        blocked_sleep_ms = blocked_sleep.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("sleep cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "sleep cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
 fn cancellation_wakes_queue_wait_tasks_promptly() {
     let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
     _ = started.put("wait")
     while not cancelled():
@@ -3478,26 +3482,24 @@ def main() -> int32:
     started = Queue[str]()
     finished = Queue[str]()
     jobs = Queue[int32]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
     wait_for_one(finished)
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"queue cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_wait_ms = blocked_wait.as_millis()
+        blocked_wait_ms = blocked_wait.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("queue-wait cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "queue wait cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
