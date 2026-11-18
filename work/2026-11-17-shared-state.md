@@ -163,6 +163,12 @@ figures were 502, 104 and 838 ms. Uncontended lock and atomic performance
 on the new runner remained above three times the Rust time. The benchmark
 report includes every workload and the local CPU and wall comparisons.
 
+Building the immediately preceding runtime with the same Cargo settings
+gave a matched four-CPU comparison. Across 15 alternating runs, the
+four-task mutex used 286 ms of process CPU before backoff and 231 ms
+afterward. Elapsed time went from 595 to 488 ms for the same four million
+increments. The shared cache also improved on both measures.
+
 ## Checked Atomic Addition
 
 Profiling exposed an out-of-line checked-add call and error construction
