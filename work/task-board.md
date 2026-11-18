@@ -24,6 +24,9 @@ Last updated: 2026-11-18
   Measurements and checksums are in `benchmarks/closures/README.md`.
 - Local functions support statement bodies and shared recursion under
   ADR-0116. See `2026-11-17-local-functions.md` for verification.
+  With the same runtime inputs, the named local function and typed lambda
+  took 386 and 388 ms for 48 million calls, against 296 ms for Rust and
+  18,443 ms for Python.
 
 ## The `image` module (complete)
 
