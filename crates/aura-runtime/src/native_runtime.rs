@@ -20809,7 +20809,7 @@ fn with_locked_cell<T>(
 ) -> std::result::Result<T, Diagnostic> {
     match with_sync_handle(handle, "sync.Cell", |handle| handle.try_take_with(&read))? {
         Some(value) => Ok(value),
-        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_with(read),
+        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_contended_with(read),
     }
 }
 
@@ -20847,7 +20847,9 @@ pub unsafe extern "C-unwind" fn aura_direct_sync_map_get_word(
         let found = match with_sync_handle(handle, "sync.Cell", |cell| cell.try_read_map_word(key))
         {
             Ok(Some(word)) => Ok(word),
-            Ok(None) => with_sync_handle(handle, "sync.Cell", Clone::clone).read_map_word(key),
+            Ok(None) => {
+                with_sync_handle(handle, "sync.Cell", Clone::clone).read_contended_map_word(key)
+            }
             Err(error) => Err(error),
         }
         .unwrap_or_else(|error| runtime_diagnostic_error(error));

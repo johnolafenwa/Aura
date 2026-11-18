@@ -33,8 +33,10 @@ when a caller releases an earlier lock in the meantime.
 Recursive locking by one task reports `AU4001`.
 
 Each cell has an atomic state. An immediate acquisition takes an
-unlocked cell with acquire ordering. A contended acquisition spins
-briefly and marks the cell before parking on a scheduler-aware queue.
+unlocked cell with acquire ordering. On contention the reader probes the
+state less often as it spins. Native code keeps the handle borrowed during
+these probes. Parking takes an owned handle, marks the cell and waits on
+its scheduler-aware queue.
 Release publishes the new contents and wakes a waiter when the cell
 was marked. The wake queue retains an early signal.
 

@@ -342,19 +342,37 @@ fn an_integer_map_read_checks_ownership_and_poisons_a_malformed_cell() {
     let held = cell.take().unwrap();
     assert_eq!(cell.try_read_map_word(1).unwrap(), None);
     assert!(cell
-        .read_map_word(1)
+        .read_contended_map_word(1)
         .unwrap_err()
         .message
         .contains("already holds"));
     cell.put(held).unwrap();
     assert!(cell
-        .read_map_word(1)
+        .read_contended_map_word(1)
         .unwrap_err()
         .message
         .contains("dictionary"));
     assert!(cell.is_poisoned().unwrap());
     assert!(cell
-        .read_map_word(1)
+        .read_contended_map_word(1)
+        .unwrap_err()
+        .message
+        .contains("poisoned"));
+}
+
+#[test]
+fn a_borrowed_lock_spin_leaves_waiters_and_poison_for_the_scheduler_path() {
+    let handle = SyncValue::cell(int(7));
+    let cell = handle.as_cell("sync.Mutex").unwrap();
+    assert!(cell.spin_lock());
+    assert!(!cell.spin_lock());
+    assert_eq!(cell.state.load(Ordering::Relaxed), LOCKED);
+    cell.state.store(CONTENDED, Ordering::Relaxed);
+    assert!(!cell.spin_lock());
+    assert_eq!(cell.state.load(Ordering::Relaxed), CONTENDED);
+    cell.state.store(POISONED, Ordering::Relaxed);
+    assert!(!cell.spin_lock());
+    assert!(lock_contended(cell)
         .unwrap_err()
         .message
         .contains("poisoned"));

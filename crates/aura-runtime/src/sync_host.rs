@@ -22,8 +22,7 @@ const LOCKED: u8 = 1;
 const CONTENDED: u8 = 2;
 const POISONED: u8 = 3;
 
-/// How many times a taker checks a locked cell before it waits through the
-/// scheduler. A critical section is usually shorter than a park and a wake.
+/// Maximum spin-loop hints before an acquisition parks through the scheduler.
 const SPIN_LIMIT: u32 = 96;
 
 /// The active prefix contains the cells this task holds in acquisition
@@ -282,6 +281,31 @@ impl CellState {
             .is_ok()
     }
 
+    fn try_lock_without_parking(&self) -> bool {
+        self.try_lock() || self.spin_lock()
+    }
+
+    /// Back off between probes while the current owner holds the cell. A native
+    /// caller can keep borrowing its handle until it needs to park the task.
+    #[cold]
+    fn spin_lock(&self) -> bool {
+        let mut remaining = SPIN_LIMIT;
+        let mut stride = 1;
+        while remaining > 0 {
+            match self.state.load(Ordering::Relaxed) {
+                UNLOCKED if self.try_lock() => return true,
+                CONTENDED | POISONED => return false,
+                _ => {}
+            }
+            for _ in 0..stride {
+                std::hint::spin_loop();
+            }
+            remaining -= stride;
+            stride = (stride * 2).min(16).min(remaining);
+        }
+        false
+    }
+
     fn check_poisoned(&self) -> bool {
         self.state.load(Ordering::Acquire) == POISONED
     }
@@ -391,10 +415,18 @@ impl SyncValue {
         read: impl FnOnce(&mut Option<GuardedValue>) -> T,
     ) -> Result<T> {
         let cell = self.as_cell("sync.__aura_cell_take")?;
-        if !cell.try_lock() {
-            // The scheduler changes the current task while a waiter yields.
+        if !cell.try_lock_without_parking() {
             lock_contended(cell)?;
         }
+        Ok(Self::take_locked(cell, read))
+    }
+
+    pub(crate) fn take_contended_with<T>(
+        &self,
+        read: impl FnOnce(&mut Option<GuardedValue>) -> T,
+    ) -> Result<T> {
+        let cell = self.as_cell("sync.__aura_cell_take")?;
+        lock_contended(cell)?;
         Ok(Self::take_locked(cell, read))
     }
 
@@ -405,7 +437,9 @@ impl SyncValue {
         read: impl FnOnce(&mut Option<GuardedValue>) -> T,
     ) -> Result<Option<T>> {
         let cell = self.as_cell("sync.__aura_cell_take")?;
-        Ok(cell.try_lock().then(|| Self::take_locked(cell, read)))
+        Ok(cell
+            .try_lock_without_parking()
+            .then(|| Self::take_locked(cell, read)))
     }
 
     #[inline]
@@ -421,16 +455,14 @@ impl SyncValue {
     /// The outer option distinguishes a contended cell from a missing key.
     pub(crate) fn try_read_map_word(&self, key: i64) -> Result<Option<Option<i64>>> {
         let cell = self.as_cell("sync.__aura_map_get")?;
-        cell.try_lock()
+        cell.try_lock_without_parking()
             .then(|| cell.read_locked_map_word(key))
             .transpose()
     }
 
-    pub(crate) fn read_map_word(&self, key: i64) -> Result<Option<i64>> {
+    pub(crate) fn read_contended_map_word(&self, key: i64) -> Result<Option<i64>> {
         let cell = self.as_cell("sync.__aura_map_get")?;
-        if !cell.try_lock() {
-            lock_contended(cell)?;
-        }
+        lock_contended(cell)?;
         cell.read_locked_map_word(key)
     }
 
@@ -510,14 +542,11 @@ fn wrong_handle(call: &str, expected: &str, found: &str) -> Diagnostic {
 /// Takes a cell another holder has, or reports why it cannot be taken.
 #[cold]
 fn lock_contended(cell: &Arc<CellState>) -> Result<()> {
+    if cell.try_lock() {
+        return Ok(());
+    }
     if with_current_holder(|holder| holder.holds(cell)) {
         return Err(relock_error());
-    }
-    for _ in 0..SPIN_LIMIT {
-        if cell.state.load(Ordering::Relaxed) == UNLOCKED && cell.try_lock() {
-            return Ok(());
-        }
-        std::hint::spin_loop();
     }
     let wake = cell.wake_queue();
     loop {
