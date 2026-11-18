@@ -130,3 +130,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 111. [ADR-0111: Byte-string literals, integer indexing of `str`, and text encodings](0111-byte-strings-str-indexing-and-text-encodings.md) — Accepted; `b"..."` is a `list[uint8]`; `text[i]` is a one-character `str`; `bytes.encode` and `bytes.decode` for eleven encodings
 112. [ADR-0112: Set algebra as methods and operators of `set[T]`](0112-set-algebra.md) — Accepted; `union`, `intersection`, `difference`, `symmetric_difference`, three relations, `update`, and `|`, `&`, `-`, `^`
 113. [ADR-0113, exact integers, decimals and complex numbers](0113-numbers-module.md)
+114. [ADR-0114: The `image` module](0114-image-module.md) — Accepted; PNG, JPEG and Netpbm into a class of three integers and a `list[uint8]`; codecs in the runtime behind nine host functions; a pixel limit checked before decoding; `Array` forms as the bridge to tensors

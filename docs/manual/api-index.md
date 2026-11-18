@@ -328,6 +328,32 @@ limit, and the error variants.
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
 
+## Image
+
+[Image Module](/manual/image) covers the pixel layout, what each format
+reads and writes, the pixel limit, the `Image` members, and the error
+variants.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `image.read` | `read(file_path: str) -> Result[Image, image.Error]` | Decodes a PNG, JPEG, or PPM file. The format comes from the file's first bytes. |
+| `image.decode` | `decode(data: list[uint8]) -> Result[Image, image.Error]` | Decodes an image of at most 268,435,456 pixels. |
+| `image.decode_up_to` | `decode_up_to(data: list[uint8], max_pixels: int64) -> Result[Image, image.Error]` | Returns `image.Error.TooLarge` before decoding when the header names more than `max_pixels` pixels. |
+| `image.info` | `info(data: list[uint8]) -> Result[image.Info, image.Error]` | The format, width, height, and channel count from the header. |
+| `image.write` | `write(file_path: str, picture: Image) -> Result[None, image.Error]` | Writes the format the extension names: `png`; `jpg` or `jpeg`; `ppm`, `pgm`, or `pnm`. |
+| `image.write_as` | `write_as(file_path: str, picture: Image, format: Format) -> Result[None, image.Error]` | Writes `format` whatever the name. |
+| `image.encode` | `encode(picture: Image, format: Format) -> Result[list[uint8], image.Error]` | The file's bytes at PNG level 6 or JPEG quality 90. |
+| `image.encode_png` | `encode_png(picture: Image, level: int64 = 6) -> Result[list[uint8], image.Error]` | A PNG file at `level` 0 to 9. A level out of range traps with `AU4001`. |
+| `image.encode_jpeg` | `encode_jpeg(picture: Image, quality: int64 = 90) -> Result[list[uint8], image.Error]` | A JPEG file at `quality` 1 to 100. An image with alpha is `image.Error.Unsupported`. |
+| `image.encode_ppm` | `encode_ppm(picture: Image) -> Result[list[uint8], image.Error]` | A binary PGM or PPM file. An image with alpha is `image.Error.Unsupported`. |
+| `image.format_of` | `format_of(file_path: str) -> Format \| None` | The format an extension names, in any letter case. |
+
+`image.Image` has the public fields `width`, `height`, `channels`, and
+`pixels: list[uint8]`. Its members are `Image.new`, `Image.filled`, `get`,
+`set`, `has_alpha`, `to_gray`, `to_gray_alpha`, `to_rgb`, `to_rgba`,
+`resize`, `resize_with`, `crop`, `flip_horizontal`, `flip_vertical`,
+`to_array`, `to_planes`, `Image.from_array`, and `Image.from_planes`.
+
 ## Regex
 
 [Regex Module](/manual/regex) covers the pattern syntax, positions, groups,

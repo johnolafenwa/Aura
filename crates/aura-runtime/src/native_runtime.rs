@@ -3649,6 +3649,84 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("bytes")],
     },
     DynamicHostAbi {
+        name: "image::__aura_info",
+        params: &[borrowed("data")],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_decode",
+        params: &[borrowed("data"), borrowed("max_pixels")],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_encode",
+        params: &[
+            borrowed("pixels"),
+            borrowed("format"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("option"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_convert",
+        params: &[
+            borrowed("pixels"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("target"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_resize",
+        params: &[
+            borrowed("pixels"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("new_width"),
+            borrowed("new_height"),
+            borrowed("filter"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_crop",
+        params: &[
+            borrowed("pixels"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("left"),
+            borrowed("top"),
+            borrowed("crop_width"),
+            borrowed("crop_height"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_flip",
+        params: &[
+            borrowed("pixels"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("vertical"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_to_array",
+        params: &[
+            borrowed("pixels"),
+            borrowed("width"),
+            borrowed("height"),
+            borrowed("channels"),
+            borrowed("planes"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "image::__aura_from_array",
+        params: &[borrowed("values"), borrowed("planes")],
+    },
+    DynamicHostAbi {
         name: "regex::__aura_is_match",
         params: &[borrowed("pattern"), borrowed("text")],
     },
@@ -16023,6 +16101,15 @@ host_builtin_entries! {
     borrowed "http::__aura_close" => aura_host_http_close(|args| direct_http("http::__aura_close", crate::runtime_value::http_client::host_http_close, args));
     owned "http::__aura_idle_connections" => aura_host_http_idle_connections(crate::runtime_value::http_client::host_http_idle_connections);
     owned "http::__aura_close_idle" => aura_host_http_close_idle(crate::runtime_value::http_client::host_http_close_idle);
+    borrowed "image::__aura_info" => aura_host_image_info(|args| direct_image("image::__aura_info", args));
+    borrowed "image::__aura_decode" => aura_host_image_decode(|args| direct_image("image::__aura_decode", args));
+    borrowed "image::__aura_encode" => aura_host_image_encode(|args| direct_image("image::__aura_encode", args));
+    borrowed "image::__aura_convert" => aura_host_image_convert(|args| direct_image("image::__aura_convert", args));
+    borrowed "image::__aura_resize" => aura_host_image_resize(|args| direct_image("image::__aura_resize", args));
+    borrowed "image::__aura_crop" => aura_host_image_crop(|args| direct_image("image::__aura_crop", args));
+    borrowed "image::__aura_flip" => aura_host_image_flip(|args| direct_image("image::__aura_flip", args));
+    borrowed "image::__aura_to_array" => aura_host_image_to_array(|args| direct_image("image::__aura_to_array", args));
+    borrowed "image::__aura_from_array" => aura_host_image_from_array(|args| direct_image("image::__aura_from_array", args));
     owned "numbers::__aura_big_add_words" => aura_host_numbers_big_add_words(crate::numbers_host::host_big_add_words);
     owned "numbers::__aura_small_pow_mod" => aura_host_numbers_small_pow_mod(crate::numbers_host::host_small_pow_mod);
     owned "numbers::__aura_big_binary" => aura_host_numbers_big_binary(crate::numbers_host::host_big_binary);
@@ -16196,6 +16283,18 @@ fn direct_http(
         values.push(args.with_borrow(name, index, |value| Ok(value.clone()))?);
     }
     evaluate(values, None)
+}
+
+/// An `image` builtin: its first argument read in place, the rest
+/// integers.
+fn direct_image(name: &str, args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    use crate::runtime_value::image_host::{evaluate_image_builtin, image_number};
+    let count = dynamic_host_abi(name).map_or(1, |metadata| metadata.params.len());
+    let mut numbers = Vec::with_capacity(count - 1);
+    for index in 1..count {
+        numbers.push(args.with_copy(name, index, |number| image_number(number, name, index))?);
+    }
+    args.with_borrow(name, 0, |data| evaluate_image_builtin(name, data, &numbers))
 }
 
 fn direct_regex(name: &str, args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {

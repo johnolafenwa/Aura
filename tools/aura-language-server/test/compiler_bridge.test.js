@@ -4709,6 +4709,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
       "trace",
       "control",
       "gzip",
+      "image",
       "numbers",
       "regex",
       "time",
@@ -4743,6 +4744,11 @@ test("compiler bridge exposes control-plane module completions", async () => {
     for (const expected of ["compress", "decompress", "Error"]) {
       assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
     }
+    const imageNames = await completionNames("image");
+    for (const expected of ["read", "write", "decode", "encode_png", "Image", "Format", "Filter", "Error"]) {
+      assert.ok(imageNames.has(expected), `image completion should include ${expected}`);
+    }
+    assert.ok(!imageNames.has("__aura_decode"), "image completion should hide host functions");
     const simdNames = await completionNames("simd");
     for (const expected of ["F64x2", "F64x4", "F32x4", "F32x8", "I64x2", "I64x4"]) {
       assert.ok(simdNames.has(expected), `simd completion should include ${expected}`);

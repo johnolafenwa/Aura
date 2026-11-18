@@ -22,6 +22,7 @@ const TIME_SOURCE: &str = include_str!("../std/time.au");
 const HTTP_SOURCE: &str = include_str!("../std/http.au");
 const NUMBERS_SOURCE: &str = include_str!("../std/numbers.au");
 const TENSOR_SOURCE: &str = include_str!("../std/tensor.au");
+const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
@@ -33,6 +34,7 @@ fn module_source(name: &str) -> Option<&'static str> {
         "time" => Some(TIME_SOURCE),
         "http" => Some(HTTP_SOURCE),
         "tensor" => Some(TENSOR_SOURCE),
+        "image" => Some(IMAGE_SOURCE),
         "numbers" => Some(NUMBERS_SOURCE),
         _ => None,
     }

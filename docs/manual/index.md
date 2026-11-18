@@ -111,6 +111,8 @@ maintained surface by area and states how it may change.
   SHA-256, and HMAC-SHA256.
 - [Gzip Module](/manual/gzip): gzip compression and bounded decompression of
   byte lists, with typed errors.
+- [Image Module](/manual/image): PNG, JPEG, and PPM pictures as pixel
+  lists, with resizing, channel conversion, and `Array` forms for tensors.
 - [Regex Module](/manual/regex): compiled regular expressions with
   linear-time search, groups, replacement, and splitting.
 - [Time Module](/manual/time): the clocks, `DateTime` with fixed offsets,

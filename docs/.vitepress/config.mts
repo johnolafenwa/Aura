@@ -108,6 +108,7 @@ export default defineConfig({
             { text: 'Math Module', link: '/manual/math' },
             { text: 'Bytes, Codecs, And SHA-256', link: '/manual/bytes' },
             { text: 'Gzip Module', link: '/manual/gzip' },
+            { text: 'Image Module', link: '/manual/image' },
             { text: 'Regex Module', link: '/manual/regex' },
             { text: 'Time Module', link: '/manual/time' },
             { text: 'HTTP Module', link: '/manual/http' },
