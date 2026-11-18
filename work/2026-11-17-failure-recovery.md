@@ -86,3 +86,19 @@ Each recovered call starts a fresh call stack and uses the current task’s
 cancellation context. A fixture enters a generator from a spawned task,
 recovers a failure inside it, checks that the trace contains only the
 failed function, and resumes the generator to completion.
+
+## Stack space for cleanup methods
+
+The ARM64 Linux and macOS CLI tests found a recursive task that registered a
+`close` method but skipped it when the next call exhausted the stack. The
+interpreter applied the same headroom check to the exit while the frame that
+owned it was still on the stack. Its failed call left the original trap primary.
+
+A function that can register an Aura exit now reserves space to call that
+exit. The registered exit spends that space and keeps the ordinary guard for
+its own execution. On x86-64 Linux, requesting 256 KiB through 1 MiB in
+4 KiB steps exposed a missing close at 105 of 193 sizes in the earlier
+packaged release. The corrected debug interpreter closed every entered scope
+at all 193 sizes for a plain resource, a manager, and an exit that opens
+another resource. At the original 768 KiB it entered and closed four nested
+scopes. The number of frames depends on the build and platform.
