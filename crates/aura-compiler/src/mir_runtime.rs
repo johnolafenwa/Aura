@@ -6790,10 +6790,9 @@ impl MirRuntime {
         Ok(value)
     }
 
-    /// A runtime that runs a generator body on the generator's own stack:
-    /// it shares this runtime's program, output, cancellation, constants,
-    /// and task ancestry, and starts with an empty call stack.
-    fn fork_for_generator(&self) -> MirRuntime {
+    /// Start with fresh call frames while sharing the immutable program and
+    /// its indices, output and program-wide constant states.
+    fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
@@ -6806,7 +6805,7 @@ impl MirRuntime {
             trait_impls: Arc::clone(&self.trait_impls),
             stdout: Arc::clone(&self.stdout),
             stdout_sink: self.stdout_sink.clone(),
-            cancellation: self.cancellation.clone(),
+            cancellation,
             program_args: Arc::clone(&self.program_args),
             call_depth: 0,
             call_stack: Vec::new(),
@@ -6815,7 +6814,14 @@ impl MirRuntime {
             constant_states: Arc::clone(&self.constant_states),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
+            generator_body: false,
+        }
+    }
+
+    fn fork_for_generator(&self) -> MirRuntime {
+        MirRuntime {
             generator_body: true,
+            ..self.fork_for_child(self.cancellation.clone())
         }
     }
 
@@ -6989,50 +6995,26 @@ impl MirRuntime {
             ));
         };
 
-        let cancellation = group_value.child_cancellation();
-
-        let module = (*self.module).clone();
-        let stdout = self.stdout.clone();
-        let stdout_sink = self.stdout_sink.clone();
-        let program_args = self.program_args.clone();
-        let constant_states = self.constant_states.clone();
-        let recursive_functions = self.recursive_functions.clone();
-        let function_for_task = function.clone();
+        let mut runtime = self.fork_for_child(group_value.child_cancellation());
         let function_signature = function_value.signature.clone();
-        let mut task_ancestry = self.task_ancestry.clone();
         let parent_frame = self
             .call_stack
             .last()
             .expect("task starts only while an Aura call frame is active");
-        task_ancestry.push(RuntimeTaskFrame {
+        runtime.task_ancestry.push(RuntimeTaskFrame {
             task_function: function.name.clone(),
             task_entry_span: RuntimeSourceSpan::point(function.source_path.clone(), function.span),
             parent_function: parent_frame.function.clone(),
             spawn_span: RuntimeSourceSpan::point(parent_frame.span.path.clone(), spawn_span),
         });
         let entry = move || {
-            let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
-                module,
-                stdout,
-                stdout_sink,
-                cancellation,
-                program_args,
-            );
-            runtime.constant_states = constant_states;
-            runtime.task_ancestry = task_ancestry;
-            runtime.recursive_functions = recursive_functions;
             if is_closure {
                 runtime
-                    .call_function_for_target(&function_for_task, None, bound_args, None)
+                    .call_function_for_target(&function, None, bound_args, None)
                     .and_then(|outcome| outcome.value.into_result())
             } else {
                 runtime
-                    .call_function_for_value(
-                        &function_for_task,
-                        bound_args,
-                        &function_signature,
-                        None,
-                    )
+                    .call_function_for_value(&function, bound_args, &function_signature, None)
                     .and_then(|outcome| outcome.value.into_result())
             }
         };
