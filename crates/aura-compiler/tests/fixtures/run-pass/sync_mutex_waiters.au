@@ -1,0 +1,29 @@
+import sync
+
+def hold(counter: sync.Mutex[int64], ready: Queue[int64], release: Queue[int64]) -> int64:
+    with value = counter.lock():
+        _ = ready.put(1)
+        value += release.get_or(-100, timeout=120s)
+    return 1
+
+def add(counter: sync.Mutex[int64], ready: Queue[int64], delta: int64) -> int64:
+    _ = ready.put(1)
+    with value = counter.lock():
+        value += delta
+    return 1
+
+def main():
+    counter = sync.Mutex[int64](0)
+    ready = Queue[int64]()
+    release = Queue[int64]()
+    with TaskGroup() as group:
+        owner = group.start(hold, counter, ready, release)
+        assert ready.get_or(0, timeout=120s) == 1
+        a = group.start(add, counter, ready, 2)
+        b = group.start(add, counter, ready, 3)
+        assert ready.get_or(0, timeout=120s) == 1
+        assert ready.get_or(0, timeout=120s) == 1
+        _ = release.put(10)
+        print(owner.result_or(-1, timeout=120s) + a.result_or(-1, timeout=120s) + b.result_or(-1, timeout=120s))
+    with value = counter.lock():
+        print(value)

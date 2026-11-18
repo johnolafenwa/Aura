@@ -144,3 +144,23 @@ A dedicated Linux runner tested the combined release at `248ffb7e`.
 The four-task mutex took 823 ms in Aura, 288 ms in Rust and 494 ms in
 CPython. All three programs reported 4,000,000 increments. The four-task
 cache took 876 ms, 348 ms and 30,755 ms respectively.
+
+A second dedicated runner, on `5f111af1`, measured 502 ms in Aura,
+104 ms in Rust and 838 ms in Python for the four-task mutex. The shared
+atomic counter took 388, 344 and 4,179 ms respectively. The uncontended
+atomic counter took 257, 47 and 4,306 ms. The two runner results and
+the four pinned CPUs use independent release measurements.
+
+## Waiting for a Contended Mutex
+
+The native reader used to clone its shared handle after the first failed
+lock attempt. The clone and its later release updated the reference count
+even when the owner released the lock during the spin. The reader now
+uses bounded exponential backoff while it borrows the handle. Once
+another waiter marks the cell or a failed owner poisons it, the reader
+goes directly to the scheduler path.
+
+The cross-backend waiter fixture uses a queue to signal when the owner
+holds the mutex. Two other tasks request the same mutex and can proceed
+once the owner receives a release signal. It checks all three completions
+and the value published by the last release.
