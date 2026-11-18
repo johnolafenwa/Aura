@@ -20,9 +20,10 @@ Last updated: 2026-11-17
   string, nested callable and wide captures independently of their creating
   task. The complete tool runner and decorated functions free every box.
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
-  Benchmark measurements are in `benchmarks/closures/README.md`.
-- Local functions with statement bodies and recursion are in development
-  under ADR-0116. See `2026-11-17-local-functions.md` for verification.
+  The six release workloads took 0.15 to 2.74 times the Rust wall time.
+  Measurements and checksums are in `benchmarks/closures/README.md`.
+- Local functions support statement bodies and shared recursion under
+  ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
 ## Three compiler defects from the book sections (complete)
 
