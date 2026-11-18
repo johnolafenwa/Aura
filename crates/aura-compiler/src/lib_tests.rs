@@ -3702,13 +3702,7 @@ def main() -> int32:
 
 #[test]
 fn lightweight_tasks_scale_to_thousands_of_waiting_tasks() {
-    let temp = TempDir::new("aura-lightweight-task-scale");
-    let ready_path = temp.path().join("ready.txt");
-    let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let source = format!(
-        r#"
-import fs
-
+    let source = r#"
 def sleeper(started: Queue[int32]) -> None:
     _ = started.put(1)
     while not cancelled():
@@ -3733,34 +3727,29 @@ def main() -> int32:
         for i in range(3000):
             group.start(sleeper, started)
         wait_for_count(started, 3000)
-        match fs.write_string("{ready_path}", "ready"):
-            case Result.Ok(_):
-                sleep(500ms)
-            case Result.Err(_):
-                group.cancel()
-                return 1
+        print("ready")
         group.cancel()
     return 0
-"#,
-        ready_path = ready_literal
-    );
+"#;
 
     let baseline_threads = current_process_thread_count();
-    let source_handle = thread::spawn(move || run_source(&source));
-    let deadline = Instant::now() + StdDuration::from_secs(15);
-    while !ready_path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "lightweight task stress never signalled readiness"
-        );
-        thread::sleep(StdDuration::from_millis(10));
-    }
-    let running_threads = current_process_thread_count();
-    let output = source_handle
-        .join()
-        .expect("lightweight task stress worker should not panic")
+    let (thread_counts, sampled) = std::sync::mpsc::channel();
+    let sink: StdoutSink = Arc::new(move |chunk| {
+        if chunk == "ready\n" {
+            // The caller is still in the task group until this print returns.
+            thread_counts.send(current_process_thread_count()).unwrap();
+        }
+    });
+    let output =
+        run_corpus_case_with_timeout("lightweight task stress", Path::new(file!()), move || {
+            run_source_with_stdout_sink(source, sink)
+        })
+        .expect("the task group should finish")
         .expect("lightweight task stress source should run");
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    let running_threads = sampled
+        .try_recv()
+        .expect("all 3,000 tasks should signal readiness before cancellation");
     assert!(
         running_threads <= baseline_threads + 32,
         "lightweight task stress should stay near the baseline thread count; baseline {}, running {}",
