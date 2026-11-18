@@ -18109,6 +18109,18 @@ def main() -> None:
 }
 
 #[test]
+fn integer_dict_index_stores_pass_both_words_without_boxing() {
+    let source = "def assign(table: mut dict[int64, int64], key: int64, value: int64):\n    table[key] = value\n\ndef main():\n    mut table = dict[int64, int64]()\n    assign(table, 1, 7)\n    print(table.len())\n";
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_host_object(&module).unwrap();
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_set_index_int64_pair"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
 fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
     let big = Type::named("numbers.BigInt");
     let words = Type::Named("list".into(), vec![Type::named("uint64")]);
@@ -18200,4 +18212,22 @@ def main():
         .unwrap();
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
+}
+
+#[test]
+fn direct_sync_map_lookup_passes_an_integer_key_without_boxing() {
+    let module = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    let symbols = exact_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_int64"),
+        "{symbols:?}"
+    );
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_word"),
+        "{symbols:?}"
+    );
+    assert!(symbols.contains("aura_host_sync_map_get"), "{symbols:?}");
 }

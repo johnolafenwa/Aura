@@ -10120,6 +10120,12 @@ fn run_and_direct_backends_discover_queues_nested_in_task_arguments() {
 }
 
 #[test]
+fn run_and_direct_backends_share_atomic_mutex_and_map_handles() {
+    let source = include_str!("../../../examples/concurrency/shared_state.au");
+    assert_run_and_direct_source_stdout("aura-shared-state", source, "400\n400\n81\n10\n11400\n");
+}
+
+#[test]
 fn run_and_direct_backends_transfer_structural_values_across_task_boundaries() {
     let source =
         include_str!("../../aura-compiler/tests/fixtures/run-pass/task_transfer_runtime_matrix.au");

@@ -101,7 +101,8 @@ impl PlainRecords {
     }
 
     pub(super) fn class_layout(&self, class_name: &str) -> Option<(LayoutTable, LayoutId)> {
-        if !self.env.classes.get(class_name)?.type_params.is_empty() {
+        let class = self.env.classes.get(class_name)?;
+        if !class.type_params.is_empty() {
             return None;
         }
         let ty = Type::named(class_name);

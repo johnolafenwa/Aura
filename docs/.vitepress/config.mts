@@ -115,6 +115,7 @@ export default defineConfig({
             { text: 'JSON Module', link: '/manual/json' },
             { text: 'Randomness Module', link: '/manual/randomness' },
             { text: 'Concurrency', link: '/manual/concurrency' },
+            { text: 'Sync Module', link: '/manual/sync' },
             { text: 'I/O Module', link: '/manual/io' },
             { text: 'Filesystem Module', link: '/manual/filesystem' },
             { text: 'Network Module', link: '/manual/network' },

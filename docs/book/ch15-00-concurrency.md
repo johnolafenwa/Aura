@@ -13,10 +13,9 @@ third by the type system. Every task starts inside a `TaskGroup`, and a task
 group is a resource managed by `with`, exactly like the files and scratch
 managers of [Chapter 14](/book/ch14-00-resources-and-cleanup). When the block
 ends, the group waits for its tasks. So a task can't outlive the block that
-started it, and a failure in a task always has somewhere to go. Tasks don't
-share mutable data at all: they exchange owned values through typed queues, and
-the compiler checks that everything crossing from one task to another is safe to
-move.
+started it, and a failure in a task always has somewhere to go. Tasks can exchange owned values through typed queues. When they share a value
+they can change, a handle from the `sync` module coordinates access. The
+compiler checks that each value can cross the task boundary.
 
 If you've used Python, you have probably met two older models. Threads from the
 `threading` module can be started anywhere and run until they finish, and the

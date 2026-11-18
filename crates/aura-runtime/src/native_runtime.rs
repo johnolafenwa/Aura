@@ -36,6 +36,7 @@ use crate::integer::{
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_reactor::IdHashMap;
+use crate::runtime_value::sync_host::GuardedValue;
 use crate::runtime_value::{
     append_string_checked, append_text_checked_with, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
@@ -5535,6 +5536,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::HttpExchange(_) => "net.HttpExchange".to_string(),
         Value::HttpResponse(_) => "http.Stream".to_string(),
         Value::Tensor(_) => "tensor.Node".to_string(),
+        Value::Sync(handle) => handle.type_name().to_string(),
         Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
         Value::WebSocket(_) => "net.WebSocket".to_string(),
         Value::UnixListener(_) => "net.UnixListener".to_string(),
@@ -5601,6 +5603,7 @@ pub(crate) fn inferred_collection_type(value: &Value) -> Type {
         Value::HttpExchange(_) => Type::named("net.HttpExchange"),
         Value::HttpResponse(_) => Type::named("http.Stream"),
         Value::Tensor(_) => Type::named("tensor.Node"),
+        Value::Sync(handle) => Type::named(handle.type_name()),
         Value::WebSocketListener(_) => Type::named("net.WebSocketListener"),
         Value::WebSocket(_) => Type::named("net.WebSocket"),
         Value::UnixListener(_) => Type::named("net.UnixListener"),
@@ -8809,6 +8812,24 @@ fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T
         Ok(value) => value,
         Err(found) => runtime_error(format!("expected `dict`, found `{found}`")),
     }
+}
+
+/// An indexed store changes the entries, preserving the existing key and value type tags.
+fn with_map_entries_mut<T>(
+    ptr: *mut OpaqueValue,
+    write: impl FnOnce(&mut crate::collection_index::DictEntries) -> T,
+) -> T {
+    let header = unsafe { ptr.as_ref() }
+        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
+    let access = header.access_unlisted(true);
+    // SAFETY: the box is confined or write-locked. Only a dictionary is
+    // changed, so there is no inline list view to adopt or refresh.
+    let found = match unsafe { &mut *header.value.get() } {
+        Value::Map(map) => return write(&mut map.entries),
+        other => value_type_name(other),
+    };
+    drop(access);
+    runtime_error(format!("expected `dict`, found `{found}`"))
 }
 
 fn with_set<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&SetValue) -> T) -> T {
@@ -12718,6 +12739,31 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64(
     })
 }
 
+/// Both operands of an `int64` to `int64` store fit in words. An existing
+/// slot keeps its original key and insertion order.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        with_map_entries_mut(map, |entries| {
+            let value = IntegerValue::from_i64(value);
+            if let Some(slot) = entries.position_i64(key) {
+                let previous = entries.value_at_mut(slot);
+                if let Value::Int(previous) = previous {
+                    *previous = value;
+                } else {
+                    *previous = Value::Int(value);
+                }
+            } else {
+                entries.push_new((Value::Int(IntegerValue::from_i64(key)), Value::Int(value)));
+            }
+        })
+    })
+}
+
 /// Borrows the value at `segments` inside `value` (ADR-0061, 2026-09-21
 /// section): an element or entry loan's projected read clones only the
 /// value it reaches, never the element that holds it.
@@ -14702,6 +14748,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::HttpExchange(_) => expected == "net.HttpExchange",
             Value::HttpResponse(_) => expected == "http.Stream",
             Value::Tensor(_) => expected == "tensor.Node",
+            Value::Sync(handle) => expected == handle.type_name(),
             Value::WebSocketListener(_) => expected == "net.WebSocketListener",
             Value::WebSocket(_) => expected == "net.WebSocket",
             Value::UnixListener(_) => expected == "net.UnixListener",
@@ -16575,6 +16622,17 @@ host_builtin_entries! {
     owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
     owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
     owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
+    owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
+    owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);
+    owned "sync::__aura_map_get" => aura_host_sync_map_get(crate::runtime_value::sync_host::host_map_get);
+    owned "sync::__aura_cell_poisoned" => aura_host_sync_cell_poisoned(crate::runtime_value::sync_host::host_cell_poisoned);
+    owned "sync::__aura_atom_new" => aura_host_sync_atom_new(crate::runtime_value::sync_host::host_atom_new);
+    owned "sync::__aura_atom_load" => aura_host_sync_atom_load(crate::runtime_value::sync_host::host_atom_load);
+    owned "sync::__aura_atom_store" => aura_host_sync_atom_store(crate::runtime_value::sync_host::host_atom_store);
+    owned "sync::__aura_atom_add" => aura_host_sync_atom_add(crate::runtime_value::sync_host::host_atom_add);
+    owned "sync::__aura_atom_swap" => aura_host_sync_atom_swap(crate::runtime_value::sync_host::host_atom_swap);
+    owned "sync::__aura_atom_compare_and_set" => aura_host_sync_atom_compare_and_set(crate::runtime_value::sync_host::host_atom_compare_and_set);
     owned "iter::__aura_generator_start" => aura_host_iter_generator_start(direct_generator_start);
     owned "iter::__aura_generator_yield" => aura_host_iter_generator_yield(direct_generator_yield);
     borrowed "iter::__aura_generator_resume" => aura_host_iter_generator_resume(|args| direct_generator_handle("iter::__aura_generator_resume", args));
@@ -21172,6 +21230,246 @@ pub extern "C-unwind" fn aura_direct_small_decimal_binary(
     1
 }
 
+/// One step on a `sync.Atom`: `operation` 0 loads, 1 stores `first`, 2 adds
+/// `first`, 3 swaps in `first`, and 4 stores `second` if the value is
+/// `first`. A store returns 0 and a compare-and-set returns whether it
+/// stored.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_atom(
+    handle: *mut OpaqueValue,
+    operation: i64,
+    first: i64,
+    second: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_sync_handle(handle, "sync.Atom", |handle| match operation {
+            0 => handle.load(),
+            1 => handle.store(first).map(|()| 0),
+            2 => handle.add(first),
+            3 => handle.swap(first),
+            _ => handle.compare_and_set(first, second).map(i64::from),
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// Reads the `sync` handle in `handle` in place, with no clone.
+fn with_sync_handle<T>(
+    handle: *mut OpaqueValue,
+    expected: &str,
+    read: impl FnOnce(&crate::runtime_value::SyncValue) -> T,
+) -> T {
+    unsafe {
+        with_unlisted_value(handle, |value| match value {
+            Value::Sync(handle) => read(handle),
+            other => runtime_error(format!(
+                "expected `{expected}`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// The exclusive, untracked box that a mutex carries between native
+/// callers. A taking task adopts the box and its reference in its ledger.
+pub(crate) struct GuardedNativeBox(std::ptr::NonNull<OpaqueValue>);
+
+impl Drop for GuardedNativeBox {
+    fn drop(&mut self) {
+        // SAFETY: the cell holds its only reference, outside any task ledger.
+        unsafe { release_untracked_value(self.0.as_ptr()) }
+    }
+}
+
+impl GuardedNativeBox {
+    pub(crate) fn as_map(&self) -> Option<&MapValue> {
+        // SAFETY: the cell holds the only reference to the detached box and
+        // its lock stays held for this borrow. A map has no inline list view.
+        match unsafe { &*self.0.as_ref().value.get() } {
+            Value::Map(map) => Some(map),
+            _ => None,
+        }
+    }
+
+    /// The caller transfers one generated-code reference to the cell.
+    unsafe fn from_owned(ptr: *mut OpaqueValue) -> Self {
+        let header = unsafe { ptr.as_ref() }.unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        let boxed =
+            if header.ref_count.load(Ordering::Acquire) == 1 && header.shared_lock().is_none() {
+                unregister_direct_owned_value(ptr);
+                ptr
+            } else {
+                let tag = unsafe { explicit_runtime_type_tag(ptr) };
+                let value = unsafe { consume_owned_value(ptr) };
+                untracked_boxed_value(value, tag)
+            };
+        // SAFETY: this value is unique and detached from every ledger.
+        Self(std::ptr::NonNull::new(boxed).expect("a box allocation has an address"))
+    }
+
+    fn into_owned(self) -> *mut OpaqueValue {
+        let ptr = self.0.as_ptr();
+        std::mem::forget(self);
+        #[cfg(all(debug_assertions, not(test)))]
+        // SAFETY: the task acquired the cell and owns this box exclusively.
+        unsafe {
+            (*ptr).owner_thread = direct_value_thread_identity();
+        }
+        register_direct_owned_value(ptr);
+        ptr
+    }
+
+    pub(crate) fn into_value(self) -> Value {
+        // As with any hand-over, adopt elements appended through a list view.
+        // SAFETY: this box's exclusively owned value is transferred once.
+        unsafe { consume_owned_value(self.into_owned()) }
+    }
+}
+
+/// A borrowed handle may guard only an immediate acquisition. If it must
+/// wait, the task takes its own reference and releases the box's read guard
+/// before yielding to the scheduler.
+fn with_locked_cell<T>(
+    handle: *mut OpaqueValue,
+    read: impl Fn(&mut Option<GuardedValue>) -> T,
+) -> std::result::Result<T, Diagnostic> {
+    match with_sync_handle(handle, "sync.Cell", |handle| handle.try_take_with(&read))? {
+        Some(value) => Ok(value),
+        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_with(read),
+    }
+}
+
+/// A shared map lookup with an integer key can keep the dictionary in its
+/// cell, copy the one result, and release the lock before boxing the Lookup.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_map_get_int64(
+    handle: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let found = with_locked_cell(handle, |slot| {
+            GuardedValue::copy_map_entry(slot, |map| map.entries.value_of_i64(key))
+        })
+        .flatten()
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        with_sync_handle(handle, "sync.Cell", |handle| handle.put_with(|_| {}))
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(found.map(lookup_found).unwrap_or_else(lookup_missing))
+    })
+}
+
+/// A match on an integer map copies the word before releasing the cell.
+/// The presence flag distinguishes a stored zero from an absent key.
+///
+/// # Safety
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_sync_map_get_word(
+    handle: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = match with_sync_handle(handle, "sync.Cell", |cell| cell.try_read_map_word(key))
+        {
+            Ok(Some(word)) => Ok(word),
+            Ok(None) => with_sync_handle(handle, "sync.Cell", Clone::clone).read_map_word(key),
+            Err(error) => Err(error),
+        }
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        // SAFETY: generated code provides an aligned slot for this call.
+        unsafe { out.write(found.unwrap_or(0)) };
+        i64::from(found.is_some())
+    })
+}
+
+/// Takes the lock of a `sync.Cell` and moves its value out.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_take(handle: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        with_locked_cell(handle, |slot| match GuardedValue::take(slot) {
+            GuardedValue::Native(value) => value.into_owned(),
+            other => boxed_value(other.into_value()),
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// Moves `value` back into a `sync.Cell` and releases its lock.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_put(
+    handle: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { GuardedNativeBox::from_owned(value) };
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| {
+            handle.put_with(|slot| *slot = Some(GuardedValue::Native(value)))
+        }) {
+            runtime_diagnostic_error(error)
+        }
+    })
+}
+
+/// [`aura_direct_sync_cell_take`] for a cell that guards an `int64`
+/// (`kind` 0) or a `bool` (`kind` 1): the value as one word, with no box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_take_word(
+    handle: *mut OpaqueValue,
+    kind: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_locked_cell(handle, |slot| {
+            let word = match slot.as_ref() {
+                Some(GuardedValue::Int64(word)) if kind == 0 => *word,
+                Some(GuardedValue::Bool(flag)) if kind == 1 => i64::from(*flag),
+                _ => return guarded_word_from_value(GuardedValue::take(slot).into_value(), kind),
+            };
+            *slot = None;
+            word
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// The initial payload, or one deposited by an interpreter or generic caller.
+#[cold]
+fn guarded_word_from_value(value: Value, kind: i64) -> i64 {
+    match value {
+        Value::Bool(value) if kind == 1 => i64::from(value),
+        value if kind == 0 => unbox_int64_of(&value),
+        other => runtime_error(format!(
+            "a lock that guards a `bool` held `{}`",
+            value_type_name(&other)
+        )),
+    }
+}
+
+/// [`aura_direct_sync_cell_put`] for the word
+/// [`aura_direct_sync_cell_take_word`] returned, changed or not.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_put_word(
+    handle: *mut OpaqueValue,
+    kind: i64,
+    word: i64,
+) {
+    task_runtime_boundary(|| {
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| {
+            handle.put_with(|slot| {
+                *slot = Some(if kind == 1 {
+                    GuardedValue::Bool(word != 0)
+                } else {
+                    GuardedValue::Int64(word)
+                });
+            })
+        }) {
+            runtime_diagnostic_error(error)
+        }
+    })
+}
+
 /// `regex.Regex.is_match`, `count`, and the group index of a name: the
 /// search `operation` of pattern `number` over the `str` handle `text`.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -22010,19 +22308,30 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
             args_address,
             claim_flag_address,
         };
-        let args = unsafe { &*(args_address as *const Vec<i64>) };
+        // The guard owns this buffer until the child has been submitted.
+        let args = unsafe { &mut *(args_address as *mut Vec<i64>) };
         let mut queue_producers = Vec::new();
-        for arg in args.iter().copied().filter(|arg| *arg != 0) {
+        for arg in args.iter_mut().filter(|arg| **arg != 0) {
+            let pointer = *arg as *mut OpaqueValue;
             unsafe {
-                with_value(arg as *mut OpaqueValue, |value| {
-                    collect_queue_values(value, &mut queue_producers)
+                let shares_box = !direct_task_arg_hands_over(pointer);
+                let sync_copy = with_value(pointer, |value| {
+                    if let Value::Sync(handle) = value {
+                        // The handle already owns synchronized storage. Give the
+                        // child its own wrapper so atomics need no second lock.
+                        if shares_box && !direct_value_is_frozen(pointer) {
+                            return Some(Value::Sync(handle.clone()));
+                        }
+                    }
+                    collect_queue_values(value, &mut queue_producers);
+                    None
                 });
-                // A value the buffer alone holds moves to the child, which
-                // takes it over unshared. Any other value the child may read
-                // while this task still holds the same handle, so both sides
-                // lock from here on.
-                if !direct_task_arg_hands_over(arg as *mut OpaqueValue) {
-                    share_direct_value(arg as *mut OpaqueValue);
+                if let Some(value) = sync_copy {
+                    let tag = explicit_runtime_type_tag(pointer);
+                    *arg = untracked_boxed_value(value, tag) as i64;
+                    release_untracked_value(pointer);
+                } else if shares_box {
+                    share_direct_value(pointer);
                 }
             }
         }

@@ -128,6 +128,7 @@ maintained surface by area and states how it may change.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,
   cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
   `wait_all`, and scheduler-aware waits.
+- [Sync Module](/manual/sync) covers mutexes, atomic counters and flags, and shared maps.
 - [I/O Module](/manual/io): standard input and output, and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, line
   and chunk reads, scoped file cleanup, and byte and text limits.
