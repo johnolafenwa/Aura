@@ -17,6 +17,20 @@ took 10.2 ms in Aura, 9.7 ms in Rust and 9.5 ms in Pillow. The earlier
 hosted run met both targets on 39 of 40 and finished ahead of Python on all
 40. [Hosted benchmark run](https://github.com/johnolafenwa/Aura/actions/runs/44225018396)
 
+At `344b3b09`, all 2,213 compiler and 1,488 runtime unit tests passed
+locally. The hosted runs covered 97.48% of functions and 96.53% of lines
+on Ubuntu, and 97.46% of functions and 96.51% of lines on Apple Silicon.
+Linux ARM64 passed all 1,137 fixtures under both the interpreter and native
+backend. [Linux coverage](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705451158) · [Apple Silicon coverage](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705450675) · [ARM64 parity](https://github.com/johnolafenwa/Aura/actions/runs/44276369421/job/134705451098)
+
+The Linux x86-64 package for that revision beat Python on 38 of the same
+40 workloads and took at most three times Rust on 39. It met both targets
+on 37 in the initial measurements. The C text callback took 66.16 ns in
+Aura, 20.25 ns in Rust and 582.37 ns in Python. JPEG decode took 8.7 ms,
+9.1 ms and 8.4 ms respectively. UTF-16 round-trip was the other miss in
+the initial five trials. A separate 15-trial repeat took 5.83 ms, 5.90 ms
+and 8.27 ms with the same checksum. [All measurements](https://github.com/johnolafenwa/Aura/pull/309)
+
 ## Failure recovery
 
 - Both backends implement `control.recover` and stack-bounded recursion.

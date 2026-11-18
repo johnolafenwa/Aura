@@ -66,6 +66,16 @@ failed the audit. The lockfile pins the patched `@ryotsu/picomatch`
 audits pass locally. All 11 documentation-site tests pass, and
 VitePress builds and renders the site with the pinned package.
 
+On November 18, the fork's npm tarball matched the lockfile SHA-512 and
+all ten files at the publisher's Git commit. Sigstore verified the signed
+tarball digest and the tagged GitHub Actions workflow that published it.
+The fork adds no dependencies or install hooks. Its parser also changes
+how brackets, newlines and some wildcards match. The publisher's upstream
+proposal closed without merging. The advisory still lists every official
+release through 4.0.7 and gives no fixed release. Revisit the override
+when upstream publishes a fix.
+[Fork source](https://github.com/ryotsu-kankichi/secured-picomatch/tree/3ab5a7627d480259e3d9ca67fbc14c125d374f0e) · [Upstream proposal](https://github.com/micromatch/picomatch/pull/240) · [Advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)
+
 ## Integration on 2026-11-18
 
 PR #301 passed the platform and coverage gates and landed on
