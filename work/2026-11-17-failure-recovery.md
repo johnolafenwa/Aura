@@ -117,3 +117,7 @@ packaged release. The corrected debug interpreter closed every entered scope
 at all 193 sizes for a plain resource, a manager, and an exit that opens
 another resource. At the original 768 KiB it entered and closed four nested
 scopes. The number of frames depends on the build and platform.
+
+On the scoped recovery release at `1dba8ad1`, the same recursive resource
+missed one close at 17 of 33 task stack sizes from 256 to 384 KiB. The
+debug build at `3d2ae363` missed one at five sizes in that range.
