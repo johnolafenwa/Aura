@@ -235,6 +235,96 @@ fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
     });
 }
 
+// Exercise the portable recovery ABI used when the backend cannot emit an
+// in-place jump buffer. Each argument buffer owns one reference per handle.
+fn call_recovered_thunk(thunk: super::NativeThunk, args: &[*mut OpaqueValue]) -> Value {
+    let count = args.len() as i64;
+    let buffer = super::aura_direct_arg_buffer_new(count);
+    for (index, arg) in args.iter().enumerate() {
+        super::aura_direct_arg_buffer_store(buffer, index as i64, *arg as i64);
+    }
+    unsafe {
+        let result = super::aura_direct_start_task_call(
+            thunk as usize as i64,
+            buffer,
+            count,
+            super::DIRECT_START_RECOVERS,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        );
+        super::consume_value(result)
+    }
+}
+
+#[test]
+fn recovered_thunk_restores_the_caller_and_releases_arguments_on_success_and_trap() {
+    unsafe extern "C-unwind" fn trap(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::yield_now_with_runtime_scheduler();
+        super::aura_direct_assert_fail(0, 14, 5, 0)
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let argument = int_value(29);
+            let expected = unsafe { value_ref(argument) };
+            let ok = || crate::runtime_value::result_ok(expected.clone());
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+
+            let Value::EnumVariant(error) = call_recovered_thunk(trap, &[argument]) else {
+                panic!("expected Result.Err");
+            };
+            assert_eq!(error.variant_name, "Err");
+            let payload = error.payloads.get(0).unwrap();
+            let Value::Instance(trap) = payload.as_ref() else {
+                panic!("expected control.Trap");
+            };
+            let fields = trap.fields.map();
+            assert_eq!(fields["code"], Value::string("AU4001"));
+            assert_eq!(fields["message"], Value::string("assertion failed"));
+            assert_eq!(fields["line"], Value::Int(IntegerValue::from_i64(14)));
+            assert_eq!(fields["column"], Value::Int(IntegerValue::from_i64(5)));
+
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+            assert_eq!(unsafe { &*argument }.ref_count.load(Ordering::Acquire), 1);
+            unsafe { release_value(argument) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn recovered_thunk_propagates_cancellation_through_an_outer_recovered_call() {
+    unsafe extern "C-unwind" fn cancel(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::cancel_current_lightweight_task_boundary()
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        let task = spawn_lightweight_task(|| {
+            // Cancellation must cross the in-place caller without jumping to its
+            // trap handler. The buffer remains live until this task exits.
+            let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+            unsafe { super::aura_direct_recover_begin(outer.as_mut_ptr(), 1) };
+            call_recovered_thunk(cancel, &[]);
+            panic!("a cancelled recovered call returned");
+        })?;
+        let status = task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(2)), None)
+            .unwrap();
+        assert!(matches!(status, TaskWaitStatus::Cancelled), "{status:?}");
+        Ok(Value::Unit)
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
 #[test]
 fn recovered_calls_move_owned_values_across_nested_boundaries() {
     super::with_direct_task_runtime_scope(|| {

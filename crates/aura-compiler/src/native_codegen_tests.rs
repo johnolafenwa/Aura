@@ -30,6 +30,31 @@ use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
 #[test]
+fn recover_emits_checked_messages_and_general_call_boundaries() {
+    let source = include_str!("../tests/fixtures/run-pass/control_recover_call_chains.au");
+    let mir = lower_source_to_mir(source).expect("the recovery calls should lower");
+    let object = emit_unoptimized_object(&mir).expect("the recovery calls should emit");
+    let symbols = exact_referenced_symbols(&object);
+
+    for required in [
+        "aura_direct_recover_assertion_cell",
+        "aura_direct_recover_formatted_assertion",
+    ] {
+        assert!(symbols.contains(required), "missing {required}");
+    }
+    if cfg!(unix) {
+        // The intervening ordinary calls need a general recovery boundary.
+        for required in [
+            "aura_direct_recover_begin",
+            "aura_direct_recover_end",
+            "aura_direct_recover_trapped",
+        ] {
+            assert!(symbols.contains(required), "missing {required}");
+        }
+    }
+}
+
+#[test]
 fn recovered_scalar_bodies_require_total_work_outside_a_failed_check() {
     let source = r#"
 def check(x: int64) -> int64:

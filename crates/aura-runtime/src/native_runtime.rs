@@ -22571,6 +22571,10 @@ fn drain_cleanups_for_task_exit() {
 thread_local! {
     /// States ready for the next `control.recover` call on this thread.
     /// Each is as a new state is: nothing owned, no call active.
+    #[expect(
+        clippy::vec_box,
+        reason = "the task-state table reuses these boxes and their stable addresses"
+    )]
     static RECOVERED_CALL_STATES: RefCell<Vec<Box<DirectTaskRuntimeState>>> =
         const { RefCell::new(Vec::new()) };
     /// The `Result.Err` of the call that just trapped, between the jump

@@ -86,3 +86,18 @@ Each recovered call starts a fresh call stack and uses the current task’s
 cancellation context. A fixture enters a generator from a spawned task,
 recovers a failure inside it, checks that the trace contains only the
 failed function, and resumes the generator to completion.
+
+The earlier Ubuntu gate measured 96.45% line coverage and 97.23%
+function coverage. The runtime tests now call the portable recovery ABI
+with an argument the caller still owns and check its reference count
+after success and after a trap. They verify that cancellation crosses a nested native
+recovery boundary and that an isolated call releases abandoned work if
+its stack allocation fails or it yields outside a generator. All 1,351
+instrumented runtime library tests passed on Linux. Compared with the
+same run of the earlier 1,347 tests, LLVM recorded 22 more functions and
+185 more lines in the three runtime files containing these paths.
+
+The 3,000-task readiness test exceeded its deadline on macOS and on a
+shared Linux worker. Tasks now share their parent's immutable MIR program
+and function indices. The test samples thread usage while all 3,000 tasks
+are waiting at the readiness barrier.

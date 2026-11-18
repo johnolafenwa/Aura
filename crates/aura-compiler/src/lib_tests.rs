@@ -34,6 +34,23 @@ const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.a
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn recover_preserves_caught_values_call_frames_cleanup_and_cancellation() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+    for case in [
+        "control_recover_scalar_results",
+        "control_recover_call_chains",
+        "control_recover_cleanup",
+        "control_recover_tasks",
+        "control_recover_cancellation",
+    ] {
+        let path = fixtures.join(format!("{case}.au"));
+        let output = run_path(&path).unwrap_or_else(|error| panic!("{case}: {error}"));
+        let expected = fs::read_to_string(path.with_extension("stdout")).expect("expected output");
+        assert_eq!(output.stdout, expected, "{case}");
+    }
+}
+
+#[test]
 fn recover_rejects_invalid_targets_and_arguments() {
     for (case, code) in [
         ("argument_move", "AU3001"),
