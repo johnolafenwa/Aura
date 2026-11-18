@@ -72,3 +72,20 @@ How to read the rows:
 The checks agree between the sides where the work is exact. The decoders
 return the same samples for the PNG. For the JPEG and the resize the means
 agree, and single samples may differ by one step between libraries.
+
+## Integrated Linux release
+
+The dedicated x86-64 runner used the release compiler from `248ffb7e`.
+The table gives milliseconds per operation. Aura decoded JPEG faster
+than Pillow in this run. Pillow encoded it 1.0 ms faster than Aura.
+[Image benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44207713216/job/134487634589)
+
+| Operation | Aura | Rust | Python |
+| --- | ---: | ---: | ---: |
+| Decode PNG | 12.3 | 13.0 | 28.0 |
+| Decode JPEG | 6.9 | 7.1 | 7.9 |
+| Encode PNG | 93.8 | 428.3 | 548.8 |
+| Encode PNG fast | 12.0 | 9.9 | 118.9 |
+| Encode JPEG | 6.0 | 41.3 | 5.0 |
+| Resize | 3.4 | 16.5 | 7.9 |
+| Convert to floats | 5.3 | 2.8 | 9.6 |

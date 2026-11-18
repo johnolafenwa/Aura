@@ -65,3 +65,14 @@ failed the audit. The lockfile pins the patched `@ryotsu/picomatch`
 4.0.7-a fork until upstream ships a fixed release. Both npm and Cargo
 audits pass locally. All 11 documentation-site tests pass, and
 VitePress builds and renders the site with the pinned package.
+
+## Integration on 2026-11-18
+
+PR #301 passed the platform and coverage gates and landed on
+`codex/aura-integration` at `0008bf2d`. The raylib picture example
+produced byte-identical 320×200 PNGs through the interpreter and native
+backend. The image module read the expected sun and grass colors from
+both files. On a dedicated Linux runner the integrated release beat
+Python in six of seven workloads. Encoding JPEG took 6.0 ms in Aura,
+41.3 ms in Rust and 5.0 ms in Pillow.
+[Image benchmark results](../benchmarks/image_codec/README.md#integrated-linux-release)
