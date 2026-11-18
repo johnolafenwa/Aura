@@ -730,14 +730,10 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_local_text_guard(
     unsafe fn call_with_text(
         body: unsafe extern "C-unwind" fn(*mut u64),
         frame: *mut u64,
-        mask: u64,
+        mask: std::num::NonZeroU64,
         function: *const u8,
         function_length: usize,
     ) {
-        if mask == 0 {
-            unsafe { body(frame) };
-            return;
-        }
         let index = mask.trailing_zeros() as usize;
         // SAFETY: generated code supplied a frame word for every selected argument.
         let slot = unsafe { frame.add(index) };
@@ -749,19 +745,28 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_local_text_guard(
                 error,
             ),
         };
-        let mut local = OpaqueValue::new(Value::String(text.into()), None);
+        let mut local =
+            OpaqueValue::with_view(Value::String(text.into()), None, super::EMPTY_VALUE_VIEW);
         *local.ref_count.get_mut() = super::FROZEN_REFERENCES;
         *local.shared_lock.get_mut() = std::ptr::from_ref(&super::FROZEN_VALUE_LOCK).cast_mut();
         // SAFETY: the remaining arguments and callback run inside this frame.
         // The callback only reads this pointer. Both return and unwind drop the value.
         unsafe {
             *slot = std::ptr::from_mut(&mut local) as u64;
-            call_with_text(body, frame, mask & (mask - 1), function, function_length);
+            if let Some(remaining) = std::num::NonZeroU64::new(mask.get() & (mask.get() - 1)) {
+                call_with_text(body, frame, remaining, function, function_length);
+            } else {
+                body(frame);
+            }
         }
     }
 
     with_callback_guard(|| unsafe {
-        call_with_text(body, frame, text_mask, function, function_length)
+        if let Some(mask) = std::num::NonZeroU64::new(text_mask) {
+            call_with_text(body, frame, mask, function, function_length)
+        } else {
+            body(frame)
+        }
     });
 }
 
