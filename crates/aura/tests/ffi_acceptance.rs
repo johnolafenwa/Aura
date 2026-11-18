@@ -1017,6 +1017,11 @@ double fx_spill_fpair(double a, double b, double c, double d, double e, double f
                       FPair p, double h) {
     return a + b + c + d + e + f + g + 10.0 * p.v[0] + 100.0 * p.v[1] + 1000.0 * h;
 }
+float fx_points_overwrite(Pt *points) {
+    float old = points[0].x;
+    points[0].x = -999.0f;
+    return old;
+}
 float fx_points_sum(const Pt *points, int32_t count) {
     float total = 0; for (int i = 0; i < count; i++) total += points[i].x + points[i].y; return total;
 }
@@ -1358,6 +1363,7 @@ extern "C" def fx_spill_fpair(
     a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
     p: FPair, h: float64
 ) -> float64
+extern "C" def fx_points_overwrite(points: ptr[Pt]) -> float32
 extern "C" def fx_points_sum(points: ptr[Pt], count: int32) -> float32
 extern "C" def fx_points_shift(points: mut ptr[Pt], count: int32, by: float32) -> None
 extern "C" def fx_shapes_tags(shapes: ptr[Shape], count: int32) -> int32
@@ -2494,82 +2500,91 @@ fn a_read_only_pointer_to_native_records_copies_their_storage() {
     let (_package, source) = fixture_package(
         r#"
 def main() -> int32:
-    points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0)]
+    mut points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0)]
     mut total: float32 = 0.0
     for i in range(64):
         total += fx_points_sum(points, 2)
     print(total)
+    print(fx_points_overwrite(points))
+    print(points[0].x)
+    points.append(Pt(x=9.0, y=10.0))
+    print(fx_points_sum(points, 3))
+    print(fx_points_overwrite(points))
+    print(points[0].x)
     return 0
 "#,
     );
     let (direct, stats) = native_stats(&source);
     assert_success(&direct, "passing native records to C");
-    assert_eq!(direct.stdout, b"640.0\n");
-    // Constructing the two records can convert them once at setup.
-    assert!(stats.conversions <= 2, "{stats:?}");
+    assert_eq!(direct.stdout, b"640.0\n1.0\n1.0\n29.0\n1.0\n1.0\n");
+    // Each of the three source records can convert once. Repeated calls
+    // should never convert the existing elements again.
+    assert!(stats.conversions <= 3, "{stats:?}");
     assert_eq!(stats.opaque_boxes, stats.freed_boxes);
 }
 
 #[test]
 fn a_trap_in_a_text_callback_releases_its_arguments() {
-    let (_package, source) = fixture_package(
-        r#"
+    let fixture = r#"
 class Marker:
     name: str
 
     def close(mut self) -> None:
         print(self.name)
 
+def inspect(text: str) -> int64:
+    return len(text)
+
 def log(message: str, value: float64, unit: str) -> None:
     with inner = Marker(name="Aura callback cleanup"):
-        assert value < 0.0, "callback stopped"
+        assert value < 0.0 or READ_MESSAGE < 0, "callback stopped"
 
 def main() -> int32:
     with outer = Marker(name="Aura caller cleanup"):
         fx_log_with_cleanup(log)
     return 0
-"#,
-    );
-    let interpreted = run_mir(&source);
-    assert!(!interpreted.status.success());
-    assert_eq!(
-        interpreted.stdout,
-        b"Aura callback cleanup\nC finished cleanup\nAura caller cleanup\n"
-    );
-    let (direct, stats) = native_stats(&source);
-    assert_eq!(direct.stdout, interpreted.stdout);
-    let stderr = String::from_utf8_lossy(&direct.stderr);
-    assert!(
-        !direct.status.success() && stderr.contains("callback stopped"),
-        "{stderr}"
-    );
-    assert_eq!(stats.opaque_boxes, stats.freed_boxes, "{stderr}");
+"#;
+    for read in ["inspect(message)", "len(message)"] {
+        let (_package, source) = fixture_package(&fixture.replace("READ_MESSAGE", read));
+        let interpreted = run_mir(&source);
+        assert!(!interpreted.status.success());
+        assert_eq!(
+            interpreted.stdout,
+            b"Aura callback cleanup\nC finished cleanup\nAura caller cleanup\n"
+        );
+        let (direct, stats) = native_stats(&source);
+        assert_eq!(direct.stdout, interpreted.stdout);
+        let stderr = String::from_utf8_lossy(&direct.stderr);
+        assert!(
+            !direct.status.success() && stderr.contains("callback stopped"),
+            "{stderr}"
+        );
+        assert_eq!(stats.opaque_boxes, stats.freed_boxes, "{stderr}");
+    }
 }
 
 #[test]
 fn a_bad_second_text_argument_releases_the_first_and_returns_to_c() {
-    let (_package, source) = fixture_package(
-        r#"
-def sink(first: str, second: str) -> None:
-    print("unexpected callback entry")
-
-def main() -> int32:
-    fx_text_bad_second(sink)
-    return 0
-"#,
-    );
-    let interpreted = run_mir(&source);
-    let (direct, stats) = native_stats(&source);
-    for output in [&interpreted, &direct] {
-        assert_eq!(output.stdout, b"C finished cleanup\n");
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            !output.status.success() && stderr.contains("AU4005"),
-            "{stderr}"
-        );
-        assert!(stderr.contains("not valid UTF-8"), "{stderr}");
+    // The first callback passes the string to another operation. The second
+    // can only inspect it. Both must release the first converted argument.
+    for use_first in ["print(first)", "print(len(first))"] {
+        let (_package, source) = fixture_package(&format!(
+            "def sink(first: str, second: str) -> None:\n    {use_first}\n\n\
+            def main() -> int32:\n    fx_text_bad_second(sink)\n    return 0\n"
+        ));
+        let interpreted = run_mir(&source);
+        let (direct, stats) = native_stats(&source);
+        for output in [&interpreted, &direct] {
+            assert_eq!(output.stdout, b"C finished cleanup\n");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                !output.status.success() && stderr.contains("AU4005"),
+                "{stderr}"
+            );
+            assert!(stderr.contains("not valid UTF-8"), "{stderr}");
+        }
+        assert_eq!(stats.opaque_boxes, stats.freed_boxes);
     }
-    assert_eq!(stats.opaque_boxes, stats.freed_boxes);
 }
 
 #[test]

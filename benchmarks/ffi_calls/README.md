@@ -145,4 +145,14 @@ In this repeat the other CPU medians for Aura / Rust / ctypes were
 17.81 / 5.21 / 1127.81 ns for struct arrays, 7.50 / 3.44 / 797.16 ns for
 fixed array fields, and 114.26 / 23.44 / 1098.63 ns for text callbacks.
 The struct-array ratio moved between 2.69× and 3.42× across the two runs.
-The text callback remains above the three-times-Rust target.
+The text callback took 4.87 times Rust’s CPU time in this run.
+
+
+On 2026-11-18, nine runs rotated the previous Aura binary, the new
+Aura binary and the Rust binary on the same CPU. Matching small record
+lists copied directly into the private call buffer. Callbacks that only
+inspect their text arguments kept the owned strings on the stack.
+The medians were 15.74 / 11.00 / 6.43 ns for the record list and
+120.52 / 87.39 / 25.54 ns for the callback. The new Aura and Rust
+binaries took 7.54 / 2.84 ns for the fixed array field and 0.76 / 0.59 ns
+for the union read.

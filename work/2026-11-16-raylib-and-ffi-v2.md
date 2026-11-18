@@ -197,7 +197,7 @@ for a text callback. All four beat Python ctypes. A separate paired comparison
 measured the numeric union getter at 8.94 ns with a frame on every read and
 5.62 ns with a frame only for the slow conversion. A malformed union still
 reports `AU4005` with the same `Word.code` and `main` frames on both backends.
-Union reads and text callbacks remain above the three-times-Rust goal.
+Union reads and text callbacks exceeded the three-times-Rust goal in that run.
 
 A follow-up native build kept validated, private C writeback storage for
 union lists whose only element uses are immutable numeric reads. Eight
@@ -206,3 +206,14 @@ The independent three-way run measured 0.82 ns for Aura, 0.67 ns for Rust,
 and 216.12 ns for Python ctypes. The native backend and interpreter agreed
 on refills, replacements, edits to a union's bytes, AU4003 for an invalid
 index and AU4005 for an incorrect byte count.
+
+
+On November 18 a guarded fixed-size copy reduced the median cost of passing
+a small record array from 15.74 to 11.00 ns. The generated code checks the
+current length and stride each time. Writing through C’s pointer leaves the
+Aura list intact, including after its length changes. For callbacks whose
+string arguments only feed read-only operations, the entry now holds the
+owned text on its stack. Across the same nine rotating runs this reduced
+the callback from 120.52 to 87.39 ns, against Rust’s 25.54 ns. A native
+allocator probe verified that a 2 KiB input had separate owned storage and
+that both return and unwind freed it.

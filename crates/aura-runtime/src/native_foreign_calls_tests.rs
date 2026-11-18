@@ -735,6 +735,44 @@ fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task(
 }
 
 #[test]
+fn scoped_callback_strings_copy_their_input_and_leave_the_scalar_slots_in_place() {
+    unsafe extern "C-unwind" fn inspect(frame: *mut u64) {
+        let words = unsafe { slice::from_raw_parts_mut(frame, 5) };
+        let first = words[0] as *mut OpaqueValue;
+        let second = words[2] as *mut OpaqueValue;
+        let mut view = ForeignView {
+            pointer: std::ptr::null(),
+            length: 0,
+        };
+        unsafe { aura_direct_ffi_str_view(first, &mut view) };
+        assert_ne!(view.pointer as u64, words[4]);
+        assert_eq!(view.length, 160);
+        assert_eq!(rendered(second), "café");
+        words[3] = words[1] + view.length as u64;
+        // Compiled Aura code can release an argument when it finishes with it.
+        unsafe {
+            aura_direct_release_value(first);
+            aura_direct_release_value(second);
+        }
+    }
+
+    let text = std::ffi::CString::new("ab".repeat(80)).unwrap();
+    let first = text.as_ptr() as u64;
+    let mut frame = [first, 7, c"café".as_ptr() as u64, 0, first];
+    unsafe {
+        super::aura_direct_ffi_callback_local_text_guard(
+            inspect,
+            frame.as_mut_ptr(),
+            0b101,
+            b"inspect".as_ptr(),
+            7,
+        )
+    };
+    super::aura_direct_ffi_callback_check();
+    assert_eq!(frame[3], 167);
+}
+
+#[test]
 fn a_callback_copies_the_c_text_it_receives() {
     let function = "show";
     unsafe {

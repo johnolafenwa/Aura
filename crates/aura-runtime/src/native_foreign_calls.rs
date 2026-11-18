@@ -682,6 +682,10 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     body: unsafe extern "C-unwind" fn(*mut u64),
     frame: *mut u64,
 ) {
+    with_callback_guard(|| unsafe { body(frame) });
+}
+
+fn with_callback_guard(body: impl FnOnce()) {
     let previous = super::with_direct_task_runtime_state(|state| {
         if state.foreign_callback_failure.is_some() {
             return None;
@@ -695,13 +699,69 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     let Some(previous) = previous else {
         return;
     };
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
     super::with_direct_task_runtime_state(|state| {
         state.foreign_callback_cleanup_base = previous;
         if let Err(payload) = outcome {
             state.foreign_callback_failure = Some(payload);
             MAY_HAVE_CALLBACK_FAILURE.set(true);
         }
+    });
+}
+
+/// Calls a callback whose uses of its string arguments only inspect them.
+/// Each validated string owns its bytes in a Rust stack frame until the
+/// callback returns or unwinds. The ordinary Aura release of a parameter
+/// leaves that frame in charge of the value.
+///
+/// # Safety
+///
+/// As for [`aura_direct_ffi_callback_guard`]. Every set bit names a C
+/// string argument and the compiler proved that no such value escapes.
+/// The function name is static UTF-8 data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C" fn aura_direct_ffi_callback_local_text_guard(
+    body: unsafe extern "C-unwind" fn(*mut u64),
+    frame: *mut u64,
+    text_mask: u64,
+    function: *const u8,
+    function_length: usize,
+) {
+    unsafe fn call_with_text(
+        body: unsafe extern "C-unwind" fn(*mut u64),
+        frame: *mut u64,
+        mask: u64,
+        function: *const u8,
+        function_length: usize,
+    ) {
+        if mask == 0 {
+            unsafe { body(frame) };
+            return;
+        }
+        let index = mask.trailing_zeros() as usize;
+        // SAFETY: generated code supplied a frame word for every selected argument.
+        let slot = unsafe { frame.add(index) };
+        let text = match unsafe { crate::ffi::checked_callback_text(*slot as usize) } {
+            Ok(text) => text,
+            Err(error) => foreign_call_failure(
+                unsafe { metadata_text(function, function_length) },
+                "AU4005",
+                error,
+            ),
+        };
+        let mut local = OpaqueValue::new(Value::String(text.into()), None);
+        *local.ref_count.get_mut() = super::FROZEN_REFERENCES;
+        *local.shared_lock.get_mut() = std::ptr::from_ref(&super::FROZEN_VALUE_LOCK).cast_mut();
+        // SAFETY: the remaining arguments and callback run inside this frame.
+        // The callback only reads this pointer. Both return and unwind drop the value.
+        unsafe {
+            *slot = std::ptr::from_mut(&mut local) as u64;
+            call_with_text(body, frame, mask & (mask - 1), function, function_length);
+        }
+    }
+
+    with_callback_guard(|| unsafe {
+        call_with_text(body, frame, text_mask, function, function_length)
     });
 }
 

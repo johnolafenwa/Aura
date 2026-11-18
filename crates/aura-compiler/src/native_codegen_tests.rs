@@ -17380,7 +17380,11 @@ def show(word: str, index: int32) -> int32:
 
 def main() -> int32:
     cb_words(show)
+    cb_words(measure)
     return 0
+
+def measure(word: str, index: int32) -> int32:
+    return len(word) as int32 + index
 "#,
     );
     let callbacks = super::foreign::module_callbacks(&text);
@@ -17390,6 +17394,7 @@ def main() -> int32:
     let referenced = object_referenced_symbols(&object);
     for symbol in [
         "aura_direct_ffi_callback_text",
+        "aura_direct_ffi_callback_local_text_guard",
         "aura_direct_ffi_release_callback_text",
     ] {
         assert!(
