@@ -204,3 +204,39 @@ fn single_byte_decoders_map_every_defined_byte() {
         Ok("\u{20ac}")
     );
 }
+
+#[test]
+fn utf16_offsets_count_bytes_across_surrogate_pairs_and_the_order_mark() {
+    for (encoding, big, prefix) in [
+        (Encoding::Utf16Le, false, &[][..]),
+        (Encoding::Utf16Be, true, &[][..]),
+        (Encoding::Utf16, false, &[0xFF, 0xFE][..]),
+        (Encoding::Utf16, true, &[0xFE, 0xFF][..]),
+    ] {
+        let word = |unit: u16| {
+            if big {
+                unit.to_be_bytes()
+            } else {
+                unit.to_le_bytes()
+            }
+        };
+        let mut valid = prefix.to_vec();
+        valid.extend("A😀".encode_utf16().flat_map(word));
+        for suffix in [vec![0x41], word(0xDC00).to_vec(), word(0xD800).to_vec()] {
+            let mut input = valid.clone();
+            input.extend(suffix);
+            assert_eq!(
+                decode(&input, encoding),
+                Err(EncodingError::Invalid { index: valid.len() })
+            );
+        }
+        let mut input = valid.clone();
+        input.extend(word(0xD800));
+        input.extend(word(0x61));
+        input.push(0x00);
+        assert_eq!(
+            decode(&input, encoding),
+            Err(EncodingError::Invalid { index: valid.len() })
+        );
+    }
+}
