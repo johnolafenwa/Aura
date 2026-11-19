@@ -1928,7 +1928,8 @@ impl<'a> NativeCodegen<'a> {
             None => current_function_path,
         };
 
-        let lookup_slots = lookups::lookup_payload_slots(function)
+        let (lookup_slots, map_word_slots) = lookups::lookup_slots(function);
+        let lookup_slots = lookup_slots
             .into_iter()
             .filter(|name| {
                 matches!(
@@ -1938,6 +1939,19 @@ impl<'a> NativeCodegen<'a> {
                 )
             })
             .collect::<HashSet<_>>();
+        // Each nonescaping matched integer lookup has its own two words.
+        let mut map_word_names = map_word_slots
+            .intersection(&lookup_slots)
+            .collect::<Vec<_>>();
+        map_word_names.sort_unstable();
+        let map_word_slots = map_word_names
+            .into_iter()
+            .map(|name| {
+                let slot = builder.create_sized_stack_slot(16, 3);
+                let address = builder.stack_addr(types::I64, slot, 0);
+                (name.clone(), address)
+            })
+            .collect();
         let lent_places = lookups::lent_lookup_places(
             function,
             &lookup_slots,
@@ -2399,6 +2413,7 @@ impl<'a> NativeCodegen<'a> {
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
             indexed_ascii_literals: lookups::indexed_ascii_literals(function),
+            map_word_slots,
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -3842,6 +3857,8 @@ struct FunctionCompiler<'a> {
     /// The `Lookup` temporaries kept as the found value's box or null. See
     /// `lookups::lookup_payload_slots`.
     lookup_slots: HashSet<String>,
+    /// Payload and presence of a nonescaping integer lookup in a shared map.
+    map_word_slots: HashMap<String, Val>,
     /// The slices of a list of bytes that only the `str.from_bytes` right
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
@@ -6051,6 +6068,13 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lookup_slots.contains(place.as_str())
                 );
+                let map_word_presence = match scrutinee {
+                    Operand::Place(place) => self
+                        .map_word_slots
+                        .get(place)
+                        .map(|address| self.builder.load(types::I64, MemFlags::new(), *address, 8)),
+                    _ => None,
+                };
                 let lent = matches!(
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
@@ -6088,7 +6112,11 @@ impl<'a> FunctionCompiler<'a> {
                         // the receive got no item.
                         let found = lookups::is_payload_variant(arm.variant_name.as_deref());
                         let cc = if found { IntCC::NotEqual } else { IntCC::Equal };
-                        self.builder.icmp_imm(cc, scrutinee.values[0], 0)
+                        self.builder.icmp_imm(
+                            cc,
+                            map_word_presence.unwrap_or(scrutinee.values[0]),
+                            0,
+                        )
                     } else {
                         let test = if lent {
                             RuntimeFn::LentVariantMatches
@@ -9888,7 +9916,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         match op {
             RuntimeOp::Print(kind) => self.compile_print(kind, args),
-            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args),
+            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args, target),
             RuntimeOp::Function(function) => self.compile_function_op(function, args, target),
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
@@ -10303,6 +10331,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         builtin: HostBuiltin,
         args: &[MirArg],
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
         if let Some(operation) = aura_runtime::runtime_value::host_builtins::INTEGER_MATH_CALLS
@@ -10345,6 +10374,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
+        }
+        if let Some(value) = self.compile_sync_access(builtin, args, target)? {
+            return Ok(value);
         }
         use aura_runtime::text_encodings::Encoding;
         let literal_codec = match (name, args) {
@@ -12454,6 +12486,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(element, &direct_type)
             }
             DirectType::Opaque(_) => {
+                if let Some(handle) = sync::handle_class_field(&object.ty, &self.classes) {
+                    if handle.name == field {
+                        // The instance is its handle: the same box, read
+                        // as the field's type.
+                        return Ok(ValueRef {
+                            values: object.values,
+                            ty: DirectType::Opaque(handle.ty.clone()),
+                        });
+                    }
+                }
                 let field_ty =
                     direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums);
                 if let Some(field_ty) = &field_ty {
@@ -13987,6 +14029,17 @@ impl<'a> FunctionCompiler<'a> {
         let root = segments.remove(0);
         let result = if segments.is_empty() {
             self.store_root(root, value)
+        } else if let Some(root_ty) = self.handle_class_store(root, &segments) {
+            // The instance is its handle: the written box becomes the
+            // instance.
+            let value = self.ensure_opaque(value)?;
+            self.store_root(
+                root,
+                ValueRef {
+                    values: value.values,
+                    ty: root_ty,
+                },
+            )
         } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
             match self.store_class_place(place, value)? {
                 None => Ok(()),
@@ -14904,6 +14957,11 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(None);
         };
         let target_ty = self.type_of_place(target)?;
+        if target_ty == DirectType::Scalar(ScalarKind::Int64) {
+            if let Some(value) = self.map_lookup_word(place) {
+                return Ok(Some(value));
+            }
+        }
         let lent = self.lent_places.contains(place.as_str());
         if self.lookup_slots.contains(place.as_str()) {
             // The slot keeps the found value's box until its release, so a
@@ -15015,6 +15073,9 @@ impl<'a> FunctionCompiler<'a> {
         target: &str,
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
+        if let Some(&address) = self.map_word_slots.get(target) {
+            return self.compile_map_word_lookup(value, address);
+        }
         let target_ty = self.type_of_place(target)?;
         if let Rvalue::Use(Operand::MovePlace(source)) = value {
             if self.lookup_slots.contains(source.as_str()) {
@@ -15118,6 +15179,9 @@ impl<'a> FunctionCompiler<'a> {
         place: &str,
         moved: bool,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(word) = self.map_lookup_word(place) {
+            return self.ensure_opaque(word);
+        }
         let payload = if moved {
             self.take_place(place)?
         } else {
@@ -17536,16 +17600,20 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(indexed, &value_direct_ty)
             }
             DictOp::SetIndex if value_direct_ty == DirectType::Scalar(ScalarKind::Int64) => {
-                // An `int64` value goes in as its word, with no box.
-                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
-                let loaded =
-                    self.load_operand_with_integer_hint(&args[1].value, Some(ScalarKind::Int64))?;
-                let value = self.coerce_value(loaded, &value_direct_ty)?.values[0];
-                let key = self.transfer_owned_opaque_value(&key);
-                self.builder.call(
-                    self.runtime[RuntimeFn::MapSetIndexInt64],
-                    &[map, key, value],
-                );
+                let (key, entry) = if key_direct_ty == DirectType::Scalar(ScalarKind::Int64) {
+                    (
+                        self.load_word(args[0], ScalarKind::Int64, true)?,
+                        RuntimeFn::MapSetIndexInt64Pair,
+                    )
+                } else {
+                    let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                    (
+                        self.transfer_owned_opaque_value(&key),
+                        RuntimeFn::MapSetIndexInt64,
+                    )
+                };
+                let value = self.load_word(args[1], ScalarKind::Int64, true)?;
+                self.builder.call(self.runtime[entry], &[map, key, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -18486,6 +18554,9 @@ impl<'a> FunctionCompiler<'a> {
             "direct backend does not know class `{}`",
             class_name
         ))?;
+        if let Some(built) = self.construct_handle_class(fields, target_ty)? {
+            return Ok(built);
+        }
         if let Some(built) = self.construct_class_in_place(class_name, fields, target_ty, &class)? {
             return Ok(built);
         }
@@ -21723,6 +21794,8 @@ mod ordered;
 mod plain;
 #[path = "native_codegen_shapes.rs"]
 mod shapes;
+#[path = "native_codegen_sync.rs"]
+mod sync;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]
@@ -21747,6 +21820,6 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
         ty,
         Type::Named(name, args)
             if args.is_empty()
-                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration")
+                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }

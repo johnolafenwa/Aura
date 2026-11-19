@@ -1,0 +1,177 @@
+# The Aura-source part of the builtin `sync` module: state several tasks
+# share. The compiler checks this file as module `sync` and merges its
+# public items with the host functions that `builtin_modules.rs` declares.
+#
+# Every class here is a Copy handle, as a `Queue[T]` handle is. A copy
+# reaches the same shared state, and a handle is `Transfer`, so it can be a
+# task argument, a field, or a module constant.
+import sync
+
+
+public copy class Locked[T: Transfer]:
+    """What `Mutex.lock()` returns: a `with` item that holds the lock for
+    the body.
+
+    ```aura fragment
+    with value = mutex.lock():
+        value += 1
+    ```
+
+    The item name is a mutable view of the guarded value. The lock is
+    taken when the block is entered and released on every way out of it.
+    Outside a `with` header a `Locked` does nothing."""
+    cell: sync.Cell
+
+    # The compiler calls these two for a `with` item: the first on the way
+    # in, the second on every way out.
+    public def __aura_take(self) -> T:
+        return sync.__aura_cell_take[T](self.cell)
+
+    public def __aura_put(self, value: own T) -> None:
+        sync.__aura_cell_put[T](self.cell, value)
+
+
+public copy class Mutex[T: Transfer]:
+    """A value that one task at a time may read and change.
+
+    `Mutex[T](value)` guards `value`. `with name = mutex.lock():` waits
+    until no other task holds the lock, then runs the body with `name` as
+    a mutable view of the value. A waiting task does not block its worker.
+
+    The lock is not reentrant: a task that locks a mutex it already holds
+    traps with `AU4001`. A task that fails while it holds the lock poisons
+    it, and every later `lock()` traps with `AU4001`."""
+    cell: sync.Cell
+
+    public def __init__(self, value: own T):
+        self.cell = sync.__aura_cell_new[T](value)
+
+    public def lock(self) -> Locked[T]:
+        """The `with` item that holds this lock for a block."""
+        return Locked[T](cell=self.cell)
+
+    public def replace(self, value: own T) -> T:
+        """Stores `value` and returns the value it replaces, as one step
+        under the lock."""
+        previous = sync.__aura_cell_take[T](self.cell)
+        sync.__aura_cell_put[T](self.cell, value)
+        return previous
+
+    public def set(self, value: own T) -> None:
+        """Stores `value`, dropping the value it replaces."""
+        _ = self.replace(value)
+
+    public def is_poisoned(self) -> bool:
+        """Whether a task failed while it held the lock."""
+        return sync.__aura_cell_poisoned(self.cell)
+
+
+public copy class AtomicInt:
+    """An `int64` that tasks read and change with single atomic steps."""
+    atom: sync.Atom
+
+    public def __init__(self, value: int64):
+        self.atom = sync.__aura_atom_new(value)
+
+    public def load(self) -> int64:
+        return sync.__aura_atom_load(self.atom)
+
+    public def store(self, value: int64) -> None:
+        sync.__aura_atom_store(self.atom, value)
+
+    public def add(self, delta: int64) -> int64:
+        """Adds `delta` and returns the new value. An overflow traps with
+        `AU4002` after the stored value has wrapped."""
+        return sync.__aura_atom_add(self.atom, delta)
+
+    public def swap(self, value: int64) -> int64:
+        """Stores `value` and returns the value it replaces."""
+        return sync.__aura_atom_swap(self.atom, value)
+
+    public def compare_and_set(self, expected: int64, new: int64) -> bool:
+        """Stores `new` if the value is `expected`, and says whether it
+        did."""
+        return sync.__aura_atom_compare_and_set(self.atom, expected, new)
+
+
+public copy class AtomicBool:
+    """A `bool` that tasks read and change with single atomic steps."""
+    atom: sync.Atom
+
+    public def __init__(self, value: bool):
+        if value:
+            self.atom = sync.__aura_atom_new(1)
+        else:
+            self.atom = sync.__aura_atom_new(0)
+
+    public def load(self) -> bool:
+        return sync.__aura_atom_load(self.atom) != 0
+
+    public def store(self, value: bool) -> None:
+        if value:
+            sync.__aura_atom_store(self.atom, 1)
+        else:
+            sync.__aura_atom_store(self.atom, 0)
+
+    public def swap(self, value: bool) -> bool:
+        """Stores `value` and returns the value it replaces."""
+        if value:
+            return sync.__aura_atom_swap(self.atom, 1) != 0
+        return sync.__aura_atom_swap(self.atom, 0) != 0
+
+    public def compare_and_set(self, expected: bool, new: bool) -> bool:
+        """Stores `new` if the value is `expected`, and says whether it
+        did."""
+        mut from_word = 0
+        if expected:
+            from_word = 1
+        mut to_word = 0
+        if new:
+            to_word = 1
+        return sync.__aura_atom_compare_and_set(self.atom, from_word, to_word)
+
+
+public copy class Map[K: Transfer, V: Transfer]:
+    """A dictionary several tasks can use at once.
+
+    Each call locks the map for its own duration and returns owned
+    values, so one call is one atomic step. Two calls are two steps:
+    another task may change the map between a `get` and a `set`. A change
+    that must read and write as one step uses a `Mutex[dict[K, V]]`."""
+    cell: sync.Cell
+
+    public def __init__(self):
+        self.cell = sync.__aura_cell_new[dict[K, V]](dict[K, V]())
+
+    public def get(self, key: K) -> Lookup[V]:
+        """`Lookup.Found` with a clone of the value stored for `key`, or
+        `Lookup.Missing`."""
+        return sync.__aura_map_get[K, V](self.cell, key)
+
+    public def set(self, key: own K, value: own V) -> None:
+        """Stores `value` for `key`, replacing any value already there."""
+        with table = Locked[dict[K, V]](cell=self.cell):
+            table[key] = value
+
+    public def remove(self, key: K) -> Lookup[V]:
+        """Removes the entry for `key` and returns its value in
+        `Lookup.Found`, or returns `Lookup.Missing`."""
+        with table = Locked[dict[K, V]](cell=self.cell):
+            return table.remove(key)
+
+    public def contains(self, key: K) -> bool:
+        with table = Locked[dict[K, V]](cell=self.cell):
+            return key in table
+
+    public def len(self) -> int64:
+        with table = Locked[dict[K, V]](cell=self.cell):
+            return table.len()
+
+    public def clear(self) -> None:
+        with table = Locked[dict[K, V]](cell=self.cell):
+            table.clear()
+
+    public def snapshot(self) -> dict[K, V]:
+        """A copy of the whole map as it is at one instant."""
+        with table = Locked[dict[K, V]](cell=self.cell):
+            return table.copy()

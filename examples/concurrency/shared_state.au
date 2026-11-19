@@ -1,0 +1,63 @@
+# State that several tasks share: an atomic counter, a lock around a
+# record, and a shared map used as a cache.
+import sync
+
+# A module constant may hold a handle. Every task reaches the same counter.
+REQUESTS = sync.AtomicInt(0)
+
+
+class Stats:
+    served: int64
+    largest: int64
+
+
+def square(cache: sync.Map[int64, int64], n: int64) -> int64:
+    match cache.get(n):
+        case Lookup.Found(known):
+            return known
+        case Lookup.Missing:
+            computed = n * n
+            # Another task may have stored the same entry meanwhile, which
+            # is harmless for a cache.
+            cache.set(n, computed)
+            return computed
+
+
+def handle(cache: sync.Map[int64, int64], stats: sync.Mutex[Stats]) -> int64:
+    mut total = 0
+    mut i = 0
+    while i < 100:
+        answer = square(cache, i % 10)
+        total += answer
+        _ = REQUESTS.add(1)
+        # The block holds the lock, and `record` is the guarded value.
+        with record = stats.lock():
+            record.served += 1
+            if answer > record.largest:
+                record.largest = answer
+        i += 1
+    return total
+
+
+def main() -> int32:
+    cache = sync.Map[int64, int64]()
+    stats = sync.Mutex[Stats](Stats(served=0, largest=0))
+    mut total = 0
+
+    with TaskGroup() as group:
+        first = group.start(handle, cache, stats)
+        second = group.start(handle, cache, stats)
+        third = group.start(handle, cache, stats)
+        fourth = group.start(handle, cache, stats)
+        total += first.result_or(0, timeout=10s)
+        total += second.result_or(0, timeout=10s)
+        total += third.result_or(0, timeout=10s)
+        total += fourth.result_or(0, timeout=10s)
+
+    print(REQUESTS.load())
+    with record = stats.lock():
+        print(record.served)
+        print(record.largest)
+    print(cache.len())
+    print(total)
+    return 0

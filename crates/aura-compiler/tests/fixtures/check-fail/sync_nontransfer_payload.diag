@@ -1,0 +1,6 @@
+error[AU3008]: type `random.Rng` does not satisfy the bound `Transfer` because `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/sync_nontransfer_payload.au:5:18
+  |
+5 |     guard = sync.Mutex[random.Rng](random.Rng(1))
+  |                  ^
+  = help: pass a value made only from Transfer components; keep capabilities and host resources on their owning worker

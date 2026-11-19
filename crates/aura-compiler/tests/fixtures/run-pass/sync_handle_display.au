@@ -1,0 +1,11 @@
+import sync
+
+def render(guard: sync.AtomicInt):
+    print(guard)
+    print([guard])
+    print(f"{guard}")
+
+def main():
+    render(sync.AtomicInt(4))
+    print(sync.Mutex[int64](0))
+    print(sync.Map[int64, int64]())

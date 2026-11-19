@@ -591,14 +591,13 @@ program-output order are not specified.
 - Selection creates no helper tasks, does not migrate the selecting task, and
   adds no periodic scheduler tick.
 
-**Cross-worker communication.** Queue and Task handles are the maintained way
-for tasks on different workers to communicate. Their runtime state is
-synchronized, so a Queue operation or task completion can wake a task pinned
-elsewhere. Every other captured argument and task result must be owned
-`Transfer` data, which keeps a share-nothing boundary. Live host resources and
-capability views stay on their owning task. Cancellation and diagnostic state
-stay isolated per task. Running or trapping on one worker does not replace
-another task's current cancellation or diagnostic context.
+**Cross-worker communication.** Queue and Task handles let workers send
+values and observe completion. A worker can also copy a mutex, atomic, or
+map handle to change shared state. Each lock protects its guarded value,
+and each atomic operation is a single step. Other captured values and
+results cross as owned `Transfer` data. Live host resources, capability
+views, cancellation state and diagnostic state stay with their task.
+See [Sync Module](/manual/sync).
 
 **Nested groups.** A running child may create a nested `TaskGroup`, start
 grandchildren, and immediately wait on their returned handles, on both
@@ -803,8 +802,7 @@ These features are implemented:
 
 Task execution is multicore. Queue and Task handle state is safe across
 workers, and a task body stays on the worker that first runs it on both
-backends. Speedup depends on the workload. The share-nothing `Transfer`
-boundary holds while Queue and Task handles communicate between workers.
+backends. Speedup depends on the workload. The `Transfer` boundary permits shared state through synchronized handles.
 
 The `Transfer` contract covers structural checks for task captures, task
 results, and Queue payloads, plus static repeatable or single-consumer task
