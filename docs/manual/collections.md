@@ -758,3 +758,67 @@ resources and the runtime's size caps.
 The collection contract on this page is the Aura 0.16 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).
+
+## The collections module
+
+Import `Deque`, `Heap`, `SortedMap`, or `SortedSet` from `collections`.
+Each type owns its elements. Methods that return `Lookup.Found` or an owned
+snapshot of retained elements require clone-safe elements in the result.
+`Lookup.Missing` represents absence even when a collection can store `None`.
+
+<<< ../../examples/collections/delivery_queue.au{aura}
+
+### Deque
+
+A `Deque[T]()` keeps insertion order. Pushes and pops at either end take
+amortized constant time. Reading by position takes constant time plus the
+cost of cloning the element. A negative position counts from the back.
+
+| Operation | Result |
+| --- | --- |
+| `push_front(value)`, `push_back(value)` | Moves a value into the chosen end. |
+| `pop_front()`, `pop_back()` | Moves a value out of the chosen end. An empty deque traps. |
+| `front()`, `back()`, `get(index)` | Returns `Lookup[T]` with a cloned value when present. |
+| `queue[index]`, `at(index)` | Returns a cloned `T`. An invalid position traps. |
+| `len()`, `clear()` | Reads the number of values or removes them all. |
+
+A `for` loop consumes a deque from front to back. Use `for item in mut queue`
+to stop early and keep the rest.
+
+### Heap
+
+`Heap[T]()` pops the least element first. `Heap[T].max()` pops the greatest
+first. The element type implements `Ord[T]`. Equal priorities have no stable
+order.
+
+| Operation | Result |
+| --- | --- |
+| `Heap[T].from_list(items)` | Consumes the list and builds a min-heap in linear time. |
+| `push(value)`, `pop()` | Inserts or removes one value in logarithmic time. Popping an empty heap traps. |
+| `peek()` | Returns `Lookup[T]` with a clone of the next value, or `Missing`. |
+| `len()` | Returns the number of values. |
+| `into_sorted()` | Consumes the heap and returns a list in pop order. |
+
+### SortedMap and SortedSet
+
+`SortedMap[K, V]()` and `SortedSet[T]()` keep their keys in ascending order.
+The key type implements `Ord` against itself. Its comparisons must give a
+consistent order. Keys compare equal when neither precedes the other.
+Inserting a value for an equal map key updates the value in place. Floating
+point keys put NaN after all numbers. All NaNs occupy the same position.
+
+| Operation | Map | Set |
+| --- | --- | --- |
+| Insert | `set(key, value)` | `add(key)` |
+| Read | `get(key) -> Lookup[V]` | `get(key) -> Lookup[T]` |
+| Test membership | `contains(key) -> bool` | `contains(key) -> bool` |
+| Remove | `remove(key) -> Lookup[V]` | `remove(key) -> bool` |
+| Count | `len() -> int64` | `len() -> int64` |
+| Smallest or greatest | `first()`, `last() -> Lookup[(K, V)]` | `first()`, `last() -> Lookup[T]` |
+| Greatest key at or below a key | `floor(key) -> Lookup[(K, V)]` | `floor(key) -> Lookup[T]` |
+| Smallest key at or above a key | `ceiling(key) -> Lookup[(K, V)]` | `ceiling(key) -> Lookup[T]` |
+| Snapshot in key order | `range(low, high) -> list[(K, V)]` | `range(low, high) -> list[T]` |
+
+Ranges include the lower bound and exclude the upper bound. Equal or reversed
+bounds give an empty list. Lookup, insertion and removal take logarithmic time.
+A `for` loop consumes the map or set and visits every entry in ascending order.
