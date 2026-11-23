@@ -2,6 +2,25 @@
 
 Last updated: 2026-11-18
 
+## Shared Mutable State (implemented)
+
+- The sync module provides `Mutex[T]`, `AtomicInt`, `AtomicBool` and
+  `Map[K, V]`. Checkpoint 31 and ADR-0102 cover the design.
+- Empty collection literals in generic class initializers keep their
+  specialized element type. The compiler regression covers both a local
+  class and an imported mutex. See `2026-11-17-shared-state.md`.
+- ADR-0103, the manual and Chapter 15 describe shared state. Runtime,
+  verifier, CLI and editor regressions cover lock release, handle transfer
+  and the multi-task example.
+- The uncontended integer lock took 36.5 ns per update on four pinned
+  CPUs. Aura finished ahead of CPython on all six workloads on that
+  machine. With backoff before parking, the dedicated integration
+  runner measured 158 / 97 / 822 ms in Aura, Rust and CPython for the
+  four-task mutex. On that runner, the three shared workloads met both
+  speed targets and the uncontended lock and atomic counter exceeded
+  three times the Rust time.
+  [Shared-state measurements](../benchmarks/shared_state/README.md)
+
 ## First-class closures (in progress)
 
 - Target: John's 2026-11-16 approval of item 3 of the missing features

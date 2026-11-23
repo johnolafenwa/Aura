@@ -86,7 +86,6 @@ pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
-    ManagerShape,
 };
 mod patterns;
 mod structural_patterns;
@@ -5949,15 +5948,26 @@ impl<'a> FunctionChecker<'a> {
         // The manager then lives in a hidden managed binding that is the
         // view's origin (checkpoint F4), and the body is checked as if it
         // began with `view [mut] name = <hidden>.__enter__()`.
-        let entry_view = match shape.entry {
+        let entry_view = match &shape.entry {
             ManagerEntry::View { mutable } => Some(crate::ast::ViewStmt {
                 name: with_stmt.binding.clone(),
-                mutable,
+                mutable: *mutable,
                 source: manager_method_call(
                     &hidden_manager_binding(with_stmt.span),
                     "__enter__",
                     with_stmt.span,
                 ),
+                span: with_stmt.span,
+            }),
+            // A lock item binds a mutable view of the hidden local that
+            // holds the guarded value while the lock is held.
+            ManagerEntry::Lock { .. } => Some(crate::ast::ViewStmt {
+                name: with_stmt.binding.clone(),
+                mutable: true,
+                source: Expr {
+                    kind: ExprKind::Name(managers::hidden_lock_value_binding(with_stmt.span)),
+                    span: with_stmt.span,
+                },
                 span: with_stmt.span,
             }),
             _ => None,
@@ -5969,32 +5979,36 @@ impl<'a> FunctionChecker<'a> {
         };
 
         let mut body_locals = locals.clone();
-        body_locals.insert(
-            manager_binding,
-            LocalBinding {
-                ty: value_ty,
-                assignable: true,
-                mutable_place: true,
-                managed_resource: true,
-                passing: ReceiverKind::Value,
-                borrow_origin: None,
-                borrowed_at: None,
-                match_borrow_place: None,
-                stale_match_borrow_place: None,
-                shared_match_scrutinee: None,
-                moved: false,
-                moved_at: None,
-                moved_fields: BTreeMap::new(),
-                frozen_places: BTreeMap::new(),
-                shared_match_places: BTreeMap::new(),
-                local_function: None,
-                captured: false,
-                view: None,
-                closure_loans: Vec::new(),
-                narrowed: BTreeMap::new(),
-                stale_narrowing: BTreeMap::new(),
-            },
-        );
+        let managed_local = |ty: Type| LocalBinding {
+            ty,
+            assignable: true,
+            mutable_place: true,
+            managed_resource: true,
+            passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrowed_at: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
+            shared_match_scrutinee: None,
+            moved: false,
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
+            local_function: None,
+            captured: false,
+            view: None,
+            closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
+        };
+        body_locals.insert(manager_binding, managed_local(value_ty));
+        if let ManagerEntry::Lock { payload } = &shape.entry {
+            body_locals.insert(
+                managers::hidden_lock_value_binding(with_stmt.span),
+                managed_local(payload.clone()),
+            );
+        }
         let entered_body;
         let body = if let Some(entry_view) = entry_view {
             entered_body = std::iter::once(Stmt::View(entry_view))
@@ -13332,6 +13346,8 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "HttpExchange")
                                 | ("http", "Stream")
                                 | ("tensor", "Node")
+                                | ("sync", "Cell")
+                                | ("sync", "Atom")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")

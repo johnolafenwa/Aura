@@ -1613,6 +1613,7 @@ maintained surface by area and states how it may change.
 - [Concurrency](/manual/concurrency): `TaskGroup`, `Task[T]`, `Queue[T]`,
   cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
   `wait_all`, and scheduler-aware waits.
+- [Sync Module](/manual/sync) covers mutexes, atomic counters and flags, and shared maps.
 - [I/O Module](/manual/io): standard input and output, and `io.Error`.
 - [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, line
   and chunk reads, scoped file cleanup, and byte and text limits.
@@ -2215,6 +2216,18 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 The two stack-size methods are provisional. Their 256 KiB minimum is for tasks
 whose shallow stack use you have measured. It is not the default.
+
+### Shared State
+
+| Type | Operations |
+| --- | --- |
+| `sync.Mutex[T]` | `lock`, `replace`, `set`, `is_poisoned` |
+| `sync.AtomicInt` | `load`, `store`, `add`, `swap`, `compare_and_set` |
+| `sync.AtomicBool` | `load`, `store`, `swap`, `compare_and_set` |
+| `sync.Map[K, V]` | `get`, `set`, `remove`, `contains`, `len`, `clear`, `snapshot` |
+
+Copying one of these handles lets another task reach the same state.
+The [Sync Module](/manual/sync) lists signatures and locking rules.
 
 ## I/O And Filesystem
 
@@ -6560,14 +6573,13 @@ program-output order are not specified.
 - Selection creates no helper tasks, does not migrate the selecting task, and
   adds no periodic scheduler tick.
 
-**Cross-worker communication.** Queue and Task handles are the maintained way
-for tasks on different workers to communicate. Their runtime state is
-synchronized, so a Queue operation or task completion can wake a task pinned
-elsewhere. Every other captured argument and task result must be owned
-`Transfer` data, which keeps a share-nothing boundary. Live host resources and
-capability views stay on their owning task. Cancellation and diagnostic state
-stay isolated per task. Running or trapping on one worker does not replace
-another task's current cancellation or diagnostic context.
+**Cross-worker communication.** Queue and Task handles let workers send
+values and observe completion. A worker can also copy a mutex, atomic, or
+map handle to change shared state. Each lock protects its guarded value,
+and each atomic operation is a single step. Other captured values and
+results cross as owned `Transfer` data. Live host resources, capability
+views, cancellation state and diagnostic state stay with their task.
+See [Sync Module](/manual/sync).
 
 **Nested groups.** A running child may create a nested `TaskGroup`, start
 grandchildren, and immediately wait on their returned handles, on both
@@ -6772,8 +6784,7 @@ These features are implemented:
 
 Task execution is multicore. Queue and Task handle state is safe across
 workers, and a task body stays on the worker that first runs it on both
-backends. Speedup depends on the workload. The share-nothing `Transfer`
-boundary holds while Queue and Task handles communicate between workers.
+backends. Speedup depends on the workload. The `Transfer` boundary permits shared state through synchronized handles.
 
 The `Transfer` contract covers structural checks for task captures, task
 results, and Queue payloads, plus static repeatable or single-consumer task
@@ -8166,6 +8177,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
+
+- A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
+- Each shared-map method is a single operation. Use `sync.Mutex[dict[K, V]]` to protect a sequence of reads and writes.
 
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own` target parameters. `mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form. Use `TaskGroup`.
@@ -27007,6 +27021,223 @@ See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned tool
 - [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
 - [ADR-0047: Integer literal bases, bitwise operators, and shifts](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md)
 - [ADR-0048: Power, rounding, divmod, and the math module](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md)
+
+## Source: docs/manual/sync.md
+
+# Sync Module
+
+The `sync` module holds the values several tasks can change: a lock around
+a value, atomic integers and booleans, and a shared map. Everything else
+in Aura has one owner, and module constants never change, so these four
+types are how tasks share state.
+
+```aura
+import sync
+```
+
+Every type here is a Copy handle, as a `Queue[T]` is. Copying a handle
+copies a reference to the same shared state, not the state. A handle is
+`Transfer`, so it can be a task argument, a `Queue` item, a field of a
+class, or a module constant. Printing a handle shows `<sync-handle>`.
+Read the value through its methods or inside a lock block to display it.
+
+## Public API
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `sync.Mutex[T]` | `Mutex[T](value: own T)` | A lock that guards `value`. `T` must be `Transfer`. |
+| `Mutex.lock` | `lock(self) -> sync.Locked[T]` | The `with` item that holds the lock for a block. |
+| `Mutex.replace` | `replace(self, value: own T) -> T` | Stores `value` and returns the value it replaces, as one step. |
+| `Mutex.set` | `set(self, value: own T) -> None` | Stores `value` and drops the value it replaces. |
+| `Mutex.is_poisoned` | `is_poisoned(self) -> bool` | Whether a task failed while it held the lock. |
+| `sync.AtomicInt` | `AtomicInt(value: int64)` | An `int64` changed in single atomic steps. |
+| `AtomicInt.load` | `load(self) -> int64` | The value now. |
+| `AtomicInt.store` | `store(self, value: int64) -> None` | Replaces the value. |
+| `AtomicInt.add` | `add(self, delta: int64) -> int64` | Adds `delta` and returns the new value. |
+| `AtomicInt.swap` | `swap(self, value: int64) -> int64` | Stores `value` and returns the value it replaces. |
+| `AtomicInt.compare_and_set` | `compare_and_set(self, expected: int64, new: int64) -> bool` | Stores `new` if the value is `expected`, and says whether it did. |
+| `sync.AtomicBool` | `AtomicBool(value: bool)` | A `bool` changed in single atomic steps. |
+| `AtomicBool.load` | `load(self) -> bool` | The value now. |
+| `AtomicBool.store` | `store(self, value: bool) -> None` | Replaces the value. |
+| `AtomicBool.swap` | `swap(self, value: bool) -> bool` | Stores `value` and returns the value it replaces. |
+| `AtomicBool.compare_and_set` | `compare_and_set(self, expected: bool, new: bool) -> bool` | Stores `new` if the value is `expected`, and says whether it did. |
+| `sync.Map[K, V]` | `Map[K, V]()` | An empty shared map. `K` and `V` must be `Transfer`. |
+| `Map.get` | `get(self, key: K) -> Lookup[V]` | `Lookup.Found` with a copy of the value, or `Lookup.Missing`. |
+| `Map.set` | `set(self, key: own K, value: own V) -> None` | Stores `value` for `key`. |
+| `Map.remove` | `remove(self, key: K) -> Lookup[V]` | Removes the entry and returns its value, or `Lookup.Missing`. |
+| `Map.contains` | `contains(self, key: K) -> bool` | Whether `key` has an entry. |
+| `Map.len` | `len(self) -> int64` | The number of entries. |
+| `Map.clear` | `clear(self) -> None` | Removes every entry. |
+| `Map.snapshot` | `snapshot(self) -> dict[K, V]` | A copy of the whole map at one instant. |
+
+## Example
+
+<<< ../../examples/concurrency/shared_state.au{aura}
+
+It prints:
+
+```text
+400
+400
+81
+10
+11400
+```
+
+## Mutex
+
+`sync.Mutex[T](value)` guards one value of any `Transfer` type. The only
+way to reach the value is a `with` block:
+
+```aura fragment
+hits = sync.Mutex[dict[str, int64]](dict[str, int64]())
+
+with table = hits.lock():
+    table["home"] = 1
+```
+
+The block waits until no other task holds the lock. Inside it, the item
+name is a mutable view of the guarded value: the body reads it, assigns to
+it, and calls its methods as it would with a `mut` local. The view cannot
+be stored, returned, or passed to a task, so no reference to the value
+outlives the block. Every way out of the block releases the lock: the end
+of the body, `return`, `break`, `continue`, and `try`.
+
+A value computed inside the block leaves it as an owned value:
+
+```aura fragment
+mut count = 0
+with table = hits.lock():
+    count = table.len()
+```
+
+`replace` and `set` change the whole value in one step without a block.
+
+### Waiting
+
+A task that finds the lock held waits without holding its worker thread,
+so other tasks on that worker keep running. A holder may sleep, do I/O, or
+wait on a `Queue` inside the block. Tasks that wait for one lock are not
+served in arrival order.
+
+Waiting for a lock is not a cancellation point. `lock()` returns only
+with the lock held, and a cancelled task sees its cancellation at the next
+operation that reports one.
+
+### Locking Twice
+
+A mutex is not reentrant. A task that enters a `with` block for a mutex it
+already holds traps with `AU4001` instead of waiting for itself forever.
+`replace` and `set` take the lock too, so they trap inside a block that
+holds the same mutex.
+
+Two tasks that take two locks in opposite orders can each wait for the
+other. Take locks in one order everywhere. The runtime reports the group
+as deadlocked when every task in it waits and none can run.
+
+### Poisoning
+
+A task that traps while it holds a lock leaves the guarded value half
+changed, and the value is lost with the task. The mutex is then poisoned:
+every later `lock()`, `replace`, and `set` traps with `AU4001`, and tasks
+already waiting for the lock trap the same way. `is_poisoned()` reports
+the state without trapping.
+
+### Generators
+
+A generator that yields inside a lock block keeps the lock until the
+consumer asks for the next item or closes the generator. Prefer to copy
+what the generator needs out of the block first.
+
+## Atomics
+
+`sync.AtomicInt` and `sync.AtomicBool` change in single steps that no
+other task can observe halfway, with no lock. Use them for counters,
+flags, and identifiers:
+
+```aura fragment
+REQUESTS = sync.AtomicInt(0)
+
+def serve() -> None:
+    _ = REQUESTS.add(1)
+```
+
+`add` returns the new value. An addition that overflows `int64` traps with
+`AU4002`, as `+` does. The stored value has wrapped by the time the trap
+is raised.
+
+`compare_and_set(expected, new)` is the step other lock-free updates are
+built from: it stores `new` only if the value is still `expected`.
+
+Every operation is sequentially consistent: all tasks agree on one order
+of all atomic steps.
+
+## Map
+
+`sync.Map[K, V]` is a dictionary that tasks use at once. Each call locks
+the map for its own duration and hands back owned values, so each call is
+one atomic step and no reference to an entry leaves the map. `get` and
+`snapshot` copy the values they return.
+
+Two calls are two steps. Another task may change the map between a `get`
+and the `set` that follows it:
+
+```aura fragment
+match cache.get(key):
+    case Lookup.Found(value):
+        return value
+    case Lookup.Missing:
+        value = compute(key)
+        cache.set(key, value)   # another task may have set it meanwhile
+        return value
+```
+
+That is the right shape for a cache, where computing a value twice is
+harmless. A change that must read and write as one step uses a
+`sync.Mutex[dict[K, V]]` and one `with` block.
+
+## Module Constants
+
+A module constant may hold a handle. The constant itself never changes,
+and the state it reaches does:
+
+```aura fragment
+CACHE = sync.Map[str, str]()
+NEXT_ID = sync.AtomicInt(1)
+```
+
+Every task in the program reaches the same map and the same counter
+through these names.
+
+## Typing Rules
+
+- `sync.Mutex[T]` and `sync.Map[K, V]` require `Transfer` type arguments,
+  because the guarded values cross between tasks.
+- Every handle type is Copy and `Transfer`, whatever its type arguments.
+- The item of `with name = mutex.lock():` has type `view mut T`.
+- `sync.Locked[T]` is useful only as a `with` item. The item form
+  `with mutex.lock() as name:` is accepted too.
+
+## Verification
+
+`aura verify` treats the value a lock block sees, and the result of every
+atomic and map operation, as an unknown value of its type. Another task
+may have changed it, so a fact proved about the value in one block does
+not hold in the next.
+
+## Backend Support
+
+`aura run` and `aura build` both support every operation on every
+platform the runtime supports. A freestanding build has no tasks and no
+`sync` module.
+
+## Limits
+
+- There is no reader-writer lock, no condition variable, no `try_lock`,
+  and no lock timeout. A `Queue` wakes a waiting task.
+- A lock cannot be handed to another task while it is held.
+- `sync.Map` has no call that updates one entry in place. Use a
+  `sync.Mutex[dict[K, V]]` for that.
 
 ## Source: docs/manual/tensors.md
 
@@ -50776,10 +51007,9 @@ third by the type system. Every task starts inside a `TaskGroup`, and a task
 group is a resource managed by `with`, exactly like the files and scratch
 managers of [Chapter 14](/book/ch14-00-resources-and-cleanup). When the block
 ends, the group waits for its tasks. So a task can't outlive the block that
-started it, and a failure in a task always has somewhere to go. Tasks don't
-share mutable data at all: they exchange owned values through typed queues, and
-the compiler checks that everything crossing from one task to another is safe to
-move.
+started it, and a failure in a task always has somewhere to go. Tasks can exchange owned values through typed queues. When they share a value
+they can change, a handle from the `sync` module coordinates access. The
+compiler checks that each value can cross the task boundary.
 
 If you've used Python, you have probably met two older models. Threads from the
 `threading` module can be started anywhere and run until they finish, and the
@@ -51290,10 +51520,10 @@ environment variable), and each task is pinned to one worker for its whole life.
 There is no global interpreter lock, so two CPU-bound tasks can use two cores at
 once, unlike two Python threads.
 
-Parallel execution is exactly when shared mutable data becomes dangerous, so
-Aura doesn't allow it. Everything passed to a task, and everything a task
-returns, must be `Transfer`: a value that can be moved to another worker and
-used there without anyone else holding on to it. The compiler works out which
+Everything passed to a task, and everything a task returns, must be
+`Transfer`. This means a value can safely cross to another worker. For an
+ordinary mutable value, the worker gets its own storage. A synchronized
+handle can reach data that several workers use at once. The compiler works out which
 types are `Transfer` from their structure. Numbers, strings, lists and
 dictionaries of transferable values, and your own classes and enums built from
 them all qualify. A live host resource doesn't, because an open file handle
@@ -51337,11 +51567,35 @@ transferable types may implement `Job`. A `dyn Job` can then go to a task or
 through a queue like any other owned value. A generic function asks for the
 same thing with a bound, `def send[T: Transfer](value: own T)`.
 
-Two kinds of handle are the exception that makes communication possible. A
-`Queue` handle and a `Task` handle can be passed to any task, because their
-internal state is synchronized by the runtime. Everything else moves as owned,
-unshared data. That's the whole model: tasks share nothing except the channels
-between them.
+Queue and task handles let us send work and receive results. To count items
+as several tasks finish them, we can also pass a handle from the `sync` module.
+
+### Counting from two tasks
+
+```aura
+import sync
+
+def record(counter: sync.AtomicInt):
+    _ = counter.add(1)
+
+def main():
+    completed = sync.AtomicInt(0)
+    with workers = TaskGroup():
+        workers.start_soon(record, completed)
+        workers.start_soon(record, completed)
+    print(completed.load())
+```
+
+This prints `2`. Each worker gets a copy of the handle. Both copies reach
+the same counter, and `add` reads and increments it in one step. The end
+of the task group waits for both workers before we read the total.
+
+When several fields must change together, we can put a record in a
+`sync.Mutex` and update it inside `with record = stats.lock():`. The
+next task to take that lock sees all the changes. If a holder traps,
+the next attempt to enter the lock reports `AU4001`. We can also use
+`sync.Map` when one dictionary operation at a time is enough. The
+[shared-state example](/manual/sync#example) uses all three kinds of handle.
 
 ### A result can be observed once
 
@@ -52587,10 +52841,10 @@ Concurrency in Aura is structured. A task is started by a `TaskGroup`, a group
 is a resource managed by `with`, and a group's exit waits for every task it
 started, so no task outlives its block. The compiler keeps the group from
 escaping that block, and a failure in a task always reaches either the code that
-reads its result or the block that owns it. Tasks share nothing except the
-channels between them: arguments and results move into and out of tasks, queues
-move owned values from one task to another, and the compiler checks that
-everything crossing those boundaries is `Transfer`.
+reads its result or the block that owns it. Arguments and results move into and out of tasks. Queues move owned values
+between workers, and handles from `sync` give workers coordinated access to
+shared state. The compiler checks that everything crossing those boundaries
+is `Transfer`.
 
 You can now start tasks with `start` and `start_soon`, wait for them with
 `result`, `wait_all`, and `wait_any`, pass work through bounded and unbounded

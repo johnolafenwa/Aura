@@ -26129,6 +26129,54 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
     boxed_value(Value::Bool(shared))
 }
 
+unsafe extern "C-unwind" fn child_adds_through_confined_sync_handle(
+    args: *const i64,
+    count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let confined = unsafe { &*argument }.shared_lock().is_none();
+    super::aura_direct_sync_atom(argument, 2, 1, 0);
+    unsafe { release_value(argument) };
+    boxed_value(Value::Bool(confined))
+}
+
+#[test]
+fn sync_task_arguments_share_the_atomic_word_in_separate_boxes() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let outcome = run_lightweight_root_task(|| {
+        let argument = boxed_value(Value::Sync(crate::runtime_value::SyncValue::atom(40)));
+        let group = super::aura_direct_task_group_new();
+        let args = super::aura_direct_arg_buffer_new(1);
+        super::aura_direct_arg_buffer_store(args, 0, argument as i64);
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                child_adds_through_confined_sync_handle as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        let joined = super::aura_direct_task_join(task);
+        let result = unsafe { take_value(joined) };
+        assert_eq!(super::aura_direct_sync_atom(argument, 0, 0, 0), 41);
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+            release_value(argument);
+        }
+        Ok(result)
+    })
+    .expect("the child completes");
+    assert!(matches!(outcome, Value::EnumVariant(variant)
+        if variant.payloads == vec![Value::Bool(true)].into()));
+}
+
 #[test]
 fn task_arguments_are_shared_before_the_child_starts() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
@@ -28629,6 +28677,29 @@ fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
 }
 
 #[test]
+fn two_word_dict_stores_preserve_key_order_and_copied_tables() {
+    let table = super::aura_direct_map_empty();
+    for key in 0..24 {
+        super::aura_direct_map_set_index_int64_pair(table, key, -key);
+    }
+    let Value::Map(snapshot) = (unsafe { value_ref(table) }) else {
+        panic!("expected dict");
+    };
+    super::aura_direct_map_set_index_int64_key(table, -1, string_value("previous"));
+    super::aura_direct_map_set_index_int64_pair(table, -1, 11);
+    super::aura_direct_map_set_index_int64_pair(table, 0, 29);
+    let Value::Map(changed) = (unsafe { take_value(table) }) else {
+        panic!("expected dict");
+    };
+    let int = |value| Value::Int(IntegerValue::from_i64(value));
+    assert_eq!(snapshot.entries.value_of_i64(0), Some(&int(0)));
+    assert_eq!(snapshot.entries.value_of_i64(-1), None);
+    assert_eq!(changed.entries.value_of_i64(0), Some(&int(29)));
+    assert_eq!(changed.entries.value_of_i64(-1), Some(&int(11)));
+    assert_eq!(changed.entries.at_slot(24).0, int(-1));
+}
+
+#[test]
 fn entry_loans_append_scalars_to_the_list_the_map_keeps() {
     use super::DirectScalarKind as K;
     let lists = super::aura_direct_map_empty();
@@ -29293,6 +29364,299 @@ fn direct_time_helpers_write_parse_and_keep_the_outcome() {
         message,
         "`time::__aura_duration_seconds` expects `Duration`, found `bool`"
     );
+}
+
+#[test]
+fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
+    use crate::runtime_value::SyncValue;
+    let atom = boxed_value(Value::Sync(SyncValue::atom(5)));
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 5);
+    assert_eq!(super::aura_direct_sync_atom(atom, 1, 8, 0), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 2, 2, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 3, 1, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 7), 1);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 9), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 7);
+
+    let cell = boxed_value(Value::Sync(SyncValue::cell(Value::string("held"))));
+    let held = super::aura_direct_sync_cell_take(cell);
+    unsafe {
+        assert_eq!(super::value_ref(held), Value::string("held"));
+    }
+    super::aura_direct_sync_cell_put(cell, held);
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(unsafe { take_value(again) }, Value::string("held"));
+    super::aura_direct_sync_cell_put(cell, boxed_value(Value::string("next")));
+
+    let count = boxed_value(Value::Sync(SyncValue::cell(Value::Int(
+        IntegerValue::from_i64(41),
+    ))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 41);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 42);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+
+    let flag = boxed_value(Value::Sync(SyncValue::cell(Value::Bool(false))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 0);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 1);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+
+    unsafe {
+        for value in [atom, cell, count, flag] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_sync_map_lookup_reads_the_same_dictionary_before_and_after_box_transfer() {
+    use crate::runtime_value::{lookup_found, lookup_missing, SyncValue};
+    let table = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(table, 2, 9);
+    let shared = SyncValue::cell(unsafe { take_value(table) });
+    let cell = boxed_value(Value::Sync(shared.clone()));
+    let read = |key| unsafe { take_value(super::aura_direct_sync_map_get_int64(cell, key)) };
+    let nine = Value::Int(IntegerValue::from_i64(9));
+    assert_eq!(read(2), lookup_found(nine.clone()));
+    let boxed = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, boxed);
+    assert_eq!(read(3), lookup_missing());
+    std::thread::spawn(move || {
+        let child = boxed_value(Value::Sync(shared));
+        let found = unsafe { take_value(super::aura_direct_sync_map_get_int64(child, 2)) };
+        assert_eq!(found, lookup_found(Value::Int(IntegerValue::from_i64(9))));
+        unsafe { release_value(child) };
+    })
+    .join()
+    .unwrap();
+    assert_eq!(read(2), lookup_found(nine));
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(again, boxed);
+    super::aura_direct_sync_cell_put(cell, again);
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn direct_sync_map_word_reads_copy_every_integer_and_distinguish_a_miss() {
+    use crate::runtime_value::SyncValue;
+    let map = super::aura_direct_map_empty();
+    for (key, value) in [(0, 0), (1, i64::MIN), (2, i64::MAX)] {
+        super::aura_direct_map_set_index_int64_pair(map, key, value);
+    }
+    let cell = boxed_value(Value::Sync(SyncValue::cell(unsafe { take_value(map) })));
+    for (key, expected) in [
+        (0, Some(0)),
+        (1, Some(i64::MIN)),
+        (2, Some(i64::MAX)),
+        (3, None),
+    ] {
+        let mut word = 42;
+        let present = unsafe { super::aura_direct_sync_map_get_word(cell, key, &mut word) };
+        assert_eq!((present != 0).then_some(word), expected);
+    }
+    let moved = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, moved);
+    let mut word = 0;
+    assert_eq!(
+        unsafe { super::aura_direct_sync_map_get_word(cell, 2, &mut word) },
+        1
+    );
+    assert_eq!(word, i64::MAX);
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn guarded_words_round_trip_through_host_and_generic_callers() {
+    use crate::runtime_value::SyncValue;
+    for (kind, initial, changed) in [(0, 41, 42), (1, 0, 1)] {
+        let as_value = |word| {
+            if kind == 0 {
+                Value::Int(IntegerValue::from_i64(word))
+            } else {
+                Value::Bool(word != 0)
+            }
+        };
+        let handle = SyncValue::cell(as_value(initial));
+        let native = boxed_value(Value::Sync(handle.clone()));
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        assert_eq!(handle.take().unwrap(), as_value(changed));
+        handle.put(as_value(initial)).unwrap();
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        let payload = super::aura_direct_sync_cell_take(native);
+        assert_eq!(unsafe { value_ref(payload) }, as_value(changed));
+        super::aura_direct_sync_cell_put(native, payload);
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            changed
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        unsafe { release_value(native) };
+    }
+}
+
+#[test]
+fn a_native_mutex_moves_the_same_collection_box_between_tasks() {
+    use crate::runtime_value::SyncValue;
+    let handle = SyncValue::cell(Value::Unit);
+    let cell = boxed_value(Value::Sync(handle.clone()));
+    let original = super::aura_direct_sync_cell_take(cell);
+    let items = super::aura_direct_vec_empty();
+    super::aura_direct_sync_cell_put(cell, items);
+    unsafe { release_value(original) };
+    let address = items as usize;
+    std::thread::spawn(move || {
+        let other = boxed_value(Value::Sync(handle));
+        let owned = super::aura_direct_sync_cell_take(other);
+        assert_eq!(owned as usize, address);
+        assert!(matches!(unsafe { value_ref(owned) }, Value::Vec(_)));
+        super::aura_direct_sync_cell_put(other, owned);
+        unsafe { release_value(other) };
+    })
+    .join()
+    .expect("the second task owns the box");
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn failed_native_shared_map_reads_poison_the_cell_and_preserve_the_diagnostic() {
+    use crate::runtime_value::{MapValue, SharedType, SyncValue};
+
+    let malformed = SyncValue::cell(Value::Map(MapValue {
+        key_type: SharedType::named("int64"),
+        value_type: SharedType::named("uint64"),
+        entries: vec![(
+            Value::Int(IntegerValue::from_i64(7)),
+            Value::Int(IntegerValue::from_u64(u64::MAX)),
+        )]
+        .into(),
+    }));
+    let word_map = malformed.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(word_map));
+            let mut output = 0;
+            unsafe { super::aura_direct_sync_map_get_word(handle, 7, &mut output) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the stored value cannot be returned as an int64 word");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "sync.Map.get expected an int64 value");
+    assert!(malformed.is_poisoned().unwrap());
+
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(malformed));
+            super::aura_direct_sync_cell_take_word(handle, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a later reader must observe the poisoned cell");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("poisoned"));
+
+    let wrong_type = SyncValue::cell(Value::Unit);
+    let boxed_map = wrong_type.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(boxed_map));
+            super::aura_direct_sync_map_get_int64(handle, 7);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the generic lookup also validates dictionary storage");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("dictionary"));
+    assert!(wrong_type.is_poisoned().unwrap());
+}
+
+#[test]
+fn direct_sync_helpers_report_a_wrong_handle_and_a_failed_step() {
+    use crate::runtime_value::SyncValue;
+    let failure = |run: fn()| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                run();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("the helper traps")
+        .message
+    };
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_atom(bool_value(true), 0, 0, 0);
+        }),
+        "expected `sync.Atom`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_cell_take(bool_value(true));
+        }),
+        "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_sync_cell_put(bool_value(true), bool_value(true))),
+        "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+            super::aura_direct_sync_cell_put(cell, std::ptr::null_mut());
+        }),
+        "direct runtime received a null opaque value pointer"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_map_set_index_int64_pair(std::ptr::null_mut(), 7, 9)),
+        "direct runtime received a null opaque value pointer"
+    );
+    // A cell is not an atom, an overflow traps, and a cell that is not
+    // locked takes no value back.
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_atom(cell, 0, 0, 0);
+    })
+    .contains("sync.Atom"));
+    assert!(failure(|| {
+        let atom = boxed_value(Value::Sync(SyncValue::atom(i64::MAX)));
+        let _ = super::aura_direct_sync_atom(atom, 2, 1, 0);
+    })
+    .contains("overflow"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put(cell, bool_value(true));
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put_word(cell, 0, 1);
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take(cell);
+        let _ = super::aura_direct_sync_cell_take(cell);
+    })
+    .contains("already holds"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 0);
+    })
+    .contains("int64"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 1);
+    })
+    .contains("bool"));
 }
 
 #[test]

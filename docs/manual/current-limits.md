@@ -141,6 +141,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Tasks
 
+- A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
+- Each shared-map method is a single operation. Use `sync.Mutex[dict[K, V]]` to protect a sequence of reads and writes.
+
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own` target parameters. `mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form. Use `TaskGroup`.
 

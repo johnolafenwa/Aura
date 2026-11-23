@@ -85,7 +85,7 @@ def _user_nominals(source: str) -> set[str]:
     return {
         match.group(1)
         for match in re.finditer(
-            r"(?m)^\s*(?:public\s+)?(?:class|enum|trait)\s+([A-Za-z_]\w*)\b",
+            r"(?m)^\s*(?:public\s+)?(?:(?:copy\s+)?(?:class|enum)|trait)\s+([A-Za-z_]\w*)\b",
             source,
         )
     }
@@ -117,7 +117,7 @@ def _user_method_receivers(source: str) -> tuple[dict[str, set[str]], dict[str, 
             continue
         indent = len(line) - len(line.lstrip(" "))
         header = re.match(
-            r"\s*(?:public\s+)?(?:class|trait)\s+([A-Za-z_]\w*)\b", line
+            r"\s*(?:public\s+)?(?:(?:copy\s+)?class|trait)\s+([A-Za-z_]\w*)\b", line
         )
         if header:
             block = (indent, header.group(1))
@@ -209,7 +209,7 @@ def scan_aura_collection_surface(source: str) -> list[tuple[int, str]]:
         if not line.strip():
             continue
         indent = len(line) - len(line.lstrip(" "))
-        header = re.match(r"\s*(?:public\s+)?class\s+([A-Za-z_]\w*)\b", line)
+        header = re.match(r"\s*(?:public\s+)?(?:copy\s+)?class\s+([A-Za-z_]\w*)\b", line)
         if header:
             current = (indent, header.group(1))
         elif current is not None and indent <= current[0]:
@@ -843,10 +843,10 @@ class AuraIdentityTests(unittest.TestCase):
 enum Flag:
     Set(bool)
 
-class Vec[T]:
+public copy class Vec[T]:
     value: T
 
-class Stack:
+copy class Stack:
     def push(mut self, value: int64):
         pass
 

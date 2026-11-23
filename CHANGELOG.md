@@ -119,6 +119,10 @@ in this file.
 
 - Editor: the VS Code grammar highlights byte strings and their escapes.
 
+- The `sync` module adds `Mutex[T]`, `AtomicInt`, `AtomicBool`, and
+  `Map[K, V]` for state shared between tasks. A `with` block around
+  `mutex.lock()` gives its body a mutable view of the guarded value.
+
 - New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
   files into an `image.Image`, whose pixels are a `list[uint8]`.
   `image.read`, `image.decode`, `image.info`, `image.write`, and the

@@ -10892,7 +10892,11 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     push_imported_module_functions(program, &mut functions, &mut seen_function_names);
 
     let mut classes = Vec::new();
-    for class in program.classes.values() {
+    for class in program
+        .classes
+        .values()
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         let fields = class
             .decl
@@ -11125,6 +11129,12 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
 /// The class is asked about with its own type parameters as arguments, so
 /// a generic class is not Copy here.
 fn mir_class_is_copy(program: &Program, name: &str, class: &crate::sema::ClassInfo) -> bool {
+    // A generic class whose fields store none of its type parameters is
+    // Copy for every argument, and its values still take the generic
+    // path here, which drops them.
+    if !class.decl.type_params.is_empty() {
+        return false;
+    }
     let ty = Type::Named(
         name.to_string(),
         class
@@ -11300,7 +11310,12 @@ fn push_imported_module_classes_from_namespace(
         .all_classes
         .values()
         .filter(|class| class.module_name == namespace.path);
-    for class in namespace.classes.values().chain(private_classes) {
+    for class in namespace
+        .classes
+        .values()
+        .chain(private_classes)
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         if !seen_class_names.insert(class_name.clone()) {
             continue;
@@ -12357,6 +12372,9 @@ struct Lowerer<'a> {
     /// Exit result shape of each active `with` place whose action is a
     /// manager `__exit__`, keyed by the place in `with_stack`.
     manager_exits: BTreeMap<String, ManagerExitResult>,
+    /// The underlying `sync.Cell` of each active lock item, keyed by the
+    /// place in `with_stack`, which holds the guarded value.
+    lock_exits: BTreeMap<String, String>,
     match_writeback_stack: Vec<MatchWritebackState>,
     local_types: std::collections::BTreeMap<String, Type>,
     /// Original type-parameter identity for roots whose projection-summary
@@ -12638,6 +12656,7 @@ impl<'a> Lowerer<'a> {
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
             manager_exits: BTreeMap::new(),
+            lock_exits: BTreeMap::new(),
             match_writeback_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
             specialized_bound_roots: BTreeMap::new(),
@@ -14889,7 +14908,7 @@ impl<'a> Lowerer<'a> {
                         target: return_place,
                         value: Rvalue::Use(value),
                     });
-                    self.emit_cleanup_range(cleanup_depth, true);
+                    self.emit_cleanup_range(cleanup_depth, true, 0);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
@@ -14901,7 +14920,7 @@ impl<'a> Lowerer<'a> {
                         });
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
-                    self.emit_cleanup_range(0, true);
+                    self.emit_cleanup_range(0, true, 0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -14934,7 +14953,7 @@ impl<'a> Lowerer<'a> {
                 let loan_depth = loop_labels.loan_depth;
                 let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
-                self.emit_cleanup_range(cleanup_depth, true);
+                self.emit_cleanup_range(cleanup_depth, true, loan_depth);
                 self.terminate(Terminator::Goto(continue_label));
                 false
             }
@@ -14950,7 +14969,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = loop_labels.loan_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
-        self.emit_cleanup_range(cleanup_depth, true);
+        self.emit_cleanup_range(cleanup_depth, true, loan_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -21780,6 +21799,15 @@ impl<'a> Lowerer<'a> {
                 // it early is safe: a successful `try` falls through to the
                 // arm's own writeback, which stores the same or a newer value.
                 self.emit_active_match_writebacks();
+                let value = if self
+                    .with_stack
+                    .iter()
+                    .any(|place| self.lock_exits.contains_key(place))
+                {
+                    self.emit_locked_try_error_edge(value, inner, expr)
+                } else {
+                    value
+                };
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -26135,10 +26163,6 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                if class.initializer().is_some() {
-                    self.lower_initializer_call(&class, name, args, callee.span, &temp);
-                    return Operand::Place(temp);
-                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -26153,6 +26177,17 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => std::collections::HashMap::new(),
                 };
+                if class.initializer().is_some() {
+                    self.lower_initializer_call(
+                        &class,
+                        name,
+                        args,
+                        callee.span,
+                        &temp,
+                        &substitutions,
+                    );
+                    return Operand::Place(temp);
+                }
                 let field_names = class
                     .decl
                     .fields
@@ -26636,16 +26671,6 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
-                            if class.initializer().is_some() {
-                                self.lower_initializer_call(
-                                    &class,
-                                    field,
-                                    args,
-                                    callee.span,
-                                    &temp,
-                                );
-                                return Operand::Place(temp);
-                            }
                             let runtime_class_name = mir_runtime_class_name(self.program, &class);
                             let qualified_class_name = format!("{}.{}", module_path, field);
                             let constructor_type = expected
@@ -26669,6 +26694,17 @@ impl<'a> Lowerer<'a> {
                                 }
                                 _ => std::collections::HashMap::new(),
                             };
+                            if class.initializer().is_some() {
+                                self.lower_initializer_call(
+                                    &class,
+                                    field,
+                                    args,
+                                    callee.span,
+                                    &temp,
+                                    &substitutions,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let field_names = class
                                 .decl
                                 .fields
@@ -28214,15 +28250,32 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         span: Span,
         target: &str,
+        substitutions: &HashMap<String, Type>,
     ) {
         let initializer = class
             .initializer()
             .expect("an initializer call lowers only for a class with `__init__`");
-        let lowered_args = self.lower_user_args(
+        let expected_param_types = (!substitutions.is_empty()).then(|| {
+            initializer
+                .signature
+                .params
+                .iter()
+                .zip(&initializer.decl.params)
+                .map(|(ty, param)| {
+                    if crate::sema::has_unresolved_type_params(ty) {
+                        substitute_type(ty, substitutions)
+                    } else {
+                        self.lower_type_ref_with_provenance(&param.ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let lowered_args = self.lower_user_args_with_types(
             &format!("class `{surface_name}`"),
             &initializer.decl.params,
             args,
             span,
+            expected_param_types.as_deref(),
             Some(&initializer.signature.param_passings),
         );
         self.emit(Instruction::Assign {
@@ -31224,17 +31277,90 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
-    fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {
-        let places = self.with_stack[depth..].to_vec();
-        for place in places.into_iter().rev() {
+    /// A successful `try` leaves every holder in place. On its error edge,
+    /// publish locked values and run intervening managers in exit order.
+    /// Registered managers discard a secondary Result.Err during propagation.
+    fn emit_locked_try_error_edge(&mut self, value: Operand, inner: &Expr, expr: &Expr) -> Operand {
+        let source = self.new_temp_for_expr(inner);
+        self.emit(Instruction::Assign {
+            target: source.clone(),
+            value: Rvalue::Use(value),
+        });
+        let error = self.new_block("locked_try_error");
+        let ok = self.new_block("locked_try_ok");
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(source.clone()),
+            arms: vec![MirMatchArm {
+                enum_name: Some("Result".to_string()),
+                variant_name: Some("Err".to_string()),
+                wildcard: false,
+                label: self.label(error),
+            }],
+            otherwise: self.label(ok),
+        });
+        self.switch_to(error);
+        self.emit_loan_cleanup_from(0, None);
+        for place in self.with_stack.clone().into_iter().rev() {
+            if self.lock_exits.contains_key(&place) {
+                self.emit_with_exit(place, true);
+            } else {
+                self.emit(Instruction::PopCleanup {
+                    place,
+                    cancel_before_cleanup: true,
+                    run: true,
+                });
+            }
+        }
+        // Preserve the ordinary From conversion and the frame's release list.
+        let never = self.new_temp_for_expr(expr);
+        self.emit(Instruction::Assign {
+            target: never,
+            value: Rvalue::Try {
+                value: Operand::MovePlace(source.clone()),
+                releases_on_error: Vec::new(),
+                from: None,
+            },
+        });
+        self.terminate(Terminator::Unreachable);
+        self.switch_to(ok);
+        Operand::MovePlace(source)
+    }
+
+    fn emit_cleanup_range(
+        &mut self,
+        depth: usize,
+        cancel_before_cleanup: bool,
+        ended_loan_depth: usize,
+    ) {
+        // A fallible manager exit may itself propagate an error. During its
+        // lowering only the outer, still-active managers and loans remain.
+        let ended_scopes = self.loan_scopes.split_off(ended_loan_depth);
+        let original_stack = self.with_stack.clone();
+        while self.with_stack.len() > depth {
+            let place = self.with_stack.pop().expect("active manager");
             self.emit_with_exit(place, cancel_before_cleanup);
         }
+        self.with_stack = original_stack;
+        self.loan_scopes.extend(ended_scopes);
     }
 
     /// Leaves one `with` item on a normal exit path. A manager's action is
     /// popped without running, then `__exit__` is called explicitly so a
     /// `Result` exit propagates its error as `try` would (checkpoint F5).
     fn emit_with_exit(&mut self, place: String, cancel_before_cleanup: bool) {
+        if let Some(handle) = self.lock_exits.get(&place).cloned() {
+            // A lock item registered no cleanup. Leaving moves the guarded
+            // value back into its cell, which releases the lock.
+            let ignored = self.new_typed_temp(Type::Unit);
+            self.emit(Instruction::Assign {
+                target: ignored,
+                value: Self::lock_call(
+                    "sync::__aura_cell_put",
+                    [Operand::Place(handle), Operand::MovePlace(place)],
+                ),
+            });
+            return;
+        }
         let Some(exit_result) = self.manager_exits.get(&place).copied() else {
             self.emit(Instruction::PopCleanup {
                 place,
@@ -31258,6 +31384,46 @@ impl<'a> Lowerer<'a> {
         }
         let value = self.lower_expr(&exit_call);
         self.emit(Instruction::Eval { value });
+    }
+
+    /// The standard Mutex.lock method only wraps the same cell. For every
+    /// other expression evaluate the manager itself once, including user calls.
+    fn mutex_lock_receiver<'b>(&self, manager: &'b Expr) -> Option<&'b Expr> {
+        let ExprKind::Call { callee, args, .. } = &manager.kind else {
+            return None;
+        };
+        let ExprKind::Member { object, field } = &callee.kind else {
+            return None;
+        };
+        if field != "lock" || !args.is_empty() {
+            return None;
+        }
+        let Type::Named(name, _) = self.infer_expr_type(object)? else {
+            return None;
+        };
+        let class = self.resolve_class_info(&name)?;
+        (class.module_name == "sync" && class.decl.name == "Mutex").then_some(object)
+    }
+
+    fn lock_call(name: &str, operands: impl IntoIterator<Item = Operand>) -> Rvalue {
+        let builtin =
+            crate::runtime_ops::HostBuiltin::from_name(name).expect("a sync host operation");
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Host(builtin),
+                receiver: None,
+                receiver_place: None,
+            },
+            args: operands
+                .into_iter()
+                .map(|value| MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                })
+                .collect(),
+            type_args: BTreeMap::new(),
+        }
     }
 
     /// Lowers one `with` item (checkpoint F1-F5). A multi-item header was
@@ -31297,29 +31463,72 @@ impl<'a> Lowerer<'a> {
         });
         // The `as` name is bound in the body's scope.
         self.binding_blocks.push(BindingBlock::default());
-        // A view-returning `__enter__` keeps the manager in a hidden managed
-        // place, a fresh temporary that source code cannot name (F4).
-        let place = if matches!(
-            shape.as_ref().map(|shape| &shape.entry),
-            Some(crate::sema::ManagerEntry::View { .. })
-        ) {
-            match manager_ty.clone() {
-                Some(ty) => self.new_typed_temp(ty),
-                None => self.new_temp(),
-            }
-        } else {
-            self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
+        let lock_payload = match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { payload }) => Some(payload.clone()),
+            _ => None,
         };
-        let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
-        self.emit(Instruction::Assign {
-            target: place.clone(),
-            value: Rvalue::Use(value),
-        });
-
         let span = with_stmt.span;
+        let place = if let Some(payload) = lock_payload {
+            // Keep the cell even when the source variable is reassigned in the body.
+            let handle = self.new_typed_temp(Type::named("sync.Cell"));
+            let source = self
+                .mutex_lock_receiver(&with_stmt.value)
+                .unwrap_or(&with_stmt.value);
+            let cell = Expr {
+                kind: ExprKind::Member {
+                    object: Box::new(source.clone()),
+                    field: "cell".to_string(),
+                },
+                span,
+            };
+            let value = self.lower_expr(&cell);
+            self.emit(Instruction::Assign {
+                target: handle.clone(),
+                value: Rvalue::Use(value),
+            });
+            let held = self.new_typed_temp(payload);
+            self.emit(Instruction::Assign {
+                target: held.clone(),
+                value: Self::lock_call("sync::__aura_cell_take", [Operand::Place(handle.clone())]),
+            });
+            self.lock_exits.insert(held.clone(), handle);
+            held
+        } else {
+            // A view-returning entry keeps its manager in a hidden place.
+            let place = if matches!(
+                shape.as_ref().map(|shape| &shape.entry),
+                Some(crate::sema::ManagerEntry::View { .. })
+            ) {
+                self.new_typed_temp(manager_ty.clone().expect("a typed view manager"))
+            } else {
+                self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
+            };
+            let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(value),
+            });
+            place
+        };
         let mut entry_loan = None;
         self.loan_scopes.push(Vec::new());
         match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { .. }) => {
+                let view = Stmt::View(crate::ast::ViewStmt {
+                    name: with_stmt.binding.clone(),
+                    mutable: true,
+                    source: Expr {
+                        kind: ExprKind::Name(place.clone()),
+                        span,
+                    },
+                    span,
+                });
+                self.lower_stmt(&view, &BTreeSet::new());
+                entry_loan = self
+                    .loan_scopes
+                    .last()
+                    .and_then(|scope| scope.last().cloned());
+            }
             Some(crate::sema::ManagerEntry::Unit) => {
                 let entry = crate::sema::manager_method_call(&place, "__enter__", span);
                 let value = self.lower_expr(&entry);
@@ -31352,11 +31561,13 @@ impl<'a> Lowerer<'a> {
         if let CleanupAction::ManagerExit { exit_result } = &action {
             self.manager_exits.insert(place.clone(), *exit_result);
         }
-        self.emit(Instruction::PushCleanup {
-            place: place.clone(),
-            action,
-            callee: None,
-        });
+        if !self.lock_exits.contains_key(&place) {
+            self.emit(Instruction::PushCleanup {
+                place: place.clone(),
+                action,
+                callee: None,
+            });
+        }
         self.with_stack.push(place.clone());
         let mut body_endings = ending_loans
             .iter()
@@ -31386,6 +31597,7 @@ impl<'a> Lowerer<'a> {
             self.emit_with_exit(place.clone(), false);
         }
         self.manager_exits.remove(&place);
+        self.lock_exits.remove(&place);
         self.end_binding_block();
         !self.current_terminated()
     }
@@ -31664,12 +31876,18 @@ fn tuple_target_ranges(elements: &[BindingTarget], arity: usize) -> Vec<std::ops
     crate::ast::rest_element_ranges(&is_rest, arity).expect("checked tuple targets fit their value")
 }
 
-fn is_builtin_class(class: &crate::sema::ClassInfo) -> bool {
-    class.is_builtin
+/// These declarations give the checker a type for each opaque runtime handle.
+/// Emitting an empty MIR record for one would give it a zero-field layout.
+fn is_sync_host_handle(class: &crate::sema::ClassInfo) -> bool {
+    class.is_builtin && class.module_name == "sync"
+}
+
+fn mir_class_has_local_name(program: &Program, class: &crate::sema::ClassInfo) -> bool {
+    !is_sync_host_handle(class) && (class.is_builtin || class.module_name == program.module_name)
 }
 
 fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         class.decl.name.clone()
     } else {
         format!("{}.{}", class.module_name, class.decl.name)
@@ -31753,7 +31971,7 @@ fn mir_class_method_name(
     class: &crate::sema::ClassInfo,
     method_name: &str,
 ) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         format!("{}.{}", class.decl.name, method_name)
     } else {
         format!("{}::{}.{}", class.module_name, class.decl.name, method_name)
@@ -31769,7 +31987,7 @@ fn mir_class_type_name(
         .builtin_constructor()
         .map(|constructor| constructor.qualified_name().to_string())
         .unwrap_or_else(|| {
-            if class.module_name == program.module_name || is_builtin_class(class) {
+            if mir_class_has_local_name(program, class) {
                 fallback.to_string()
             } else {
                 format!("{}.{}", class.module_name, class.decl.name)

@@ -36,6 +36,9 @@ pub(crate) fn layout_env(module: &MirModule) -> LayoutEnv {
         classes: module
             .classes
             .iter()
+            // A sync wrapper's one native word holds the runtime handle.
+            // The same layout applies when it is a field of another record.
+            .filter(|class| !crate::runtime_value::sync_host::is_handle_class(&class.name))
             .map(|class| {
                 (
                     class.name.clone(),

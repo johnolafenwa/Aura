@@ -1,0 +1,5 @@
+error[AU3010]: this function must return a shared view from `guard`
+ --> crates/aura-compiler/tests/fixtures/check-fail/sync_guarded_view_escape.au:5:9
+  |
+5 |         return value
+  |         ^
