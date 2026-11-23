@@ -1,0 +1,28 @@
+import image
+
+def round_trip(width: int64, height: int64) -> Result[None, image.Error]:
+    picture = image.Image.filled(width, height, 1, 148)
+    encoded = try image.encode_jpeg(picture)
+    info = try image.info(encoded)
+    decoded = try image.decode_up_to(encoded, width * height)
+    print(f"{info.width}x{info.height} {decoded.pixels[0]}")
+    match image.decode_up_to(encoded, width * height - 1):
+        case Result.Err(image.Error as error):
+            print(error)
+        case Result.Ok(image.Image as _):
+            print("unexpected success")
+    return Result.Ok(None)
+
+def main() -> int32:
+    match round_trip(20000, 1):
+        case Result.Err(image.Error as error):
+            print(error)
+            return 1
+        case Result.Ok(None):
+            pass
+    match round_trip(1, 20000):
+        case Result.Err(image.Error as error):
+            print(error)
+            return 1
+        case Result.Ok(None):
+            return 0

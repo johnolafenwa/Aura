@@ -38,6 +38,8 @@ pub(super) fn is_dict_get(value: &Rvalue) -> bool {
 enum SlotKind {
     /// A `Lookup` from a `dict` `get`.
     Lookup,
+    /// A lookup in a shared map whose key and value are both int64.
+    MapWord,
     /// A `QueueReceive` from a queue receive that waits for an item.
     Receive,
     /// The `Result` of a queue `put`, which nothing reads.
@@ -45,6 +47,8 @@ enum SlotKind {
     /// The `Result` of `str.from_bytes` or a number parse, whose error
     /// nothing reads.
     Result,
+    /// Scalar success kept in a register, or a complete recovery error.
+    Recovery,
 }
 
 impl SlotKind {
@@ -54,7 +58,7 @@ impl SlotKind {
         let enum_name = arm.enum_name.as_deref();
         let variant_name = arm.variant_name.as_deref();
         match self {
-            SlotKind::Lookup => {
+            SlotKind::Lookup | SlotKind::MapWord => {
                 matches!(enum_name, None | Some("Lookup"))
                     && matches!(variant_name, Some("Found" | "Missing"))
             }
@@ -67,7 +71,7 @@ impl SlotKind {
                         || (matches!(variant_name, Some("Closed" | "TimedOut" | "Cancelled"))
                             && arm.label == otherwise))
             }
-            SlotKind::Result => {
+            SlotKind::Result | SlotKind::Recovery => {
                 matches!(enum_name, None | Some("Result"))
                     && matches!(variant_name, Some("Ok" | "Err"))
             }
@@ -79,11 +83,31 @@ impl SlotKind {
     /// `variant_name` reads.
     fn keeps_payload_of(self, variant_name: &str) -> bool {
         match self {
-            SlotKind::Lookup | SlotKind::Receive => true,
+            SlotKind::Lookup | SlotKind::MapWord | SlotKind::Receive | SlotKind::Recovery => true,
             SlotKind::Result => variant_name == "Ok",
             SlotKind::Discarded => false,
         }
     }
+}
+
+/// The checked standard library method whose receiver is the actual cell
+/// handle and whose key and payload both fit in a machine word.
+pub(super) fn map_word_get(value: &Rvalue) -> Option<(&Operand, &MirArg)> {
+    let Rvalue::Call {
+        callee:
+            CallTarget::Member {
+                object,
+                dispatch: Some(crate::mir::MethodDispatch::Static { function }),
+                ..
+            },
+        args,
+        ..
+    } = value
+    else {
+        return None;
+    };
+    let [key] = args.as_slice() else { return None };
+    (function == "sync::Map.get[int64, int64]").then_some((object, key))
 }
 
 fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
@@ -103,6 +127,7 @@ fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
             RuntimeOp::Function(op) if parse_kind(*op).is_some() => Some(SlotKind::Result),
             _ => None,
         },
+        lookup if map_word_get(lookup).is_some() => Some(SlotKind::MapWord),
         _ => None,
     }
 }
@@ -145,7 +170,42 @@ fn is_temporary(place: &str) -> bool {
 /// compiler temporary that is assigned only from one kind of `get` and is
 /// otherwise only matched on the variants its slot tells apart, unpacked
 /// in one place at most once per lookup, and released.
-pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
+pub(super) fn lookup_slots(function: &MirFunction) -> (HashSet<String>, HashSet<String>) {
+    payload_slots(function, slot_kind)
+}
+
+/// Match-only temporaries holding eligible scalar recovery results. The error
+/// remains a regular boxed Result, so either arm may read its payload repeatedly.
+pub(super) fn recovery_payload_slots(
+    function: &MirFunction,
+    supports: impl Fn(&Rvalue) -> bool,
+) -> HashSet<String> {
+    let has_recovery = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::StartTask { recover: true, .. },
+                    ..
+                }
+            )
+        });
+    if !has_recovery {
+        return HashSet::new();
+    }
+    payload_slots(function, |value| {
+        supports(value).then_some(SlotKind::Recovery)
+    })
+    .0
+}
+
+fn payload_slots(
+    function: &MirFunction,
+    origin: impl Fn(&Rvalue) -> Option<SlotKind>,
+) -> (HashSet<String>, HashSet<String>) {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
     // Each move of one temporary into another, by target.
@@ -157,7 +217,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
                     moves.push((target, source, &block.label));
                     continue;
                 }
-                let kind = slot_kind(value).filter(|_| is_temporary(target));
+                let kind = origin(value).filter(|_| is_temporary(target));
                 if let Some(kind) = kind {
                     let candidate = candidates.entry(target).or_default();
                     if candidate
@@ -208,7 +268,7 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
     }
     candidates.retain(|name, _| !rejected.contains(name));
     if candidates.is_empty() {
-        return HashSet::new();
+        return (HashSet::new(), HashSet::new());
     }
 
     for block in &function.blocks {
@@ -288,9 +348,14 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
         .iter()
         .map(|block| (block.label.as_str(), successors(&block.terminator)))
         .collect::<HashMap<_, _>>();
+    let word_candidates = candidates
+        .iter()
+        .filter_map(|(&name, c)| (c.kind == Some(SlotKind::MapWord)).then_some(name))
+        .collect::<HashSet<_>>();
     let mut slots = candidates
         .into_iter()
         .filter(|(_, candidate)| match candidate.unpacked_in.as_slice() {
+            _ if candidate.kind == Some(SlotKind::Recovery) => true,
             [] => true,
             [block] => !reaches_again_without_assignment(block, &candidate.assigned, &successors),
             // Two copies of one payload would share one box.
@@ -308,7 +373,16 @@ pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
             }
         }
     }
-    slots.into_iter().map(str::to_string).collect()
+    let words = slots
+        .intersection(&word_candidates)
+        .map(|name| (*name).to_owned())
+        .collect();
+    (slots.into_iter().map(str::to_string).collect(), words)
+}
+
+#[cfg(test)]
+pub(super) fn lookup_payload_slots(function: &MirFunction) -> HashSet<String> {
+    lookup_slots(function).0
 }
 
 #[derive(Default)]
@@ -785,4 +859,71 @@ pub(super) fn text_byte_slices(function: &MirFunction) -> HashSet<String> {
         .filter(|slice| mentions.get(slice) == Some(&2) && !params.contains(slice))
         .map(str::to_string)
         .collect()
+}
+
+/// Known bytes for a character read from a single-assignment ASCII literal.
+/// A mutable call or loan can replace the local through another name.
+pub(super) fn indexed_ascii_literals(function: &MirFunction) -> HashMap<String, String> {
+    use crate::mir::ownership::{instruction_accesses, Access};
+    fn receiver(instruction: &Instruction) -> Option<&str> {
+        match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Str(crate::runtime_ops::StrOp::CharAt),
+                                receiver: Some(Operand::Place(local)),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => Some(local),
+            _ => None,
+        }
+    }
+    let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+    let mut indexed = instructions().filter_map(receiver).collect::<HashSet<_>>();
+    if indexed.is_empty() {
+        return HashMap::new();
+    }
+    let mut literals = HashMap::new();
+    let mut writes = HashMap::<&str, usize>::new();
+    for instruction in instructions() {
+        if let Instruction::Assign {
+            target,
+            value: Rvalue::Use(Operand::String(text)),
+        } = instruction
+        {
+            if indexed.contains(target.as_str()) && text.is_ascii() && !text.is_empty() {
+                literals.insert(target.clone(), text.clone());
+            }
+        }
+        for (place, access) in instruction_accesses(instruction) {
+            // MIR retains a receiver place even for the read-only CharAt method.
+            if access == Access::Writeback && Some(place) == receiver(instruction) {
+                continue;
+            }
+            if !matches!(access, Access::Assign | Access::Writeback) {
+                continue;
+            }
+            let root = place.split('.').next().unwrap_or(place);
+            if indexed.contains(root) {
+                *writes.entry(root).or_default() += 1;
+            }
+        }
+        if let Instruction::BeginLoan { source, .. }
+        | Instruction::BeginElementLoan { source, .. }
+        | Instruction::Lend { place: source, .. } = instruction
+        {
+            indexed.remove(source.split('.').next().unwrap_or(source));
+        }
+    }
+    literals.retain(|place, _| {
+        indexed.contains(place.as_str())
+            && writes.get(place.as_str()) == Some(&1)
+            && !function.params.iter().any(|param| param.name == *place)
+    });
+    literals
 }

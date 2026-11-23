@@ -1,6 +1,6 @@
 # Functions
 
-Functions are module-level declarations introduced by `def`. A function's callable contract applies at every call site. It fixes:
+Use `def` to declare a module-level function or a [local function](/manual/closures#local-functions). A function's callable contract applies at every call site. It fixes:
 
 - the parameter names, passing modes, and types
 - the generic parameters and their bounds
@@ -16,7 +16,7 @@ def add(left: int32, right: int32) -> int32:
 
 ## Signatures And Return Types
 
-Every ordinary parameter has an explicit type. The return annotation is optional, and omitting it is exactly the same as writing `-> None`. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
+Every ordinary parameter has an explicit type. A module-level function or method may omit its return annotation, which means `-> None`. A local function must spell out its return type. An ordinary `-> T` return is owned. A returned view uses the separate `-> view [mut] T from origin` form.
 
 A plain triple-quoted string as the first statement of the body is the function's docstring. It documents parameters under an `Args:` heading and does not run. See [Docstrings And API Docs](/manual/docstrings).
 
@@ -543,7 +543,7 @@ Aura checks them every time the function runs. See
 
 ## `main`
 
-In the selected entry module, a local function named `main` is the entrypoint when the module has no executable top-level statements. Its only valid signatures are:
+When the entry module has no executable top-level statements, its module-level `main` function is the entrypoint. Its only valid signatures are:
 
 ```aura
 def main() -> int32:
@@ -557,11 +557,11 @@ def main():
 
 `main` takes no parameters and returns exactly `int32` or `None`. A returned `int32` becomes the requested host exit status. `None` means success. An imported function named `main` stays an ordinary imported function. A file cannot combine a local `main` with executable top-level statements.
 
-[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the 256-call runtime depth limit.
+[Execution Model](/manual/execution-model#entry-module-execution) specifies the alternate top-level execution form, evaluation order, cleanup on return, and the call depth rule.
 
 ## Grammar
 
-[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Ordinary functions are module items. Nested function declarations are not accepted. [Closures](/manual/closures) specifies expression lambdas.
+[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Module functions are items. A local `def` binds a closure in the enclosing function. A lambda creates a closure in an expression. [Closures](/manual/closures)
 
 ## Typing Rules
 
@@ -613,11 +613,11 @@ Runtime diagnostics:
 
 | Code | Meaning |
 | --- | --- |
-| `AU4001` | Call-depth or general call trap. |
+| `AU4001` | General call trap. |
 | `AU4002` | Arithmetic overflow or underflow in a callee. |
 | `AU4003` | Bounds or lookup violation in a callee. |
 | `AU4004` | Zero divisor in a callee. |
-| `AU4005` | Trapping resource or I/O failure in a callee. |
+| `AU4005` | A call exhausts the stack, or a resource or I/O operation fails in a callee. |
 
 A callee's `AU4002`, `AU4003`, `AU4004`, or `AU4005` keeps the same typed Aura call frames and task ancestry on mid-level intermediate representation (MIR) execution and on direct-native execution.
 
@@ -632,16 +632,15 @@ Aura has none of these:
 - trait-object function interactions
 - Aura variadic functions
 - overloads
-- nested functions
 - mutable-parameter task targets
 
-[Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
+Written function types express bare shared, `mut`, and `own` parameter contracts. Local functions use those same parameter modes. [Closures](/manual/closures)
 
-Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
+Nested calls are limited by the stack they run on ([Call Depth](/manual/failure-recovery#call-depth)). The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 
-The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. By-value expression closures are implemented.
+The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. Lambdas and local functions support captures.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 

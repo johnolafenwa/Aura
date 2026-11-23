@@ -244,6 +244,15 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::constant_time_eq",
         "gzip::compress",
         "gzip::decompress",
+        "image::__aura_info",
+        "image::__aura_decode",
+        "image::__aura_encode",
+        "image::__aura_convert",
+        "image::__aura_resize",
+        "image::__aura_crop",
+        "image::__aura_flip",
+        "image::__aura_to_array",
+        "image::__aura_from_array",
         "regex::__aura_compile",
         "regex::__aura_pattern",
         "regex::__aura_escape",
@@ -353,21 +362,48 @@ fn math_namespace_exposes_the_exact_float64_function_contract() {
     let namespace =
         builtin_module_namespace(&["math".to_string()]).expect("math should be a builtin module");
     let expected = [
-        ("ceil", vec!["value"], Type::named("int64")),
-        ("cos", vec!["value"], Type::named("float64")),
-        ("exp", vec!["value"], Type::named("float64")),
-        ("floor", vec!["value"], Type::named("int64")),
-        ("log", vec!["value"], Type::named("float64")),
-        ("log10", vec!["value"], Type::named("float64")),
-        ("log2", vec!["value"], Type::named("float64")),
-        ("pow", vec!["base", "exponent"], Type::named("float64")),
-        ("sin", vec!["value"], Type::named("float64")),
-        ("tan", vec!["value"], Type::named("float64")),
-        ("trunc", vec!["value"], Type::named("int64")),
+        ("acos", vec!["value"], "float64", "float64"),
+        ("acosh", vec!["value"], "float64", "float64"),
+        ("asin", vec!["value"], "float64", "float64"),
+        ("asinh", vec!["value"], "float64", "float64"),
+        ("atan", vec!["value"], "float64", "float64"),
+        ("atan2", vec!["y", "x"], "float64", "float64"),
+        ("atanh", vec!["value"], "float64", "float64"),
+        ("cbrt", vec!["value"], "float64", "float64"),
+        ("ceil", vec!["value"], "float64", "int64"),
+        ("comb", vec!["count", "chosen"], "int64", "int64"),
+        ("copysign", vec!["magnitude", "sign"], "float64", "float64"),
+        ("cos", vec!["value"], "float64", "float64"),
+        ("cosh", vec!["value"], "float64", "float64"),
+        ("degrees", vec!["value"], "float64", "float64"),
+        ("exp", vec!["value"], "float64", "float64"),
+        ("expm1", vec!["value"], "float64", "float64"),
+        ("factorial", vec!["value"], "int64", "int64"),
+        ("floor", vec!["value"], "float64", "int64"),
+        ("gcd", vec!["left", "right"], "int64", "int64"),
+        ("hypot", vec!["x", "y"], "float64", "float64"),
+        ("is_finite", vec!["value"], "float64", "bool"),
+        ("is_inf", vec!["value"], "float64", "bool"),
+        ("is_nan", vec!["value"], "float64", "bool"),
+        ("isqrt", vec!["value"], "int64", "int64"),
+        ("lcm", vec!["left", "right"], "int64", "int64"),
+        ("log", vec!["value"], "float64", "float64"),
+        ("log10", vec!["value"], "float64", "float64"),
+        ("log1p", vec!["value"], "float64", "float64"),
+        ("log2", vec!["value"], "float64", "float64"),
+        ("perm", vec!["count", "chosen"], "int64", "int64"),
+        ("pow", vec!["base", "exponent"], "float64", "float64"),
+        ("radians", vec!["value"], "float64", "float64"),
+        ("sin", vec!["value"], "float64", "float64"),
+        ("sinh", vec!["value"], "float64", "float64"),
+        ("sqrt", vec!["value"], "float64", "float64"),
+        ("tan", vec!["value"], "float64", "float64"),
+        ("tanh", vec!["value"], "float64", "float64"),
+        ("trunc", vec!["value"], "float64", "int64"),
     ];
 
     assert_eq!(namespace.functions.len(), expected.len());
-    for (name, parameter_names, return_type) in expected {
+    for (name, parameter_names, parameter_type, return_type) in expected {
         let function = namespace
             .functions
             .get(name)
@@ -385,8 +421,8 @@ fn math_namespace_exposes_the_exact_float64_function_contract() {
             .signature
             .params
             .iter()
-            .all(|parameter| *parameter == Type::named("float64")));
-        assert_eq!(function.signature.return_type, return_type);
+            .all(|parameter| *parameter == Type::named(parameter_type)));
+        assert_eq!(function.signature.return_type, Type::named(return_type));
         assert!(host_builtin_metadata(&format!("math::{name}")).is_some());
     }
 }
@@ -400,6 +436,7 @@ fn math_namespace_exposes_exact_generic_float64_constants() {
         ("inf", 0x7ff0_0000_0000_0000_u64),
         ("nan", 0x7ff8_0000_0000_0000_u64),
         ("pi", 0x4009_21fb_5444_2d18_u64),
+        ("tau", 0x4019_21fb_5444_2d18_u64),
     ];
 
     assert_eq!(namespace.constants.len(), expected.len());
@@ -446,6 +483,8 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
             "base64_decode",
             "base64_encode",
             "constant_time_eq",
+            "decode",
+            "encode",
             "ends_with",
             "find",
             "hex_decode",
@@ -1012,6 +1051,99 @@ def unpack(data: list[uint8]) -> str:
     )
     .expect_err("gzip.compress takes bytes, not text");
     assert!(error.message.contains("list[uint8]"), "{}", error.message);
+}
+
+#[test]
+fn image_module_type_checks_its_whole_api() {
+    assert!(super::is_builtin_root_module("image"));
+    assert!(super::builtin_module_registry().contains_key("image"));
+    let resize = host_builtin_metadata("image::__aura_resize").expect("image resize metadata");
+    assert_eq!(resize.params.len(), 7);
+    for name in crate::native_runtime::HOST_BUILTIN_SYMBOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| name.starts_with("image::"))
+    {
+        let metadata = host_builtin_metadata(name).expect("an image entry has metadata");
+        assert_eq!(
+            crate::native_runtime::dynamic_host_abi(name).map(|abi| abi.params.len()),
+            Some(metadata.params.len()),
+            "{name}"
+        );
+    }
+
+    crate::check_source(
+        r#"import image
+
+def shrink(source: str, target: str) -> Result[int64, image.Error]:
+    picture = try image.read(source)
+    small = picture.resize(picture.width // 2, picture.height // 2)
+    sharp = picture.resize_with(64, 64, image.Filter.Bicubic)
+    try image.write(target, small.to_gray())
+    try image.write_as(target, sharp.to_rgb(), image.Format.Jpeg)
+    return Result.Ok(small.pixels.len() + sharp.width)
+
+def codecs(picture: image.Image) -> Result[int64, image.Error]:
+    png = try image.encode_png(picture, level=9)
+    jpeg = try image.encode_jpeg(picture.to_rgb(), quality=80)
+    ppm = try image.encode_ppm(picture.to_gray())
+    any = try image.encode(picture, image.Format.Png)
+    found = try image.info(png)
+    again = try image.decode(jpeg)
+    bounded = try image.decode_up_to(ppm, 1024)
+    return Result.Ok(found.width + again.height + bounded.channels + any.len())
+
+def pixels() -> int64:
+    mut picture = image.Image.new(4, 3, 4)
+    picture.set(1, 1, 3, 255)
+    filled = image.Image.filled(2, 2, 1, 128)
+    part = picture.crop(0, 0, 2, 2).flip_horizontal().flip_vertical()
+    wide = part.to_rgba().to_gray_alpha()
+    mut total = picture.get(1, 1, 3) as int64 + filled.pixels.len() + wide.channels
+    if picture.has_alpha():
+        total += 1
+    return total
+
+def arrays(picture: image.Image) -> image.Image:
+    values: Array[float32] = picture.to_array()
+    planes: Array[float32] = picture.to_planes()
+    first = image.Image.from_array(values)
+    second = image.Image.from_planes(planes)
+    if first.pixels == second.pixels:
+        return first
+    return second
+
+def named(file_path: str) -> bool:
+    match image.format_of(file_path):
+        case image.Format as format:
+            return format == image.Format.Ppm
+        case None:
+            return false
+
+def reason(failure: image.Error) -> str:
+    match failure:
+        case image.Error.Io(error):
+            return "io"
+        case image.Error.InvalidData(message):
+            return message.clone()
+        case image.Error.Unsupported(message):
+            return message.clone()
+        case image.Error.TooLarge(limit_pixels):
+            return f"{limit_pixels}"
+"#,
+    )
+    .expect("the image API should type-check");
+
+    let error = crate::check_source(
+        "import image\n\ndef bad() -> Result[image.Image, image.Error]:\n    return image.decode(\"photo.png\")\n",
+    )
+    .expect_err("image.decode takes bytes, not a path");
+    assert!(error.message.contains("list[uint8]"), "{}", error.message);
+    let error = crate::check_source(
+        "import image\n\ndef bad(picture: image.Image) -> None:\n    picture.set(0, 0, 0, 1)\n",
+    )
+    .expect_err("set needs a mutable image");
+    assert!(error.message.contains("mut"), "{}", error.message);
 }
 
 #[test]

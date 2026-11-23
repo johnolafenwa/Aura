@@ -30,6 +30,7 @@ representation, and the direct backend compiles native code.
 | `default_arguments.au` | Shared-borrow default parameter values, evaluated fresh on each call | `hello world`, `hello aura`, `6`, `12` |
 | `function_values.au` | Capture-free named function values in bindings, parameters, fields, and `list`. Covers copy semantics, explicit generic specialization, and a statically known indirect call that uses a default and a named argument. Also shows explicit `def(mut T) -> R` and `def(own T) -> R` contracts through fields and `list`. | `2`, `3`, `6`, `5`, `5`, `12`, `11`, `21`, `2`, `owned` |
 | `closures.au` | Contextually typed expression lambdas with a Copy snapshot, a repeatable read-only non-Copy capture, and a consuming single-use capture | `42`, `12`, `4`, `4`, `owned` |
+| `stored_closures.au` | Closures stored through `Callable[...]` types: returned from a function, passed as an argument, kept in a class field and a dictionary, and a Mutable closure that owns its state. A lambda packs where the storage type is expected. | `slow: 1`, `over the limit: 2`, `1`, `12`, `true` |
 | `decorators.au` | Decorators on module-level functions. Decorator expressions evaluate top to bottom and apply bottom to top. A recursive call goes through the decorated binding. | `evaluate offset(100)`, `evaluate offset(10)`, `apply offset(10)`, `apply offset(100)`, `112`, `call 2`, `call 1`, `call 0`, `0` |
 | `retry_decorator.au` | A generic decorator factory. `@retry(3)` takes its attempt count as an argument and infers its type parameters from the function it decorates. | `8080`, `attempt 1 failed`, `attempt 2 failed`, `bad port http` |
 | `views.au` | Shared and mutable local views, returned view provenance, mutable reborrowing, inferred final-use release, fixed tuple-place identity, and a mutable-repeatable loan closure | `Ada`, `2`, `9`, `(10, 21)`, `(11, 32)` |
@@ -64,6 +65,7 @@ executable size.
 | `list_algorithms.au` | Eager shared `map` and `filter`, stable natural sorting of numbers and `str`, stable key sorting that calls the key once per element, and source retention | `[6, 2, 4, 8]`, `[2, 4]`, `[1, 2, 3, 4]`, `[4, 3, 2, 1]`, `second`, `first`, `third`, `[Apple, fig, pear]`, `[3, 1, 2, 4]` |
 | `dict_basics.au` | `dict[K, V]` literals, `update(...)`, tuple-valued `items()`, indexed writes, indexed reads, and typed optional lookup and removal | `3`, `true`, `1`, `1`, `5`, `(aura, 5)`, `(repo, 3)`, `3`, `3`, `3`, `true` |
 | `lookup_in_place.au` | Arm-scoped `lookup` on lists and dictionaries: a mutable `Found` view that appends in place, the `Missing` arm for an invalid position or absent key, and a shared read | `no team at 2`, `core: 1`, `2`, `1`, `1` |
+| `set_algebra.au` | Set union, intersection, difference, and symmetric difference with `\|`, `&`, `-`, `^` and the named methods, the subset, superset, and disjoint tests, and `update` | `either: ada, grace, linus, margaret`, `both: grace`, `backend only: ada, linus`, `one team: ada, linus, margaret`, `either: ada, grace, linus, margaret`, `false`, `true`, `true`, `5` |
 | `set_basics.au` | `set[T]` literals, shared-borrow iteration, deduplication, and the set method surface | `3`, `true`, `false`, `true`, `true`, `9`, `true`, `true`, `1` |
 
 ### `classes/`
@@ -149,6 +151,7 @@ seven real loopback requests.
 
 | File | Shows | Prints |
 | --- | --- | --- |
+| `byte_strings_and_encodings.au` | Byte strings such as `b"\r\n"` as `list[uint8]` values, `bytes.encode` and `bytes.decode` through UTF-8, Latin-1, UTF-16, ASCII, and Windows-1252, and matching each `bytes.EncodingError` | `16`, `true`, `00ff`, `utf-8: 636166c3a9`, `latin-1: 636166e9`, `utf-16-le: 630061006600e900`, `ascii: cannot hold character 3`, `no encoding named ebcdic`, `“quoted”` |
 | `codecs_and_hashing.au` | Converts `str` to strict UTF-8 bytes and back, encodes and decodes binary data with canonical base64, renders lowercase hex, computes raw SHA-256, and reuses shared inputs afterward | `4175726120f09f8c8c`, `Aura 🌌`, `AAH+/w==`, `0001feff`, `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`, `4175726120f09f8c8c`, `[0, 1, 254, 255]` |
 
 ### `control_flow/`
@@ -252,6 +255,7 @@ package authorization.
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
 | `ffi_getpid/` | An FFI package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
 | `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
+| `raylib/` | A binding of the raylib graphics library, generated from raylib's API description: structs by value, `cstr` text, `mut` struct and scalar parameters, and constants. Three programs use it: a brick game with keyboard and mouse input, a 3D scene with a camera and a model, and a picture written to a PNG with no window | `picture.au` prints the size of its image and two colors |
 
 Run commands:
 
@@ -265,6 +269,12 @@ Run commands:
 - `sqlite_notes/`, on a host with the SQLite library and its linker file
   (`libsqlite3-dev` on Debian and Ubuntu, built in on macOS):
   `cargo run -p aura -- run examples/packages/sqlite_notes/src/main.au`
+- `raylib/`, on a host with the raylib library, from the package
+  directory so the picture lands there. Its `README.md` says how to
+  install raylib. `main.au` and `scene.au` open a window:
+  - `cargo run -p aura -- run examples/packages/raylib/src/picture.au`
+  - `cargo run -p aura -- run examples/packages/raylib/src/main.au`
+  - `cargo run -p aura -- run examples/packages/raylib/src/scene.au`
 
 `Aura.toml` also supports git dependencies with `git`, `rev`, `tag`, or
 `branch`. The default branch is `main`. Git dependencies need cached git
@@ -293,6 +303,7 @@ compiler, CLI, and language-server regression tests cover them instead.
 | `atomic_save.au` | `fs.File.sync()` and `fs.rename(...)` replace a file atomically; renaming a missing file returns `io.Error.NotFound` | `second`, `false`, `io.Error.NotFound` |
 | `read_lines.au` | `fs.File.read_lines(...)`, `read_line()`, and `read_chunk(...)` read a file in pieces from one position | `4 lines, 9 words`, `the quick brown fox`, `24`, `3`, `true` |
 | `sign_and_compress.au` | `gzip.compress(...)`, bounded `gzip.decompress(...)`, `bytes.hmac_sha256(...)`, and `bytes.constant_time_eq(...)` | `true`, `64`, `true`, `bad signature`, `more than 4096 bytes`, `not gzip` |
+| `image_thumbnail.au` | `image.write(...)` and `image.read(...)` as PNG, JPEG, and PGM, `resize(...)`, `to_gray()`, `image.info(...)`, `to_planes()`, and the `image.Error` variants | `64x48 channels=3`, `true`, `true`, `16x12 channels=1`, `true`, `true`, `[3, 48, 64]`, `0.5019608`, `true`, `the data is not a PNG, JPEG or Netpbm image`, `JPEG has no alpha`, `more than 1000 pixels` |
 | `process_run.au` | Shell-free `process.run(..., group=true)`, UTF-8 and raw captured stdout and stderr, and `process.Completed.check()` | `aura process`, `13`, `0`, `ExitStatus.Exited(0)` |
 | `process_pipes.au` | Interactive `process.start(..., group=true)`, `process.Pipe`, and child waiting with a timeout | `ping`, `ExitStatus.Exited(0)` |
 | `process_supervisor.au` | `process.supervisor()`, restart policies, restart backoff, and group-aware supervisor shutdown | `SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)`, `SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)`, `true`, `false`, `true` |
@@ -365,6 +376,8 @@ printed-output order unless they coordinate that order explicitly.
 | `float32_values.au` | `float32` values in annotated bindings, parameters, returns, and class fields | `3.25`, `2.0`, `5.0` |
 | `numeric_casts.au` | Explicit numeric conversions with `expr as Type` | `7`, `3.0`, `1.25`, `2.0` |
 | `numeric_builtins.au` | Builtin numeric helpers `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`, and `float64.sqrt()` | `7`, `3.5`, `2`, `12`, `9.0`, `9.0` |
+| `angles_and_integers.au` | The inverse trigonometric functions, `hypot`, `degrees`, and value classification from the `math` module, and its exact integer functions `gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and `perm` | `5.0`, `53`, `30`, `true`, `true`, `12`, `12`, `31622`, `3628800`, `2598960`, `20` |
+| `exact_numbers.au` | Arbitrary-size factorial, decimal receipt totals and complex multiplication | `265252859812191058636308480000000`, `59.85`, `-1.0` |
 | `scalar_math.au` | Exact `float64` constants and scalar rounding, power, exponential, logarithmic, and trigonometric functions from the `math` module | `3.141592653589793`, `2.718281828459045`, `inf`, `NaN`, `-2`, `-1`, `-1`, `0.125`, `1.0`, `0.0`, `3.0`, `3.0`, `0.0`, `1.0`, `0.0` |
 | `numeric_arrays.au` | Global contiguous row-major `Array[T]` over the four supported dtypes. Covers construction, multidimensional indexing, mutable replacement, row slices, mapping, reductions, scalar kernels, and explicit wrapping and saturating integer arithmetic. | `2`, `[1, 2, 3, 4]`, `[2, 2]`, `20`, `46`, `25.0`, `-2147483648`, `2147483647`, `16.0` |
 | `array_products.au` | `Array.matmul` of a table and a vector and of two tables, `Array.dot`, and the reordered `fast_sum` and `fast_mean` beside the left-to-right `sum` | `Array[float64](shape=[2], values=[88.3, 88.3])`, `0.38`, `Array[int64](shape=[2, 2], values=[19, 22, 43, 50])`, `70`, `100000.00000133288`, `99999.9999999441`, `0.0999999999999441` |
@@ -381,6 +394,7 @@ printed-output order unless they coordinate that order explicitly.
 | --- | --- | --- |
 | `greeting.au` | String concatenation and equality | `hello, aura` |
 | `string_clone.au` | `str.clone()` on owned strings | `aura` |
+| `character_positions.au` | Reading one character of a `str` with `text[index]` and `char_at`, negative positions, and loops that compare characters from both ends | `n`, `ï`, `e`, `a`, `AKL`, `true`, `false` |
 | `string_methods.au` | Single-quoted strings, an owned `str \| None` match helper, and the `str` methods: `int64` Unicode-scalar `len()`, `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()` | `13`, `true`, `true`, `true`, `aura repo`, `2`, `aura`, `repo`, `aura lang`, `aura repo`, `AURA REPO`, `repo`, `none`, `aura`, `none`, `9` |
 | `string_parsing_and_formatting.au` | Parsing builtins, scalar and boolean `.to_string()`, and `str.join(...)` | `42`, `-9000000000`, `3.5`, `true`, `aura-lang-tests`, `true`, `12`, `4`, `9`, `3.0` |
 | `text_parsing.au` | A small request-log parser that uses `lines()`, `split_whitespace()`, `rsplit_once(...)`, `split_once(...)`, `trim_start()`, `trim_end()`, `find(...)`, `count(...)`, and `repeat(...)`, plus `bytes.starts_with`, `bytes.find`, and `bytes.ends_with` | `Requests`, `--------`, three aligned request rows, `skipped: broken`, `Content-Type = text/plain; charset=utf-8`, `utf-8`, `2`, `68656c6c6f`, `true` |
@@ -469,6 +483,7 @@ cargo run -p aura -- run examples/io/bytes_file_io.au
 cargo run -p aura -- run examples/io/atomic_save.au
 cargo run -p aura -- run examples/io/read_lines.au
 cargo run -p aura -- run examples/io/sign_and_compress.au
+cargo run -p aura -- run examples/io/image_thumbnail.au
 cargo run -p aura -- run examples/io/process_run.au
 cargo run -p aura -- run examples/io/process_pipes.au
 cargo run -p aura -- run examples/io/process_supervisor.au

@@ -1,0 +1,102 @@
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+type Job = TaskCallable[def() -> int64]
+type Printer = TaskCallable[def() -> None]
+type Maker = Callable[def(amount: int64) -> Step]
+
+
+class Total:
+    sum: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.sum = self.sum + amount
+        return self.sum
+
+
+class Rule:
+    weight: int64
+    step: Step
+
+
+class Pipeline:
+    name: str
+    rules: list[Rule]
+
+    def run(self, value: int64) -> int64:
+        mut acc = value
+        for rule in self.rules:
+            acc = rule.step(acc) * rule.weight
+        return acc
+
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+
+def compose(first: own Step, second: own Step) -> Step:
+    return lambda [own first, own second] value: second(first(value))
+
+
+def running_total() -> Tally:
+    total = Total(sum=0)
+    return lambda [own total] amount: total.add(amount)
+
+
+def make_job(seed: int64) -> Job:
+    return lambda: seed * seed
+
+
+def make_printer(seed: int64) -> Printer:
+    return lambda: print(seed * seed)
+
+
+def run_twice(tally: mut Tally) -> int64:
+    tally(1)
+    return tally(1)
+
+
+def take(step: own Step) -> int64:
+    return step(1)
+
+
+def main() -> None:
+    both = compose(make_adder(1), make_adder(10))
+    print(both(0))
+    chain: list[Step] = [compose(make_adder(1), make_adder(2)), both]
+    mut acc = 0
+    for step in chain:
+        acc = step(acc)
+    print(acc)
+
+    pipeline = Pipeline(name="p", rules=[Rule(weight=2, step=make_adder(1)), Rule(weight=3, step=make_adder(2))])
+    print(pipeline.run(1))
+    print(pipeline.run(2))
+
+    mut tallies: list[Tally] = [running_total()]
+    print(run_twice(tallies[0]))
+    print(tallies[0](10))
+    mut moved = tallies.pop()
+    print(moved(100))
+    print(run_twice(moved))
+
+    jobs: list[Job] = [make_job(3), make_job(4)]
+    mut sum = 0
+    for job in jobs:
+        sum += job()
+    print(sum)
+    mut queued: list[Printer] = [make_printer(5)]
+    with group = TaskGroup():
+        group.start_soon(queued.pop())
+
+    maker: Maker = make_adder
+    mut made: list[Step] = [maker(3), maker(4)]
+    print(made[0](1) + made[1](1))
+    print(take(made.pop()))
+    print(len(made))
+
+    mut rule = Rule(weight=1, step=make_adder(1))
+    print(rule.step(1))
+    rule.step = make_adder(50)
+    print(rule.step(1))
+    rule = Rule(weight=1, step=compose(make_adder(5), make_adder(6)))
+    print(rule.step(1))

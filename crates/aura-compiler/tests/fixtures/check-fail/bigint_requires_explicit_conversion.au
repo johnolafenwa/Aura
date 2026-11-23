@@ -1,0 +1,5 @@
+from numbers import BigInt
+
+
+def main() -> None:
+    print(BigInt.from_int(1) + 2)

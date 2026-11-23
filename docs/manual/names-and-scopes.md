@@ -137,7 +137,7 @@ A function body starts with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.16 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
+A local `def` introduces an immutable function name in its enclosing block. Its parameters and locals belong to a new function scope. Classes, enums, and traits are declared at module level or as members of declarations that permit them. See [Closures](/manual/closures).
 
 ## Local Bindings
 
@@ -344,7 +344,7 @@ Name, visibility, trait, module, and scope resolution happen in the compiler fro
 ## Limits And Implementation-Defined Behavior
 
 - Local declarations and comprehension targets cannot shadow visible locals in the positions listed above.
-- Items cannot be nested in function suites.
+- A local `def` binds its name in the enclosing block. Other module items cannot be nested in a function suite.
 - Wildcard imports, relative-dot imports, and imported top-level execution are unavailable.
 - Import aliases follow the ordinary no-collision and visibility rules.
 
@@ -363,6 +363,6 @@ Implemented:
 - comprehension scopes
 - the entry-module top-level scope described above
 
-Unavailable: dynamic names, reflection-based lookup, nested items, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
+Unavailable: dynamic names, reflection-based lookup, import side effects, wildcard imports, and user-selectable shadowing. An identifier that lexes today does not imply any future name-resolution form.
 
 Design record: `architecture_docs/decisions/0037-expression-closures-and-value-capture.md`.

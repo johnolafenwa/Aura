@@ -1,0 +1,10 @@
+left error[AU4001]: rejected (site.au:5:5) | [literal at 4:1]
+right error[AU4001]: rejected (site.au:5:5) | [literal at 4:1]
+error[AU4001]: rejected (site.au:5:5) | [literal at 4:1, first_path at 36:1]
+error[AU4001]: rejected (site.au:5:5) | [literal at 4:1, second_path at 40:1]
+error[AU4001]: rejected -5 (site.au:10:5) | [dynamic at 9:1, first_message at 44:1]
+error[AU4001]: rejected -6 (site.au:10:5) | [dynamic at 9:1, second_message at 48:1]
+error[AU4001]: rejected -7 (site.au:10:5) | [dynamic at 9:1]
+error[AU4001]: rejected -8 (site.au:10:5) | [dynamic at 9:1]
+flag false count 17
+AU4004

@@ -1,0 +1,6 @@
+error[AU3003]: local function `once` cannot call itself while it mutates or consumes captures
+ --> crates/aura-compiler/tests/fixtures/check-fail/local_function_consuming_recursion.au:7:5
+  |
+7 |     def once[own values](depth: int64) -> int64:
+  |     ^
+  = help: pass the state as a mut parameter

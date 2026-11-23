@@ -55,7 +55,7 @@ fn signature_help_preserves_defaults_keyword_slots_and_incomplete_calls() {
 
 #[test]
 fn rename_rejects_imports_invalid_sources_and_binding_capture() {
-    let source = "import math\ndef main():\n    value = math.sqrt(4.0)\n    print(value)\n";
+    let source = "import math\ndef main():\n    value = math.root(4.0)\n    print(value)\n";
     assert!(rename_path_source(path(), source, 2, 19, "root").is_none());
     assert!(prepare_rename_path_source(path(), source, 2, 19).is_none());
     assert!(rename_path_source(path(), SOURCE, 5, 7, "a b").is_none());

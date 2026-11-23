@@ -1,0 +1,11 @@
+type Step = Callable[def(value: int64) -> int64]
+
+
+def replace(pair: mut (Step, int64)) -> int64:
+    pair = (lambda value: value + 2, 0)
+    return 1
+
+
+def main() -> None:
+    mut pair: (Step, int64) = (lambda value: value, 0)
+    print(pair[0](replace(pair)))

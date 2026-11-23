@@ -1,0 +1,7 @@
+Lookup.Found((1, 3))
+Lookup.Missing
+Lookup.Missing
+Lookup.Missing
+Lookup.Found(17)
+Lookup.Found(32)
+Lookup.Found(90)

@@ -18,8 +18,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numbers And Durations
 
-- Integers are fixed-width.
-- Aura has no arbitrary-precision integer, implicit width promotion, rotate operator, literal suffix, hexadecimal floating literal, or distinct unsigned-right-shift operator.
+- Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
+- Integer operations require explicit width conversion. Rotate operators, literal suffixes, hexadecimal floating literals and a distinct unsigned-right-shift operator are outside the current syntax.
 - Power is builtin-only.
 - `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
@@ -45,9 +45,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Ordinary and triple-quoted strings may use single or double quotes. F-strings use double quotes.
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
-- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. `text[index]` and `char_at(index)` read one character by scalar position, in constant time for ASCII text and by a scan otherwise. A `str` cannot be changed through an index. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
+- `list[uint8]` is the bytes type, and a byte string `b"..."` is a literal of it. Text conversion is explicit: UTF-8 through `to_bytes` and `from_bytes`, and UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252 through `bytes.encode` and `bytes.decode`. Other text encodings, lossy decoding with a replacement character, triple-quoted and raw byte strings, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -73,7 +73,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `receiver.method` binds a closure over the receiver with the method's contract. `Class.method` on a non-generic class is a function value.
 - A generic method's type arguments come from `method[T]` or an expected contract. An associated method of a generic class still needs a call.
 - A stored callable may return a view of one named parameter. A `from self` view result and loan captures cannot be stored.
-- Bare callable destinations require identical complete contracts (`AU2015`). A safe restriction needs a thin alias adapter such as `Unary(function)`, or an explicit `Callable[...]` or `TaskCallable[...]` constructor. The callable member of a union destination such as `(def(value: int64) -> int64) | None` is a bare destination too.
+- Bare callable destinations require identical complete contracts (`AU2015`). A safe restriction needs a thin alias adapter such as `Unary(function)`, or the constructor of a `Callable[...]` or `TaskCallable[...]` alias. The callable member of a union destination such as `(def(value: int64) -> int64) | None` is a bare destination too.
 - Callable identities are tracked through at most eight levels of class field nesting. The MIR validator refuses a call through a callable stored deeper than that.
 
 ### Lambdas And Closures
@@ -85,7 +85,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Capturing closures cannot pass through arbitrary written-`def` parameters, fields, collections, or annotated returns. Those boundaries describe capture-free code pointers.
 - Compiler-known repeatable callback sites keep closure metadata. Task start accepts a qualifying closure by move for one call.
 - Conditional and `match` expressions merge capturing closures only through an explicit common `Callable[...]` contract on the destination. Otherwise, invoke the closure within each branch, or use capture-free lambdas or named functions.
-- Owned callable storage, `Callable[...]` and `TaskCallable[...]`, holds owned captures only. It is packed explicitly through an alias call.
+- Owned callable storage, `Callable[...]` and `TaskCallable[...]`, holds owned captures only. A callable value packs where the storage type is expected.
 
 ### Comprehensions And Slices
 
@@ -97,7 +97,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice assignment to a list or `str` is a reserved `AU2005` form.
-- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, grapheme slicing and indexing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms
@@ -132,14 +132,17 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
 - Calls run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list, C structs of scalars by value and by pointer, temporary str and byte pointer-length views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
-- A callback is a named top-level function over scalars. Closures, text, lists, structs, and handles do not cross in a callback.
-- There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
+- The ABI accepts fixed-width scalars, pointers to one scalar, pointers to scalar or struct arrays, C structs and unions, temporary text and byte views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
+- A callback is a named top-level function. Its parameters can be scalars, pointers to one scalar, or NUL-terminated UTF-8 text declared as `cstr`. Declare a handle parameter as `uint64`. The result is a scalar or `None`.
+- Variadic functions, pointer arithmetic, returned views, C bit-fields, and asynchronous foreign calls are unavailable. C union members are read-only.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
-- The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
+- The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
+
+- A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
+- Each shared-map method is a single operation. Use `sync.Mutex[dict[K, V]]` to protect a sequence of reads and writes.
 
 - `TaskGroup.start(...)` and `start_soon(...)` support bare shared and `own` target parameters. `mut` targets are rejected because child tasks cannot write back through the starting call frame.
 - Detached lightweight tasks are not a language form. Use `TaskGroup`.
@@ -181,8 +184,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact `int64` requests from 256 KiB through 64 MiB inclusive.
 - Accepted requests are rounded up to the host page size and guard-protected. Smaller and larger requests are rejected, not clamped.
 - The stack override API is provisional.
-- The MIR and direct runtime entry thread reserves 64 MiB. Maintained execution paths stop with a recursion-depth diagnostic after 256 nested Aura calls.
-- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. The direct backend has only the depth limit.
+- The program's first task has a 64 MiB stack in a built program and 256 MiB under `aura run`. No count limits nested calls: a call that would not fit on the running stack traps with `AU4005` ([Call Depth](/manual/failure-recovery#call-depth)). `aura run` reaches a much smaller depth than a built program, because one interpreted call costs about 11 KiB of stack.
+- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. A built program checks at the entry of every function that can call itself.
 - The 256 KiB lower bound is an opt-in minimum for measured shallow tasks, not a generally safe default. The complete compiled Aura HTTP example faulted when 256 KiB was the global default and succeeded with a 512 KiB default.
 - An isolated runtime protocol round trip succeeds with 256 KiB callers because it excludes compiled language-execution frames. It proves the service offload boundary, not a 256 KiB whole-program default.
 
@@ -238,6 +241,13 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - Duration is a signed i128 nanosecond language value, but host timer ranges are narrower.
 - Negative values, out-of-range host conversions, and overflowing deadline calculations are invalid input, not unlimited waits. The exact error classification is fixed by the Duration design record.
+
+### Images
+
+- The `image` module holds 8-bit samples only. A 16-bit PNG or PPM is narrowed as it is read.
+- It reads and writes PNG, JPEG, and the Netpbm family. GIF, BMP, WebP, TIFF, and AVIF are not provided.
+- Metadata, including EXIF orientation and colour profiles, is neither returned nor written.
+- An image is decoded and encoded whole in memory. `image.decode` refuses more than 268,435,456 pixels, and `image.decode_up_to` accepts a limit up to 536,870,911.
 
 ### JSON
 

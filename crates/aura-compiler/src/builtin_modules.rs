@@ -393,6 +393,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
     ClassInfo {
         module_name: module_name.to_string(),
         is_builtin: true,
+        is_builtin_source: false,
         decl: ClassDecl {
             public: true,
             copy: false,
@@ -404,6 +405,8 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             span: builtin_span(),
             doc: None,
             c_layout: false,
+            c_arrays: BTreeMap::new(),
+            c_union: None,
         },
         type_param_bounds: BTreeMap::new(),
         fields: BTreeMap::new(),
@@ -1646,6 +1649,220 @@ fn iter_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// Opaque, copy-on-write storage owned by the source collection classes.
+fn collections_namespace() -> ModuleNamespace {
+    let ty = |name| type_ref(name, Vec::new());
+    let state = || ty("collections.__Store");
+    let k = || ty("K");
+    let v = || ty("V");
+    let t = || ty("T");
+    let flag = || ty("bool");
+    let index = || ty("int64");
+    let pair = |left, right| TypeRef::tuple(vec![left, right], false, builtin_span());
+    let lookup = |item| type_ref("Lookup", vec![item]);
+    let list = |item| type_ref("list", vec![item]);
+    let read = || borrow_param("storage", state());
+    let write = || own_param("storage", state());
+    let function = |name, params, result| function_info("collections", name, params, result);
+    let generic = |name, parameters, params, result| {
+        generic_function_info("collections", name, parameters, params, result)
+    };
+    let functions = vec![
+        function("__aura_new", vec![value_param("kind", index())], state()),
+        function("__aura_len", vec![read()], index()),
+        generic(
+            "__aura_supported",
+            vec!["T"],
+            vec![borrow_param("value", t())],
+            flag(),
+        ),
+        generic(
+            "__aura_deque_push",
+            vec!["T"],
+            vec![
+                write(),
+                own_param("value", t()),
+                value_param("front", flag()),
+            ],
+            state(),
+        ),
+        generic(
+            "__aura_deque_pop",
+            vec!["T"],
+            vec![write(), value_param("front", flag())],
+            pair(state(), t()),
+        ),
+        generic(
+            "__aura_deque_get",
+            vec!["T"],
+            vec![read(), value_param("index", index())],
+            lookup(t()),
+        ),
+        generic(
+            "__aura_heap_from",
+            vec!["T"],
+            vec![own_param("items", list(t()))],
+            state(),
+        ),
+        generic(
+            "__aura_heap_push",
+            vec!["T"],
+            vec![write(), own_param("value", t())],
+            state(),
+        ),
+        generic(
+            "__aura_heap_take",
+            vec!["T"],
+            vec![write()],
+            pair(state(), t()),
+        ),
+        generic("__aura_heap_peek", vec!["T"], vec![read()], lookup(t())),
+        generic(
+            "__aura_map_put",
+            vec!["K", "V"],
+            vec![write(), own_param("key", k()), own_param("value", v())],
+            state(),
+        ),
+        generic(
+            "__aura_map_get",
+            vec!["K", "V"],
+            vec![read(), borrow_param("key", k())],
+            lookup(v()),
+        ),
+        generic(
+            "__aura_map_has",
+            vec!["K"],
+            vec![read(), borrow_param("key", k())],
+            flag(),
+        ),
+        generic(
+            "__aura_map_take",
+            vec!["K", "V"],
+            vec![write(), borrow_param("key", k())],
+            pair(state(), lookup(v())),
+        ),
+        generic(
+            "__aura_map_edge",
+            vec!["K", "V"],
+            vec![read(), value_param("last", flag())],
+            lookup(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_bound",
+            vec!["K", "V"],
+            vec![
+                read(),
+                borrow_param("key", k()),
+                value_param("mode", index()),
+            ],
+            lookup(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_range",
+            vec!["K", "V"],
+            vec![read(), borrow_param("low", k()), borrow_param("high", k())],
+            list(pair(k(), v())),
+        ),
+        generic(
+            "__aura_map_drain",
+            vec!["K", "V"],
+            vec![write()],
+            list(pair(k(), v())),
+        ),
+    ];
+    let mut namespace = function_only_namespace("collections", functions);
+    let storage = class_info("collections", "__Store");
+    namespace
+        .all_classes
+        .insert("__Store".to_string(), storage.clone());
+    namespace.classes.insert("__Store".to_string(), storage);
+    namespace
+}
+
+/// The host part of `image`: the codecs and the pixel operations, each
+/// taking one large value and then integers. `Image`, `Error` and the
+/// public functions are Aura source in `std/image.au`.
+fn image_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let text = || type_ref("str", Vec::new());
+    let array = || type_ref("Array", vec![type_ref("float32", Vec::new())]);
+    let tuple = |items: Vec<TypeRef>| TypeRef::tuple(items, false, builtin_span());
+    let function = |name: &str, data: (&str, TypeRef), numbers: &[&str], result: TypeRef| {
+        let mut params = vec![borrow_param(data.0, data.1)];
+        params.extend(numbers.iter().map(|number| value_param(number, int64())));
+        function_info("image", name, params, result)
+    };
+    let pixels = || ("pixels", bytes_vec_type_ref());
+    let layout = ["width", "height", "channels"];
+    let with_layout = |rest: &[&'static str]| [&layout[..], rest].concat();
+    function_only_namespace(
+        "image",
+        vec![
+            function(
+                "__aura_info",
+                ("data", bytes_vec_type_ref()),
+                &[],
+                tuple(vec![int64(), int64(), int64(), int64(), text()]),
+            ),
+            function(
+                "__aura_decode",
+                ("data", bytes_vec_type_ref()),
+                &["max_pixels"],
+                tuple(vec![
+                    int64(),
+                    int64(),
+                    int64(),
+                    int64(),
+                    bytes_vec_type_ref(),
+                    text(),
+                ]),
+            ),
+            function(
+                "__aura_encode",
+                pixels(),
+                &["format", "width", "height", "channels", "option"],
+                tuple(vec![int64(), bytes_vec_type_ref(), text()]),
+            ),
+            function(
+                "__aura_convert",
+                pixels(),
+                &with_layout(&["target"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_resize",
+                pixels(),
+                &with_layout(&["new_width", "new_height", "filter"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_crop",
+                pixels(),
+                &with_layout(&["left", "top", "crop_width", "crop_height"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_flip",
+                pixels(),
+                &with_layout(&["vertical"]),
+                bytes_vec_type_ref(),
+            ),
+            function(
+                "__aura_to_array",
+                pixels(),
+                &with_layout(&["planes"]),
+                array(),
+            ),
+            function(
+                "__aura_from_array",
+                ("values", array()),
+                &["planes"],
+                tuple(vec![int64(), int64(), int64(), bytes_vec_type_ref()]),
+            ),
+        ],
+    )
+}
+
 /// The host part of `regex`: the searches themselves, keyed by the number
 /// the runtime gave the pattern. `Regex`, `Match`, `Captures`, and `compile`
 /// are Aura source in `std/regex.au`.
@@ -2008,6 +2225,103 @@ fn tensor_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// The host part of `sync`: the lock cell and the atomic word that
+/// `std/sync.au` builds `Mutex`, `AtomicInt`, `AtomicBool`, and `Map` on.
+/// Both handles are Copy and Transfer, as a `Queue[T]` handle is: a copy
+/// reaches the same shared state.
+fn sync_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let unit = || type_ref("None", Vec::new());
+    let cell = || type_ref("sync.Cell", Vec::new());
+    let atom = || type_ref("sync.Atom", Vec::new());
+    let payload = || type_ref("T", Vec::new());
+    let atom_function = |name: &str, extra: Vec<Param>, result: TypeRef| {
+        let mut params = vec![value_param("atom", atom())];
+        params.extend(extra);
+        function_info("sync", name, params, result)
+    };
+    let mut namespace = function_only_namespace(
+        "sync",
+        vec![
+            generic_function_info(
+                "sync",
+                "__aura_cell_new",
+                vec!["T"],
+                vec![own_param("value", payload())],
+                cell(),
+            ),
+            generic_function_info(
+                "sync",
+                "__aura_cell_take",
+                vec!["T"],
+                vec![value_param("cell", cell())],
+                payload(),
+            ),
+            generic_function_info(
+                "sync",
+                "__aura_cell_put",
+                vec!["T"],
+                vec![value_param("cell", cell()), own_param("value", payload())],
+                unit(),
+            ),
+            generic_function_info(
+                "sync",
+                "__aura_map_get",
+                vec!["K", "V"],
+                vec![
+                    value_param("cell", cell()),
+                    value_param("key", type_ref("K", Vec::new())),
+                ],
+                type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+            ),
+            function_info(
+                "sync",
+                "__aura_cell_poisoned",
+                vec![value_param("cell", cell())],
+                boolean(),
+            ),
+            function_info(
+                "sync",
+                "__aura_atom_new",
+                vec![value_param("value", int64())],
+                atom(),
+            ),
+            atom_function("__aura_atom_load", Vec::new(), int64()),
+            atom_function(
+                "__aura_atom_store",
+                vec![value_param("value", int64())],
+                unit(),
+            ),
+            atom_function(
+                "__aura_atom_add",
+                vec![value_param("delta", int64())],
+                int64(),
+            ),
+            atom_function(
+                "__aura_atom_swap",
+                vec![value_param("value", int64())],
+                int64(),
+            ),
+            atom_function(
+                "__aura_atom_compare_and_set",
+                vec![
+                    value_param("expected", int64()),
+                    value_param("new", int64()),
+                ],
+                boolean(),
+            ),
+        ],
+    );
+    for name in ["Cell", "Atom"] {
+        let mut handle = class_info("sync", name);
+        handle.decl.copy = true;
+        namespace.classes.insert(name.to_string(), handle.clone());
+        namespace.all_classes.insert(name.to_string(), handle);
+    }
+    namespace
+}
+
 fn time_namespace() -> ModuleNamespace {
     let text = || type_ref("str", Vec::new());
     let int64 = || type_ref("int64", Vec::new());
@@ -2311,6 +2625,33 @@ fn math_namespace() -> ModuleNamespace {
             type_ref("int64", Vec::new()),
         )
     };
+    let binary_float = |name, first, second| {
+        function_info(
+            "math",
+            name,
+            vec![value_param(first, float()), value_param(second, float())],
+            float(),
+        )
+    };
+    let predicate = |name| {
+        function_info(
+            "math",
+            name,
+            vec![value_param("value", float())],
+            type_ref("bool", Vec::new()),
+        )
+    };
+    let integer = |name, params: &[&str]| {
+        function_info(
+            "math",
+            name,
+            params
+                .iter()
+                .map(|param| value_param(param, type_ref("int64", Vec::new())))
+                .collect(),
+            type_ref("int64", Vec::new()),
+        )
+    };
     let mut namespace = function_only_namespace(
         "math",
         vec![
@@ -2333,11 +2674,39 @@ fn math_namespace() -> ModuleNamespace {
             unary_float("sin"),
             unary_float("cos"),
             unary_float("tan"),
+            unary_float("sqrt"),
+            unary_float("cbrt"),
+            unary_float("asin"),
+            unary_float("acos"),
+            unary_float("atan"),
+            unary_float("sinh"),
+            unary_float("cosh"),
+            unary_float("tanh"),
+            unary_float("asinh"),
+            unary_float("acosh"),
+            unary_float("atanh"),
+            unary_float("expm1"),
+            unary_float("log1p"),
+            unary_float("degrees"),
+            unary_float("radians"),
+            binary_float("atan2", "y", "x"),
+            binary_float("hypot", "x", "y"),
+            binary_float("copysign", "magnitude", "sign"),
+            predicate("is_nan"),
+            predicate("is_inf"),
+            predicate("is_finite"),
+            integer("gcd", &["left", "right"]),
+            integer("lcm", &["left", "right"]),
+            integer("isqrt", &["value"]),
+            integer("factorial", &["value"]),
+            integer("comb", &["count", "chosen"]),
+            integer("perm", &["count", "chosen"]),
         ],
     );
     let constants = [
         ("pi", 0x4009_21fb_5444_2d18_u64),
         ("e", 0x4005_bf0a_8b14_5769_u64),
+        ("tau", 0x4019_21fb_5444_2d18_u64),
         ("inf", 0x7ff0_0000_0000_0000_u64),
         ("nan", 0x7ff8_0000_0000_0000_u64),
     ]
@@ -2665,6 +3034,36 @@ fn bytes_error_enum_info() -> EnumInfo {
     )
 }
 
+/// Why `bytes.encode` or `bytes.decode` did not convert.
+fn bytes_encoding_error_enum_info() -> EnumInfo {
+    let named = |name: &str, ty| EnumPayloadFieldDecl {
+        name: Some(name.to_string()),
+        ty,
+        span: builtin_span(),
+    };
+    builtin_enum_info(
+        "bytes",
+        "EncodingError",
+        vec![
+            (
+                "Unknown",
+                vec![named("name", type_ref("str", Vec::new()))],
+                true,
+            ),
+            (
+                "Invalid",
+                vec![named("index", type_ref("int64", Vec::new()))],
+                true,
+            ),
+            (
+                "Unencodable",
+                vec![named("index", type_ref("int64", Vec::new()))],
+                true,
+            ),
+        ],
+    )
+}
+
 fn bytes_namespace() -> ModuleNamespace {
     let bytes_result = || {
         type_ref(
@@ -2738,6 +3137,36 @@ fn bytes_namespace() -> ModuleNamespace {
         ),
         function_info(
             "bytes",
+            "encode",
+            vec![
+                value_param("text", type_ref("str", Vec::new())),
+                value_param("encoding", type_ref("str", Vec::new())),
+            ],
+            type_ref(
+                "Result",
+                vec![
+                    bytes_vec_type_ref(),
+                    type_ref("bytes.EncodingError", Vec::new()),
+                ],
+            ),
+        ),
+        function_info(
+            "bytes",
+            "decode",
+            vec![
+                value_param("value", bytes_vec_type_ref()),
+                value_param("encoding", type_ref("str", Vec::new())),
+            ],
+            type_ref(
+                "Result",
+                vec![
+                    type_ref("str", Vec::new()),
+                    type_ref("bytes.EncodingError", Vec::new()),
+                ],
+            ),
+        ),
+        function_info(
+            "bytes",
             "hmac_sha256",
             vec![
                 value_param("key", bytes_vec_type_ref()),
@@ -2759,7 +3188,11 @@ fn bytes_namespace() -> ModuleNamespace {
     .map(|function| (function.decl.name.clone(), function))
     .collect::<BTreeMap<_, _>>();
     let error = bytes_error_enum_info();
-    let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
+    let encoding_error = bytes_encoding_error_enum_info();
+    let enums = BTreeMap::from([
+        (error.decl.name.clone(), error),
+        (encoding_error.decl.name.clone(), encoding_error),
+    ]);
     ModuleNamespace {
         union_injections: Default::default(),
         narrowed_reads: Default::default(),
@@ -2932,6 +3365,147 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
     function_only_namespace(name, functions)
 }
 
+/// The host functions under the Aura source of `numbers` (`std/numbers.au`).
+/// Most host calls take a scalar and magnitude words, plus an exponent for
+/// a decimal. Large results use the wire list described in `numbers_host.rs`.
+fn numbers_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let float64 = || type_ref("float64", Vec::new());
+    let text = || type_ref("str", Vec::new());
+    let words = || type_ref("list", vec![type_ref("uint64", Vec::new())]);
+    let integer = |name: &str| {
+        vec![
+            value_param(&format!("{name}_small"), int64()),
+            borrow_param(&format!("{name}_digits"), words()),
+        ]
+    };
+    let decimal = |name: &str| {
+        let mut params = integer(name);
+        params.push(value_param(&format!("{name}_exponent"), int64()));
+        params
+    };
+    let function = |name: &str, groups: Vec<Vec<Param>>, result: TypeRef| {
+        function_info(
+            "numbers",
+            name,
+            groups.into_iter().flatten().collect(),
+            result,
+        )
+    };
+    let scalar = |name: &str, kind: TypeRef| vec![value_param(name, kind)];
+    function_only_namespace(
+        "numbers",
+        vec![
+            function(
+                "__aura_big_add_words",
+                vec![vec![
+                    borrow_param("left", words()),
+                    borrow_param("right", words()),
+                ]],
+                words(),
+            ),
+            function(
+                "__aura_small_pow_mod",
+                vec![
+                    scalar("base", int64()),
+                    scalar("exponent", int64()),
+                    scalar("modulus", int64()),
+                ],
+                int64(),
+            ),
+            function(
+                "__aura_big_binary",
+                vec![scalar("op", int64()), integer("left"), integer("right")],
+                words(),
+            ),
+            function(
+                "__aura_big_compare",
+                vec![integer("left"), integer("right")],
+                int64(),
+            ),
+            function(
+                "__aura_big_pow_mod",
+                vec![integer("base"), integer("exponent"), integer("modulus")],
+                words(),
+            ),
+            function(
+                "__aura_big_unary",
+                vec![scalar("op", int64()), integer("value")],
+                words(),
+            ),
+            function("__aura_big_bits", vec![integer("value")], int64()),
+            function(
+                "__aura_big_parse",
+                vec![vec![borrow_param("text", text())], scalar("radix", int64())],
+                words(),
+            ),
+            function(
+                "__aura_big_format",
+                vec![integer("value"), scalar("radix", int64())],
+                text(),
+            ),
+            function("__aura_big_to_float", vec![integer("value")], float64()),
+            function(
+                "__aura_big_from_float",
+                vec![scalar("value", float64())],
+                words(),
+            ),
+            function(
+                "__aura_dec_binary",
+                vec![
+                    scalar("op", int64()),
+                    decimal("left"),
+                    decimal("right"),
+                    scalar("digits", int64()),
+                    scalar("rounding", int64()),
+                ],
+                words(),
+            ),
+            function(
+                "__aura_dec_compare",
+                vec![decimal("left"), decimal("right")],
+                int64(),
+            ),
+            function(
+                "__aura_dec_round",
+                vec![
+                    decimal("value"),
+                    scalar("places", int64()),
+                    scalar("rounding", int64()),
+                ],
+                words(),
+            ),
+            function(
+                "__aura_dec_integer",
+                vec![decimal("value"), scalar("rounding", int64())],
+                words(),
+            ),
+            function("__aura_dec_normalize", vec![decimal("value")], words()),
+            function(
+                "__aura_dec_parse",
+                vec![vec![borrow_param("text", text())]],
+                words(),
+            ),
+            function(
+                "__aura_dec_format",
+                vec![decimal("value"), scalar("places", int64())],
+                text(),
+            ),
+            function("__aura_dec_to_float", vec![decimal("value")], float64()),
+            function(
+                "__aura_dec_from_float",
+                vec![scalar("value", float64())],
+                words(),
+            ),
+            function(
+                "__aura_dec_sqrt",
+                vec![decimal("value"), scalar("digits", int64())],
+                words(),
+            ),
+        ],
+    )
+}
+
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
         "io" => Some(io_namespace()),
@@ -2946,17 +3520,21 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "mem" => Some(mem_namespace()),
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
+        "image" => Some(image_namespace()),
         "regex" => Some(regex_namespace()),
+        "numbers" => Some(numbers_namespace()),
         "http" => Some(http_namespace()),
         "time" => Some(time_namespace()),
         "tensor" => Some(tensor_namespace()),
+        "sync" => Some(sync_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
         // `std/prelude.au`.
         "prelude" => Some(function_only_namespace("prelude", Vec::new())),
         // The lane classes are Aura source in `std/simd.au`.
-        "simd" => Some(function_only_namespace("simd", Vec::new())),
+        "simd" => Some(function_only_namespace(name, Vec::new())),
+        "collections" => Some(collections_namespace()),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
@@ -2964,8 +3542,27 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "tensor", "json",
-    "iter", "toml", "metrics", "log", "trace", "random",
+    "sys",
+    "path",
+    "math",
+    "mem",
+    "bytes",
+    "gzip",
+    "image",
+    "regex",
+    "time",
+    "http",
+    "tensor",
+    "json",
+    "iter",
+    "toml",
+    "metrics",
+    "log",
+    "trace",
+    "random",
+    "numbers",
+    "collections",
+    "sync",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -3090,14 +3687,18 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "mem"
             | "bytes"
             | "gzip"
+            | "image"
             | "http"
             | "regex"
+            | "numbers"
             | "time"
             | "tensor"
+            | "sync"
             | "json"
             | "iter"
             | "prelude"
             | "simd"
+            | "collections"
             | "toml"
             | "log"
             | "metrics"
@@ -3114,9 +3715,34 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
-        "gzip", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd", "toml",
-        "log", "metrics", "trace",
+        "io",
+        "fs",
+        "net",
+        "process",
+        "random",
+        "control",
+        "sys",
+        "path",
+        "math",
+        "mem",
+        "bytes",
+        "gzip",
+        "image",
+        "regex",
+        "time",
+        "http",
+        "tensor",
+        "json",
+        "iter",
+        "prelude",
+        "simd",
+        "toml",
+        "log",
+        "metrics",
+        "trace",
+        "numbers",
+        "collections",
+        "sync",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

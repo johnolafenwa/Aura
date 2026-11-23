@@ -14,24 +14,34 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 const JSON_SOURCE: &str = include_str!("../std/json.au");
+const COLLECTIONS_SOURCE: &str = include_str!("../std/collections.au");
 const ITER_SOURCE: &str = include_str!("../std/iter.au");
 const PRELUDE_SOURCE: &str = include_str!("../std/prelude.au");
 const SIMD_SOURCE: &str = include_str!("../std/simd.au");
 const REGEX_SOURCE: &str = include_str!("../std/regex.au");
 const TIME_SOURCE: &str = include_str!("../std/time.au");
 const HTTP_SOURCE: &str = include_str!("../std/http.au");
+const NUMBERS_SOURCE: &str = include_str!("../std/numbers.au");
 const TENSOR_SOURCE: &str = include_str!("../std/tensor.au");
+const SYNC_SOURCE: &str = include_str!("../std/sync.au");
+const CONTROL_SOURCE: &str = include_str!("../std/control.au");
+const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
+        "collections" => Some(COLLECTIONS_SOURCE),
         "prelude" => Some(PRELUDE_SOURCE),
         "simd" => Some(SIMD_SOURCE),
         "regex" => Some(REGEX_SOURCE),
         "time" => Some(TIME_SOURCE),
         "http" => Some(HTTP_SOURCE),
         "tensor" => Some(TENSOR_SOURCE),
+        "sync" => Some(SYNC_SOURCE),
+        "control" => Some(CONTROL_SOURCE),
+        "image" => Some(IMAGE_SOURCE),
+        "numbers" => Some(NUMBERS_SOURCE),
         _ => None,
     }
 }
@@ -73,17 +83,41 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
         .unwrap_or_else(|error| panic!("builtin `{name}` source should parse: {error:?}"));
     let imported_bindings = crate::builtin_imports_with(&module, false)
         .unwrap_or_else(|error| panic!("builtin `{name}` imports should resolve: {error:?}"));
+    // A library source can implement traits from another source module.
+    // The registry must include the dependency's impls and associated types
+    // as well as its imported names. A module's self-import names its host
+    // namespace and must not recursively compile the source being checked.
+    let mut module_registry = crate::builtin_modules::builtin_module_registry();
+    for dependency in imported_source_parts(&module) {
+        if dependency != name {
+            if let (Some(namespace), Some(part)) = (
+                module_registry.get_mut(&dependency),
+                source_part(&dependency),
+            ) {
+                merge(namespace, part);
+            }
+        }
+    }
     let program = crate::sema::check_with_context(
         module,
         ModuleContext {
             module_name: name.to_string(),
             imported_bindings,
-            module_registry: crate::builtin_modules::builtin_module_registry(),
+            module_registry,
             is_entry_module: false,
         },
     )
     .unwrap_or_else(|error| panic!("builtin `{name}` source should check: {error:?}"));
-    let namespace = crate::exported_namespace(&[name.to_string()], &program);
+    let mut namespace = crate::exported_namespace(&[name.to_string()], &program);
+    for class in namespace
+        .classes
+        .values_mut()
+        .chain(namespace.all_classes.values_mut())
+    {
+        if class.module_name == name {
+            class.is_builtin_source = true;
+        }
+    }
     CHECKED.with(|checked| {
         checked
             .borrow_mut()
@@ -118,6 +152,19 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
     host.all_traits.extend(part.all_traits);
     host.trait_impls.extend(part.trait_impls);
     host.imported_modules.extend(part.imported_modules);
+    if host.name == "collections" {
+        // The source module sees the raw host namespace through its self
+        // import. Exports keep its representation and type-erased calls private.
+        host.functions
+            .retain(|name, _| !name.starts_with("__aura_"));
+        host.classes.remove("__Store");
+        // The canonical type registry follows transitive imports as well
+        // as direct exports. Keep the raw self import's internal shape for
+        // lowering without publishing it as a nameable type annotation.
+        if let Some(raw) = host.imported_modules.get_mut("collections") {
+            raw.classes.remove("__Store");
+        }
+    }
     host.closures.extend(part.closures);
     host.comprehensions.extend(part.comprehensions);
 }

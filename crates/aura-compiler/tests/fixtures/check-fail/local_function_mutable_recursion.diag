@@ -1,0 +1,6 @@
+error[AU3003]: local function `step` cannot call itself while it mutates or consumes captures
+ --> crates/aura-compiler/tests/fixtures/check-fail/local_function_mutable_recursion.au:3:5
+  |
+3 |     def step(depth: int64) -> int64:
+  |     ^
+  = help: pass the state as a mut parameter

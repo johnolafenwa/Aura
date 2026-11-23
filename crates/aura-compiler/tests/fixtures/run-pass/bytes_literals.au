@@ -1,0 +1,15 @@
+import bytes
+
+def main() -> None:
+    header = b"GET / HTTP/1.1\r\n"
+    print(len(header))
+    print(header[0])
+    print(header[len(header) - 1])
+    print(bytes.hex_encode(b"\x00\xff\t'\""))
+    print(bytes.hex_encode(b'a"b'))
+    print(len(b""))
+    print(b"abc" == "abc".to_bytes())
+    mut total: int64 = 0
+    for byte in b"\x01\x02\xfd":
+        total += byte as int64
+    print(total)

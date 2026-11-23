@@ -45,7 +45,7 @@ def main():
     field_count("connection pool exhausted")
 ```
 
-<span class="caption">Listing 13-7: A decorator that wraps a function with trace output</span>
+<span class="caption">Listing 13-8: A decorator that wraps a function with trace output</span>
 
 ```console
 $ aura run tools.au
@@ -266,7 +266,7 @@ def main():
     print(double(21))
 ```
 
-<span class="caption">Listing 13-8: A decorator factory, stacked twice</span>
+<span class="caption">Listing 13-9: A decorator factory, stacked twice</span>
 
 ```console
 $ aura run tools.au
@@ -328,7 +328,7 @@ def main():
     print(double(21))
 ```
 
-<span class="caption">Listing 13-9: A generic decorator factory that fits any one-argument tool</span>
+<span class="caption">Listing 13-10: A generic decorator factory that fits any one-argument tool</span>
 
 ```console
 $ aura run tools.au
@@ -401,7 +401,7 @@ def main():
     print(json.dumps(json.encode(CountArgs(level="WARN", service=None))))
 ```
 
-<span class="caption">Listing 13-10: Decoding and encoding a class through a derived codec</span>
+<span class="caption">Listing 13-11: Decoding and encoding a class through a derived codec</span>
 
 ```console
 $ aura run tools.au
@@ -669,7 +669,7 @@ def main():
                 print(f"error {message}")
 ```
 
-<span class="caption">Listing 13-11: A typed tool runner with decorated tools and derived codecs</span>
+<span class="caption">Listing 13-12: A typed tool runner with decorated tools and derived codecs</span>
 
 ```console
 $ aura run tools.au
@@ -721,8 +721,8 @@ you can store and pass anywhere. A lambda that captures becomes a closure,
 and you choose how each capture is held: copied or moved in by default,
 borrowed with `[name]` or `[mut name]`, or taken with `[own name]`. What the
 body does with its captures makes it callable any number of times, once, or
-only through a `mut` binding. To return or store a capturing closure, you pack
-it into a `Callable[...]` type, explicitly.
+only through a `mut` binding. To return or store a capturing closure, give
+the destination a `Callable[...]` type, and the closure packs into it.
 
 Decorators are built from those pieces. A decorator is a function from a
 `Callable` to a `Callable` of the same contract, applied once when the module

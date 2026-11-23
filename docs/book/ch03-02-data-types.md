@@ -280,6 +280,22 @@ does, the fix is one conversion, which we'll see shortly. Function calls
 follow the same rule: passing an `int32` to a parameter declared as `int64` is
 an error (`AU2002`), not a widening.
 
+## Exact Numbers
+
+Suppose we sell three tickets at 19.95 each. We can keep the price exact
+from the input through the receipt by storing 1995 cents and a decimal
+exponent of −2. The program also computes a factorial larger than an
+`int64` and squares the imaginary unit.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+`Decimal.from_parts` reads those digits as 19.95. We convert the quantity
+with `Decimal.from_int(3)` so both sides of the multiplication have the
+same type. The multiplication preserves the exact value and `to_fixed(2)`
+writes `59.85` on the receipt. For a large integer read from a file, we
+can use `BigInt.parse(text)` and match on the result before computing with
+it. [Numbers Module](/manual/numbers)
+
 ## Booleans
 
 The `bool` type has two values, `true` and `false`. They are lowercase, and
@@ -415,27 +431,28 @@ NAÏVE
 `len()` counts characters (strictly, Unicode scalar values), and
 `byte_len()` counts the bytes of the UTF-8 encoding, where `ï` takes two. A
 slice like `word[0:2]` counts in characters too, and gives you a new string.
-What you can't do is index a string with a single number:
+A single number in the brackets gives you one character:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "naïve"
     print(word[0])
+    print(word[2])
+    print(word[-1])
 ```
 
 ```console
 $ aura run src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+n
+ï
+e
 ```
 
 Aura has no separate character type. A one-character piece of text is still
-a `str`, and you get one with a slice, `word[0:1]`, as the word counter did.
-Leaving out single-number indexing keeps you from writing code that looks
-like it takes constant time but has to scan the string from the start, which
+a `str`, so `word[2]` is the string `"ï"`. A negative position counts from
+the end, and a position past either end stops the program with a trap. One
+thing to know about cost: finding the nth character of text that isn't plain
+ASCII means scanning from the start, which
 any UTF-8 string has to do to find the nth character. When you really want
 every character, `word.chars()` gives them to you as a list in one pass;
 Chapter 8 shows it along with `ord` and `chr`.

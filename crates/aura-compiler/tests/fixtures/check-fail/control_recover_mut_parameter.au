@@ -1,0 +1,8 @@
+import control
+
+def increment(value: mut int64):
+    value += 1
+
+def main():
+    mut value: int64 = 0
+    _ = control.recover(increment, value)

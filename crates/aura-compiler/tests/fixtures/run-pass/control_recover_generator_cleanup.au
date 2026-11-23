@@ -1,0 +1,33 @@
+import control
+from iter import Generator
+
+class Guard:
+    def __exit__(mut self):
+        print("closed generator")
+
+class Sink:
+    name: str
+
+    def __exit__(mut self) -> Result[None, str]:
+        print("closed " + self.name)
+        return Result.Err(self.name.clone())
+
+def values() -> Generator[int64]:
+    with watch = Guard():
+        yield 1
+        yield 2
+
+def broken() -> Result[None, str]:
+    with outer = Sink("outer"), inner = Sink("inner"):
+        mut pending = values()
+        _ = pending.next()
+        assert false, "primary failure"
+    return Result.Ok(None)
+
+def main():
+    match control.recover(broken):
+        case Err(trap):
+            print(trap.code)
+            print(trap.message)
+        case Ok(_):
+            print("unexpected success")

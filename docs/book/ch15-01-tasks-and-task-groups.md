@@ -491,10 +491,10 @@ environment variable), and each task is pinned to one worker for its whole life.
 There is no global interpreter lock, so two CPU-bound tasks can use two cores at
 once, unlike two Python threads.
 
-Parallel execution is exactly when shared mutable data becomes dangerous, so
-Aura doesn't allow it. Everything passed to a task, and everything a task
-returns, must be `Transfer`: a value that can be moved to another worker and
-used there without anyone else holding on to it. The compiler works out which
+Everything passed to a task, and everything a task returns, must be
+`Transfer`. This means a value can safely cross to another worker. For an
+ordinary mutable value, the worker gets its own storage. A synchronized
+handle can reach data that several workers use at once. The compiler works out which
 types are `Transfer` from their structure. Numbers, strings, lists and
 dictionaries of transferable values, and your own classes and enums built from
 them all qualify. A live host resource doesn't, because an open file handle
@@ -538,11 +538,35 @@ transferable types may implement `Job`. A `dyn Job` can then go to a task or
 through a queue like any other owned value. A generic function asks for the
 same thing with a bound, `def send[T: Transfer](value: own T)`.
 
-Two kinds of handle are the exception that makes communication possible. A
-`Queue` handle and a `Task` handle can be passed to any task, because their
-internal state is synchronized by the runtime. Everything else moves as owned,
-unshared data. That's the whole model: tasks share nothing except the channels
-between them.
+Queue and task handles let us send work and receive results. To count items
+as several tasks finish them, we can also pass a handle from the `sync` module.
+
+### Counting from two tasks
+
+```aura
+import sync
+
+def record(counter: sync.AtomicInt):
+    _ = counter.add(1)
+
+def main():
+    completed = sync.AtomicInt(0)
+    with workers = TaskGroup():
+        workers.start_soon(record, completed)
+        workers.start_soon(record, completed)
+    print(completed.load())
+```
+
+This prints `2`. Each worker gets a copy of the handle. Both copies reach
+the same counter, and `add` reads and increments it in one step. The end
+of the task group waits for both workers before we read the total.
+
+When several fields must change together, we can put a record in a
+`sync.Mutex` and update it inside `with record = stats.lock():`. The
+next task to take that lock sees all the changes. If a holder traps,
+the next attempt to enter the lock reports `AU4001`. We can also use
+`sync.Map` when one dictionary operation at a time is enough. The
+[shared-state example](/manual/sync#example) uses all three kinds of handle.
 
 ### A result can be observed once
 

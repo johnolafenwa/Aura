@@ -14,7 +14,7 @@ use aura_core::types::Type;
 
 /// The `str` text-convenience methods, in the order the direct backend
 /// numbers them for its runtime dispatcher.
-pub const TEXT_METHOD_NAMES: [&str; 10] = [
+pub const TEXT_METHOD_NAMES: [&str; 11] = [
     "trim_start",
     "trim_end",
     "split_once",
@@ -25,6 +25,7 @@ pub const TEXT_METHOD_NAMES: [&str; 10] = [
     "count",
     "repeat",
     "chars",
+    "char_at",
 ];
 
 /// Evaluates one text-convenience method by name. `argument` is the text
@@ -52,6 +53,7 @@ pub fn evaluate_text_method(
         "count" => count_occurrences(text, argument()?),
         "repeat" => repeat(text, count),
         "chars" => Ok(chars(text)),
+        "char_at" => char_at(text, text.is_ascii(), count),
         _ => Err(Diagnostic::coded(
             "AU4001",
             format!("unknown text method `str.{method}`"),
@@ -265,6 +267,49 @@ pub fn evaluate_bytes_search(name: &str, value: &[u8], pattern: &[u8]) -> Value 
         "bytes::starts_with" => Value::Bool(value.starts_with(pattern)),
         "bytes::ends_with" => Value::Bool(value.ends_with(pattern)),
         _ => optional_index(memchr::memmem::find(value, pattern)),
+    }
+}
+
+/// `text[index]`: the scalar at `index` as a one-character string. A
+/// negative index counts from the end. ASCII text, which `ascii` reports,
+/// is read at the byte; other text is walked from the nearer end.
+pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
+    scalar_at(text, ascii, index).map(Value::string)
+}
+
+/// Selects a Unicode scalar without materializing a one-character string.
+pub(crate) fn scalar_at(text: &str, ascii: bool, index: i64) -> Result<char> {
+    let out_of_range = |length: usize| {
+        Diagnostic::coded(
+            "AU4003",
+            format!("str index {index} is out of range for a string of {length} characters"),
+        )
+    };
+    if ascii {
+        let length = text.len();
+        let position = if index < 0 {
+            index.checked_add(length as i64)
+        } else {
+            Some(index)
+        };
+        return match position.and_then(|position| usize::try_from(position).ok()) {
+            Some(position) if position < length => Ok(char::from(text.as_bytes()[position])),
+            _ => Err(out_of_range(length)),
+        };
+    }
+    let found = if index < 0 {
+        index
+            .checked_neg()
+            .and_then(|back| usize::try_from(back - 1).ok())
+            .and_then(|back| text.chars().nth_back(back))
+    } else {
+        usize::try_from(index)
+            .ok()
+            .and_then(|position| text.chars().nth(position))
+    };
+    match found {
+        Some(scalar) => Ok(scalar),
+        None => Err(out_of_range(text.chars().count())),
     }
 }
 

@@ -1,0 +1,5 @@
+error[AU3002]: task starting does not support mutable parameter `value` on function `increment`; child tasks cannot write back through the starting call frame
+ --> crates/aura-compiler/tests/fixtures/check-fail/control_recover_mut_parameter.au:8:25
+  |
+8 |     _ = control.recover(increment, value)
+  |                         ^

@@ -1,0 +1,3 @@
+error[AU4003]: str index 5 is out of range for a string of 5 characters
+ --> crates/aura-compiler/tests/fixtures/run-fail/str_index_out_of_range.au
+  = note: Aura call chain (innermost first): main at 1:1

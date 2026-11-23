@@ -82,3 +82,94 @@ In `callback` the C function calls the function it is handed once. Rust
 passes an `extern "C" fn`, and Python a `CFUNCTYPE` or `ffi.callback`
 wrapper of a lambda. Aura's 4 ns over Rust is the frame its entry packs and
 the guard that keeps a failure from unwinding through C.
+
+## Struct Arrays, Array Fields, Unions, And Text Callbacks
+
+Build a release compiler and run the four FFI v2 comparisons.
+
+```sh
+cargo build --release -p aura -p aura-runtime
+bash benchmarks/ffi_calls/run.sh v2
+```
+
+Each implementation builds its input once. Each timed loop runs two million
+iterations and checks the accumulated result. Times include loop overhead.
+All three read the same nanosecond clock from the fixture C library. The
+default measures wall time. Set `AURA_FFI_BENCH_CLOCK=cpu` to measure
+process CPU time when sharing the host with other work.
+
+| Case | Work in one iteration |
+| --- | --- |
+| `struct_array` | Pass four two-field records to C. C sums their eight signed 32-bit coordinates. |
+| `array_field` | Pass a struct by value. C sums its four inline signed 32-bit integers. |
+| `union_read` | Read a signed 32-bit member of one of four unions populated by C before timing. |
+| `text_callback` | Call C with a named function. The callback counts the Unicode scalars in `café`. |
+
+Aura gives C a private copy of a struct list. Rust and ctypes pass the
+address of a C-layout array they already hold. In the callback, Aura owns
+a checked copy of the C string. Rust borrows and validates it with
+`CStr::to_str`. Python decodes the bytes passed by ctypes.
+
+### FFI v2 results
+
+Linux x86-64, 2026-11-18. Each row gives median nanoseconds per operation
+from five runs on one pinned CPU. Aura, Rust and Python rotated through
+first, second and third position. Each implementation checked its result.
+The native Aura program used LLVM’s `default<O3>` pipeline and the release
+runtime. The Aura compiler executable used the Rust dev profile. Rust used
+`rustc -C opt-level=3`. Other workloads on the host accounted for some of
+the difference between elapsed time and process CPU time.
+
+| Case | Aura CPU | Rust CPU | ctypes CPU | Aura elapsed | Rust elapsed | ctypes elapsed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `struct_array` | 12.89 | 6.39 | 1084.81 | 11.74 | 6.45 | 1834.55 |
+| `array_field` | 8.22 | 2.75 | 936.22 | 9.11 | 3.27 | 1090.24 |
+| `union_read` | 0.93 | 0.46 | 217.50 | 0.91 | 0.48 | 352.25 |
+| `text_callback` | 105.73 | 26.80 | 1300.92 | 131.43 | 44.06 | 1920.14 |
+
+CPU and elapsed samples were separate series. The text callback took
+3.94 times Rust’s CPU time and 2.98 times its elapsed time.
+
+Nine additional runs rotated two versions of the Aura program with Rust.
+After checking the length and native record layout, the newer program
+copied small record lists directly into the private call buffer. The
+median fell from 15.74 to 11.00 ns of process CPU time, with Rust at
+6.43 ns. Holding read-only callback arguments in scoped storage reduced
+the text callback from 120.52 to 87.39 ns, with Rust at 25.54 ns.
+
+Earlier paired measurements isolated the cost of the numeric union getter.
+Eliding its diagnostic frame on valid input reduced the median from 8.94
+to 5.62 ns across six alternating runs. Reusing the private C writeback
+array for an exclusively read list reduced the median from 4.54 to
+0.78 ns across eight alternating pairs. The compiler uses the ordinary
+list when a later operation can escape or change its elements. Invalid
+indices and malformed union bytes produce the same diagnostics and call
+frames as the interpreter.
+
+A second measurement isolated the setup of a scoped callback argument.
+The string has no list or array view, and the last argument can call the
+body directly. Across 24 alternating pairs of full two-million-call
+runs, the original build at `98ffa327` took a median of 97.99 ns per
+callback and the revised build took 89.61 ns of process CPU time. The
+new build won 19 pairs, with a median paired reduction of 9.5%.
+Callgrind measured 613 and 547 instructions per call respectively in a
+separate C harness that validated, copied, inspected and released `café`.
+
+In five rotating comparison runs on the same shared Linux worker, the
+revised callback took 86.31 ns of process CPU time, Rust took 23.81 ns
+and Python ctypes took 1,215.18 ns. Median elapsed time in a separate
+series was 232.07, 57.51 and 3,165.77 ns. The revised callback beat
+Python and exceeded three times the Rust time in both series.
+
+The Linux runner at `92535bb9` measured the same four FFI v2 workloads
+in nanoseconds per operation.
+[Benchmark job](https://github.com/johnolafenwa/Aura/actions/runs/44225018396/job/134547497845)
+
+| Workload | Aura | Rust | Python ctypes |
+| --- | ---: | ---: | ---: |
+| `struct_array` | 3.72 | 2.62 | 369.16 |
+| `array_field` | 2.51 | 1.31 | 274.63 |
+| `union_read` | 0.32 | 0.22 | 74.75 |
+| `text_callback` | 29.98 | 9.62 | 377.61 |
+
+The text callback took 3.12 times Rust’s time. All four completed ahead of ctypes.

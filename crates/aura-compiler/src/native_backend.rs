@@ -528,6 +528,11 @@ pub(crate) enum Indirect {
     /// The call copies the `size` bytes the pointer names to the argument
     /// area of the stack: LLVM's `byval`.
     ByValue { size: u32 },
+    /// The call passes the `count` values of type `element` the pointer
+    /// names as one array argument. AArch64 gives an array either
+    /// consecutive registers or the stack, never both, and after one goes
+    /// to the stack no later argument takes a register of its kind.
+    Aggregate { element: ScalarType, count: u32 },
     /// The callee writes its `size`-byte result through the pointer, which
     /// travels where the convention puts a struct result's address: LLVM's
     /// `sret`.
@@ -757,6 +762,9 @@ pub(crate) trait FunctionBackend {
     fn symbol_value(&mut self, ty: ScalarType, data: DataRef) -> Val;
 
     fn call(&mut self, callee: FuncRef, args: &[Val]) -> Call;
+    /// The signature `callee` was declared with, for a call through its
+    /// address.
+    fn signature_of(&mut self, callee: FuncRef) -> SigRef;
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call;
     fn jump(&mut self, block: Blk, args: &[Val]);
     fn brif(

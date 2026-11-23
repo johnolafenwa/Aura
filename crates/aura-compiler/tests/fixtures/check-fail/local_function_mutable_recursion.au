@@ -1,0 +1,8 @@
+def main() -> None:
+    mut count = 0
+    def step(depth: int64) -> int64:
+        count += 1
+        if depth == 0:
+            return count
+        return step(depth - 1)
+    print(step(3))

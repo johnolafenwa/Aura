@@ -1,0 +1,52 @@
+type Check = Callable[def(int64) -> bool]
+type Tally = Callable[mut def(amount: int64) -> int64]
+
+
+class Rule:
+    name: str
+    matches: Check
+
+
+def slower_than(limit: int64) -> Check:
+    return lambda ms: ms > limit
+
+
+def count_where(values: list[int64], keep: Check) -> int64:
+    mut total = 0
+    for value in values:
+        if keep(value):
+            total += 1
+    return total
+
+
+class Total:
+    sum: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.sum = self.sum + amount
+        return self.sum
+
+
+def running_total() -> Tally:
+    total = Total(sum=0)
+    return lambda [own total] amount: total.add(amount)
+
+
+def main():
+    durations = [12, 1840, 35, 410, 7]
+    limit = 100
+    rules = [
+        Rule(name="slow", matches=slower_than(1000)),
+        Rule(name="over the limit", matches=lambda ms: ms > limit),
+    ]
+    for rule in rules:
+        print(f"{rule.name}: {count_where(durations, rule.matches)}")
+    print(count_where(durations, lambda ms: ms < 10))
+
+    mut tally = running_total()
+    tally(5)
+    print(tally(7))
+
+    mut by_name: dict[str, Check] = {}
+    by_name["even"] = lambda ms: ms % 2 == 0
+    print(by_name["even"](12))

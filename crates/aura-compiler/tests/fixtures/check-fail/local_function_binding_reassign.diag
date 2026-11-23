@@ -1,0 +1,5 @@
+error[AU3003]: cannot assign to immutable binding `step`; declare it with `mut` to rebind it
+ --> crates/aura-compiler/tests/fixtures/check-fail/local_function_binding_reassign.au:6:5
+  |
+6 |     step = step
+  |     ^

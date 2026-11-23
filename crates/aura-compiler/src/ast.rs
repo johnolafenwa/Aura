@@ -269,6 +269,29 @@ pub struct ClassDecl {
     /// those fields in order.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c_layout: bool,
+    /// The fields of an `extern "C"` class that are C arrays, each with
+    /// its lengths, the outer array first. The type of such a field is a
+    /// `list` nested once per length.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub c_arrays: BTreeMap<String, Vec<usize>>,
+    /// For the class of an `extern "C" union`, the name of the class in
+    /// the same module whose fields are the union's members. The union's
+    /// own class holds its bytes, and crosses the C boundary laid out as a
+    /// C union of those members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_union: Option<String>,
+}
+
+/// The name of the class the parser declares to hold the members of the
+/// `extern "C" union` `name`.
+pub fn c_union_members_class(name: &str) -> String {
+    format!("__{name}_members")
+}
+
+/// The union whose members the class `name` holds, when the parser
+/// declared the class for an `extern "C" union`.
+pub fn c_union_of_members_class(name: &str) -> Option<&str> {
+    name.strip_prefix("__")?.strip_suffix("_members")
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -428,6 +451,86 @@ pub struct OldValue {
 }
 
 impl Expr {
+    /// A bracket followed by a call is parsed as type arguments when its
+    /// contents could name types. For a collection value the same spelling
+    /// selects an element, so reconstruct its ordinary index expression.
+    pub(crate) fn indexed_collection_callee(
+        &self,
+        is_collection: impl FnOnce(&Expr) -> bool,
+    ) -> Option<Expr> {
+        let ExprKind::Specialize { expr, type_args } = &self.kind else {
+            return None;
+        };
+        let [index] = type_args.as_slice() else {
+            return None;
+        };
+        if !is_collection(expr) {
+            return None;
+        }
+        fn index_expression(reference: &TypeRef) -> Option<Expr> {
+            let (path, arguments) = reference.named_parts()?;
+            if reference.indirect {
+                return None;
+            }
+            let mut parts = path.split('.');
+            let name = parts.next()?.to_owned();
+            let span = reference.span;
+            let mut value = Expr {
+                kind: ExprKind::Name(name),
+                span,
+            };
+            for field in parts {
+                value = Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(value),
+                        field: field.to_owned(),
+                    },
+                    span,
+                };
+            }
+            if let [index] = arguments {
+                value = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(value),
+                        index: Box::new(index_expression(index)?),
+                    },
+                    span,
+                };
+            } else if !arguments.is_empty() {
+                return None;
+            }
+            Some(value)
+        }
+        Some(Expr {
+            kind: ExprKind::Index {
+                object: expr.clone(),
+                index: Box::new(index_expression(index)?),
+            },
+            span: self.span,
+        })
+    }
+
+    /// The member call used by a read-only subscript on a library type.
+    pub(crate) fn indexed_member(object: &Expr, index: &Expr, method: &str, span: Span) -> Self {
+        Self {
+            kind: ExprKind::Call {
+                callee: Box::new(Self {
+                    kind: ExprKind::Member {
+                        object: Box::new(object.clone()),
+                        field: method.to_string(),
+                    },
+                    span,
+                }),
+                args: vec![Argument {
+                    name: None,
+                    value: index.clone(),
+                    span: index.span,
+                }],
+            },
+            span,
+        }
+    }
+
     /// Calls `visit` on each direct child expression, in source order.
     pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
         match &mut self.kind {
@@ -488,7 +591,13 @@ impl Expr {
                 visit(condition);
                 visit(else_expr);
             }
-            ExprKind::Lambda { body, .. } => visit(body),
+            ExprKind::Lambda { body, .. } => {
+                // Statement suites have a separate lexical scope. Passes that
+                // rewrite statements enter them through their block walkers.
+                if let crate::ast::ClosureBody::Expression(value) = body {
+                    visit(value);
+                }
+            }
             ExprKind::Call { callee, args } => {
                 visit(callee);
                 for arg in args {
@@ -1068,6 +1177,14 @@ pub struct LambdaParam {
     pub span: Span,
 }
 
+/// The expression of a lambda or the statement suite of a named local function.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum ClosureBody {
+    Expression(Box<Expr>),
+    Function { name: String, statements: Vec<Stmt> },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LambdaCapture {
     pub name: String,
@@ -1139,7 +1256,7 @@ pub enum ExprKind {
     Lambda {
         captures: Option<Vec<LambdaCapture>>,
         params: Vec<LambdaParam>,
-        body: Box<Expr>,
+        body: ClosureBody,
     },
     Call {
         callee: Box<Expr>,

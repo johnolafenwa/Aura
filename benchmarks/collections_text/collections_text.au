@@ -1,0 +1,51 @@
+import bytes
+import math
+import time
+
+
+def round_trip(text: str) -> int64:
+    match bytes.encode(text, "utf-16-le"):
+        case Ok(data):
+            match bytes.decode(data, "utf-16-le"):
+                case Ok(decoded):
+                    return len(decoded)
+                case Err(_):
+                    return -1
+        case Err(_):
+            return -1
+
+
+def main() -> None:
+    mut check: int64 = 0
+    mut start = time.monotonic()
+    for i in range(500000):
+        check = check + math.gcd(i % 997 + 41, 1533)
+    print(f"gcd {(time.monotonic() - start).to_ms()} {check}")
+
+    text = "abracadabra"
+    check = 0
+    start = time.monotonic()
+    for i in range(400000):
+        if text[i % 11] == "a":
+            check = check + 1
+    print(f"ascii_index {(time.monotonic() - start).to_ms()} {check}")
+
+    mut left = set[int64]()
+    mut right = set[int64]()
+    for i in range(128):
+        left.add(i)
+        right.add(i + 64)
+    check = 0
+    start = time.monotonic()
+    for _ in range(2000):
+        check = check + len(left | right)
+    print(f"set_union {(time.monotonic() - start).to_ms()} {check}")
+
+    mut message = "café-😀|"
+    for _ in range(5):
+        message = message + message
+    check = 0
+    start = time.monotonic()
+    for _ in range(4000):
+        check = check + round_trip(message)
+    print(f"utf16_round_trip {(time.monotonic() - start).to_ms()} {check}")

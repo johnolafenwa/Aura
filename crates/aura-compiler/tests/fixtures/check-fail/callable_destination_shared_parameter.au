@@ -1,0 +1,5 @@
+def keep(items: list[int64]) -> Callable[def() -> int64]:
+    return lambda: items.len()
+
+def main():
+    print(keep([1])())

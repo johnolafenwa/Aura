@@ -18,6 +18,7 @@ pub mod array_simd;
 pub mod array_views;
 pub mod bytes_codec;
 pub mod c_layout;
+pub mod c_values;
 pub mod collection_index;
 pub mod ffi;
 pub mod gzip_codec;
@@ -25,12 +26,14 @@ pub mod host_io;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod host_tools;
+pub mod image_codec;
 pub mod json_codec;
 pub mod json_tape;
 pub mod list_elements;
 pub mod list_sort;
 mod native_allocator;
 pub mod native_runtime;
+pub mod numbers_host;
 #[cfg(any(windows, test))]
 mod pipe_bridge;
 pub mod randomness;
@@ -40,6 +43,7 @@ pub mod runtime_value;
 #[cfg(any(windows, test))]
 mod socket_watcher;
 pub mod text;
+pub mod text_encodings;
 pub mod text_methods;
 pub mod union_runtime;
 #[cfg(windows)]

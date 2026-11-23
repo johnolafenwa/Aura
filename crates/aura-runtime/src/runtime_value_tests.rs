@@ -39,6 +39,118 @@ use super::{
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
 
+#[test]
+fn recovered_trap_exposes_the_innermost_path_position_and_shortened_chain() {
+    use crate::diag::{RuntimeCallFrame, RuntimeSourceSpan, GENERATED_COLUMN_STRIDE};
+    let mut diagnostic = Diagnostic::coded_at(
+        "AU4003",
+        Span::new(17, GENERATED_COLUMN_STRIDE + 3),
+        "missing element",
+    );
+    diagnostic.render_path = Some("fallback.au".into());
+    diagnostic.call_frames = ["read", "parse"]
+        .into_iter()
+        .map(|name| RuntimeCallFrame {
+            function: name.into(),
+            span: RuntimeSourceSpan::point(Some("worker.au".into()), Span::new(2, 1)),
+        })
+        .collect();
+    diagnostic.set_omitted_call_frames(1, 7);
+    let Value::Instance(trap) = super::recovered_trap_value(diagnostic) else {
+        panic!("expected a control.Trap");
+    };
+    assert_eq!(trap.class_name.as_str(), "control.Trap");
+    let fields = trap.fields.map();
+    assert_eq!(fields["code"], Value::string("AU4003"));
+    assert_eq!(fields["message"], Value::string("missing element"));
+    assert_eq!(fields["path"], Value::string("worker.au"));
+    assert_eq!(
+        fields["line"],
+        Value::Int(crate::integer::IntegerValue::from_i64(17))
+    );
+    assert_eq!(
+        fields["column"],
+        Value::Int(crate::integer::IntegerValue::from_i64(3))
+    );
+    let Value::Vec(frames) = &fields["frames"] else {
+        panic!("expected a list of call frames");
+    };
+    assert_eq!(
+        frames.elements.to_vec(),
+        ["read at 2:1", "... 7 more calls ...", "parse at 2:1"].map(Value::string),
+    );
+}
+
+#[test]
+fn recovered_trap_without_frames_or_location_uses_documented_defaults() {
+    let mut diagnostic = Diagnostic::coded("AU4005", "stack exhausted");
+    for path in [None, Some("program.au".to_string())] {
+        diagnostic.render_path = path.clone();
+        let Value::Instance(trap) = super::recovered_trap_value(diagnostic.clone()) else {
+            panic!("expected a control.Trap");
+        };
+        let fields = trap.fields.map();
+        assert_eq!(fields["path"], Value::string(path.unwrap_or_default()));
+        assert_eq!(
+            fields["line"],
+            Value::Int(crate::integer::IntegerValue::from_i64(0))
+        );
+        assert_eq!(
+            fields["column"],
+            Value::Int(crate::integer::IntegerValue::from_i64(0))
+        );
+        assert!(matches!(&fields["frames"], Value::Vec(frames) if frames.elements.is_empty()));
+    }
+}
+
+#[test]
+fn recovered_trap_copies_share_an_unformatted_snapshot_until_mutation() {
+    let trap = super::recovered_trap_value(Diagnostic::coded("AU4001", "original"));
+    let holder = Value::Instance(super::InstanceValue {
+        class_name: "Holder".into(),
+        fields: [("trap".to_string(), trap.clone())].into(),
+    });
+    let Value::Instance(holder_copy) = super::try_clone_array_containing_value(&holder).unwrap()
+    else {
+        panic!("holder instance");
+    };
+    let Value::Instance(mut copy) = super::try_clone_array_containing_value(&trap).unwrap() else {
+        panic!("trap instance");
+    };
+    let Value::Instance(original) = trap else {
+        panic!("trap instance");
+    };
+    let super::InstanceFields::Recovered(snapshot) = &original.fields else {
+        panic!("immutable diagnostic snapshot");
+    };
+    let nested = holder_copy.fields.get("trap").unwrap();
+    let Value::Instance(nested) = nested.as_ref() else {
+        panic!("nested trap");
+    };
+    assert!(
+        matches!(&nested.fields, super::InstanceFields::Recovered(other) if Arc::ptr_eq(snapshot, other))
+    );
+    assert!(std::sync::LazyLock::get(&snapshot.fields).is_none());
+    assert_eq!(
+        copy.fields.remove("message"),
+        Some(Value::string("original"))
+    );
+    copy.fields.insert("code", Value::string("copy")).unwrap();
+    assert!(!copy.fields.contains_key("message"));
+    assert_eq!(
+        original.fields.get("message").unwrap().as_ref(),
+        &Value::string("original")
+    );
+    assert_eq!(
+        original.fields.get("code").unwrap().as_ref(),
+        &Value::string("AU4001")
+    );
+    assert_eq!(
+        original.fields.keys().collect::<Vec<_>>(),
+        ["code", "column", "frames", "line", "message", "path"]
+    );
+}
+
 /// The payload of a `T | None` union value, `None` when the value is absent.
 fn optional_payload(value: Value) -> Option<Value> {
     match value {
@@ -1138,6 +1250,27 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
         callback_result_error.message,
         "array int64 storage requires int64 scalar at flat index 0, found not an int64"
     );
+}
+
+#[test]
+fn integer_array_construction_checks_untyped_literal_bounds_at_the_element() {
+    for (name, largest) in [("int32", i32::MAX as u128), ("int64", i64::MAX as u128)] {
+        let literal = |magnitude| Value::Int(IntegerValue::from_literal(magnitude));
+        let error = ArrayValue::from_values(
+            &Type::named(name),
+            Box::new([2]),
+            vec![literal(largest), literal(largest + 1)],
+        )
+        .expect_err("a literal outside the element type must not wrap");
+        assert_eq!(error.code, "AU4007");
+        assert_eq!(
+            error.message,
+            format!(
+                "array {name} storage requires {name} scalar at flat index 1, found {}",
+                largest + 1
+            )
+        );
+    }
 }
 
 #[test]
@@ -2908,7 +3041,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         "def(label: str = ..., items: mut list[int32], predicate: own def(own bool) -> None) -> (int64,)"
     );
 
-    let function = Value::Function(Box::new(FunctionValue {
+    let function = Value::Function(Arc::new(FunctionValue {
         name: "support::transform".to_string(),
         signature: signature.clone(),
         source_path: Some("/workspace/support.au".to_string()),
@@ -2916,6 +3049,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: Some(11),
         direct_default_binder: Some(12),
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_eq!(function.render(), "<function support::transform>");
 
@@ -2940,7 +3074,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
     assert_eq!(function, cloned);
 
     let same_callable_contract_with_different_execution_metadata =
-        Value::Function(Box::new(FunctionValue {
+        Value::Function(Arc::new(FunctionValue {
             name: "support::transform".to_string(),
             signature: function_signature("renamed", false),
             source_path: Some("/installed/support.au".to_string()),
@@ -2948,13 +3082,14 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
             direct_thunk: Some(101),
             direct_default_binder: None,
             closure_environment: None,
+            direct_callable: None,
         }));
     assert_eq!(
         function, same_callable_contract_with_different_execution_metadata,
         "function identity ignores declaration-only parameter metadata and backend addresses"
     );
 
-    let different_name = Value::Function(Box::new(FunctionValue {
+    let different_name = Value::Function(Arc::new(FunctionValue {
         name: "support::other".to_string(),
         signature: signature.clone(),
         source_path: None,
@@ -2962,10 +3097,11 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_ne!(function, different_name);
 
-    let different_signature = Value::Function(Box::new(FunctionValue {
+    let different_signature = Value::Function(Arc::new(FunctionValue {
         name: "support::transform".to_string(),
         signature: Type::Function {
             params: Vec::new(),
@@ -2976,6 +3112,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_ne!(function, different_signature);
     assert_ne!(function, Value::Unit);
@@ -2998,7 +3135,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
             .into_iter()
             .enumerate()
             .map(|(index, name)| {
-                Value::Function(Box::new(FunctionValue {
+                Value::Function(Arc::new(FunctionValue {
                     name: format!("support::{name}"),
                     signature: signature.clone(),
                     source_path: Some("/workspace/support.au".to_string()),
@@ -3006,6 +3143,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
                     direct_thunk: Some(20 + index as i64),
                     direct_default_binder: None,
                     closure_environment: None,
+                    direct_callable: None,
                 }))
             })
             .collect(),
@@ -3105,7 +3243,7 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
         call_kind: aura_core::types::ClosureCallKind::Repeatable,
     };
     let function = |environment: Option<Arc<ClosureEnvironment>>| {
-        Value::Function(Box::new(FunctionValue {
+        Value::Function(Arc::new(FunctionValue {
             name: "main::__lambda_repeatable".to_string(),
             signature: signature.clone(),
             source_path: Some("/workspace/main.au".to_string()),
@@ -3113,6 +3251,7 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
             direct_thunk: Some(17),
             direct_default_binder: None,
             closure_environment: environment,
+            direct_callable: None,
         }))
     };
     let shared = function(Some(Arc::clone(&repeatable)));
@@ -3259,6 +3398,10 @@ fn adr0038_closure_capture_access_recovers_poisoned_loan_bookkeeping() {
     let repeatable = Arc::new(ClosureEnvironment::new(vec![mutable_capture(3)], false));
     let poison_target = Arc::clone(&repeatable);
     let poison = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _pending = poison_target
+            .pending
+            .lock()
+            .expect("fresh pending captures");
         let _guard = poison_target
             .captures
             .lock()
@@ -3282,6 +3425,14 @@ fn adr0038_closure_capture_access_recovers_poisoned_loan_bookkeeping() {
     assert_eq!(borrowed[0].source_place.as_deref(), Some("state.counter"));
     assert!(borrowed[0].mutable);
     assert_eq!(borrowed[0].value, Value::Int(IntegerValue::from_i64(4)));
+
+    assert_eq!(repeatable.capture_count(), 1);
+    let moved = repeatable.take_captures().expect("capture remains owned");
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].source_place.as_deref(), Some("state.counter"));
+    assert_eq!(moved[0].value, Value::Int(IntegerValue::from_i64(4)));
+    assert_eq!(repeatable.capture_count(), 0);
+    assert!(repeatable.take_captures().is_none());
 
     let consuming = Arc::new(ClosureEnvironment::new(vec![mutable_capture(7)], true));
     let poison_target = Arc::clone(&consuming);
@@ -11284,6 +11435,52 @@ fn queue_iteration_wait_wakes_for_unobserved_task_group_failure() {
 }
 
 #[test]
+fn task_group_iteration_receives_the_last_send_before_reporting_completion() {
+    let cancellation = CancellationContext::default();
+    let group = TaskGroupValue::new(&cancellation);
+    let channel = ChannelValue::new();
+    let first = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
+    wait_task_ready(&first).expect("the first task should finish");
+    group.register_task(first.clone());
+
+    let (release, start) = std::sync::mpsc::channel();
+    let output = channel.clone();
+    let producer = TaskValue::from_handle(thread::spawn(move || {
+        start.recv().expect("release the last producer");
+        output.send(Value::Bool(true)).expect("send the final item");
+        output.close();
+        Ok(Value::Unit)
+    }));
+    group.register_task(producer.clone());
+
+    thread::scope(|scope| {
+        // The reader checks the group after seeing an empty queue. Pause its
+        // first task inspection until the last producer has sent and finished.
+        let first_result = lock_mutex(&first.inner.handle);
+        let reader = scope.spawn(|| recv_for_task_group_iteration(&channel, &cancellation, &group));
+        let deadline = Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_secs(5));
+        while group.inner.tasks.try_lock().is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "reader did not inspect the group"
+            );
+            thread::yield_now();
+        }
+        release.send(()).expect("start the final send");
+        wait_task_ready(&producer).expect("the producer should finish");
+        drop(first_result);
+        assert_eq!(
+            reader.join().unwrap(),
+            RecvValueResult::Value(Value::Bool(true))
+        );
+    });
+    assert_eq!(
+        recv_for_task_group_iteration(&channel, &cancellation, &group),
+        RecvValueResult::Closed
+    );
+}
+
+#[test]
 fn phase73_observable_runtime_task_group_cancellation_precedes_empty_completion() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     group.cancel();
@@ -11451,10 +11648,12 @@ fn task_group_cleanup_probe_waits_for_a_child_parked_on_blocking_io() {
 #[test]
 fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     let channel = ChannelValue::new();
-    let task = TaskValue::from_handle(thread::spawn(|| Ok(Value::Unit)));
-    assert_eq!(
-        wait_task_ready(&task).expect("snapshot dependency task should complete"),
-        Value::Unit
+    let task = TaskValue {
+        inner: super::new_lightweight_task_state(true),
+    };
+    super::complete_lightweight_task_state(
+        &task.inner,
+        TaskExecutionResult::Ready(Ok(Value::Unit)),
     );
 
     let task_weak = Arc::downgrade(&task.inner);
@@ -11476,14 +11675,11 @@ fn task_wait_reachability_snapshot_does_not_retain_tasks_or_queues() {
     drop(registration);
     drop(task);
     drop(channel);
-    for _ in 0..100 {
-        if task_weak.upgrade().is_none() {
-            break;
-        }
-        thread::yield_now();
-    }
     assert!(task_weak.upgrade().is_none());
     assert!(channel_weak.upgrade().is_none());
+    assert!(snapshot.task_waits[0].upgrade().is_none());
+    assert!(snapshot.recv_channels[0].upgrade().is_none());
+    assert!(snapshot.send_channels[0].upgrade().is_none());
 }
 
 #[test]

@@ -7,6 +7,139 @@ in this file.
 
 ## Unreleased
 
+- A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
+
+- Language: a closure is stored without ceremony. A lambda, a function, a
+  bound method, or a local that holds a closure packs where a
+  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
+  binding, an argument, a field, a list, set, or dictionary element, a
+  `return`, and each arm of a conditional or `match` expression. A type
+  alias called as a constructor is no longer needed, and `AU2015` no longer
+  reports implicit erased storage. The constructor stays valid and is still
+  how a packed value is restricted to a weaker contract.
+- Language: a lambda without a capture list captures a Copy parameter of
+  the enclosing function by value, so `def make(n: int64)` can return
+  `lambda value: value + n`. A parameter that is not Copy still needs `own`
+  or a clone and reports `AU3002`.
+- Compiler: a call through a closure kept in a class field or a list
+  element is direct. The stored value keeps the closure's four words, and
+  the call reaches them where the field or the list keeps them. A field
+  call takes about 41 instructions on x86-64, and a `for` loop over a
+  shared `list[Callable[...]]` takes about 40 per element. A call of a
+  closure with mutable captures no longer asks the runtime for mutable
+  sinks its caller never handed over.
+- Fixed: a `for` loop over `mut` elements of a list of Mutable callables,
+  `for tally in mut tallies: tally(1)`, was rejected by the MIR validator
+  with "no authoritative callable contract". An element loan now carries
+  the callable identities of its collection.
+- Fixed: a nested list of callables whose rows differ in length, such as
+  `[[first], [second, third]]`, was rejected by the MIR validator when a
+  row was read. A shorter row no longer poisons the positions it lacks.
+
+- C callbacks accept NUL-terminated UTF-8 text. Declare the parameter
+  as `cstr` in the foreign signature and `str` in the named Aura
+  function. A null pointer or invalid UTF-8 raises `AU4005`.
+
+- FFI: an `extern "C"` class can hold a fixed-size C array. A field of
+  type `array[T, N]` is laid out as `T name[N]`, where `T` is a scalar,
+  another `extern "C"` class, or another array. In Aura code the field is
+  a `list[T]`, and it must hold exactly `N` elements when the struct
+  crosses, or the call fails with `AU4005`. A class with an array field is
+  not a `copy class`.
+
+- FFI: `extern "C" union Name:` declares a C union. In Aura it is a class
+  that holds the union's bytes in `bytes: list[uint8]`. Each member is a
+  read-only property, such as `event.key`, and has an associated function
+  that builds a union from it, such as `Event.from_key(value)`. `Name()`
+  is a union of zero bytes. A union crosses wherever an `extern "C"` class
+  does. SDL's event loop can now be written in Aura.
+
+- FFI: `ptr[Name]` and `mut ptr[Name]` pass a `list[Name]` of an
+  `extern "C"` class as a C array of structs, such as `const Vector2 *`.
+  The call copies the elements into the array and, for `mut`, back out of
+  it.
+
+- Fixed: on AArch64, a built program refused a foreign call whose struct
+  argument did not fit the registers that were left. It now passes the
+  struct on the stack as the C convention requires. raylib's `DrawModelEx`
+  and `DrawTexturePro` are such calls.
+
+- Fixed: a built program passed a struct of integers on the stack when
+  more than eight floating-point arguments came before it, and a struct of
+  floats when more than six integers did (eight on AArch64). C passes such
+  a struct in registers, so the foreign function read the wrong values.
+  The interpreter was not affected.
+
+- Examples: `examples/packages/raylib` binds the raylib graphics library
+  through FFI. A script in the package generates the binding from
+  raylib's own API description, and it covers 587 of raylib 6.0's 600
+  functions. Three programs use it: a brick game with keyboard and mouse
+  input, a 3D scene with a camera and a model, and a picture drawn into
+  an image and written to a PNG. The package's README says how to install
+  raylib and run them.
+
+- The `numbers` module supplies arbitrary-size `BigInt`, exact `Decimal` with explicit rounding, and two-component `Complex` arithmetic.
+
+- The `collections` module adds `Deque`, `Heap`, `SortedMap` and `SortedSet`.
+  Maps and sets support ordered iteration, floor, ceiling and half-open ranges.
+
+- Language: byte strings. `b"GET /\r\n"` and `b'\x89PNG'` are literals of
+  type `list[uint8]`. The body holds ASCII characters and escapes, and
+  `\xHH` is one byte (ADR-0111).
+
+- Language: `text[index]` reads one character of a `str` as a
+  one-character string, and `text.char_at(index)` is the same call. A
+  position counts Unicode scalar values, a negative one counts from the
+  end, and one outside the string traps with `AU4003`. ASCII text is read
+  in constant time. `text[0] = "x"` is now reported as `AU2003` with a
+  hint (ADR-0111).
+
+- Library: `bytes.encode(text, encoding)` and `bytes.decode(value,
+  encoding)` convert text through UTF-8, UTF-8 with a byte-order mark,
+  UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252. They return a
+  `Result` with the new `bytes.EncodingError`, which names an unknown
+  encoding, the first invalid byte, or the first character that cannot be
+  encoded (ADR-0111).
+
+- Library: set algebra. `set[T]` has `union`, `intersection`,
+  `difference`, `symmetric_difference`, `is_subset`, `is_superset`,
+  `is_disjoint`, and `update`. Between two sets of one element type the
+  operators `|`, `&`, `-`, and `^` are the first four, and `|=`, `&=`,
+  `-=`, and `^=` assign the result back. A result keeps insertion order
+  (ADR-0112).
+
+- Library: `math` has 27 more functions and the constant `tau`. On
+  `float64`: `sqrt`, `cbrt`, `asin`, `acos`, `atan`, `atan2`, `sinh`,
+  `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `expm1`, `log1p`, `hypot`,
+  `copysign`, `degrees`, `radians`, `is_nan`, `is_inf`, and `is_finite`.
+  On `int64`, exact: `gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and
+  `perm`. A NaN argument gives NaN, an argument outside the domain traps
+  with `AU4001`, and a result that does not fit traps with `AU4002`
+  (ADR-0110).
+
+- Editor: the VS Code grammar highlights byte strings and their escapes.
+
+- The `sync` module adds `Mutex[T]`, `AtomicInt`, `AtomicBool`, and
+  `Map[K, V]` for state shared between tasks. A `with` block around
+  `mutex.lock()` gives its body a mutable view of the guarded value.
+
+- `control.recover(function, arguments...)` returns the function's value in
+  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
+  current task and cleans up its own scopes on failure.
+- Recursive calls can continue past 256 frames. A call that exhausts the
+  available stack traps with AU4005. Deep diagnostics record how many
+  intervening calls were omitted.
+- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
+  files into an `image.Image`, whose pixels are a `list[uint8]`.
+  JPEG encoding averages colour across each 2 by 2 group of pixels.
+  `image.read`, `image.decode`, `image.info`, `image.write`, and the
+  `image.encode_*` functions return `Result` with an `image.Error`, and a
+  damaged or oversized file is never a trap. An image can be resized,
+  cropped, flipped, and converted between gray, RGB, and alpha forms.
+  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
+  `Tensor.from_array`. See the Image Module page of the Manual and
+  section 20.6 of the book (ADR-0114).
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

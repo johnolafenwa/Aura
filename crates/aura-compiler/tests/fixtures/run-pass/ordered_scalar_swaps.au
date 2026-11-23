@@ -1,0 +1,23 @@
+class Moves:
+    values: list[int64]
+
+    def reverse_pair(mut self):
+        self.values.swap(-1, 0)
+
+
+def main():
+    mut moves = Moves(values=[1, 2, 3])
+    copy = moves.values.copy()
+    moves.reverse_pair()
+    moves.values.swap(-2, 1)
+    print(copy)
+    print(moves.values)
+    mut narrow: list[uint8] = [1, 200, 3]
+    narrow.swap(0, -2)
+    print(narrow)
+    mut flags = [true, false]
+    flags.swap(-1, 0)
+    print(flags)
+    mut floats = [0.5, 1.75]
+    floats.swap(1, 0)
+    print(floats)

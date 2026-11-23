@@ -19,7 +19,7 @@
 //! local a mutable loan borrows, since the loan changes what the box holds,
 //! not the box.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::mir::{Instruction, MirFunction, MirModule, Operand, Rvalue, Terminator};
 
@@ -42,6 +42,9 @@ pub(super) struct ProgramShapes {
     /// `leaf_body`): such a method hands back the box it was given as it
     /// was, so a call tags neither the receiver nor the write-back.
     field_only_methods: HashSet<String>,
+    pub(super) numeric_union_projections: HashMap<String, (String, usize, crate::ffi::FfiScalar)>,
+    /// Only compiler-supplied methods have no user source path.
+    collection_methods: HashMap<String, crate::diag::Span>,
 }
 
 impl ProgramShapes {
@@ -54,7 +57,17 @@ impl ProgramShapes {
         let value_functions = value_functions.into_iter().collect::<HashSet<_>>();
         let mut shapes = Self::default();
         for function in &module.functions {
+            if function.module_name == "collections" && function.source_path.is_none() {
+                shapes
+                    .collection_methods
+                    .insert(function.name.clone(), function.span);
+            }
             let name = function.name.as_str();
+            if let Some(projection) = super::foreign_reads::numeric_projection(function) {
+                shapes
+                    .numeric_union_projections
+                    .insert(function.name.clone(), projection);
+            }
             // A method qualifies when only named calls and statically
             // dispatched method calls reach it, which the ownership pass
             // records in `borrowing`.
@@ -106,6 +119,14 @@ impl ProgramShapes {
     /// Records the methods that never name their receiver's box.
     pub(super) fn set_field_only_methods(&mut self, methods: HashSet<String>) {
         self.field_only_methods = methods;
+    }
+
+    pub(super) fn is_standard_collection_method(&self, function: &str) -> bool {
+        self.collection_methods.contains_key(function)
+    }
+
+    pub(super) fn collection_method_span(&self, function: &str) -> Option<crate::diag::Span> {
+        self.collection_methods.get(function).copied()
     }
 
     /// Whether `function` only reads and writes scalar fields of its

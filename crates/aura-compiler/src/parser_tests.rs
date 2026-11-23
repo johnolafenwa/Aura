@@ -226,6 +226,34 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
         TypeRefKind::Function { .. }
     ));
 
+    // `cstr` in a callback type is C text the callback receives. It reads
+    // as `str` from there on, and a written `str` is refused.
+    let text = parse(
+        "extern \"C\" def each(visit: def(word: cstr, count: int32, mut cstr, list[cstr]) -> None, plain: int32) -> None\n",
+    )
+    .expect("a callback that takes C text parses");
+    let Item::ExternFunction(each) = &text.items[0] else {
+        panic!("expected an extern function");
+    };
+    let TypeRefKind::Function { params, .. } = &each.params[0].ty.kind else {
+        panic!("expected a callback type");
+    };
+    let names = params
+        .iter()
+        .map(|param| match &param.ty.kind {
+            TypeRefKind::Named { name, .. } => name.as_str(),
+            _ => "",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["str", "int32", "str", "list"]);
+    assert_eq!(each.c_string_params, [false, false]);
+    let written = parse("extern \"C\" def each(visit: def(word: str) -> None) -> None\n")
+        .expect_err("a callback takes text as `cstr`");
+    assert_eq!(
+        written.message,
+        "a callback takes text as `cstr`: C passes a pointer to NUL-terminated bytes, with no length"
+    );
+
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
         .expect_err("FFI v0 reserves raw pointer syntax");
     assert_eq!(
@@ -238,7 +266,12 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
 fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let lambda = parse_expression("lambda value, own text, mut output: output")
         .expect("lambda with all supported parameter modes should parse");
-    let ExprKind::Lambda { params, body, .. } = lambda.kind else {
+    let ExprKind::Lambda {
+        params,
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = lambda.kind
+    else {
         panic!("expected lambda expression");
     };
     assert!(matches!(
@@ -269,7 +302,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let no_params = parse_expression("lambda: 42").expect("zero-parameter lambda should parse");
     assert!(matches!(
         no_params.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params.is_empty() && matches!(body.kind, ExprKind::Int(42))
     ));
 
@@ -277,7 +310,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
         .expect("contextual identifier parameter should parse");
     assert!(matches!(
         contextual_name.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params[0].name == "from"
                 && matches!(body.kind, ExprKind::Name(ref name) if name == "from")
     ));
@@ -289,7 +322,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("conditional expression should remain inside the lambda body");
     assert!(matches!(
         conditional_body.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Conditional { .. })
     ));
 
@@ -306,7 +339,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("lambda bodies should permit nested lambdas");
     assert!(matches!(
         nested.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Lambda { .. })
     ));
 
@@ -1088,7 +1121,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
         [ComprehensionClause {
             iterable:
                 Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 },
             ..
@@ -1107,7 +1140,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
             if matches!(
                 filters.as_slice(),
                 [Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 }] if matches!(
                     params.as_slice(),
@@ -3446,7 +3479,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     assert_eq!(args[0].span, Span::new(1, 64));
     let ExprKind::Lambda {
         params: lambda_params,
-        body,
+        body: crate::ast::ClosureBody::Expression(body),
         ..
     } = &args[0].value.kind
     else {
@@ -5763,6 +5796,235 @@ fn extern_c_classes_are_copy_classes_of_fields_only() {
 }
 
 #[test]
+fn an_extern_c_class_spells_a_c_array_field_as_array_of_a_length() {
+    let module = parse(concat!(
+        "extern \"C\" class Material:\n",
+        "    shader: uint64\n",
+        "    params: array[float32, 4]\n",
+        "    grid: array[array[int16, 3], 2]\n",
+        "    corners: array[geometry.Point, 2]\n\n",
+        "extern \"C\" class Plain:\n    x: int32\n",
+    ))
+    .expect("an array field is a field");
+    let classes: Vec<&ClassDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Class(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    let material = classes[0];
+    // The class holds lists, so it is not Copy.
+    assert!(material.c_layout && !material.copy);
+    assert!(classes[1].copy && classes[1].c_arrays.is_empty());
+    assert_eq!(material.c_arrays["params"], [4]);
+    assert_eq!(material.c_arrays["grid"], [2, 3]);
+    assert_eq!(material.c_arrays["corners"], [2]);
+    assert!(!material.c_arrays.contains_key("shader"));
+    let spelled = |index: usize| {
+        let TypeRefKind::Named { name, args } = &material.fields[index].ty.kind else {
+            panic!("a field has a named type");
+        };
+        (name.clone(), args.len())
+    };
+    assert_eq!(spelled(1), ("list".to_string(), 1));
+    assert_eq!(spelled(2), ("list".to_string(), 1));
+    let shape = |class: &ClassDecl| serde_json::to_value(class).expect("a class serializes");
+    assert_eq!(
+        shape(material)["c_arrays"]["grid"],
+        serde_json::json!([2, 3])
+    );
+    assert!(
+        shape(classes[1]).get("c_arrays").is_none(),
+        "a class with no array field serializes as before"
+    );
+
+    for (source, message) in [
+        (
+            "def first(values: array[int32, 4]) -> int32:\n    return values[0]\n",
+            "`array[T, N]` is the type of a field of an `extern \"C\"` class",
+        ),
+        (
+            "class Plain:\n    values: array[int32, 4]\n",
+            "`array[T, N]` is the type of a field of an `extern \"C\"` class",
+        ),
+        (
+            "extern \"C\" class Empty:\n    values: array[int32, 0]\n",
+            "where `N` is a whole number from 1 to",
+        ),
+        (
+            "extern \"C\" class Huge:\n    values: array[int32, 99999999]\n",
+            "where `N` is a whole number from 1 to",
+        ),
+        (
+            "extern \"C\" class Bare:\n    values: array[int32]\n",
+            "a C array field is written `array[T, N]`",
+        ),
+        (
+            "extern \"C\" class Two:\n    values: array[int32, int32]\n",
+            "a C array field is written `array[T, N]`",
+        ),
+        (
+            "extern \"C\" class Open:\n    values: array[int32, 4, 5]\n",
+            "expected",
+        ),
+    ] {
+        let error = parse(source).expect_err("the array type is misplaced or malformed");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+    // An extern function after the class is parsed as before.
+    parse("extern \"C\" class A:\n    v: array[int8, 2]\nextern \"C\" def f(a: A, p: ptr[A]) -> None\n")
+        .expect("a class with an array field crosses");
+}
+
+#[test]
+fn an_extern_c_union_is_a_class_of_bytes_with_a_property_for_each_member() {
+    let module = parse(concat!(
+        "public extern \"C\" union Event:\n",
+        "    \"\"\"One event.\"\"\"\n\n",
+        "    kind: uint32\n",
+        "    \"\"\"What happened.\"\"\"\n",
+        "    key: Key\n",
+        "    text: array[uint8, 8]\n\n",
+        "extern \"C\" class Key:\n    code: int32\n",
+    ))
+    .expect("a union is a declaration");
+    let class = |name: &str| {
+        module
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Class(decl) if decl.name == name => Some(decl),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("the module declares `{name}`"))
+    };
+    let event = class("Event");
+    assert!(event.public && event.c_layout && !event.copy);
+    assert_eq!(event.c_union.as_deref(), Some("__Event_members"));
+    assert_eq!(
+        event.doc.as_ref().map(|doc| doc.text.as_str()),
+        Some("One event.")
+    );
+    assert_eq!(event.fields.len(), 1);
+    assert_eq!(event.fields[0].name, "bytes");
+    assert!(event.fields[0].public && event.fields[0].default.is_some());
+    let methods: Vec<_> = event
+        .methods
+        .iter()
+        .map(|method| {
+            (
+                method.name.as_str(),
+                method.property.is_some(),
+                method.public,
+            )
+        })
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            ("kind", true, true),
+            ("from_kind", false, true),
+            ("key", true, true),
+            ("from_key", false, true),
+            ("text", true, true),
+            ("from_text", false, true),
+        ]
+    );
+    assert_eq!(
+        event.methods[0].doc.as_ref().map(|doc| doc.text.as_str()),
+        Some("What happened.")
+    );
+    let named = |ty: &TypeRef| match &ty.kind {
+        TypeRefKind::Named { name, .. } => name.clone(),
+        _ => panic!("a member has a named type"),
+    };
+    assert_eq!(named(&event.methods[0].return_type), "uint32");
+    assert_eq!(named(&event.methods[2].return_type), "Key");
+    assert_eq!(named(&event.methods[3].params[0].ty), "Key");
+    assert_eq!(named(&event.methods[4].return_type), "list");
+
+    // The members are the fields of a class of their own.
+    let members = class("__Event_members");
+    assert!(members.c_layout && members.c_union.is_none());
+    assert_eq!(members.c_arrays["text"], [8]);
+    assert_eq!(
+        crate::ast::c_union_of_members_class(&members.name),
+        Some("Event")
+    );
+    assert_eq!(crate::ast::c_union_of_members_class("Event"), None);
+    // A scalar or an array crosses as the one field of a class. A class
+    // crosses as itself.
+    assert!(class("__Event_box_kind").copy);
+    assert_eq!(class("__Event_box_text").c_arrays["value"], [8]);
+    assert!(!class("__Event_box_text").copy);
+    let externs: Vec<_> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(externs.len(), 6);
+    assert!(externs
+        .iter()
+        .all(|decl| decl.link_name() == crate::ffi::REINTERPRET_SYMBOL));
+    let function = |name: &str| {
+        externs
+            .iter()
+            .find(|decl| decl.name == name)
+            .unwrap_or_else(|| panic!("the module declares `{name}`"))
+    };
+    assert_eq!(named(&function("__Event_get_key").return_type), "Key");
+    assert_eq!(named(&function("__Event_set_key").params[0].ty), "Key");
+    assert_eq!(
+        named(&function("__Event_get_kind").return_type),
+        "__Event_box_kind"
+    );
+    assert_eq!(
+        named(&function("__Event_set_text").params[0].ty),
+        "__Event_box_text"
+    );
+    // Every generated declaration has a place of its own on the line of
+    // the `union` word.
+    assert_eq!(function("__Event_get_kind").span.line, 1);
+    assert!(function("__Event_get_kind").span.column >= crate::diag::GENERATED_COLUMN_STRIDE);
+
+    // `union` stays a name everywhere else.
+    parse("def union(a: int32) -> int32:\n    return a\n\nunion_size = union(1)\n")
+        .expect("`union` is not a keyword");
+
+    for (source, message) in [
+        (
+            "extern \"C\" union U:\n    bytes: uint32\n",
+            "cannot have a member named `bytes`",
+        ),
+        (
+            "extern \"C\" union U:\n    pass\n",
+            "`extern \"C\"` union `U` needs at least one member",
+        ),
+        (
+            "extern \"C\" union U[T]:\n    a: T\n",
+            "`extern \"C\"` union `U` cannot have type parameters",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32 = 1\n",
+            "of `extern \"C\"` union `U` cannot have a default value",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\n    def f(self) -> int32:\n        return 1\n",
+            "`extern \"C\"` union `U` declares only fields",
+        ),
+        ("extern \"C\" union:\n    a: int32\n", "expected"),
+    ] {
+        let error = parse(source).expect_err("the union is malformed");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
 fn an_opaque_class_names_its_drop_function() {
     let module = parse(concat!(
         "extern \"C\" opaque class Database drop sqlite3_close\n",
@@ -5837,4 +6099,102 @@ fn export_c_marks_an_ordinary_function_and_is_a_word_only_before_an_abi() {
         let error = crate::parse_source(source).expect_err("the declaration is malformed");
         assert!(error.message.contains(expected), "{source}: {error:?}");
     }
+}
+
+#[test]
+fn local_function_signatures_and_statement_bodies_are_preserved() {
+    let Item::Function(outer) = parse_item_from(
+        "def outer() -> None:\n    def update[mut total](value: own str, *, delta: int64) -> int64:\n        total += delta\n        return total\n",
+    ).expect("local function with a capture and two statements") else { panic!("function") };
+    let [Stmt::Assign(binding)] = outer.body.as_slice() else {
+        panic!("local declaration")
+    };
+    assert!(!binding.mutable);
+    let ExprKind::Lambda {
+        captures: Some(captures),
+        params,
+        body: crate::ast::ClosureBody::Function { name, statements },
+    } = &binding.value.kind
+    else {
+        panic!("closure body")
+    };
+    assert_eq!(name, "update");
+    assert_eq!(captures[0].name, "total");
+    assert_eq!(captures[0].mode, ParamMode::BorrowMut);
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(matches!(
+        statements.as_slice(),
+        [Stmt::Assign(_), Stmt::Return(_)]
+    ));
+    let TypeRefKind::Function {
+        params,
+        view_return,
+        ..
+    } = &binding.annotation.as_ref().unwrap().kind
+    else {
+        panic!("written function signature")
+    };
+    assert_eq!(params[0].name.as_deref(), Some("value"));
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(view_return.is_none());
+}
+
+#[test]
+fn local_function_signatures_require_a_result_and_exclude_defaults_and_views() {
+    for (header, message) in [
+        ("def inner(x: int64):", "needs a written return type"),
+        ("def inner(x: int64 = 1) -> int64:", "cannot have defaults"),
+        (
+            "def inner(x: int64) -> view int64 from x:",
+            "cannot return a view",
+        ),
+    ] {
+        let source = format!("def outer() -> None:\n    {header}\n        return x\n");
+        let error = parse_item_from(&source).expect_err(&source);
+        assert_eq!(error.code, "AU1101");
+        assert!(error.message.contains(message), "{error:?}");
+    }
+}
+
+#[test]
+fn byte_strings_parse_to_a_byte_list_expression() {
+    let ascii = parse_stmt_from("data = b\"hi\"\n").expect("an ASCII byte string parses");
+    let Stmt::Assign(assign) = ascii else {
+        panic!("expected an assignment");
+    };
+    // ASCII bytes are the UTF-8 bytes of the same text.
+    let ExprKind::Call { callee, args } = &assign.value.kind else {
+        panic!("expected a call, found {:?}", assign.value.kind);
+    };
+    assert!(args.is_empty());
+    let ExprKind::Member { object, field } = &callee.kind else {
+        panic!("expected a member");
+    };
+    assert_eq!(field, "to_bytes");
+    assert!(matches!(&object.kind, ExprKind::String(text) if text == "hi"));
+
+    let binary = parse_stmt_from("data = b\"\\xff\\x00a\"\n").expect("escaped bytes parse");
+    let Stmt::Assign(assign) = binary else {
+        panic!("expected an assignment");
+    };
+    let ExprKind::List(elements) = &assign.value.kind else {
+        panic!("expected a list, found {:?}", assign.value.kind);
+    };
+    let bytes = elements
+        .iter()
+        .map(|element| match &element.kind {
+            ExprKind::Cast { expr, .. } => match expr.kind {
+                ExprKind::Int(byte) => byte,
+                _ => panic!("expected an integer"),
+            },
+            other => panic!("expected a cast, found {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(bytes, [255, 0, 97]);
+
+    // A byte string starts an expression statement and an argument.
+    parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
+    parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
 }

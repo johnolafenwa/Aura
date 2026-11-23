@@ -1,5 +1,6 @@
 mod api_docs;
 mod requests;
+use crate::sema::recover;
 pub use api_docs::{
     api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
     API_DOCS_SCHEMA_VERSION,
@@ -1250,7 +1251,18 @@ impl<'a> AnalysisBuilder<'a> {
     ) {
         match &expr.kind {
             ExprKind::Lambda { params, body, .. } => {
-                if expression_contains_position(body, target_line, character) {
+                let inside = match body {
+                    crate::ast::ClosureBody::Expression(value) => {
+                        expression_contains_position(value, target_line, character)
+                    }
+                    crate::ast::ClosureBody::Function { statements, .. } => {
+                        target_line >= expr.span.line
+                            && statements
+                                .last()
+                                .is_some_and(|stmt| target_line <= stmt_end_line(stmt))
+                    }
+                };
+                if inside {
                     if let Some(info) = self.closure_info(expr) {
                         for (param, contract) in params.iter().zip(&info.params) {
                             let definition = range_from_span(param.span, param.name.len());
@@ -1265,7 +1277,20 @@ impl<'a> AnalysisBuilder<'a> {
                             );
                         }
                     }
-                    self.extend_lambda_scope_from_expr(body, target_line, character, scope);
+                    match body {
+                        crate::ast::ClosureBody::Expression(value) => {
+                            self.extend_lambda_scope_from_expr(value, target_line, character, scope)
+                        }
+                        crate::ast::ClosureBody::Function { statements, .. } => {
+                            self.accumulate_scope_from_stmts(statements, target_line, scope);
+                            self.extend_lambda_scope_from_stmts(
+                                statements,
+                                target_line,
+                                character,
+                                scope,
+                            );
+                        }
+                    }
                 }
             }
             ExprKind::Membership {
@@ -1888,6 +1913,14 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions = Vec::new();
         if let Type::Module(path) = receiver_type {
             if let Some(namespace) = self.module_namespace(path) {
+                if namespace.path == recover::MODULE {
+                    completions.push(AnalysisCompletion {
+                        name: recover::RECOVER.into(),
+                        kind: "function".into(),
+                        detail: recover::SIGNATURE.into(),
+                        documentation: Some(recover::SUMMARY.into()),
+                    });
+                }
                 for child in namespace.modules.values() {
                     completions.push(AnalysisCompletion {
                         name: child.name.clone(),
@@ -3132,17 +3165,17 @@ impl<'a> AnalysisBuilder<'a> {
             .infer_expr_type(&with_stmt.value, scope)
             .unwrap_or(Type::Unit);
         let class_info = self.class_info_for_type_name(base_type_name(&manager_ty));
-        if let Ok(crate::sema::ManagerShape {
-            entry: crate::sema::ManagerEntry::View { mutable },
-            ..
-        }) = crate::sema::classify_manager(&manager_ty, class_info)
-        {
-            if let Some(view_ty) = self
-                .resolve_member_type(&manager_ty, "__enter__")
-                .and_then(|member| member.ty)
-            {
-                return (view_ty, if mutable { "mutable view" } else { "view" });
+        match crate::sema::classify_manager(&manager_ty, class_info).map(|shape| shape.entry) {
+            Ok(crate::sema::ManagerEntry::Lock { payload }) => return (payload, "mutable view"),
+            Ok(crate::sema::ManagerEntry::View { mutable }) => {
+                if let Some(view_ty) = self
+                    .resolve_member_type(&manager_ty, "__enter__")
+                    .and_then(|member| member.ty)
+                {
+                    return (view_ty, if mutable { "mutable view" } else { "view" });
+                }
             }
+            _ => {}
         }
         (manager_ty, "local")
     }
@@ -3414,7 +3447,23 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    fn indexed_collection_callee(
+        &self,
+        expr: &Expr,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Expr> {
+        expr.indexed_collection_callee(|object| {
+            self.infer_expr_type(object, scope).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        })
+    }
+
     fn visit_expr(&mut self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) {
+        if let Some(indexed) = self.indexed_collection_callee(expr, scope) {
+            self.visit_expr(&indexed, scope);
+            return;
+        }
         match &expr.kind {
             ExprKind::Membership {
                 value, container, ..
@@ -3567,7 +3616,14 @@ impl<'a> AnalysisBuilder<'a> {
                         lambda_scope.insert(param.name.clone(), binding);
                     }
                 }
-                self.visit_expr(body, &lambda_scope);
+                match body {
+                    crate::ast::ClosureBody::Expression(value) => {
+                        self.visit_expr(value, &lambda_scope)
+                    }
+                    crate::ast::ClosureBody::Function { statements, .. } => {
+                        self.visit_stmts(statements, &mut lambda_scope)
+                    }
+                }
             }
             ExprKind::Cast { expr, ty } => {
                 self.visit_expr(expr, scope);
@@ -3952,6 +4008,17 @@ impl<'a> AnalysisBuilder<'a> {
     fn resolve_member_type(&self, receiver_type: &Type, field: &str) -> Option<ResolvedMember> {
         if let Type::Module(path) = receiver_type {
             let namespace = self.module_namespace(path)?;
+            if namespace.path == recover::MODULE && field == recover::RECOVER {
+                return Some(ResolvedMember {
+                    hover: format!(
+                        "```aura\nfunction {}\n```\n\n{}",
+                        recover::SIGNATURE,
+                        recover::SUMMARY
+                    ),
+                    definition: None,
+                    ty: None,
+                });
+            }
             if let Some(child) = namespace.modules.get(field) {
                 return Some(ResolvedMember {
                     hover: self
@@ -4195,7 +4262,8 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::StringSplitWhitespace
                 | BuiltinMember::StringFind
                 | BuiltinMember::StringCount
-                | BuiltinMember::StringRepeat => {
+                | BuiltinMember::StringRepeat
+                | BuiltinMember::StringCharAt => {
                     crate::sema::text_convenience_result_type(builtin_member.name())
                 }
                 BuiltinMember::ArrayShape => {
@@ -4341,11 +4409,19 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::StringClone => Some(Type::named("str")),
                 BuiltinMember::SetLen => Some(Type::named("int64")),
                 BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::SetClone => Some(receiver_type.clone()),
-                BuiltinMember::SetContains => Some(Type::named("bool")),
+                BuiltinMember::SetClone
+                | BuiltinMember::SetUnion
+                | BuiltinMember::SetIntersection
+                | BuiltinMember::SetDifference
+                | BuiltinMember::SetSymmetricDifference => Some(receiver_type.clone()),
+                BuiltinMember::SetContains
+                | BuiltinMember::SetIsSubset
+                | BuiltinMember::SetIsSuperset
+                | BuiltinMember::SetIsDisjoint => Some(Type::named("bool")),
                 BuiltinMember::SetInsert
                 | BuiltinMember::SetRemove
                 | BuiltinMember::SetDiscard
+                | BuiltinMember::SetUpdate
                 | BuiltinMember::SetClear
                 | BuiltinMember::SetReserve => Some(Type::Unit),
                 BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
@@ -5106,6 +5182,9 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
+        if let Some(indexed) = self.indexed_collection_callee(expr, scope) {
+            return self.infer_expr_type(&indexed, scope);
+        }
         match &expr.kind {
             ExprKind::IsNone { .. }
             | ExprKind::Membership { .. }
@@ -5309,6 +5388,7 @@ impl<'a> AnalysisBuilder<'a> {
                             "Array" => ty.type_arguments().first().cloned(),
                             "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),
+                            "str" => Some(ty.clone()),
                             _ => None,
                         },
                     })
@@ -5401,6 +5481,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(result) = crate::call::list_binary_result_type(*op, &left_ty, &right_ty)
                 {
                     return Some(result);
+                }
+                if crate::call::set_binary_method(*op, &left_ty, &right_ty).is_some() {
+                    return Some(left_ty);
                 }
                 match op {
                     BinaryOp::And | BinaryOp::Or => Some(Type::named("bool")),
@@ -5662,7 +5745,26 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
                 let receiver_type = self.infer_expr_type(object, scope)?;
-                if matches!(receiver_type, Type::Module(_)) {
+                if let Type::Module(path) = &receiver_type {
+                    if self
+                        .module_namespace(path)
+                        .is_some_and(|module| module.path == recover::MODULE)
+                        && field == recover::RECOVER
+                    {
+                        let (target, arguments) = args.split_first()?;
+                        let value = self
+                            .infer_call_type(&target.value, arguments, scope)
+                            .or_else(|| match self.infer_expr_type(&target.value, scope)? {
+                                Type::Function { return_type, .. }
+                                | Type::Closure { return_type, .. } => Some(*return_type),
+                                Type::Callable(callable) => Some(callable.return_type.clone()),
+                                _ => None,
+                            })?;
+                        return Some(Type::Named(
+                            "Result".into(),
+                            vec![value, Type::named("control.Trap")],
+                        ));
+                    }
                     if let Some(alias) = self.analysis_alias_for_callee(callee, scope) {
                         return self.infer_alias_call_type(alias, None, callee.span, args, scope);
                     }
@@ -6187,10 +6289,22 @@ impl<'a> AnalysisBuilder<'a> {
         // in the editor's file.
         let generated =
             |range: &AnalysisRange| range.line + 1 >= crate::sema::GENERATED_LINE_OFFSET;
-        if generated(&range) {
+        // The declarations behind an `extern "C" union` take the place of
+        // its `union` word, each at a column no written code reaches.
+        let stride = crate::diag::GENERATED_COLUMN_STRIDE;
+        if generated(&range) || range.start_character >= stride {
             return;
         }
-        let definition = definition.filter(|definition| !generated(definition));
+        let definition =
+            definition
+                .filter(|definition| !generated(definition))
+                .map(|mut definition| {
+                    if definition.start_character >= stride {
+                        definition.start_character %= stride;
+                        definition.end_character = definition.start_character + "union".len();
+                    }
+                    definition
+                });
         self.output.occurrences.push(AnalysisOccurrence {
             line: range.line,
             start_character: range.start_character,
@@ -6427,6 +6541,17 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
         })
         .collect::<Vec<_>>();
     for item in &module.items {
+        // The declarations the parser wrote for a union are not the
+        // user's to see.
+        let span = match item {
+            Item::Class(class) => Some(class.span),
+            Item::ExternFunction(function) => Some(function.span),
+            _ => None,
+        };
+        let hidden = matches!(item, Item::Class(class) if crate::ast::c_union_of_members_class(&class.name).is_some());
+        if hidden || span.is_some_and(|span| span.column >= crate::diag::GENERATED_COLUMN_STRIDE) {
+            continue;
+        }
         match item {
             Item::TypeAlias(alias) => symbols.push(symbol(
                 &alias.name,
@@ -6436,7 +6561,15 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
                 Vec::new(),
             )),
             Item::Class(class_decl) => {
-                let mut children = class_decl
+                // A union lists its members, which another class holds.
+                let members = class_decl.c_union.as_ref().and_then(|holder| {
+                    module.items.iter().find_map(|item| match item {
+                        Item::Class(class) if class.name == *holder => Some(class),
+                        _ => None,
+                    })
+                });
+                let mut children = members
+                    .unwrap_or(class_decl)
                     .fields
                     .iter()
                     .map(|field| {
@@ -6449,7 +6582,9 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
                         )
                     })
                     .collect::<Vec<_>>();
-                children.extend(method_symbols(&class_decl.methods, method_kind));
+                if members.is_none() {
+                    children.extend(method_symbols(&class_decl.methods, method_kind));
+                }
                 symbols.push(symbol(
                     &class_decl.name,
                     "class",
@@ -6867,7 +7002,13 @@ fn expression_end_line(expr: &Expr) -> usize {
         | ExprKind::IsNone { value: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object) => expression_end_line(object),
-        ExprKind::Lambda { body, .. } => expression_end_line(body),
+        ExprKind::Lambda { body, .. } => match body {
+            crate::ast::ClosureBody::Expression(value) => expression_end_line(value),
+            crate::ast::ClosureBody::Function { statements, .. } => statements
+                .last()
+                .map(stmt_end_line)
+                .unwrap_or(expr.span.line),
+        },
         ExprKind::Call { callee, args } => args
             .iter()
             .map(|arg| expression_end_line(&arg.value))
@@ -8189,6 +8330,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringFind,
         BuiltinMember::StringCount,
         BuiltinMember::StringRepeat,
+        BuiltinMember::StringCharAt,
         BuiltinMember::StringToBytes,
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,
@@ -8221,6 +8363,14 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
         BuiltinMember::SetDiscard,
+        BuiltinMember::SetUnion,
+        BuiltinMember::SetIntersection,
+        BuiltinMember::SetDifference,
+        BuiltinMember::SetSymmetricDifference,
+        BuiltinMember::SetIsSubset,
+        BuiltinMember::SetIsSuperset,
+        BuiltinMember::SetIsDisjoint,
+        BuiltinMember::SetUpdate,
         BuiltinMember::SetClear,
         BuiltinMember::SetReserve,
         BuiltinMember::QueuePut,

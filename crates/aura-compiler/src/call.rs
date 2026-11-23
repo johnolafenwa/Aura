@@ -123,6 +123,27 @@ pub fn sequence_builtin_element_type(ty: &Type, allow_unordered: bool) -> Option
 /// repeats one: `list[T] + list[T]` and `list[T] * n` or `n * list[T]`,
 /// where a `Span[T]` operand reads as `list[T]` and `n` is an integer in
 /// the `int64` index domain.
+/// The set method a binary operator between two sets of one type calls:
+/// `|` is `union`, `&` is `intersection`, `-` is `difference`, and `^` is
+/// `symmetric_difference`. `None` for any other operator or operand types.
+pub fn set_binary_method(
+    op: crate::ast::BinaryOp,
+    left: &Type,
+    right: &Type,
+) -> Option<&'static str> {
+    if left != right || !matches!(left, Type::Named(name, args) if name == "set" && args.len() == 1)
+    {
+        return None;
+    }
+    match op {
+        crate::ast::BinaryOp::BitOr => Some("union"),
+        crate::ast::BinaryOp::BitAnd => Some("intersection"),
+        crate::ast::BinaryOp::Sub => Some("difference"),
+        crate::ast::BinaryOp::BitXor => Some("symmetric_difference"),
+        _ => None,
+    }
+}
+
 pub fn list_binary_result_type(
     op: crate::ast::BinaryOp,
     left: &Type,
@@ -475,6 +496,8 @@ const STRING_SEPARATOR_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "separator", ReceiverKind::Borrow)];
 const STRING_REPEAT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "count", ReceiverKind::Borrow)];
+const STRING_CHAR_AT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "index", ReceiverKind::Borrow)];
 const STRING_REPLACE_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "from", ReceiverKind::Borrow),
     builtin_param!(required, "to", ReceiverKind::Borrow),
@@ -490,6 +513,8 @@ const MAP_EXTEND_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "other", ReceiverKind::Value)];
 const SET_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const SET_OTHER_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "other", ReceiverKind::Borrow)];
 const SET_INSERT_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Value)];
 const CAPACITY_PARAMS: [BuiltinParam; 1] =
@@ -1234,6 +1259,7 @@ pub enum BuiltinMember {
     StringFind,
     StringCount,
     StringRepeat,
+    StringCharAt,
     StringJoin,
     StringToBytes,
     ScalarToString,
@@ -1331,6 +1357,14 @@ pub enum BuiltinMember {
     SetInsert,
     SetRemove,
     SetDiscard,
+    SetUnion,
+    SetIntersection,
+    SetDifference,
+    SetSymmetricDifference,
+    SetIsSubset,
+    SetIsSuperset,
+    SetIsDisjoint,
+    SetUpdate,
     SetClear,
     SetReserve,
     StringClone,
@@ -1688,6 +1722,14 @@ impl BuiltinMember {
             ("set", "add") => Some(Self::SetInsert),
             ("set", "remove") => Some(Self::SetRemove),
             ("set", "discard") => Some(Self::SetDiscard),
+            ("set", "union") => Some(Self::SetUnion),
+            ("set", "intersection") => Some(Self::SetIntersection),
+            ("set", "difference") => Some(Self::SetDifference),
+            ("set", "symmetric_difference") => Some(Self::SetSymmetricDifference),
+            ("set", "is_subset") => Some(Self::SetIsSubset),
+            ("set", "is_superset") => Some(Self::SetIsSuperset),
+            ("set", "is_disjoint") => Some(Self::SetIsDisjoint),
+            ("set", "update") => Some(Self::SetUpdate),
             ("set", "clear") => Some(Self::SetClear),
             ("set", "reserve") => Some(Self::SetReserve),
             ("str", "len") => Some(Self::StringLen),
@@ -1712,6 +1754,7 @@ impl BuiltinMember {
             ("str", "find") => Some(Self::StringFind),
             ("str", "count") => Some(Self::StringCount),
             ("str", "repeat") => Some(Self::StringRepeat),
+            ("str", "char_at") => Some(Self::StringCharAt),
             ("str", "join") => Some(Self::StringJoin),
             ("str", "to_bytes") => Some(Self::StringToBytes),
             ("str", "clone") => Some(Self::StringClone),
@@ -1870,6 +1913,7 @@ impl BuiltinMember {
             Self::StringFind => "find",
             Self::StringCount => "count",
             Self::StringRepeat => "repeat",
+            Self::StringCharAt => "char_at",
             Self::StringJoin => "join",
             Self::StringToBytes => "to_bytes",
             Self::ArrayShape => "shape",
@@ -1960,6 +2004,14 @@ impl BuiltinMember {
             Self::SetInsert => "add",
             Self::SetRemove => "remove",
             Self::SetDiscard => "discard",
+            Self::SetUnion => "union",
+            Self::SetIntersection => "intersection",
+            Self::SetDifference => "difference",
+            Self::SetSymmetricDifference => "symmetric_difference",
+            Self::SetIsSubset => "is_subset",
+            Self::SetIsSuperset => "is_superset",
+            Self::SetIsDisjoint => "is_disjoint",
+            Self::SetUpdate => "update",
             Self::SetClear => "clear",
             Self::SetReserve => "reserve",
             Self::QueuePut => "put",
@@ -2116,6 +2168,7 @@ impl BuiltinMember {
             Self::StringFind => "find(text: str) -> int64 | None",
             Self::StringCount => "count(text: str) -> int64",
             Self::StringRepeat => "repeat(count: int64) -> str",
+            Self::StringCharAt => "char_at(index: int64) -> str",
             Self::StringJoin => "join(parts: list[str]) -> str",
             Self::StringToBytes => "to_bytes() -> list[uint8]",
             Self::ArrayShape => "shape() -> list[int64]",
@@ -2214,6 +2267,14 @@ impl BuiltinMember {
             Self::SetInsert => "add(value: own T) -> None",
             Self::SetRemove => "remove(value: T) -> None",
             Self::SetDiscard => "discard(value: T) -> None",
+            Self::SetUnion => "union(other: set[T]) -> set[T]",
+            Self::SetIntersection => "intersection(other: set[T]) -> set[T]",
+            Self::SetDifference => "difference(other: set[T]) -> set[T]",
+            Self::SetSymmetricDifference => "symmetric_difference(other: set[T]) -> set[T]",
+            Self::SetIsSubset => "is_subset(other: set[T]) -> bool",
+            Self::SetIsSuperset => "is_superset(other: set[T]) -> bool",
+            Self::SetIsDisjoint => "is_disjoint(other: set[T]) -> bool",
+            Self::SetUpdate => "update(other: own set[T]) -> None",
             Self::SetClear => "clear() -> None",
             Self::SetReserve => "reserve(additional: int64) -> None",
             Self::StringClone => "clone() -> str",
@@ -2463,6 +2524,9 @@ impl BuiltinMember {
             Self::StringRepeat => {
                 "Returns `count` concatenated copies of the string. A negative `count` traps with `AU4003`, and a result above the 64 MiB string limit traps with `AU4005`."
             }
+            Self::StringCharAt => {
+                "Returns the character at `index`, counted in Unicode scalar values, as a one-character string. It is what `text[index]` calls. A negative `index` counts from the end, and a position outside the string traps with `AU4003`."
+            }
             Self::StringJoin => {
                 "Joins the `list[str]` parts using the receiver string as the separator."
             }
@@ -2675,6 +2739,26 @@ impl BuiltinMember {
             Self::SetInsert => "Adds `value` when it is not already present.",
             Self::SetRemove => "Removes `value`. Missing values raise AU4008.",
             Self::SetDiscard => "Removes `value` when present.",
+            Self::SetUnion => {
+                "Returns a new set with the elements of the receiver, then the elements of `other` it lacks."
+            }
+            Self::SetIntersection => {
+                "Returns a new set with the receiver's elements that are also in `other`, in the receiver's order."
+            }
+            Self::SetDifference => {
+                "Returns a new set with the receiver's elements that are not in `other`, in the receiver's order."
+            }
+            Self::SetSymmetricDifference => {
+                "Returns a new set with the elements in exactly one of the two sets: the receiver's first, then `other`'s."
+            }
+            Self::SetIsSubset => "Returns true when every element of the receiver is in `other`.",
+            Self::SetIsSuperset => {
+                "Returns true when every element of `other` is in the receiver."
+            }
+            Self::SetIsDisjoint => "Returns true when the two sets share no element.",
+            Self::SetUpdate => {
+                "Moves the elements of `other` into the receiver, after its own, skipping the ones it already has."
+            }
             Self::SetClear => "Removes all set elements.",
             Self::SetReserve => "Reserves room for additional set elements.",
             Self::StringClone => "Creates a new owned `str` with the same contents.",
@@ -3098,6 +3182,9 @@ impl BuiltinMember {
             Self::StringRepeat => {
                 BuiltinCallShape::fixed(&STRING_REPEAT_PARAMS, CallConvention::PositionalOrNamed)
             }
+            Self::StringCharAt => {
+                BuiltinCallShape::fixed(&STRING_CHAR_AT_PARAMS, CallConvention::PositionalOrNamed)
+            }
             Self::StringReplace => {
                 BuiltinCallShape::fixed(&STRING_REPLACE_PARAMS, CallConvention::PositionalOrNamed)
             }
@@ -3121,6 +3208,18 @@ impl BuiltinMember {
             }
             Self::SetInsert => {
                 BuiltinCallShape::fixed(&SET_INSERT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SetUnion
+            | Self::SetIntersection
+            | Self::SetDifference
+            | Self::SetSymmetricDifference
+            | Self::SetIsSubset
+            | Self::SetIsSuperset
+            | Self::SetIsDisjoint => {
+                BuiltinCallShape::fixed(&SET_OTHER_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::SetUpdate => {
+                BuiltinCallShape::fixed(&MAP_EXTEND_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::QueuePut => {
                 BuiltinCallShape::fixed(&VALUE_TIMEOUT_PARAMS, CallConvention::PositionalOrNamed)
@@ -3278,6 +3377,7 @@ impl BuiltinMember {
                 | Self::SetInsert
                 | Self::SetRemove
                 | Self::SetDiscard
+                | Self::SetUpdate
                 | Self::SetClear
                 | Self::SetReserve
                 | Self::FileWriteAll

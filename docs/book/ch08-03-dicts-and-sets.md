@@ -370,11 +370,39 @@ Sets currently iterate in the order values were added, but that order isn't
 part of the contract, so if you need a particular order, sort:
 `sorted(struggling)` gives you a sorted list.
 
-You may be used to Python's set operators, `a | b` for union and `a & b` for
-intersection. Aura doesn't have them yet; `|` on two sets is an `AU2003`
-error, because the compiler only knows `|` as a bitwise operator on integers.
-For now, a comprehension or a short loop does the job, and comprehensions are
-where we're going next.
+Two sets of the same element type combine the way they do in Python.
+`a | b` is the union, `a & b` the intersection, `a - b` the values of `a`
+that `b` lacks, and `a ^ b` the values in exactly one of them. Each has a
+method that says the same thing in words, and there are three questions you
+can ask about a pair of sets:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    passed: set[str] = {"Grace", "Alan", "Ada"}
+    submitted: set[str] = {"Ada", "Linus", "Grace"}
+
+    print(sorted(passed & submitted))
+    print(sorted(submitted - passed))
+    print(sorted(passed.union(submitted)))
+    print(passed.is_subset(submitted))
+    print(passed.is_disjoint({"Margaret"}))
+```
+
+```console
+$ aura run src/main.au
+[Ada, Grace]
+[Linus]
+[Ada, Alan, Grace, Linus]
+false
+true
+```
+
+Neither operand is changed or used up: each operator builds a new set. To
+pour one set into another instead, `passed.update(other)` moves the values
+of `other` into a set declared with `mut`. Subsets are asked about by name,
+with `is_subset` and `is_superset`; there is no `<=` for sets.
 
 ## Choosing a collection
 
@@ -389,3 +417,27 @@ In the next section we'll stop writing so many loops. Comprehensions build a
 list, a set, or a dictionary from another collection in one expression, and a
 handful of builtins compute sums, minimums, and sorted copies without a loop
 at all.
+
+## Visiting entries in key order
+
+Suppose we list delivery stops by their scheduled minute. A driver asks
+which stops fall in the first twenty minutes. We can keep the schedule in a
+`SortedMap` and read that interval in order.
+
+```aura
+from collections import SortedMap
+
+def main():
+    mut stops = SortedMap[int64, str]()
+    stops.set(15, "bridge")
+    stops.set(5, "station")
+    stops.set(30, "museum")
+    for minute, place in own stops.range(0, 20):
+        print(f"{minute} {place}")
+```
+
+This prints `5 station` followed by `15 bridge`. The range includes minute
+zero and ends just before minute twenty. When we only care whether a stop
+exists, a `SortedSet` holds the keys alone. The same module provides a
+`Deque` for taking work from either end and a `Heap` for taking the least
+or greatest value first. [Collections](/manual/collections#the-collections-module)

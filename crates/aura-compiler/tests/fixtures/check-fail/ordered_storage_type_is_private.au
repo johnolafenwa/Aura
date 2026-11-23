@@ -1,0 +1,5 @@
+import collections
+
+
+def consume(value: collections.__Store):
+    print(value)

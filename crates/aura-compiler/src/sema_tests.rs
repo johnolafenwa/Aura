@@ -2301,6 +2301,59 @@ def main():
 }
 
 #[test]
+fn ffi_callbacks_take_c_text_as_a_borrowed_str() {
+    check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr, count: int32) -> int32) -> None
+
+def show(word: str, count: int32) -> int32:
+    print(word)
+    return count
+
+def main():
+    each(show)
+"#,
+    )
+    .expect("a callback takes C text");
+
+    // The text is borrowed for the call, so a function that takes it by
+    // another mode is not that callback.
+    let owned = check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr) -> None) -> None
+
+def keep(word: own str) -> None:
+    print(word)
+
+def main():
+    each(keep)
+"#,
+    )
+    .expect_err("a callback borrows its text");
+    assert_eq!(owned.code, "AU2015", "{}", owned.message);
+
+    let result = check_ffi_source_for_test(
+        r#"extern "C" def bad(make: def() -> cstr) -> None
+"#,
+    )
+    .expect_err("a callback does not return text");
+    assert_eq!(
+        result.message,
+        "a callback cannot return `cstr`: nothing would own the text once the function returns"
+    );
+    let list = check_ffi_source_for_test(
+        r#"extern "C" def bad(visit: def(words: list[int32]) -> None) -> None
+"#,
+    )
+    .expect_err("a callback takes scalars and text");
+    assert!(
+        list.help
+            .iter()
+            .any(|help| help.contains("`cstr` for C text")),
+        "{:?}",
+        list.help
+    );
+}
+
+#[test]
 fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
     let rejected = [
         (
@@ -2328,7 +2381,7 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: def(str) -> int32) -> None
+            r#"extern "C" def bad(value: def(mut cstr) -> int32) -> None
 "#,
             "parameter 1 of callback `value` cannot cross the C boundary as `str`",
             "AU2002",
@@ -3956,15 +4009,73 @@ def classify(value: PairState):
 }
 
 #[test]
-fn d4_string_indexing_remains_rejected() {
-    let error = crate::check_source(
-        "def index_text() -> str:\n    text = 'Aura'\n    return text[0]\n\ndef main() -> int32:\n    return 0\n",
+fn string_indexing_reads_one_character_and_rejects_writes_and_other_indices() {
+    crate::check_source(
+        "def index_text() -> str:\n    text = 'Aura'\n    return text[0] + text.char_at(-1)\n\ndef main() -> int32:\n    return 0\n",
     )
-    .expect_err("Aura does not define integer str indexing");
-    assert_eq!(
-        error.message,
-        "cannot index non-Array, list, or dict value `str`"
-    );
+    .expect("a str index reads one character");
+    let write =
+        crate::check_source("def main() -> None:\n    mut text = 'Aura'\n    text[0] = 'x'\n")
+            .expect_err("a str index is not a place");
+    assert_eq!(write.code.as_str(), "AU2003");
+    assert_eq!(write.message, "a `str` cannot be changed through an index");
+    let key = crate::check_source("def main() -> None:\n    text = 'Aura'\n    print(text['a'])\n")
+        .expect_err("a str index is an integer");
+    assert!(key
+        .message
+        .starts_with("str indices must have type `int64`"));
+    let float = crate::check_source(
+        "def main() -> None:\n    text = 'Aura'\n    print(text.char_at(1.5))\n",
+    )
+    .expect_err("char_at takes an integer");
+    assert_eq!(float.code.as_str(), "AU2002");
+}
+
+#[test]
+fn set_algebra_checks_operand_types_mutability_and_result_types() {
+    let source = |body: &str| {
+        format!("def main() -> None:\n    a: set[int64] = {{1, 2}}\n    names: set[str] = {{'x'}}\n    mut c: set[int64] = {{3}}\n{body}")
+    };
+    crate::check_source(&source(
+        "    d: set[int64] = (a | c) & a.union(c) - a.difference(c) ^ a.symmetric_difference(c)\n    e: bool = a.is_subset(d) or a.is_superset(d) or a.is_disjoint(other=d)\n    c.update(d)\n    c |= a\n    print(e)\n",
+    ))
+    .expect("set algebra should type-check");
+    for (body, code, message) in [
+        (
+            "    print(len(a.union(names)))\n",
+            "AU2002",
+            "`union` expects `set[int64]`, found `set[str]`",
+        ),
+        (
+            "    print(a.is_subset([1]))\n",
+            "AU2002",
+            "`is_subset` expects `set[int64]`, found `list[int64]`",
+        ),
+        (
+            "    print(len(a | names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    print(len(a - names))\n",
+            "AU2002",
+            "set operators need two sets of one element type, found `set[int64]` and `set[str]`",
+        ),
+        (
+            "    a.update(c)\n",
+            "AU3003",
+            "method `update` requires a mutable receiver",
+        ),
+    ] {
+        let error = crate::check_source(&source(body)).expect_err(body);
+        assert_eq!(error.code.as_str(), code, "{body}");
+        assert_eq!(error.message, message, "{body}");
+    }
+    let missing =
+        crate::check_source(&source("    print(a.union())\n")).expect_err("union needs a set");
+    assert!(!missing.code.is_empty());
+    let shift = crate::check_source(&source("    print(len(a << c))\n")).expect_err("no set shift");
+    assert_eq!(shift.code.as_str(), "AU2003");
 }
 
 #[test]
@@ -7920,6 +8031,8 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         span: Span::new(1, 1),
         doc: None,
         c_layout: false,
+        c_arrays: Default::default(),
+        c_union: None,
     }
 }
 
@@ -7955,6 +8068,7 @@ fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> C
     ClassInfo {
         module_name: "<test>".to_string(),
         is_builtin: false,
+        is_builtin_source: false,
         decl: class_decl(name, copy, decl_fields),
         type_param_bounds: BTreeMap::new(),
         fields,
@@ -8096,6 +8210,7 @@ fn local_binding(
             .collect(),
         frozen_places: BTreeMap::new(),
         shared_match_places: BTreeMap::new(),
+        local_function: None,
         captured: false,
         view: None,
         closure_loans: Vec::new(),
@@ -9438,7 +9553,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
     assert!(checker
         .type_of_expr(
             &expr(ExprKind::Index {
-                object: Box::new(expr(ExprKind::Name("text".to_string()))),
+                object: Box::new(expr(ExprKind::Bool(true))),
                 index: Box::new(expr(ExprKind::Int(0))),
             }),
             &mut locals,
@@ -9652,7 +9767,7 @@ fn checker_assignment_helper_paths_cover_index_member_and_binding_edges() {
         )
         .expect_err("non-indexable assignment targets should fail")
         .message
-        .contains("cannot index non-Array, list, or dict value"));
+        .contains("cannot be changed through an index"));
 
     let mut locals = HashMap::from([(
         "nums".to_string(),
@@ -14382,6 +14497,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14417,6 +14533,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14449,6 +14566,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -19639,6 +19757,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ]),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19686,6 +19805,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19711,6 +19831,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19863,6 +19984,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -25413,7 +25535,7 @@ def main():
 }
 
 #[test]
-fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unavailable() {
+fn owned_slices_reject_unsupported_bases_and_scalars_have_no_index() {
     for source in [
         "def main():\n    value: int32 = 1\n    print(value[:])\n",
         "def main():\n    values = {1, 2}\n    print(values[:])\n",
@@ -25431,8 +25553,10 @@ fn owned_slices_reject_unsupported_bases_and_string_scalar_indexing_remains_unav
         );
     }
 
-    let indexed = crate::check_source("def main():\n    print(\"text\"[0])\n")
-        .expect_err("str scalar indexing remains unavailable");
+    crate::check_source("def main():\n    print(\"text\"[0])\n")
+        .expect("a str index reads one character");
+    let indexed =
+        crate::check_source("def main():\n    print(true[0])\n").expect_err("a bool has no index");
     assert!(indexed.message.contains("cannot index"));
 }
 
@@ -32653,16 +32777,16 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
     .expect("unnamed slots admit any parameter name");
     let cases: [(&str, &str); 13] = [
         (
-            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
-            "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
+            "def inc(value: int64 = 1) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(value: int64) -> int64] = inc\n",
+            "use `Adapter(...)` to restrict the value",
         ),
         (
-            "def main():\n    c: Callable[def(int64) -> int64] = lambda x: x\n",
-            "a lambda becomes `Callable[def(int64) -> int64]` only through an explicit",
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(other: int64) -> int64] = inc\n",
+            "would be renamed to `other`",
         ),
         (
-            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(int64) -> int64] = inc\n",
-            "explicit `TaskCallable(...)` constructor call",
+            "def inc(value: int64 = 1) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(value: int64) -> int64] = inc\n",
+            "declare `type Adapter = TaskCallable[def(value: int64) -> int64]`",
         ),
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    k: def(int64, int64) -> int64 = inc\n",
@@ -33191,6 +33315,266 @@ def run() -> None:
 }
 
 #[test]
+fn ffi_lays_out_unions_from_their_members() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+    name: array[uint8, 4]
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    ratio: float64
+    padding: array[uint8, 24]
+
+extern "C" class Holder:
+    tag: int32
+    event: Event
+
+extern "C" def poll(event: mut Event) -> bool
+extern "C" def push(event: Event) -> int32
+extern "C" def last() -> Event
+extern "C" def hold(holder: Holder) -> int32
+extern "C" def fill(events: mut ptr[Event], count: int32) -> None
+
+def run() -> int32:
+    mut event = Event()
+    if poll(event):
+        return event.key.code
+    made = Event.from_key(Key(kind=1, code=2, name=[0, 0, 0, 0]))
+    mut events = [Event.from_kind(1), Event.from_ratio(0.5), Event.from_padding(made.padding)]
+    fill(events, 3)
+    holder = Holder(tag=1, event=last())
+    return push(made) + hold(holder) + (len(event.bytes) as int32)
+"#,
+    )
+    .expect("unions should check");
+    let event = program.extern_functions["push"].c_struct_params[0]
+        .as_ref()
+        .expect("a union crosses as a struct does");
+    assert!(event.union && event.holds_union() && !event.is_plain());
+    assert_eq!(event.name, "Event");
+    assert_eq!((event.size(), event.align()), (24, 8));
+    assert_eq!(
+        event
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["kind", "key", "ratio", "padding"]
+    );
+    assert_eq!(
+        program.extern_functions["last"].c_struct_result.as_ref(),
+        Some(event)
+    );
+    assert_eq!(
+        program.extern_functions["fill"].c_struct_params[0].as_ref(),
+        Some(event)
+    );
+    let holder = program.extern_functions["hold"].c_struct_params[0]
+        .as_ref()
+        .expect("a class that holds a union crosses");
+    assert_eq!((holder.size(), holder.align()), (32, 8));
+    assert!(!program.classes["Event"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+    // The default of the bytes is as long as the union.
+    let Some(Expr {
+        kind: ExprKind::Comprehension { clauses, .. },
+        ..
+    }) = &program.classes["Event"].decl.fields[0].default
+    else {
+        panic!("the bytes of a union default to a comprehension");
+    };
+    let ExprKind::Call { args, .. } = &clauses[0].iterable.kind else {
+        panic!("the comprehension runs over a range");
+    };
+    assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
+
+    for (source, message, code) in [
+        (
+            "extern \"C\" union U:\n    name: str\n",
+            "member `name` of `extern \"C\"` union `U` has type `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    names: array[str, 2]\n",
+            "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+            "",
+            "",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
+            "use of moved value `u`",
+            "AU3001",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source).expect_err("the union is misused");
+        assert!(error.message.contains(message), "{}", error.message);
+        if !code.is_empty() {
+            assert_eq!(error.code, code, "{}", error.message);
+        }
+    }
+}
+
+#[test]
+fn ffi_admits_array_fields_and_struct_arrays() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    name: array[int8, 8]
+    corners: array[Point, 2]
+    grid: array[array[int16, 3], 2]
+
+extern "C" class Holder:
+    id: int32
+    shape: Shape
+
+extern "C" def area(s: Shape) -> float32
+extern "C" def make(tag: uint8) -> Shape
+extern "C" def grow(s: mut Shape) -> None
+extern "C" def hold(h: Holder) -> int32
+extern "C" def total(points: ptr[Point], count: int32) -> float32
+extern "C" def shift(points: mut ptr[Point], count: int32) -> None
+extern "C" def retag(shapes: mut ptr[Shape], count: int32) -> None
+
+def run() -> float32:
+    mut shape = make(1)
+    grow(shape)
+    shape.name[0] = 65
+    first = shape.corners[0]
+    mut points = [first, Point(x=1.0, y=2.0)]
+    shift(points, 2)
+    mut shapes = [make(2)]
+    retag(shapes, 1)
+    holder = Holder(id=1, shape=make(3))
+    return area(shape) + total(points, 2) + (hold(holder) as float32)
+"#,
+    )
+    .expect("array fields and struct arrays should check");
+    use crate::c_layout::CFieldKind;
+    use crate::ffi::FfiScalar;
+    let area = &program.extern_functions["area"];
+    let shape = area.c_struct_params[0].as_ref().expect("a struct");
+    assert_eq!(
+        shape.fields[1].kind,
+        CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::I8)), 8)
+    );
+    let CFieldKind::Array(corner, 2) = &shape.fields[2].kind else {
+        panic!("corners is an array of two");
+    };
+    assert!(matches!(&**corner, CFieldKind::Struct(point) if point.name == "Point"));
+    assert_eq!(
+        shape.fields[3].kind,
+        CFieldKind::Array(
+            Box::new(CFieldKind::Array(
+                Box::new(CFieldKind::Scalar(FfiScalar::I16)),
+                3
+            )),
+            2
+        )
+    );
+    assert_eq!((shape.size(), shape.align()), (40, 4));
+    assert!(!shape.is_plain());
+    assert_eq!(
+        program.extern_functions["make"].c_struct_result.as_ref(),
+        Some(shape)
+    );
+    // A `ptr[Name]` parameter carries the layout of one element.
+    let total = &program.extern_functions["total"];
+    assert_eq!(
+        total.c_struct_params[0].as_ref().map(|point| point.size()),
+        Some(8)
+    );
+    assert!(total.c_struct_params[1].is_none());
+    assert_eq!(
+        program.extern_functions["retag"].c_struct_params[0].as_ref(),
+        Some(shape)
+    );
+    // A class with an array field is not Copy, and neither is its holder.
+    assert!(program.classes["Point"].decl.copy);
+    assert!(!program.classes["Shape"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+
+    let rejected = [
+        (
+            r#"extern "C" class P:
+    names: array[str, 2]
+"#,
+            "field `names` of `extern \"C\"` class `P` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    values: list[int32]
+"#,
+            "field `values` of `extern \"C\"` class `P` has type `list[int32]`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(p: ptr[str]) -> None
+"#,
+            "pointer parameter `p` must point to a fixed-width scalar type or an `extern \"C\"` class",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: own ptr[P]) -> None
+"#,
+            "pointer parameter `p` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" def use(p: P) -> None
+def run() -> None:
+    p = P(v=[1, 2])
+    q = p
+    use(p)
+"#,
+            "use of moved value `p`",
+            "AU3001",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" class H:
+    p: P
+extern "C" def use(h: H) -> None
+def run() -> None:
+    h = H(p=P(v=[1, 2]))
+    k = h
+    use(h)
+"#,
+            "use of moved value `h`",
+            "AU3001",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported array use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"
@@ -33277,6 +33661,11 @@ class Counter:
     let bad_declarations = [
         (
             "extern \"C\" def bad(f: def(text: str) -> None) -> None\n",
+            "a callback takes text as `cstr`",
+            "AU1101",
+        ),
+        (
+            "extern \"C\" def bad(f: def(text: mut cstr) -> None) -> None\n",
             "parameter 1 of callback `f` cannot cross the C boundary as `str`",
             "AU2002",
         ),
@@ -33650,4 +34039,174 @@ fn array_selections_reject_misuse_in_the_library_checker() {
         assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
         assert_eq!(diagnostic.message, message, "{source}");
     }
+}
+
+#[test]
+fn callable_destination_packs_function_values_lambdas_and_closures() {
+    crate::check_source(
+        "def double(value: int64) -> int64:\n    return value * 2\n\ndef make(amount: int64) -> Callable[def(value: int64) -> int64]:\n    return lambda value: value + amount\n\ndef run(step: Callable[def(value: int64) -> int64]) -> int64:\n    return step(1)\n\ndef main():\n    print(run(double))\n    print(run(make(2)))\n    held = lambda: 4\n    stored: Callable[def() -> int64] = (held)\n    print(stored())\n",
+    )
+    .expect("callable values pack where owned callable storage is expected");
+}
+
+#[test]
+fn callable_destination_copies_a_copy_parameter_into_the_closure() {
+    crate::check_source(
+        "def make(amount: int64, scale: mut int64) -> Callable[def() -> int64]:\n    return lambda: amount * scale\n\ndef main():\n    mut scale = 3\n    print(make(2, scale)())\n",
+    )
+    .expect("a Copy parameter is captured by value");
+    let error = crate::check_source(
+        "def make(items: list[int64]) -> Callable[def() -> int64]:\n    return lambda: items.len()\n",
+    )
+    .expect_err("a non-Copy shared parameter is not captured by value");
+    assert_eq!(error.code, "AU3002");
+}
+
+#[test]
+fn callable_destination_keeps_every_packing_rule() {
+    let cases = [
+        (
+            "class Counter:\n    total: int64\n    def bump(mut self) -> int64:\n        self.total = self.total + 1\n        return self.total\ndef main():\n    counter = Counter(total=0)\n    step: Callable[def() -> int64] = lambda [own counter]: counter.bump()\n",
+            "AU2015",
+            "a call kind may only weaken",
+        ),
+        (
+            "def main():\n    values = [1, 2]\n    size: Callable[def() -> int64] = lambda [values]: values.len()\n",
+            "AU3010",
+            "cannot be packed into `Callable`",
+        ),
+        (
+            "def main():\n    amount = 1\n    step: Callable[def(value: int64) -> int64] = lambda other: other + amount\n",
+            "AU2015",
+            "must be named `value`",
+        ),
+        (
+            "def main():\n    amount = 1\n    step: Callable[def() -> str] = lambda: amount\n",
+            "AU2002",
+            "lambda body has type `int64`, expected `str`",
+        ),
+        (
+            "def main():\n    step: Callable[def() -> int64] = 3\n",
+            "AU2002",
+            "but value has type `int64`",
+        ),
+        (
+            "def step(value: int64 = 1) -> int64:\n    return value\ndef main():\n    held: Callable[def(value: int64) -> int64] = step\n",
+            "AU2015",
+            "use `Adapter(...)` to restrict the value",
+        ),
+        (
+            "def step(value: int64) -> str:\n    return \"\"\ndef main():\n    held: Callable[def(value: int64) -> int64] = step\n",
+            "AU2002",
+            "",
+        ),
+        (
+            "class Group:\n    pass\ndef run(work: own TaskCallable[own def() -> int64]) -> int64:\n    return work()\ndef main():\n    values = [1]\n    view first = values\n    print(run(lambda [first]: first.len()))\n",
+            "AU3010",
+            "",
+        ),
+    ];
+    for (source, code, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}\n{}", error.message);
+        assert!(
+            error.message.contains(expected),
+            "{source}\n{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
+    let cases = [
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_branch_packing.au"),
+            "AU2015",
+            "a call kind may only weaken",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_mutable_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_binding_reassign.au"),
+            "AU3003",
+            "immutable binding",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_capture_escape.au"),
+            "AU3010",
+            "live shared loan",
+        ),
+        (
+            r#"def main() -> None:
+    for n in range(3):
+        def stop() -> None:
+            break
+        stop()
+"#,
+            "AU2999",
+            "only allowed inside a loop",
+        ),
+        (
+            r#"def main() -> None:
+    def compute(x: int64) -> int64:
+        if x == 0:
+            return x
+"#,
+            "AU2002",
+            "must return `int64` on every path",
+        ),
+        (
+            r#"def main() -> None:
+    def identity(value: int64) -> int64:
+        next = identity
+        return value
+"#,
+            "AU2005",
+            "target of a direct call",
+        ),
+        (
+            r#"def main() -> None:
+    def one(value: int64) -> int64:
+        return twice(value)
+    def twice(value: int64) -> int64:
+        return value * 2
+"#,
+            "AU2001",
+            "unknown function `twice`",
+        ),
+    ];
+    for (source, code, message) in cases {
+        let error = crate::check_source(source).expect_err("invalid local function usage");
+        assert_eq!(error.code, code, "{error:?}");
+        assert!(format!("{error:?}").contains(message), "{error:?}");
+    }
+}
+
+#[test]
+fn calling_a_tuple_closure_borrows_its_place_while_evaluating_arguments() {
+    let source =
+        include_str!("../tests/fixtures/check-fail/callable_tuple_overlapping_argument.au");
+    let error = crate::check_source(source).expect_err("the argument replaces the held callable");
+    assert_eq!(error.code, "AU3002", "{error:?}");
+}
+
+#[test]
+fn numbers_require_explicit_conversion_for_arithmetic() {
+    let source =
+        include_str!("../tests/fixtures/check-fail/bigint_requires_explicit_conversion.au");
+    let error = crate::check_source(source).expect_err("mixed integer arithmetic must be explicit");
+    assert_eq!(error.code.as_str(), "AU2999");
+    assert!(
+        error.message.contains("BigInt") && error.message.contains("int64"),
+        "{error:?}"
+    );
 }

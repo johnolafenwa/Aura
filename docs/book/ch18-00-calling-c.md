@@ -528,17 +528,190 @@ Aura passes the address of a C copy of `now`, and when the call returns,
 `const struct timespec *` for a struct the function only reads. Declare that
 as `mut` too, and pass a `mut` variable.
 
-On the Aura side there is nothing foreign about these values. An
-`extern "C"` class is a `copy class`: we build one with keyword arguments,
-read its fields, copy it by assignment, and keep it in a list. What it gives
-up is everything a C struct does not have. It has no methods, no field
-defaults, and no type parameters, and each field is a scalar or another
-`extern "C"` class, which C would hold inline as a nested struct.
+Our `Timespec` has only scalar fields, so assignment copies it. We can
+build one with keyword arguments, read its fields, and keep it in a list.
+C lays out nested structs inline. If a field contains a fixed-size array or
+a union, even inside a nested struct, assignment moves the value. An
+`extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C unions,
-bit-fields, and array fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. C
+bit-fields have no Aura spelling.
+
+### Arrays of structs
+
+C functions often take a pointer to the first of a run of structs, with a
+count beside it. A graphics library takes its points that way, and so does
+`poll`, the system call that asks which of a set of files are ready. Each
+entry is a `struct pollfd`: a file descriptor, the events we ask about, and
+the events that happened, which `poll` fills in. We met `ptr[T]` for lists
+of numbers, and it takes an `extern "C"` class as well:
+
+*Filename: src/ready.au*
+
+```aura fragment
+extern "C" class PollFd:
+    fd: int32
+    events: int16
+    revents: int16
+
+extern "C" def poll(fds: mut ptr[PollFd], count: uint64, timeout_ms: int32) -> int32
+
+POLLOUT: int16 = 4
+
+def main() -> int32:
+    mut watched = [
+        PollFd(fd=1, events=POLLOUT, revents=0),
+        PollFd(fd=2, events=POLLOUT, revents=0),
+    ]
+    ready = poll(watched, 2, 0)
+    print(ready)
+    for entry in watched:
+        print(entry.revents & POLLOUT != 0)
+    return 0
+```
+
+<span class="caption">Listing 18-7: A list of structs passed as a C array</span>
+
+```console
+$ aura run src/ready.au
+2
+true
+true
+```
+
+The argument is an ordinary `list[PollFd]`. For the call, Aura writes its
+elements into a C array, one `struct pollfd` after another, and passes the
+address of the first. Because the parameter is `mut`, it reads the array
+back when `poll` returns, and that is how `revents` reached our list. Both
+standard output and standard error were ready for writing. A parameter
+without `mut` is `const struct pollfd *`, and skips the reading back.
+
+The copy costs time for every element on every call. That is fine for a
+few dozen points or file descriptors. A buffer of a million floats should
+be an `Array[float32]`, which lends its own memory instead.
+
+### Arrays inside structs
+
+The other place C puts an array is inside the struct itself: `char
+name[32]`, `float params[4]`. The field type `array[T, N]` declares one. This is raylib's `Material`,
+whose two pointers we carry as addresses:
+
+```aura fragment
+extern "C" class Shader:
+    id: uint32
+    locs: uint64
+
+extern "C" class Material:
+    shader: Shader
+    maps: uint64
+    params: array[float32, 4]
+
+extern "C" def LoadMaterialDefault() -> Material
+extern "C" def UnloadMaterial(material: Material) -> None
+```
+
+`array` is a word only here, in a field of an `extern "C"` class. To the
+rest of the program, `params` is a `list[float32]`: we can index it, loop
+over it, and assign `material.params[0] = 2.5`. The `4` matters at the
+boundary. A `Material` that comes back from C always has four elements in
+`params`, and one we pass must have exactly four, or the call fails with
+`AU4005` before C sees anything. One more thing changes: a class that
+holds a list cannot be a `copy class`, so a `Material` moves when we assign
+it, like any other class with a list inside.
+
+### Unions
+
+A C union is several types laid over the same bytes. SDL, the library
+behind many games, reports everything that happens through one: a key
+press, a mouse move, and a window resize are all an `SDL_Event`, and its
+first four bytes say which. We declare a union with `extern "C" union`,
+listing the members we care about:
+
+*Filename: src/events.au*
+
+```aura fragment
+extern "C" class Keysym:
+    scancode: int32
+    sym: int32
+    modifiers: uint16
+    unused: uint32
+
+extern "C" class KeyboardEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    state: uint8
+    repeat: uint8
+    padding2: uint8
+    padding3: uint8
+    keysym: Keysym
+
+extern "C" union Event:
+    kind: uint32
+    key: KeyboardEvent
+    padding: array[uint8, 56]
+
+extern "C" def SDL_Init(flags: uint32) -> int32
+extern "C" def SDL_PushEvent(event: mut Event) -> int32
+extern "C" def SDL_PollEvent(event: mut Event) -> int32
+extern "C" def SDL_Quit() -> None
+
+SDL_INIT_EVENTS: uint32 = 16384
+SDL_KEYDOWN: uint32 = 768
+
+def main() -> int32:
+    SDL_Init(SDL_INIT_EVENTS)
+    mut escape = Event.from_key(KeyboardEvent(
+        kind=SDL_KEYDOWN, timestamp=0, window=0, state=1, repeat=0, padding2=0, padding3=0,
+        keysym=Keysym(scancode=41, sym=27, modifiers=0, unused=0),
+    ))
+    SDL_PushEvent(escape)
+
+    mut event = Event()
+    while SDL_PollEvent(event) != 0:
+        if event.kind == SDL_KEYDOWN:
+            pressed = event.key
+            print(f"key {pressed.keysym.sym}, state {pressed.state}")
+    SDL_Quit()
+    return 0
+```
+
+<span class="caption">Listing 18-8: Reading SDL events through a union</span>
+
+With `libraries = ["SDL2"]` in the manifest, the program prints the key we
+pushed:
+
+```console
+$ aura run
+key 27, state 1
+```
+
+`SDL_Event` has about thirty members in C. We listed three, and that is
+fine as long as one of them is as large as the whole union. SDL pads its
+union to 56 bytes for that reason, and our `padding` member does the same.
+
+Three things in `main` are new. `Event()` makes a union of zero bytes for
+SDL to fill. `event.kind` and `event.key` read the same bytes two ways: the
+first as a `uint32`, the second as a whole `KeyboardEvent`. And
+`Event.from_key(...)` builds a union from one member, with every byte the
+member does not cover set to zero. Each member we declare gets a read like
+`event.key` and a `from_` function like `Event.from_key`.
+
+A C union does not remember which member was stored, and neither does
+ours. Nothing stops us from reading `event.key` when the event is a mouse
+move. We would get a `KeyboardEvent` made of the mouse event's bytes, as a
+C program would. The `kind` field is SDL's convention for telling us which
+member to read, and checking it first is our job.
+
+Reading a member gives us a copy. `event.key` builds a new `KeyboardEvent`
+each time, which is why the loop binds it to `pressed` and reads two
+fields from that. For the same reason Aura rejects `event.kind = 1` and
+`event.key.state = 0` with `AU2045`: a member is read-only. To change a
+union, build a new one with a `from_` function. The
+bytes themselves are also there, as the list `event.bytes`, for the rare
+case where nothing else will do.
 
 ## Callbacks
 
@@ -579,24 +752,44 @@ $ aura run src/sorting.au
 `qsort` hands its comparison function two `const void *` pointers. We know
 they point at `int32` elements, so the callback type says `mut int32`: a
 pointer to one number, which Aura reads on the way in. A plain `int32`
-parameter would be a number passed by value. A callback takes and returns
-scalars only.
+parameter would be a number passed by value.
+
+GLFW gives its error callback a code and a message. We declare the
+message as `cstr` where C calls us, then use an ordinary `str` in the
+function that prints it.
+
+```aura fragment
+extern "C" def glfwSetErrorCallback(
+    callback: def(code: int32, description: cstr) -> None
+) -> uint64
+
+def report_error(code: int32, description: str) -> None:
+    print(f"GLFW error {code}: {description}")
+```
+
+Pass `report_error` to `glfwSetErrorCallback`. Aura copies the bytes up
+to the first NUL and checks their UTF-8 encoding before calling
+`report_error`. GLFW can reuse its buffer as soon as the callback
+returns. A null pointer or invalid UTF-8 causes the foreign call that
+invoked the callback to fail with `AU4005`.
 
 The argument must be a function we name, defined at the top level of a
 module. C receives a bare code address with nowhere to keep captured
 variables, so a lambda or a closure is a compile error. C libraries usually
 make up for that with a `void *user_data` parameter that they pass back to
 the callback untouched. Declare it `uint64`, and use it to carry an index
-or a key.
+or a key. A handle passed into a callback, such as the window in a GLFW
+key callback, is also declared `uint64`.
 
 A callback can fail like any other Aura code, with an index out of range
 or an overflow. Aura does not unwind through the C function, which would
 not expect it. The callback returns zero to C, any later callbacks return
 zero without running, and the `qsort` call itself fails with the
-callback's error as soon as the C function returns. Two rules keep
-callbacks safe: the C library must call the function on the thread that
-made the foreign call, and the callback should not wait on a task or a
-queue.
+callback's error as soon as the C function returns. If the callback has a
+`with` block, its manager exits before C resumes. A manager around
+`qsort` exits after C returns. The C library must call the function on the
+thread that made the foreign call, and the callback should not wait on a
+task or a queue.
 
 ## When things go wrong at run time
 
@@ -731,7 +924,7 @@ without a change to your own manifest that a reviewer will see.
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
-variadic functions such as `printf`, no unions or arrays of structs, no
+variadic functions such as `printf`, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler

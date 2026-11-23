@@ -350,3 +350,64 @@ fn class_fields_in_boxes_free_every_box() {
         include_str!("../../aura-compiler/tests/fixtures/run-pass/class_fields_in_boxes.stdout");
     assert_frees_everything("leak-class-field-boxes", source, expected, 0);
 }
+
+#[test]
+fn a_decorated_module_function_owns_its_captures_until_shutdown() {
+    let source = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Decorator = Callable[def(step: own Step) -> Step]
+
+def named(label: own str) -> Decorator:
+    return lambda [own label] own step: named_step(label.clone(), step)
+
+def named_step(label: own str, step: own Step) -> Step:
+    return lambda [own label, own step] value: label.len() + step(value)
+
+@named("tag")
+def twice(value: int64) -> int64:
+    return value * 2
+
+def main() -> None:
+    print(twice(4))
+"#;
+    assert_frees_everything("leak-decorator-captures", source, "11\n", 0);
+}
+
+#[test]
+fn an_overflow_in_a_forwarded_method_names_both_frames() {
+    let source = r#"type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Count:
+    value: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.value += amount
+        return self.value
+
+def counter(start: int64) -> Tally:
+    count = Count(value=start)
+    return lambda [own count] amount: count.add(amount)
+
+def main() -> None:
+    mut tally = counter(9223372036854775807)
+    print(tally(1))
+"#;
+    for backend in ["mir", "direct"] {
+        let result = run("forwarded-method-overflow", source, backend);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(result.stdout.is_empty(), "{}", result.stdout);
+        assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("Count.add at 6:5 -> counter::__lambda_12_12 at 12:12 -> main at 14:1"),
+            "{}",
+            result.stderr
+        );
+        if backend == "direct" {
+            // The scalar receiver can stay entirely in the callable's words.
+            let (allocated, freed) = result.boxes.expect("direct runtime stats");
+            assert_eq!(allocated, freed, "{}", result.stderr);
+        }
+    }
+}

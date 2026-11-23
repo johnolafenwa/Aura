@@ -196,12 +196,16 @@ fn run_resolved_entry(
     let handle = match thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
         .spawn(move || {
+            // A program with no tasks runs on this thread's own stack.
+            let _stack_bounds =
+                crate::runtime_value::enter_thread_stack_bounds(MIR_RUNTIME_STACK_SIZE);
             let result = panic::catch_unwind(AssertUnwindSafe(move || {
                 let stdout = Arc::new(Mutex::new(String::new()));
                 let task_stdout = stdout.clone();
                 let task_stdout_sink = stdout_sink.clone();
                 let task_entry = entry.clone();
                 let value_result = if module_uses_lightweight_tasks(&module) {
+                    crate::runtime_value::set_root_task_stack_size(MIR_RUNTIME_STACK_SIZE);
                     run_lightweight_root_task(move || {
                         let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                             module,
@@ -496,10 +500,8 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
     Ok(module)
 }
 
-// Keep the MIR runtime call-depth budget comfortably below the host thread's
-// stack ceiling. Recursive Aura programs should fail with a diagnostic before
-// the runtime thread can overflow its Rust stack.
-pub(crate) const MAX_CALL_DEPTH: usize = 256;
+/// The call frames a trap keeps from each end of a deeper call chain.
+const TRACE_FRAMES_PER_END: usize = 128;
 /// Writable coroutine stack the interpreter requires before entering another
 /// Aura call, so an exhausted task stack becomes a diagnostic instead of a
 /// guard-page fault. It must exceed the stack one call transition consumes
@@ -515,7 +517,11 @@ pub(crate) const TASK_STACK_HEADROOM_RESERVE: usize = if cfg!(debug_assertions) 
 } else {
     128 * 1024
 };
-pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
+/// The stack the interpreter reserves for the program's entry: the thread
+/// of a program with no tasks, and the root task's coroutine otherwise. An
+/// interpreted call takes about 11 KiB in an optimized build, so this holds
+/// about 20,000 nested calls. The pages are committed as they are used.
+pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 256 * 1024 * 1024;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
 const MAX_RUNTIME_TERMINATOR_ARMS: usize = 1_000_000;
@@ -893,6 +899,7 @@ struct EvaluatedMirArg {
 }
 
 struct StartTaskRequest<'a> {
+    recover: bool,
     returns_handle: bool,
     result_is_repeatable: bool,
     stack_size: Option<usize>,
@@ -903,7 +910,7 @@ struct StartTaskRequest<'a> {
 }
 
 fn mir_function_value(name: &str, signature: &Type) -> Value {
-    Value::Function(Box::new(FunctionValue {
+    Value::Function(Arc::new(FunctionValue {
         name: name.to_string(),
         signature: signature.clone(),
         source_path: None,
@@ -911,6 +918,7 @@ fn mir_function_value(name: &str, signature: &Type) -> Value {
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }))
 }
 
@@ -2816,10 +2824,39 @@ impl MirRuntime {
     }
 
     fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
-        error.capture_runtime_frames_once(
-            self.call_chain(),
-            self.task_ancestry.iter().rev().cloned().collect(),
-        );
+        if error.capture_runtime_frames_once(Vec::new(), Vec::new()) {
+            // A trap propagates through each suspended interpreter call. Take
+            // its snapshot once, copying only the frames the diagnostic keeps.
+            let mut snapshot = |outer: &[RuntimeCallFrame]| {
+                let chain = self.call_stack.iter().rev().chain(outer.iter());
+                let total = self.call_stack.len() + outer.len();
+                if total <= 2 * TRACE_FRAMES_PER_END {
+                    error.call_frames = chain.cloned().collect();
+                } else {
+                    let inner = chain.clone().take(TRACE_FRAMES_PER_END);
+                    let outer = chain.skip(total - TRACE_FRAMES_PER_END);
+                    error.call_frames = inner.chain(outer).cloned().collect();
+                    error.set_omitted_call_frames(
+                        TRACE_FRAMES_PER_END,
+                        total - 2 * TRACE_FRAMES_PER_END,
+                    );
+                }
+            };
+            if self.generator_body {
+                GENERATOR_RESUMERS.with(|frames| {
+                    snapshot(
+                        frames
+                            .borrow()
+                            .last()
+                            .map(Vec::as_slice)
+                            .unwrap_or_default(),
+                    )
+                });
+            } else {
+                snapshot(&[]);
+            }
+            error.task_ancestry = self.task_ancestry.iter().rev().cloned().collect();
+        }
         error
     }
 
@@ -2901,6 +2938,7 @@ impl MirRuntime {
             expected_return_type,
             None,
             Some(receiver_ty),
+            false,
         )?;
         if method.receiver == Some(MirReceiverKind::BorrowMut) {
             let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -3120,6 +3158,7 @@ impl MirRuntime {
             )),
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Rng(_) => Some(Type::named("random.Rng")),
+            Value::CollectionStore(_) => Some(Type::named("collections.__Store")),
             Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
             Value::TraitObject(object) => Some(Type::clone(&object.held)),
             Value::Range(_) => Some(Type::named("Range")),
@@ -3171,6 +3210,7 @@ impl MirRuntime {
             Value::HttpExchange(_) => Some(Type::Named("net.HttpExchange".to_string(), Vec::new())),
             Value::HttpResponse(_) => Some(Type::Named("http.Stream".to_string(), Vec::new())),
             Value::Tensor(_) => Some(Type::Named("tensor.Node".to_string(), Vec::new())),
+            Value::Sync(handle) => Some(Type::named(handle.type_name())),
             Value::WebSocketListener(_) => {
                 Some(Type::Named("net.WebSocketListener".to_string(), Vec::new()))
             }
@@ -3353,12 +3393,12 @@ impl MirRuntime {
             }
             (Value::Function(function), Type::Function { .. }) => {
                 let mut function = function.clone();
-                function.signature = ty.clone();
+                Arc::make_mut(&mut function).signature = ty.clone();
                 Value::Function(function)
             }
             (Value::Function(function), Type::Closure { .. }) => {
                 let mut function = function.clone();
-                function.signature = ty.clone();
+                Arc::make_mut(&mut function).signature = ty.clone();
                 Value::Function(function)
             }
             (Value::Union(_), _) | (_, Type::Union(_)) => {
@@ -3446,6 +3486,7 @@ impl MirRuntime {
             expected_return_type,
             None,
             None,
+            false,
         )
     }
 
@@ -3463,9 +3504,11 @@ impl MirRuntime {
             expected_return_type,
             Some(signature),
             None,
+            false,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call_function_with_receiver_type(
         &mut self,
         function: &MirFunction,
@@ -3474,6 +3517,7 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
+        registered_exit: bool,
     ) -> Result<CallOutcome> {
         // A returned-view projection belongs to one Aura invocation. In
         // particular, cleanup runs after ReturnLoan and may itself call a
@@ -3488,6 +3532,7 @@ impl MirRuntime {
             expected_return_type,
             concrete_function_type,
             receiver_type,
+            registered_exit,
         );
         // A callee can directly consume a returned view without forwarding
         // it. Discard that unconsumed child token; only ReturnLoan constitutes
@@ -3511,32 +3556,45 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
         concrete_function_type: Option<&Type>,
         receiver_type: Option<&Type>,
+        registered_exit: bool,
     ) -> Result<CallOutcome> {
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
+        // Nothing else bounds the depth of calls: a call chain may be as
+        // deep as the stack it runs on allows.
         if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
-            if headroom < TASK_STACK_HEADROOM_RESERVE {
-                return Err(Diagnostic::coded(
+            // A frame that registers an Aura exit must have room to enter the
+            // exit before it releases its own interpreter frames. Keep the
+            // ordinary guard in force for the exit and everything it calls.
+            // A registered exit spends the extra space already set aside.
+            // MIR without resolved cleanup callees can also call Aura code.
+            let needs_exit_space = !registered_exit
+                && headroom < 2 * TASK_STACK_HEADROOM_RESERVE
+                && function.blocks.iter().any(|block| {
+                    block.instructions.iter().any(|instruction| {
+                        matches!(
+                            instruction,
+                            Instruction::PushCleanup {
+                                callee: None | Some(crate::mir::CleanupCallee::Method { .. }),
+                                ..
+                            }
+                        )
+                    })
+                });
+            if headroom < TASK_STACK_HEADROOM_RESERVE || needs_exit_space {
+                return Err(Diagnostic::coded_at(
                     "AU4005",
+                    function.span,
                     format!(
-                        "task stack exhausted while calling `{}`: {} bytes remain but the interpreter keeps {} in reserve; start the task with `start_with_stack` and a larger size",
+                        "call stack exhausted while calling `{}`",
                         public_runtime_function_name(&function.name),
-                        headroom,
-                        TASK_STACK_HEADROOM_RESERVE
                     ),
+                )
+                .with_help(
+                    "the calls are nested too deeply for this task's stack; a task started with `start_with_stack` gets a larger one",
                 ));
             }
-        }
-        if self.call_depth >= MAX_CALL_DEPTH {
-            return Err(Diagnostic::at(
-                function.span,
-                format!(
-                    "maximum call depth of {} exceeded while calling `{}`",
-                    MAX_CALL_DEPTH,
-                    public_runtime_function_name(&function.name)
-                ),
-            ));
         }
         // Supplied arguments have already been evaluated in source order.
         // Bind them to declaration slots, then evaluate target-owned defaults
@@ -4578,6 +4636,7 @@ impl MirRuntime {
             None,
             None,
             resource_type,
+            true,
         )?;
         if let Some(updated_receiver) = outcome.updated_receiver {
             env.write_place(place, updated_receiver)?;
@@ -4671,7 +4730,7 @@ impl MirRuntime {
                     });
                 }
                 let metadata = self.functions.get(function);
-                Ok(RvalueOutcome::Value(Value::Function(Box::new(
+                Ok(RvalueOutcome::Value(Value::Function(Arc::new(
                     FunctionValue {
                         name: function.clone(),
                         signature: signature.clone(),
@@ -4684,6 +4743,7 @@ impl MirRuntime {
                         closure_environment: Some(Arc::new(ClosureEnvironment::new(
                             captured, *consuming,
                         ))),
+                        direct_callable: None,
                     },
                 ))))
             }
@@ -4827,6 +4887,7 @@ impl MirRuntime {
                 }
             }
             Rvalue::StartTask {
+                recover,
                 returns_handle,
                 result_is_copy,
                 stack_size,
@@ -4841,6 +4902,7 @@ impl MirRuntime {
                     .transpose()?;
                 Ok(RvalueOutcome::Value(self.start_task(
                     StartTaskRequest {
+                        recover: *recover,
                         returns_handle: *returns_handle,
                         result_is_repeatable: *result_is_copy,
                         stack_size,
@@ -6442,6 +6504,7 @@ impl MirRuntime {
                     expected_return_type,
                     None,
                     Some(&resolved_receiver_ty),
+                    false,
                 )?;
                 if method.receiver == Some(MirReceiverKind::BorrowMut) {
                     let updated = outcome.updated_receiver.ok_or_else(|| {
@@ -6480,6 +6543,14 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
+        // A member of a union read or stored, which calls no C function.
+        if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
+            let mut named = call.clone();
+            named.symbol = crate::ffi::reinterpret_label(&call.name);
+            return self.evaluate_extern_call_with(&named, args, env, |_, signature, arguments| {
+                crate::ffi::reinterpret(signature, arguments)
+            });
+        }
         self.evaluate_extern_call_with(call, args, env, |symbol, signature, arguments| {
             // SAFETY: semantic analysis admits only the documented FFI v0
             // surface. The remaining process-symbol signature and foreign
@@ -6537,7 +6608,8 @@ impl MirRuntime {
                 _ if matches!(param.ty, Type::Function { .. }) => {
                     ffi_callback_from_runtime(&argument.value, &param.ty)
                 }
-                (Some(layout), _) => ffi_struct_from_runtime(&argument.value, layout),
+                (Some(layout), true) => ffi_struct_elements_from_runtime(&argument.value, layout),
+                (Some(layout), false) => ffi_struct_from_runtime(&argument.value, layout),
                 (None, true) => ffi_elements_from_runtime(&argument.value, &param.ty),
                 (None, false) => ffi_value_from_runtime(&argument.value, &param.ty),
             })
@@ -6574,6 +6646,10 @@ impl MirRuntime {
                     Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
                     _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
                 },
+                FfiValue::Struct(layout, bytes) if param.pointer => {
+                    aura_runtime::c_values::unpack_elements(layout, &bytes)
+                        .map_err(|error| c_value_diagnostic(&call.symbol, error))?
+                }
                 FfiValue::Struct(layout, bytes) => {
                     struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
@@ -6633,6 +6709,19 @@ impl MirRuntime {
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{name}`")))?;
         let mut args = Vec::with_capacity(signature.params.len());
         for (param, word) in signature.params.iter().zip(frame.iter()) {
+            if param.text {
+                // SAFETY: the C caller passed this address as C text, which
+                // it keeps valid for the length of the callback.
+                let text = unsafe { crate::ffi::callback_text(*word as usize) }
+                    .map_err(|error| ffi_runtime_diagnostic(name, error))?;
+                args.push(EvaluatedMirArg {
+                    name: None,
+                    value: Value::String(text.into()),
+                    ty: Some(Type::named("str")),
+                    writeback_place: None,
+                });
+                continue;
+            }
             let ty = scalar_field_type(param.scalar);
             // C code can pass any byte as a `bool`. Nonzero is true.
             let word = match param.scalar {
@@ -6680,7 +6769,7 @@ impl MirRuntime {
         };
         let evaluated_args = evaluate_named_args(args, env)?;
         self.evaluate_function_value_with_args(
-            *function_value,
+            Arc::unwrap_or_clone(function_value),
             evaluated_args,
             expected_return_type,
             env,
@@ -6762,10 +6851,9 @@ impl MirRuntime {
         Ok(value)
     }
 
-    /// A runtime that runs a generator body on the generator's own stack:
-    /// it shares this runtime's program, output, cancellation, constants,
-    /// and task ancestry, and starts with an empty call stack.
-    fn fork_for_generator(&self) -> MirRuntime {
+    /// Start with fresh call frames while sharing the immutable program and
+    /// its indices, output and program-wide constant states.
+    fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
@@ -6778,7 +6866,7 @@ impl MirRuntime {
             trait_impls: Arc::clone(&self.trait_impls),
             stdout: Arc::clone(&self.stdout),
             stdout_sink: self.stdout_sink.clone(),
-            cancellation: self.cancellation.clone(),
+            cancellation,
             program_args: Arc::clone(&self.program_args),
             call_depth: 0,
             call_stack: Vec::new(),
@@ -6787,8 +6875,22 @@ impl MirRuntime {
             constant_states: Arc::clone(&self.constant_states),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
-            generator_body: true,
+            generator_body: false,
         }
+    }
+
+    fn fork_for_generator(&self) -> MirRuntime {
+        MirRuntime {
+            generator_body: true,
+            ..self.fork_for_child(self.cancellation.clone())
+        }
+    }
+
+    /// A runtime that runs the function of a `control.recover` call. Its
+    /// call chain starts at that function, so a trap it reports names the
+    /// calls the recovery covers and nothing outside them.
+    fn fork_for_recovered_call(&self) -> MirRuntime {
+        self.fork_for_child(self.cancellation.clone())
     }
 
     /// This runtime's active calls, innermost first, followed by those of
@@ -6896,6 +6998,7 @@ impl MirRuntime {
 
     fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
         let StartTaskRequest {
+            recover,
             returns_handle,
             result_is_repeatable,
             stack_size,
@@ -6949,6 +7052,34 @@ impl MirRuntime {
             None,
             (!is_closure).then_some(&function_value.signature),
         )?;
+        if recover {
+            // `control.recover` (ADR-0104): the function runs here, in a
+            // runtime of its own, so a trap leaves this runtime's calls as
+            // they are. A cancelled task unwinds past this as a panic.
+            let locks = crate::runtime_value::sync_host::mark_held_cells();
+            let mut runtime = self.fork_for_recovered_call();
+            let outcome = if is_closure {
+                runtime.call_function_for_target(&function, None, bound_args, None)
+            } else {
+                runtime.call_function_for_value(
+                    &function,
+                    bound_args,
+                    &function_value.signature,
+                    None,
+                )
+            }
+            .and_then(|outcome| outcome.value.into_result());
+            return Ok(match outcome {
+                Ok(value) => crate::runtime_value::result_ok(value),
+                Err(trap) => {
+                    crate::runtime_value::sync_host::abandon_held_cells_since(locks);
+                    let trap = runtime.annotate_runtime_trap_once(trap);
+                    crate::runtime_value::result_err(crate::runtime_value::recovered_trap_value(
+                        trap,
+                    ))
+                }
+            });
+        }
         let mut producer_queues = Vec::new();
         for argument in &bound_args {
             collect_queue_handles(&argument.value, &mut producer_queues);
@@ -6961,50 +7092,26 @@ impl MirRuntime {
             ));
         };
 
-        let cancellation = group_value.child_cancellation();
-
-        let module = (*self.module).clone();
-        let stdout = self.stdout.clone();
-        let stdout_sink = self.stdout_sink.clone();
-        let program_args = self.program_args.clone();
-        let constant_states = self.constant_states.clone();
-        let recursive_functions = self.recursive_functions.clone();
-        let function_for_task = function.clone();
+        let mut runtime = self.fork_for_child(group_value.child_cancellation());
         let function_signature = function_value.signature.clone();
-        let mut task_ancestry = self.task_ancestry.clone();
         let parent_frame = self
             .call_stack
             .last()
             .expect("task starts only while an Aura call frame is active");
-        task_ancestry.push(RuntimeTaskFrame {
+        runtime.task_ancestry.push(RuntimeTaskFrame {
             task_function: function.name.clone(),
             task_entry_span: RuntimeSourceSpan::point(function.source_path.clone(), function.span),
             parent_function: parent_frame.function.clone(),
             spawn_span: RuntimeSourceSpan::point(parent_frame.span.path.clone(), spawn_span),
         });
         let entry = move || {
-            let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
-                module,
-                stdout,
-                stdout_sink,
-                cancellation,
-                program_args,
-            );
-            runtime.constant_states = constant_states;
-            runtime.task_ancestry = task_ancestry;
-            runtime.recursive_functions = recursive_functions;
             if is_closure {
                 runtime
-                    .call_function_for_target(&function_for_task, None, bound_args, None)
+                    .call_function_for_target(&function, None, bound_args, None)
                     .and_then(|outcome| outcome.value.into_result())
             } else {
                 runtime
-                    .call_function_for_value(
-                        &function_for_task,
-                        bound_args,
-                        &function_signature,
-                        None,
-                    )
+                    .call_function_for_value(&function, bound_args, &function_signature, None)
                     .and_then(|outcome| outcome.value.into_result())
             }
         };
@@ -8538,11 +8645,12 @@ impl MirRuntime {
                 Ok(Value::String(text.trim().to_string().into()))
             }
             "trim_start" | "trim_end" | "split_once" | "rsplit_once" | "lines" | "chars"
-            | "split_whitespace" | "find" | "count" | "repeat" => {
+            | "split_whitespace" | "find" | "count" | "repeat" | "char_at" => {
                 let parameters: &[&str] = match field {
                     "split_once" | "rsplit_once" => &["separator"],
                     "find" | "count" => &["text"],
                     "repeat" => &["count"],
+                    "char_at" => &["index"],
                     _ => &[],
                 };
                 let values = evaluate_named_args(args, env)?;
@@ -8550,6 +8658,9 @@ impl MirRuntime {
                 let (argument, count) = match (field, bound.first()) {
                     ("repeat", Some(argument)) => {
                         (None, expect_i64_value(&argument.value, "str.repeat(...)")?)
+                    }
+                    ("char_at", Some(argument)) => {
+                        (None, expect_i64_value(&argument.value, "str.char_at(...)")?)
                     }
                     (_, Some(argument)) => {
                         let Value::String(argument) = &argument.value else {
@@ -8643,6 +8754,47 @@ impl MirRuntime {
                 };
                 env.write_place(place, Value::Set(updated))?;
                 Ok(Value::Unit)
+            }
+            "union"
+            | "intersection"
+            | "difference"
+            | "symmetric_difference"
+            | "is_subset"
+            | "is_superset"
+            | "is_disjoint"
+            | "update" => {
+                let values = evaluate_named_args(args, env)?;
+                let Value::Set(other) = bind_builtin_args(&["other"], values)?
+                    .into_iter()
+                    .next()
+                    .expect("bound set argument should exist")
+                    .value
+                else {
+                    return Err(Diagnostic::new(format!(
+                        "`{field}` requires another `set[T]` value"
+                    )));
+                };
+                if field == "update" {
+                    let mut updated = set;
+                    for element in other.elements.into_vec() {
+                        updated.elements.insert(element);
+                    }
+                    let Some(place) = receiver_place else {
+                        return Err(Diagnostic::new("`update` requires a mutable set place"));
+                    };
+                    env.write_place(place, Value::Set(updated))?;
+                    return Ok(Value::Unit);
+                }
+                use aura_runtime::collection_index::{set_algebra, SetAlgebra};
+                match set_algebra(field, &set.elements, &other.elements)
+                    .expect("the arm names set-algebra methods")
+                {
+                    SetAlgebra::Elements(elements) => Ok(Value::Set(SetValue {
+                        element_type: set.element_type,
+                        elements,
+                    })),
+                    SetAlgebra::Holds(holds) => Ok(Value::Bool(holds)),
+                }
             }
             "clear" => {
                 if !args.is_empty() {
@@ -11193,8 +11345,11 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
         return Ok(FfiType::Callback);
     }
     if let Some(layout) = &param.c_struct {
-        return Ok(match param.passing {
-            MirReceiverKind::BorrowMut => FfiType::StructPointer(layout.interned()),
+        // A `ptr[Name]` parameter points to the first struct of a run.
+        return Ok(match (param.passing, param.pointer) {
+            (MirReceiverKind::BorrowMut, _) | (_, true) => {
+                FfiType::StructPointer(layout.interned())
+            }
             _ => FfiType::Struct(layout.interned()),
         });
     }
@@ -11422,9 +11577,20 @@ pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     let params = params
         .iter()
         .map(|param| {
+            let pointer = param.passing == crate::ast::ReceiverKind::BorrowMut;
+            // `cstr` in a callback type is `str` here: C text the callback
+            // gets a copy of.
+            if param.ty == Type::named("str") {
+                return (!pointer).then_some(CCallbackParam {
+                    scalar: FfiScalar::U64,
+                    pointer: false,
+                    text: true,
+                });
+            }
             Some(CCallbackParam {
                 scalar: scalar(&param.ty)?,
-                pointer: param.passing == crate::ast::ReceiverKind::BorrowMut,
+                pointer,
+                text: false,
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -11501,6 +11667,17 @@ fn ffi_struct_from_runtime(value: &Value, layout: &crate::c_layout::CStruct) -> 
     Ok(FfiValue::Struct(layout, bytes))
 }
 
+/// The diagnostic for a value that did not cross as a C struct.
+fn c_value_diagnostic(symbol: &str, error: aura_runtime::c_values::CValueError) -> Diagnostic {
+    use aura_runtime::c_values::CValueError;
+    match error {
+        CValueError::BadBool(byte) => {
+            ffi_runtime_diagnostic(symbol, FfiError::NonCanonicalBoolReturn(byte))
+        }
+        other => Diagnostic::coded(other.code(), other.to_string()),
+    }
+}
+
 /// Writes each field of the instance `value` at its offset in `bytes`,
 /// which holds the C struct `layout`.
 fn write_struct_bytes(
@@ -11508,35 +11685,8 @@ fn write_struct_bytes(
     layout: &crate::c_layout::CStruct,
     bytes: &mut [u8],
 ) -> Result<()> {
-    use crate::c_layout::CFieldKind;
-    let mismatch = || {
-        Diagnostic::coded(
-            "AU4005",
-            format!(
-                "FFI value for C struct `{}` has incompatible runtime shape `{}`",
-                layout.name,
-                value.render()
-            ),
-        )
-    };
-    let Value::Instance(instance) = value else {
-        return Err(mismatch());
-    };
-    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
-        let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
-        match &field.kind {
-            CFieldKind::Scalar(scalar) => {
-                let crossed = ffi_value_from_runtime(&held, &scalar_field_type(*scalar))?;
-                let word = scalar.word(&crossed).ok_or_else(mismatch)?;
-                let size = scalar.size();
-                bytes[offset..offset + size].copy_from_slice(&word.to_le_bytes()[..size]);
-            }
-            CFieldKind::Struct(inner) => {
-                write_struct_bytes(&held, inner, &mut bytes[offset..offset + inner.size()])?;
-            }
-        }
-    }
-    Ok(())
+    aura_runtime::c_values::pack(value, layout, bytes)
+        .map_err(|error| c_value_diagnostic(&layout.name, error))
 }
 
 /// The instance the bytes of the C struct `layout` describe, as a foreign
@@ -11546,29 +11696,17 @@ fn struct_runtime_value(
     bytes: &[u8],
     symbol: &str,
 ) -> Result<Value> {
-    use crate::c_layout::CFieldKind;
-    let mut fields = BTreeMap::new();
-    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
-        let value = match &field.kind {
-            CFieldKind::Scalar(scalar) => {
-                let size = scalar.size();
-                let mut word = [0_u8; 8];
-                word[..size].copy_from_slice(&bytes[offset..offset + size]);
-                let crossed = scalar
-                    .value(u64::from_le_bytes(word))
-                    .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
-                runtime_value_from_ffi(crossed, &scalar_field_type(*scalar))?
-            }
-            CFieldKind::Struct(inner) => {
-                struct_runtime_value(inner, &bytes[offset..offset + inner.size()], symbol)?
-            }
-        };
-        fields.insert(field.name.clone(), value);
-    }
-    Ok(Value::Instance(InstanceValue {
-        class_name: aura_runtime::runtime_value::RuntimeName::from(layout.name.clone()),
-        fields: fields.into(),
-    }))
+    aura_runtime::c_values::unpack(layout, bytes).map_err(|error| c_value_diagnostic(symbol, error))
+}
+
+/// The list `value` as a C array of `layout`, for a `ptr[Name]` parameter.
+fn ffi_struct_elements_from_runtime(
+    value: &Value,
+    layout: &crate::c_layout::CStruct,
+) -> Result<FfiValue> {
+    let bytes = aura_runtime::c_values::pack_elements(value, layout)
+        .map_err(|error| c_value_diagnostic(&layout.name, error))?;
+    Ok(FfiValue::Struct(layout.interned(), bytes))
 }
 
 /// The element type of `ty`, the `list[T]` of a `ptr[T]` parameter, and the
@@ -11992,6 +12130,14 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
 fn owns_generator(value: &Value) -> bool {
     match value {
         Value::Generator(_) => true,
+        Value::Instance(instance)
+            if matches!(
+                instance.fields,
+                crate::runtime_value::InstanceFields::Recovered(_)
+            ) =>
+        {
+            false
+        }
         Value::Instance(instance) => {
             instance.class_name == "iter.Generator"
                 || instance.fields.iter().any(|(_, v)| owns_generator(&v))
@@ -12022,6 +12168,9 @@ impl MirRuntime {
                             self.close_released_generators(field)?;
                         }
                     }
+                    // A recovered snapshot contains only text, integers and a
+                    // list of text. Mutation first converts it to an ordinary map.
+                    crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(_) => {
                         for (_, field) in instance.fields.iter() {
                             if let Value::Generator(generator) = field.as_ref() {

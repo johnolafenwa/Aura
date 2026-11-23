@@ -1583,6 +1583,12 @@ impl FunctionBackend for LlvmFunction<'_> {
             .call_results(Op::Call(callee, args.to_vec()), &returns)
     }
 
+    fn signature_of(&mut self, callee: FuncRef) -> SigRef {
+        let function = self.ir.func_refs[callee.0 as usize];
+        let signature = self.module.functions[function.0 as usize].signature.clone();
+        self.import_signature(signature)
+    }
+
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call {
         let returns = self.ir.sig_refs[signature.0 as usize].returns.clone();
         self.ir
@@ -1959,9 +1965,12 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .map(|(index, ty)| {
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
-            match signature.indirects.iter().any(|(at, _)| *at == index) {
-                true => context.ptr_type(AddressSpace::default()).into(),
-                false => BasicMetadataTypeEnum::from(basic_type(context, *ty)),
+            match signature.indirects.iter().find(|(at, _)| *at == index) {
+                Some((_, Indirect::Aggregate { element, count })) => {
+                    basic_type(context, *element).array_type(*count).into()
+                }
+                Some(_) => context.ptr_type(AddressSpace::default()).into(),
+                None => BasicMetadataTypeEnum::from(basic_type(context, *ty)),
             }
         })
         .collect::<Vec<_>>();
@@ -2400,6 +2409,18 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                                 .create_enum_attribute(Attribute::get_named_enum_kind_id(name), 0),
                         );
                     }
+                }
+                if decl.name == crate::runtime_abi::RECOVER_SET_JUMP {
+                    // The call returns a second time when a recovered
+                    // call traps, so its caller keeps every value it
+                    // needs afterwards where the first return left it.
+                    function.add_attribute(
+                        AttributeLoc::Function,
+                        context.create_enum_attribute(
+                            Attribute::get_named_enum_kind_id("returns_twice"),
+                            0,
+                        ),
+                    );
                 }
                 if decl.task_invariant {
                     for attribute in &task_invariant {
@@ -3312,13 +3333,19 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     "",
                 ))?;
                 let mut arguments = self.args(args)?;
-                for (index, _) in &signature.indirects {
+                for (index, indirect) in &signature.indirects {
                     let address = built(self.builder.build_int_to_ptr(
                         self.int(args[*index])?,
                         context.ptr_type(AddressSpace::default()),
                         "",
                     ))?;
-                    arguments[*index] = address.into();
+                    arguments[*index] = match indirect {
+                        Indirect::Aggregate { element, count } => {
+                            let array = basic_type(context, *element).array_type(*count);
+                            built(self.builder.build_load(array, address, ""))?.into()
+                        }
+                        _ => address.into(),
+                    };
                 }
                 let call = built(self.builder.build_indirect_call(
                     function_type(context, signature),
@@ -3330,6 +3357,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     let (name, size) = match indirect {
                         Indirect::ByValue { size } => ("byval", *size),
                         Indirect::Result { size } => ("sret", *size),
+                        Indirect::Aggregate { .. } => continue,
                     };
                     let location = AttributeLoc::Param(*index as u32);
                     call.add_attribute(

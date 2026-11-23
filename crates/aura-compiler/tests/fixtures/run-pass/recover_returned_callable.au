@@ -1,0 +1,31 @@
+import control
+
+type Mapper = TaskCallable[def(value: int64) -> int64]
+type Factory = TaskCallable[def(offset: int64) -> Mapper]
+
+def shift(offset: int64) -> Mapper:
+    def add(value: int64) -> int64:
+        return offset + value
+    return add
+
+def pass_through[T](value: own T) -> T:
+    return value
+
+def main() -> None:
+    match control.recover(shift, 4):
+        case Ok(action):
+            print(action(3))
+        case Err(trap):
+            print(trap.describe())
+    factory = Factory(shift)
+    match control.recover(factory, -2):
+        case Ok(action):
+            print(action(3))
+        case Err(trap):
+            print(trap.describe())
+    mapper = shift(10)
+    match control.recover(pass_through, mapper):
+        case Ok(action):
+            print(action(3))
+        case Err(trap):
+            print(trap.describe())

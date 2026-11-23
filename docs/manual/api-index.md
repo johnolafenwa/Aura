@@ -97,6 +97,7 @@ safety boundary, diagnostics, and backend rules.
 | `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
 | `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
 | `str.chars` | `chars() -> list[str]` | Each Unicode scalar value as a one-character string, in order. An empty string gives an empty list. |
+| `str.char_at`, `text[index]` | `char_at(index: int64) -> str` | The character at a position, as a one-character string. A negative index counts from the end. Traps with `AU4003` outside the string. Constant time for ASCII text. |
 | `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
 | `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
 | `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
@@ -150,6 +151,12 @@ ownership, diagnostics, and backend behavior.
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 
+## Numbers
+
+`numbers.BigInt`, `numbers.Decimal`, and `numbers.Complex` provide arbitrary-size
+integers, exact decimal arithmetic, and complex numbers. The module also exports
+`factorial` and the decimal rounding modes. [Numbers Module](/manual/numbers)
+
 ## Math
 
 Every argument is exactly `float64`. The module performs no implicit numeric
@@ -173,6 +180,21 @@ evaluation-order, diagnostic, and backend rules.
 | `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi. |
+| `math.asin`, `math.acos`, `math.atan` | `(value: float64) -> float64` | Inverse sine, cosine, and tangent, in radians. `asin` and `acos` trap with `AU4001` outside `[-1, 1]`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle of the point `(x, y)` in `[-pi, pi]`. |
+| `math.sinh`, `math.cosh`, `math.tanh` | `(value: float64) -> float64` | Hyperbolic functions. |
+| `math.asinh`, `math.acosh`, `math.atanh` | `(value: float64) -> float64` | Inverse hyperbolic functions. |
+| `math.sqrt`, `math.cbrt` | `(value: float64) -> float64` | Square and cube root. `sqrt` of a negative value traps with `AU4001`. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | Length of the vector `(x, y)`. |
+| `math.expm1`, `math.log1p` | `(value: float64) -> float64` | `exp(value) - 1` and `log(1 + value)`, accurate near zero. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign of `sign`. |
+| `math.degrees`, `math.radians` | `(value: float64) -> float64` | Angle conversion. |
+| `math.is_nan`, `math.is_inf`, `math.is_finite` | `(value: float64) -> bool` | Classification of a value. |
+| `math.gcd`, `math.lcm` | `(left: int64, right: int64) -> int64` | Greatest common divisor and least common multiple, never negative. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | Integer square root, rounded down. |
+| `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
+| `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
 ## Memory
 
@@ -241,6 +263,8 @@ authentication with HMAC-SHA256.
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
 | `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | Fresh raw 32-byte RFC 2104 HMAC with SHA-256. The key may have any length. |
 | `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | Byte equality in time that does not depend on where the lists differ. Use it to compare signatures. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | The text in a named encoding: UTF-8, UTF-16, UTF-32, Latin-1, ASCII, or Windows-1252. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | Strict decoding from a named encoding, with the offset of the first invalid byte on failure. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
@@ -303,6 +327,32 @@ limit, and the error variants.
 | --- | --- | --- |
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
+
+## Image
+
+[Image Module](/manual/image) covers the pixel layout, what each format
+reads and writes, the pixel limit, the `Image` members, and the error
+variants.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `image.read` | `read(file_path: str) -> Result[Image, image.Error]` | Decodes a PNG, JPEG, or PPM file. The format comes from the file's first bytes. |
+| `image.decode` | `decode(data: list[uint8]) -> Result[Image, image.Error]` | Decodes an image of at most 268,435,456 pixels. |
+| `image.decode_up_to` | `decode_up_to(data: list[uint8], max_pixels: int64) -> Result[Image, image.Error]` | Returns `image.Error.TooLarge` before decoding when the header names more than `max_pixels` pixels. |
+| `image.info` | `info(data: list[uint8]) -> Result[image.Info, image.Error]` | The format, width, height, and channel count from the header. |
+| `image.write` | `write(file_path: str, picture: Image) -> Result[None, image.Error]` | Writes the format the extension names: `png`; `jpg` or `jpeg`; `ppm`, `pgm`, or `pnm`. |
+| `image.write_as` | `write_as(file_path: str, picture: Image, format: Format) -> Result[None, image.Error]` | Writes `format` whatever the name. |
+| `image.encode` | `encode(picture: Image, format: Format) -> Result[list[uint8], image.Error]` | The file's bytes at PNG level 6 or JPEG quality 90. |
+| `image.encode_png` | `encode_png(picture: Image, level: int64 = 6) -> Result[list[uint8], image.Error]` | A PNG file at `level` 0 to 9. A level out of range traps with `AU4001`. |
+| `image.encode_jpeg` | `encode_jpeg(picture: Image, quality: int64 = 90) -> Result[list[uint8], image.Error]` | A JPEG file at `quality` 1 to 100. An image with alpha is `image.Error.Unsupported`. |
+| `image.encode_ppm` | `encode_ppm(picture: Image) -> Result[list[uint8], image.Error]` | A binary PGM or PPM file. An image with alpha is `image.Error.Unsupported`. |
+| `image.format_of` | `format_of(file_path: str) -> Format \| None` | The format an extension names, in any letter case. |
+
+`image.Image` has the public fields `width`, `height`, `channels`, and
+`pixels: list[uint8]`. Its members are `Image.new`, `Image.filled`, `get`,
+`set`, `has_alpha`, `to_gray`, `to_gray_alpha`, `to_rgb`, `to_rgba`,
+`resize`, `resize_with`, `crop`, `flip_horizontal`, `flip_vertical`,
+`to_array`, `to_planes`, `Image.from_array`, and `Image.from_planes`.
 
 ## Regex
 
@@ -378,7 +428,9 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 ## Collections
 
-[Collections](/manual/collections) covers ownership and iteration.
+[Collections](/manual/collections) covers ownership and iteration. The
+[`collections` module](/manual/collections#the-collections-module) exports
+`Deque[T]`, `Heap[T]`, `SortedMap[K, V]` and `SortedSet[T]`.
 
 ### list[T]
 
@@ -451,6 +503,12 @@ zone, RFC 3339 text, the pattern directives, and limits.
 | `set.add` | `add(value: own T) -> None` | Moves `value` into the set. |
 | `set.remove` | `remove(value: T) -> None` | Removes an equal value. A missing value traps with `AU4008`. |
 | `set.discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
+| `set.union`, `left \| right` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the ones only `other` has. |
+| `set.intersection`, `left & right` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` also has. |
+| `set.difference`, `left - right` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` lacks. |
+| `set.symmetric_difference`, `left ^ right` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements in exactly one of the two sets. |
+| `set.is_subset`, `set.is_superset`, `set.is_disjoint` | `(other: set[T]) -> bool` | Whether every element of one set is in the other, or none is. |
+| `set.update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver. |
 | `set.clear` | `clear() -> None` | Removes all values. |
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -490,6 +548,18 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 The two stack-size methods are provisional. Their 256 KiB minimum is for tasks
 whose shallow stack use you have measured. It is not the default.
+
+### Shared State
+
+| Type | Operations |
+| --- | --- |
+| `sync.Mutex[T]` | `lock`, `replace`, `set`, `is_poisoned` |
+| `sync.AtomicInt` | `load`, `store`, `add`, `swap`, `compare_and_set` |
+| `sync.AtomicBool` | `load`, `store`, `swap`, `compare_and_set` |
+| `sync.Map[K, V]` | `get`, `set`, `remove`, `contains`, `len`, `clear`, `snapshot` |
+
+Copying one of these handles lets another task reach the same state.
+The [Sync Module](/manual/sync) lists signatures and locking rules.
 
 ## I/O And Filesystem
 
@@ -559,6 +629,8 @@ whose shallow stack use you have measured. It is not the default.
 | `metrics.increment` | `(name: str, value: int64) -> None` |
 | `metrics.get` | `(name: str) -> int64` |
 | `metrics.reset` | `() -> None` |
+| `control.recover` | `recover(function, arguments...) -> Result[T, control.Trap]` |
+| `control.Trap` | `code`, `message`, `path`, `line`, `column`, `frames` and `describe()`. See [Recovering From Traps](/manual/failure-recovery). |
 | `control.retry` | `retry[T, E](worker: def() -> Result[T, E], max_attempts: int32 = 3, initial_backoff: Duration = 0ms) -> Result[T, E]` |
 
 Metrics are process-global `int64` counters. A missing name reads as zero.

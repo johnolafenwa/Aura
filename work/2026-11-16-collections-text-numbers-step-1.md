@@ -1,0 +1,129 @@
+# Collections, text, and numbers: step 1
+
+Date: 2026-11-16
+
+## Target
+
+John's 2026-11-16 go-ahead for item 6 of the missing-features survey:
+"Only list, dict and set, with no deque, heap, ordered map or set
+algebra. Strings have no integer indexing or byte literals, and only
+UTF-8. There is no big integer, decimal or complex type, and `math`
+lacks inverse trig."
+
+The plan for the whole item is
+`architecture_docs/32-collections-text-numbers-design-checkpoint.md`.
+This note covers step 1, the parts that live in the runtime.
+
+## Done
+
+- `math`: 27 functions and `tau` (ADR-0110).
+- Byte strings, `b"..."` (ADR-0111).
+- `text[index]` and `str.char_at` (ADR-0111).
+- `bytes.encode` and `bytes.decode` for eleven encodings (ADR-0111).
+- Set algebra: eight methods and `| & - ^` (ADR-0112).
+
+## How each is built
+
+- The `math` functions are host functions in
+  `crates/aura-runtime/src/host_builtins.rs`, one table shared by the
+  interpreter and compiled code.
+- A byte string is a lexer token. The parser turns ASCII bytes into
+  `"text".to_bytes()` and anything else into a list of `uint8` casts,
+  so nothing after the parser knows about it.
+- `text[i]` is rewritten to `text.char_at(i)` when MIR is built.
+  `char_at` is one more row of the text-method table. Compiled code
+  passes the string's cached ASCII flag, so ASCII text is indexed
+  without a scan.
+- The encodings are `crates/aura-runtime/src/text_encodings.rs`, with
+  no new dependency.
+- Set algebra is `set_algebra` in `collection_index.rs`, reached by
+  collection-operation codes 8 to 15 from compiled code and by method
+  name from the interpreter. The operators are rewritten to the method
+  calls when MIR is built.
+
+## Verification
+
+- Runtime library tests and compiler library tests pass. One compiler
+  test, `package_io_helpers_cover_local_error_paths`, fails only where
+  the tests run as root, as on the cloud machine, and is unrelated.
+- New run fixtures were recorded from the interpreter and compared
+  byte for byte with compiled output.
+- `check_doc_examples.py` passes on all 1,095 documentation blocks.
+- `aura verify` accepts functions that use `text[i]` and set operators.
+- The extension grammar tests pass against the edited grammar.
+
+Integration test binaries were not built locally. CI runs them.
+
+## Found and not fixed here
+
+These are the measurements that shape step 3. They are compiler costs
+that affect any program, not only the planned `collections` module.
+
+- `self.items.append(value)` on a list field costs about 340
+  instructions, and `self.items.pop()` about 650. The same calls on a
+  local list cost about 16.
+- Generic code over `items: mut list[T]` with comparisons is far
+  slower than the same code for one element type. A generic binary
+  heap ran 400 times slower than Rust.
+- `list.swap` is a runtime call and is not inlined.
+- A runtime trap from a host function or a text method has no source
+  line, only the call chain. `math.log(0.0)` behaved this way before.
+
+## Next
+
+Step 2 is the `numbers` module. Step 3 is `collections`, after the
+field-list and generic-list costs are removed.
+
+## Editor Verification On 2026-11-17
+
+Both hosted verify jobs failed the same exact-list assertion for set
+members. The compiler returned all eight new methods. The test now
+expects those names and checks the signatures for producing a set,
+testing a relation, and updating a set in place. All 158 language server
+tests passed on Linux with the compiler built from this branch.
+
+## Integration and measurements
+
+The Linux repo gate passed compiler coverage at 96.55% of lines and
+97.39% of functions. The audit then reported an advisory in the
+documentation toolchain. The patched glob dependency is pinned in the
+workspace lockfile.
+
+`benchmarks/collections_text` compares integer math, text indexing,
+set union and UTF-16 conversion in Aura, Rust and Python. The three
+implementations produce the same checksums. The native integer math
+entry passes its operands and result as machine words. A set union
+reuses the receiver's storage until a new key is inserted, and an
+ASCII string index can reuse an immutable one-character box.
+
+A one-character comparison after an indexed read now uses the selected
+Unicode scalar directly. When the string is an immutable ASCII literal,
+the compiler can read its constant bytes after checking the signed index.
+A mutation, a writable loan or an unknown receiver keeps runtime indexing.
+Tests exercise non-ASCII text, negative indices and replacement of a
+local through a mutable argument. An out-of-range Unicode index produced
+the same AU4003 and two source frames on both backends.
+
+Large set unions reuse the existing hash index. They retain the receiver's
+order, append new right-hand entries in order and preserve either input
+across later writes. Removing slots before union is covered by a runtime
+regression. All 1,321 runtime tests passed across a full run and an isolated
+rerun of the resolver timeout test.
+
+Known encoding names can be resolved at compile time. The native call
+borrows its input and uses the same codec and error definitions as MIR.
+The decoder now walks UTF-16 input in two-byte chunks and handles ASCII
+units directly. Verification checked the byte offset of errors in either
+endianness, every single code unit, every valid surrogate pair, and all
+17 expected lines of the codec program on both backends. The new codec
+uses no additional library. Its UTF-16 workload took 11.432 ms against
+10.341 ms for Rust and 13.882 ms for Python.
+
+On November 18, the materialized set union benchmark took 4.493 ms in Aura,
+16.457 ms in Rust and 5.699 ms in Python across seven rotated runs. Large
+sets of scalar or string keys can share backing storage while preserving
+the order and independence of both inputs and the result. Tests cover
+removed entries, membership, iteration in both directions, chained unions,
+mutation and owned class values. Immediate writes to the union took 10.7%
+longer in the separate mutation workload. The benchmark README records the
+before-and-after timings for all three downstream operations.

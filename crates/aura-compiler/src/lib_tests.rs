@@ -34,6 +34,60 @@ const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.a
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn recover_preserves_caught_values_call_frames_cleanup_and_cancellation() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+    for case in [
+        "control_recover_scalar_results",
+        "control_recover_call_chains",
+        "control_recover_cleanup",
+        "control_recover_generator_cleanup",
+        "control_recover_tasks",
+        "control_recover_cancellation",
+    ] {
+        let path = fixtures.join(format!("{case}.au"));
+        let output = run_path(&path).unwrap_or_else(|error| panic!("{case}: {error}"));
+        let expected = fs::read_to_string(path.with_extension("stdout")).expect("expected output");
+        assert_eq!(output.stdout, expected, "{case}");
+    }
+}
+
+#[test]
+fn trap_unwinds_the_inner_and_outer_managers_without_hiding_the_body_failure() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/run-pass/control_recover_generator_cleanup.au");
+    let module = lower_path_to_mir(&path).expect("the fixture should lower");
+    let trap = crate::run_mir_entry(&module, Some("broken"), None, Vec::new())
+        .expect_err("calling the failing function outside recovery propagates its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "primary failure");
+    assert_eq!(
+        trap.notes,
+        [
+            "`Sink.__exit__` also failed during cleanup: inner",
+            "`Sink.__exit__` also failed during cleanup: outer",
+        ]
+    );
+}
+
+#[test]
+fn recover_rejects_invalid_targets_and_arguments() {
+    for (case, code) in [
+        ("argument_move", "AU3001"),
+        ("file_result", "AU3008"),
+        ("missing_target", "AU2004"),
+        ("mut_parameter", "AU3002"),
+        ("named_target", "AU2004"),
+        ("type_args", "AU2004"),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/check-fail/control_recover_{case}.au"
+        ));
+        let error = check_path(&fixture).expect_err(case);
+        assert_eq!(error.code, code, "{case}: {error:?}");
+    }
+}
+
+#[test]
 fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
     assert_eq!(
         sha256_hex(b""),
@@ -806,6 +860,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "examples/basics/decorators.au",
         include_str!("../../../examples/basics/decorators.au"),
         "evaluate offset(100)\nevaluate offset(10)\napply offset(10)\napply offset(100)\n112\ncall 2\ncall 1\ncall 0\n0\n",
+    ),
+    (
+        "examples/basics/stored_closures.au",
+        include_str!("../../../examples/basics/stored_closures.au"),
+        "slow: 1\nover the limit: 2\n1\n12\ntrue\n",
     ),
     (
         "examples/basics/retry_decorator.au",
@@ -2286,19 +2345,40 @@ fn control_flow_example_runs() {
 }
 
 #[test]
-fn mir_runtime_reports_recursion_limit_before_overflowing_the_host_stack() {
-    let source = include_str!("../../../test_edge/test_recursive_medium.au");
-    let source = source.to_string();
-    let handle = thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || run_source(&source))
-        .expect("recursion test thread should spawn");
-    let error = handle
-        .join()
-        .expect("recursion test thread should join")
-        .expect_err("medium recursion should diagnose before stack overflow");
-    assert!(error.message.contains("maximum call depth of"));
-    assert!(error.message.contains("count_down"));
+fn mir_runtime_runs_recursion_deeper_than_the_old_call_limit() {
+    // 400 nested calls, which the 256-call limit used to reject. An
+    // unoptimized interpreter spends close to 200 KiB of stack on each.
+    let source = "def count_down(n: int32) -> int32:\n    if n <= 0:\n        return 0\n    return count_down(n=n - 1)\n\ndef main() -> int32:\n    print(count_down(n=400))\n    return 0\n";
+    let output = run_source(source).expect("400 nested calls fit the entry stack");
+    assert_eq!(output.stdout, "0\n");
+}
+
+#[test]
+fn mir_runtime_reports_unbounded_recursion_before_overflowing_the_host_stack() {
+    let source = "def count_down(n: int64) -> int64:\n    return count_down(n=n + 1)\n\ndef main() -> int32:\n    print(count_down(n=0))\n    return 0\n";
+    let error = run_source(source).expect_err("unbounded recursion ends with a diagnostic");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "call stack exhausted while calling `count_down`"
+    );
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.contains("start_with_stack")),
+        "{error:?}"
+    );
+    // The chain keeps both ends and counts the middle.
+    let (before, omitted) = error
+        .omitted_call_frames
+        .expect("a chain this deep leaves calls out");
+    assert_eq!(before, 128);
+    assert!(omitted > 0);
+    assert_eq!(error.call_frames.len(), 256);
+    assert_eq!(error.call_frames.last().unwrap().function, "main");
+    let rendered = error.render_with_source("recursion.au", source);
+    assert!(rendered.contains("more calls ..."), "{rendered}");
 }
 
 #[test]
@@ -3358,8 +3438,11 @@ def main() -> int32:
 #[test]
 fn cancellation_wakes_sleep_tasks_promptly() {
     let blocked_sleep = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def sleeper(started: Queue[str], finished: Queue[str]) -> None:
     _ = started.put("sleep")
     sleep({blocked_sleep_ms}ms)
@@ -3378,33 +3461,34 @@ def wait_for_one(queue: Queue[str]):
 
 def main() -> int32:
     started = Queue[str]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         finished = Queue[str]()
         group.start(sleeper, started, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"sleep cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_sleep_ms = blocked_sleep.as_millis()
+        blocked_sleep_ms = blocked_sleep.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("sleep cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "sleep cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
 fn cancellation_wakes_queue_wait_tasks_promptly() {
     let blocked_wait = crate::hosted_ci_timing_limit(StdDuration::from_millis(250));
+    let wake_limit = crate::hosted_ci_timing_limit(StdDuration::from_millis(120));
     let source = format!(
         r#"
+import time
+
 def waiter(started: Queue[str], jobs: Queue[int32], finished: Queue[str]) -> None:
     _ = started.put("wait")
     while not cancelled():
@@ -3434,26 +3518,24 @@ def main() -> int32:
     started = Queue[str]()
     finished = Queue[str]()
     jobs = Queue[int32]()
+    mut cancel_start = 0ms
     with TaskGroup() as group:
         group.start(waiter, started, jobs, finished)
         wait_for_one(started)
+        cancel_start = time.monotonic()
         group.cancel()
     wait_for_one(finished)
+    elapsed = time.monotonic() - cancel_start
+    assert elapsed < {wake_limit_ms}ms, f"queue cancellation took {{elapsed.to_ms()}} ms"
     return 0
 "#,
-        blocked_wait_ms = blocked_wait.as_millis()
+        blocked_wait_ms = blocked_wait.as_millis(),
+        wake_limit_ms = wake_limit.as_millis(),
     );
 
-    let start = Instant::now();
     let output = run_source(&source).expect("queue-wait cancellation source should run");
-    let elapsed = start.elapsed();
 
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
-    assert!(
-        elapsed < crate::hosted_ci_timing_limit(StdDuration::from_millis(120)),
-        "queue wait cancellation should return promptly; elapsed {:?}",
-        elapsed
-    );
 }
 
 #[test]
@@ -3571,13 +3653,17 @@ def main() -> int32:
 #[cfg(unix)]
 #[test]
 fn async_file_io_keeps_the_scheduler_running_while_a_fifo_read_waits() {
+    use std::os::unix::fs::OpenOptionsExt;
+
     let _guard = lock_io_example();
     let temp = TempDir::new("aura-async-file-io");
     let fifo_path = temp.path().join("events.fifo");
     let ready_path = temp.path().join("ready.txt");
+    let connected_path = temp.path().join("reader-connected.txt");
     let fifo_literal = escape_aura_string(&fifo_path.display().to_string());
     let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let read_timeout = crate::hosted_ci_timing_limit(StdDuration::from_secs(2));
+    let connected_literal = escape_aura_string(&connected_path.display().to_string());
+    let watchdog = crate::hosted_ci_timing_limit(StdDuration::from_secs(30));
 
     let status = Command::new("mkfifo")
         .arg(&fifo_path)
@@ -3596,8 +3682,9 @@ def wait_for_text(path: str):
         case Result.Err(err):
             print(err)
 
-def mark_ready(path: str):
-    sleep(20ms)
+def mark_ready(connected: str, path: str):
+    while not fs.exists(connected):
+        sleep(1ms)
     match fs.write_string(path, "ready"):
         case Result.Ok(_):
             pass
@@ -3607,8 +3694,8 @@ def mark_ready(path: str):
 def main() -> int32:
     with TaskGroup() as group:
         reader = group.start(wait_for_text, "{fifo_path}")
-        group.start_soon(mark_ready, "{ready_path}")
-        match reader.result(timeout={read_timeout_ms}ms):
+        group.start_soon(mark_ready, "{connected_path}", "{ready_path}")
+        match reader.result():
             case TaskResult.Ready(_):
                 pass
             case TaskResult.Error(_message):
@@ -3621,33 +3708,38 @@ def main() -> int32:
 "#,
         fifo_path = fifo_literal,
         ready_path = ready_literal,
-        read_timeout_ms = read_timeout.as_millis()
+        connected_path = connected_literal
     );
 
-    let writer_path = fifo_path.clone();
-    let writer = thread::spawn(move || {
-        thread::sleep(crate::hosted_ci_timing_limit(StdDuration::from_millis(500)));
-        let mut fifo = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(writer_path)
-            .expect("fifo writer should open the fifo");
-        fifo.write_all(b"ping").expect("fifo writer should succeed");
-    });
-
     let handle = thread::spawn(move || run_source(&source));
-    let ready_deadline =
-        Instant::now() + crate::hosted_ci_timing_limit(StdDuration::from_millis(350));
-    let mut ready_seen = false;
-    while Instant::now() < ready_deadline {
-        if ready_path.exists() {
-            ready_seen = true;
-            break;
+    // A write-only FIFO open succeeds only once a reader is waiting. Keep
+    // the writer open and empty while the other Aura task marks its progress.
+    let connect_deadline = Instant::now() + watchdog;
+    let mut writer = loop {
+        match fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo_path)
+        {
+            Ok(writer) => break writer,
+            Err(error)
+                if error.raw_os_error() == Some(libc::ENXIO)
+                    && !handle.is_finished()
+                    && Instant::now() < connect_deadline =>
+            {
+                thread::sleep(StdDuration::from_millis(5));
+            }
+            Err(error) => panic!("the Aura reader should open the FIFO: {error}"),
         }
+    };
+    fs::write(connected_path, "connected").expect("signal the waiting Aura task");
+    let ready_deadline = Instant::now() + watchdog;
+    while !ready_path.exists() && Instant::now() < ready_deadline {
         thread::sleep(StdDuration::from_millis(5));
     }
-
-    writer.join().expect("fifo writer thread should join");
+    let ready_seen = ready_path.exists();
+    writer.write_all(b"ping").expect("release the FIFO reader");
+    drop(writer);
     let output = handle
         .join()
         .expect("async file I/O runtime thread should join")
@@ -3663,13 +3755,7 @@ def main() -> int32:
 
 #[test]
 fn lightweight_tasks_scale_to_thousands_of_waiting_tasks() {
-    let temp = TempDir::new("aura-lightweight-task-scale");
-    let ready_path = temp.path().join("ready.txt");
-    let ready_literal = escape_aura_string(&ready_path.display().to_string());
-    let source = format!(
-        r#"
-import fs
-
+    let source = r#"
 def sleeper(started: Queue[int32]) -> None:
     _ = started.put(1)
     while not cancelled():
@@ -3694,34 +3780,29 @@ def main() -> int32:
         for i in range(3000):
             group.start(sleeper, started)
         wait_for_count(started, 3000)
-        match fs.write_string("{ready_path}", "ready"):
-            case Result.Ok(_):
-                sleep(500ms)
-            case Result.Err(_):
-                group.cancel()
-                return 1
+        print("ready")
         group.cancel()
     return 0
-"#,
-        ready_path = ready_literal
-    );
+"#;
 
     let baseline_threads = current_process_thread_count();
-    let source_handle = thread::spawn(move || run_source(&source));
-    let deadline = Instant::now() + StdDuration::from_secs(15);
-    while !ready_path.exists() {
-        assert!(
-            Instant::now() < deadline,
-            "lightweight task stress never signalled readiness"
-        );
-        thread::sleep(StdDuration::from_millis(10));
-    }
-    let running_threads = current_process_thread_count();
-    let output = source_handle
-        .join()
-        .expect("lightweight task stress worker should not panic")
+    let (thread_counts, sampled) = std::sync::mpsc::channel();
+    let sink: StdoutSink = Arc::new(move |chunk| {
+        if chunk == "ready\n" {
+            // The caller is still in the task group until this print returns.
+            thread_counts.send(current_process_thread_count()).unwrap();
+        }
+    });
+    let output =
+        run_corpus_case_with_timeout("lightweight task stress", Path::new(file!()), move || {
+            run_source_with_stdout_sink(source, sink)
+        })
+        .expect("the task group should finish")
         .expect("lightweight task stress source should run");
     assert_eq!(output.value, Value::Int(IntegerValue::from_signed(0)));
+    let running_threads = sampled
+        .try_recv()
+        .expect("all 3,000 tasks should signal readiness before cancellation");
     assert!(
         running_threads <= baseline_threads + 32,
         "lightweight task stress should stay near the baseline thread count; baseline {}, running {}",
@@ -4451,4 +4532,59 @@ fn a_for_invariant_that_ignores_the_target_is_checked_when_the_loop_runs_out() {
     ))
     .expect("target invariants hold in the body");
     assert_eq!(output.stdout, "6\n");
+}
+
+#[test]
+fn ordered_collections_use_their_declared_order_and_own_elements() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collections_rebalance.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_keys.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_collection_snapshots.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.au"),
+            include_str!("../tests/fixtures/run-pass/ordered_scalar_swaps.stdout"),
+        ),
+    ] {
+        assert_eq!(
+            run_source(source)
+                .expect("ordered collection fixture should run")
+                .stdout,
+            expected
+        );
+    }
+    for source in [
+        include_str!("../tests/fixtures/check-fail/ordered_heap_requires_order.au"),
+        include_str!("../tests/fixtures/check-fail/sorted_key_requires_order.au"),
+    ] {
+        let error = check_source(source).expect_err("unordered keys should be rejected");
+        assert!(error.message.contains("does not implement trait `Ord["));
+    }
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_lookup_owns_clone.au"
+    ))
+    .expect_err("reading a retained non-cloneable RNG must fail");
+    assert_eq!(error.code, "AU3007");
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_is_private.au"
+    ))
+    .expect_err("the type-erased collection storage must be private");
+    assert!(error.message.contains("private"));
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_type_is_private.au"
+    ))
+    .expect_err("the store definition is internal even in a type annotation");
+    assert!(error.message.contains("collections.__Store"));
 }

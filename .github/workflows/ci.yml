@@ -103,6 +103,10 @@ jobs:
         # `aura verify` and its tests run against one pinned solver.
         run: bash scripts/install-z3.sh
 
+      - name: Install raylib and a virtual display
+        # The raylib example's tests skip on a host that cannot link it.
+        run: bash scripts/install-raylib.sh
+
       - name: Install npm dependencies
         run: npm ci
 
@@ -117,7 +121,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 150
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -146,6 +150,10 @@ jobs:
 
       - name: Install Z3
         run: bash scripts/install-z3.sh
+
+      - name: Install raylib and a virtual display
+        # The raylib example's tests skip on a host that cannot link it.
+        run: bash scripts/install-raylib.sh
 
       - name: Run the workspace tests
         env:

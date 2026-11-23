@@ -1,0 +1,9 @@
+import control
+import fs
+import io
+
+def open_file() -> Result[fs.File, io.Error]:
+    return fs.open("data.txt")
+
+def main():
+    _ = control.recover(open_file)

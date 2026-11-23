@@ -1730,20 +1730,23 @@ pub struct StrViewEntry {
     pub len: usize,
 }
 
-/// A list's `str` view: one entry per element, and the element reads that
-/// missed it since it was last built. It also counts the reads that copied
-/// an element of a list of other handles, which decide when the list moves
-/// its elements into boxes it can lend.
+/// Native lookup tables for a list of whole values. The enclosing box's
+/// access code identifies the active table. A mutation invalidates it.
+/// Reads that copy other handles count toward moving the elements into
+/// boxes that compiled code can lend.
 #[derive(Debug, Default)]
 pub struct StrView {
     pub entries: Vec<StrViewEntry>,
+    /// Addresses of the direct callables held by the current elements. A
+    /// zero entry represents a value without native callable words.
+    pub callables: Vec<usize>,
     pub misses: usize,
     pub copied_reads: usize,
 }
 
-/// The `str` view a list keeps once the native runtime builds it. It
-/// describes the list's current elements only while the box's list view
-/// says so, and a copy of the list starts without one.
+/// The auxiliary views a list keeps once the native runtime builds them.
+/// Their entries describe the current elements only while the box's access
+/// code selects them. A copy of the list starts without cached entries.
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 

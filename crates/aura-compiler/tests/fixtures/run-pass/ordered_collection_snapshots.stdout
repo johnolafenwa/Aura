@@ -1,0 +1,13 @@
+right
+left
+[(7, [3]), (8, [4])]
+Lookup.Found([1, 2])
+false
+true
+2
+true
+Lookup.Found(19)
+Lookup.Found(12)
+[(5, 40), (6, 41)]
+23
+14

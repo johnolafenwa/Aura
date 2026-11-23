@@ -1,0 +1,8 @@
+def step(value: int64 = 1) -> int64:
+    return value + 1
+
+def run(action: Callable[def(value: int64) -> int64]) -> int64:
+    return action(1)
+
+def main():
+    print(run(step))

@@ -1,6 +1,6 @@
 # Closures
 
-A closure is a small callable value with an expression body, written `lambda parameters: expression`. Parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
+A closure is a callable value that can capture its surroundings. Write a lambda for an expression body or declare a local function for a statement body. Lambda parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
 
 ```aura
 def main():
@@ -25,6 +25,36 @@ This prints `42`, `12`, `6`, `6`, and `owned` on separate lines:
 - `factor` is copied into `scale`.
 - `name` moves into a read-only closure that can be called repeatedly.
 - `token` moves into a consuming closure that is called once.
+
+## Local Functions
+
+A `def` inside a function binds its name in the current block. Its
+parameters and result have written types. Bare, `mut`, `own` and
+keyword-only parameters work as in a module function. Each declaration
+captures the values it uses when control reaches it. A declaration may
+spell an exhaustive capture list after its name.
+
+```aura
+def main() -> None:
+    mut total = 2
+    def add[mut total](*, amount: int64) -> None:
+        total += amount
+    add(amount=5)
+    print(total)
+```
+
+An owned local function can be returned or stored in a matching
+`Callable` type. A local function that captures a loan stays in its
+declaring block. A capture-free local function can be used as a thin
+function value. The declaration binds an immutable name, including
+when calling the closure updates its private state.
+
+A local function with shared captures can call itself with the same
+environment. To recurse with mutable state, pass the state as a `mut`
+parameter. Define mutually recursive functions at module scope.
+Defaults, type parameters, decorators, contracts, `view` results and
+`yield` belong to module functions or methods.
+
 
 ## Grammar
 
@@ -100,15 +130,61 @@ A capturing closure carries environment and call-kind metadata that a written `d
 - called directly
 - passed directly to a compiler-known repeatable callback site, such as the list algorithms and `control.retry`. These sites also borrow a packed Shared value with the same contract.
 - moved into a qualifying task start
-- packed into an owned callable storage type
+- stored in an owned callable storage type
 
-It cannot pass through a thin `def` parameter, field, element, or annotated result. Those boundaries report `AU2002`.
+It cannot pass through a thin `def` parameter, field, element, or annotated result. Those boundaries report `AU2002`. Write the destination as a `Callable[...]` type to store a capturing closure there.
 
 ### Owned Callable Storage
 
 `Callable[def(...) -> R]`, `Callable[mut def(...) -> R]`, and `Callable[own def(...) -> R]` are owned storage types. They hold a Shared, Mutable, or Consuming callable with a complete contract and an erased capture set. See [Function Values](/manual/functions#function-values) for contracts. `TaskCallable[...]` is the same storage with every capture proven Transfer.
 
-Packing is explicit. Call an alias of such a type with one value to pack it. The packed value keeps the closure's own environment. A generic alias takes its type arguments first, as in `Fn[int64, str](value)`. Inside a generic function, the arguments may name its type parameters:
+A function value, a lambda, a bound method, or a local that holds a closure packs where such a type is expected. The packed value keeps the closure's own environment. The storage contract is the lambda's typing context, so its parameter names, types, and result come from the destination.
+
+```aura
+class Button:
+    label: str
+    on_click: Callable[def() -> str]
+
+def make_adder(amount: int64) -> Callable[def(value: int64) -> int64]:
+    return lambda value: value + amount
+
+def apply(step: Callable[def(value: int64) -> int64], start: int64) -> int64:
+    return step(start)
+
+def main():
+    add_five = make_adder(5)
+    print(add_five(1))
+    print(apply(lambda value: value * 3, 4))
+
+    name = "save"
+    button = Button(label="Save", on_click=lambda: f"{name} clicked")
+    print(button.on_click())
+
+    scale = 10
+    steps: list[Callable[def(value: int64) -> int64]] = [
+        lambda value: value + scale,
+        lambda value: value * scale,
+        make_adder(1),
+    ]
+    for step in steps:
+        print(step(2))
+```
+
+This prints `6`, `12`, `save clicked`, `12`, `20`, and `3`.
+
+A value packs at these sites:
+
+- an annotated binding and an assignment to a typed local, field, or element
+- an argument for a parameter of the storage type
+- a field in a constructor call
+- an element of a typed list, set, dictionary, or tuple literal, and of a comprehension with an expected type
+- a `return` in a function with that result type
+- each arm of a conditional or `match` expression with that expected type
+- a member of a union such as `Callable[def() -> int64] | None`
+
+### The Packing Constructor
+
+An alias of a storage type is also a constructor. Call it with one value to pack that value where no destination type is in sight, or to restrict a packed value to a weaker contract. A generic alias takes its type arguments first, as in `Fn[int64, str](value)`. Inside a generic function, the arguments may name its type parameters:
 
 ```aura
 type Fn[A, R] = Callable[def(args: A) -> R]
@@ -161,7 +237,7 @@ Packing rules:
 
 - The storage contract must admit the packed value's contract.
 - The call kind may only weaken. A Shared value packs into any kind. A Mutable value packs into Mutable or Consuming storage. A Consuming value packs only into Consuming storage. The reverse reports `AU2015`.
-- A closure or function value that reaches a `Callable` destination without the constructor reports `AU2015` as implicit erased storage.
+- A packed value that reaches a destination with a different storage contract reports `AU2015`. Restrict it through the constructor.
 - A loan capture cannot be packed and reports `AU3010`. Loan captures include `[values]`, `[mut values]`, and a live view. Move or clone an owned value into the lambda instead.
 - Packing into `TaskCallable[...]` also requires every capture type to be Transfer. Otherwise it reports `AU3008`, naming the capture. An ordinary erased `Callable` is never Transfer.
 
@@ -186,7 +262,7 @@ A conditional or `match` expression merges capturing closures only when the dest
 
 ### What A Lambda Captures
 
-In a lambda without a list, a resolved name is a capture only when it denotes an outer owned local or an `own` parameter. Lambda parameters, module functions, types, builtins, and imported items resolve normally and are not stored in the environment.
+In a lambda without a list, a resolved name is a capture when it denotes an outer owned local, an `own` parameter, or a parameter whose type is Copy. Lambda parameters, module functions, types, builtins, and imported items resolve normally and are not stored in the environment.
 
 An explicit list is exhaustive. Every resolved outer local that the body uses must appear exactly once, and every entry must be used. Entries are acquired left to right:
 
@@ -223,7 +299,9 @@ def main():
 
 ### Capturing Parameters
 
-An explicit capture list may name a bare or mutable enclosing parameter. This creates a loan bounded by the closure's live region. Without a list, those parameters are not captured. Take the input as `own`, or clone it into an owned local, for by-value capture.
+A lambda without a list captures a Copy parameter by value. The value is read once, when the closure is created. A non-Copy bare or `mut` parameter is not captured that way and reports `AU3002`. Take the input as `own`, or clone it into an owned local, for by-value capture.
+
+An explicit capture list may name a bare or mutable enclosing parameter. This creates a loan bounded by the closure's live region.
 
 An inner lambda without a list cannot capture a bare parameter of its enclosing lambda. An explicit bare entry creates a shared contained reborrow. A `mut` entry requires a mutable outer capability. When you need an independent snapshot, make the outer parameter `own` and use an `own` capture, or pass the value to a named helper that creates the owned closure.
 
@@ -259,7 +337,7 @@ The ordinary storage boundary still applies. A capturing closure cannot be the r
 | --- | --- |
 | `AU1101` | Malformed lambda parameter or body syntax. |
 | `AU2002` | Missing or mismatched parameter context, parameter capability, or result type. A capturing closure at a thin `def` storage boundary. A consuming closure where a repeatable callback is required. |
-| `AU2015` | Implicit erased storage, where a closure or function reaches `Callable[...]` without its constructor. A packed value whose contract is not admitted. A call kind that would strengthen. |
+| `AU2015` | A packed value whose contract is not admitted. A call kind that would strengthen. |
 | `AU3001` | Use after a non-Copy value moved into a closure. Use after a consuming closure or consuming callable call. |
 | `AU3002` | Overlapping capture loans and source accesses. |
 | `AU3003` | Capability escalation, mutation of a shared-view capture, or a Mutable call through an immutable place. |
@@ -387,8 +465,8 @@ A `from self` result has no value type. A bound method that returns a view of it
 
 ### Language Limits
 
-- Closures are expression-only and contextually typed.
-- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
+- Lambdas have one expression and obtain their parameter types from context. A local `def` has a written signature and a statement body.
+- Both forms exclude parameter defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, and lifetime-bearing structural callable types.
 - Owned callable storage holds owned captures only. Loan captures stay in local loan closures.
 - A stored callable may return a view of one explicit parameter, but never of a captured receiver.
 - Explicit capture lists accept local identifiers. Project a field into a named view before capturing it.
@@ -407,6 +485,8 @@ Conditional and `match` expressions cannot merge capturing closures from several
 - Captures that fit in three words live in the value itself. A wider environment lives in one checked block, and a failure to allocate it raises `AU4005`.
 - A call goes through the descriptor without boxing.
 - The value is boxed into a runtime function value only where it leaves generated code: when it is stored into a container, started as a task, passed to a runtime helper, or handed to a generic frame whose contract differs in layout.
+- Shared and Mutable closures whose plain captures fit in three words can keep their native representation inside a class field or list element. A direct call through that place invokes the descriptor without copying the closure. A closure that owns a runtime handle, such as a string or another callable, stores its captures as runtime values. They remain owned by the closure when it outlives its creating task.
+- The captures of a boxed value become runtime values only when runtime code reads them, such as a task start or the MIR interpreter's helpers.
 - This layout makes no FFI or ABI stability claim.
 
 A `TaskCallable[...]` value is a stored task target. Every `TaskGroup` start method takes it by move for one child call, whether it is Shared, Mutable, or Consuming. A Mutable target's captures are child-owned state, with no writeback to the parent. See [Concurrency](/manual/concurrency).

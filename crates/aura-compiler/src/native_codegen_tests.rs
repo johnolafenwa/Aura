@@ -25,8 +25,89 @@ use crate::mir::{
     MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
 };
 use crate::native_backend::{types, CallConv, FunctionBackend, Signature, Var};
+use crate::runtime_abi::RuntimeFn;
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
+
+#[test]
+fn recover_emits_checked_messages_and_general_call_boundaries() {
+    let source = include_str!("../tests/fixtures/run-pass/control_recover_call_chains.au");
+    let mir = lower_source_to_mir(source).expect("the recovery calls should lower");
+    let object = emit_unoptimized_object(&mir).expect("the recovery calls should emit");
+    let symbols = exact_referenced_symbols(&object);
+
+    for required in [
+        "aura_direct_recover_assertion_cell",
+        "aura_direct_recover_formatted_assertion",
+    ] {
+        assert!(symbols.contains(required), "missing {required}");
+    }
+    if cfg!(unix) {
+        // The intervening ordinary calls need a general recovery boundary.
+        for required in [
+            "aura_direct_recover_begin",
+            "aura_direct_recover_end",
+            "aura_direct_recover_trapped",
+        ] {
+            assert!(symbols.contains(required), "missing {required}");
+        }
+    }
+}
+
+#[test]
+fn recovered_scalar_bodies_require_total_work_outside_a_failed_check() {
+    let source = r#"
+def check(x: int64) -> int64:
+    assert x >= 0, "negative"
+    return x
+
+def formatted(x: int64) -> int64:
+    assert x >= 0, f"bad {x}"
+    return x
+
+def scalar_to_string(x: int64) -> int64:
+    assert x >= 0, str(x)
+    return x
+
+def trapping_format(x: int64) -> int64:
+    assert x != 0, f"ratio {10 // x}"
+    return x
+
+def divide(x: int64) -> int64:
+    return 12 // x
+
+def effect(x: int64) -> int64:
+    print(x)
+    return x
+
+def loop_bound(x: int64) -> int64:
+    mut found = 0
+    for i in range(x):
+        found = i
+    return found
+"#;
+    let module = lower_source_to_mir(source).expect("validation functions lower");
+    for (name, eligible) in [
+        ("check", true),
+        ("formatted", true),
+        ("scalar_to_string", true),
+        ("trapping_format", false),
+        ("divide", false),
+        ("effect", false),
+        ("loop_bound", false),
+    ] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        assert_eq!(
+            super::checked_scalar_leaf(function, &HashMap::new()),
+            eligible,
+            "{name}"
+        );
+    }
+}
 
 #[test]
 fn adr0038_direct_view_fixed_point_comparison_ignores_order_not_authority() {
@@ -1121,6 +1202,32 @@ def main():
 }
 
 #[test]
+fn word_arithmetic_for_exact_numbers_stays_unboxed() {
+    let source = "\
+def grow(value: int64, rhs: int64) -> int64:
+    return value.wrapping_mul(rhs).saturating_add(rhs).saturating_sub(value)
+
+def main() -> None:
+    print(grow(9223372036854775807, 2))
+";
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(!referenced
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_width_binary")));
+}
+
+#[test]
+fn compact_numeric_arithmetic_emits_scalar_decimal_calls() {
+    let source = include_str!("../tests/fixtures/run-pass/numbers_word_arithmetic.au");
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(referenced
+        .iter()
+        .any(|symbol| symbol.contains("aura_direct_small_decimal_binary")));
+}
+
+#[test]
 fn direct_dynamic_binary_opcodes_match_the_runtime_abi() {
     for (operator, opcode) in [
         (BinaryOp::Add, 0),
@@ -1864,6 +1971,122 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn indexed_ascii_bindings_exclude_writable_and_nonliteral_strings() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_literal_bindings.au");
+    let mir = lower_source_to_mir(source).expect("literal reads and writable strings lower");
+    let literals = |name: &str| {
+        let function = mir.functions.iter().find(|f| f.name == name).unwrap();
+        super::lookups::indexed_ascii_literals(function)
+    };
+    assert_eq!(
+        literals("immutable").get("text").map(String::as_str),
+        Some("abc")
+    );
+    for name in ["mutable", "conditional", "unicode"] {
+        assert!(literals(name).is_empty(), "{name}");
+    }
+    emit_unoptimized_object(&mir).expect("literal reads compile");
+}
+
+#[test]
+fn indexed_text_compares_as_a_unicode_scalar() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
+    let mir = lower_source_to_mir(source).expect("string comparisons lower");
+    let object = emit_unoptimized_object(&mir).expect("string comparisons emit");
+    for name in ["aura_fn_matches", "aura_fn_different"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.contains("aura_direct_string_scalar_at")),
+            "{symbols:?}"
+        );
+        assert!(
+            symbols
+                .iter()
+                .all(|s| !s.contains("aura_direct_string_text_method")),
+            "{symbols:?}"
+        );
+    }
+}
+
+#[test]
+fn known_text_encodings_borrow_one_input_and_dynamic_names_keep_the_host_entry() {
+    let source = r#"
+import bytes
+
+def fixed(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "uTF_16-LE")
+
+def variable(input: list[uint8], name: str) -> Result[str, bytes.EncodingError]:
+    return bytes.decode(input, name)
+
+def unsupported(text: str) -> Result[list[uint8], bytes.EncodingError]:
+    return bytes.encode(text, "future-codec")
+
+def main() -> None:
+    print(fixed("😀"))
+    print(variable([65], "ascii"))
+    print(unsupported("A"))
+"#;
+    let module = lower_source_to_mir(source).expect("known and variable encodings lower");
+    let object = emit_unoptimized_object(&module).expect("both codec paths compile");
+    let fixed = object_function_referenced_symbols(&object, "aura_fn_fixed");
+    let variable = object_function_referenced_symbols(&object, "aura_fn_variable");
+    let unsupported = object_function_referenced_symbols(&object, "aura_fn_unsupported");
+    assert!(
+        fixed
+            .iter()
+            .any(|name| name.contains("aura_direct_text_codec")),
+        "{fixed:?}"
+    );
+    assert!(
+        fixed.iter().all(|name| !name.contains("arg_buffer")),
+        "{fixed:?}"
+    );
+    assert!(
+        variable
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_decode")),
+        "{variable:?}"
+    );
+    assert!(
+        unsupported
+            .iter()
+            .any(|name| name.contains("aura_host_bytes_encode")),
+        "{unsupported:?}"
+    );
+}
+
+#[test]
+fn integer_math_passes_words_to_the_runtime() {
+    let source = r#"
+import math
+
+def integer_math(value: int64) -> int64:
+    return math.gcd(value, 15) + math.lcm(value, 2) + math.isqrt(value) + math.factorial(value) + math.comb(value, 2) + math.perm(value, 2)
+
+def main() -> None:
+    print(integer_math(4))
+"#;
+    let mir = lower_source_to_mir(source).expect("integer math lowers");
+    let object = emit_unoptimized_object(&mir).expect("integer math compiles");
+    let symbols = object_function_referenced_symbols(&object, "aura_fn_integer_math");
+    assert!(
+        symbols
+            .iter()
+            .any(|name| name.contains("aura_direct_math_integer")),
+        "integer math should accept int64 arguments directly: {symbols:?}"
+    );
+    assert!(
+        symbols
+            .iter()
+            .all(|name| !name.contains("aura_host_math_") && !name.contains("arg_buffer")),
+        "integer math should keep its inputs and outputs in words: {symbols:?}"
+    );
+}
+
+#[test]
 fn direct_monotonic_time_uses_scalar_runtime_abi_without_generic_host_boxing() {
     let source = r#"
 import sys
@@ -2489,6 +2712,7 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
                 instructions: vec![Instruction::Assign {
                     target: "dead_task".to_string(),
                     value: Rvalue::StartTask {
+                        recover: false,
                         returns_handle: false,
                         result_is_copy: true,
                         stack_size: None,
@@ -9070,6 +9294,7 @@ def main() -> int32:
             Instruction::Assign {
                 target: "test_task".to_string(),
                 value: Rvalue::StartTask {
+                    recover: false,
                     returns_handle: true,
                     result_is_copy: true,
                     stack_size: None,
@@ -9151,6 +9376,7 @@ def main() -> int32:
     borrowed_main_mut.blocks[0].instructions[1] = Instruction::Assign {
         target: "test_task".to_string(),
         value: Rvalue::StartTask {
+            recover: false,
             returns_handle: true,
             result_is_copy: true,
             stack_size: None,
@@ -9226,6 +9452,7 @@ def main() -> int32:
         invalid_main.blocks[0].instructions[1] = Instruction::Assign {
             target: "test_task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -11246,6 +11473,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         .expect("MovePlace should remain valid for a consuming assignment");
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::MovePlace("stack_bytes".to_string())),
@@ -11262,6 +11490,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
@@ -11278,6 +11507,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
@@ -17107,6 +17337,178 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_reads_union_members_without_a_c_call() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+
+extern "C" class Pair:
+    low: uint32
+    high: uint32
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    text: array[uint8, 12]
+
+extern "C" def un_poll(event: mut Event) -> bool
+extern "C" def as_pair(key: Key) -> Pair symbol "aura.reinterpret"
+
+def main() -> int32:
+    mut event = Event()
+    if un_poll(event):
+        print(event.key.code)
+    made = Event.from_key(Key(kind=1, code=2))
+    print(made.kind)
+    print(Event.from_text(made.text).kind)
+    print(as_pair(Key(kind=3, code=4)).high)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a union should emit");
+    let referenced = object_referenced_symbols(&object);
+    let references = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "un_poll",
+        "aura_direct_ffi_pack_struct",
+        "aura_direct_ffi_unpack_struct",
+    ] {
+        assert!(references(symbol), "the object should reference `{symbol}`");
+    }
+    // A member read is not a call of a C function.
+    assert!(!references(crate::ffi::REINTERPRET_SYMBOL));
+    assert!(!referenced.iter().any(|name| name.contains("__Event_")));
+}
+
+#[test]
+fn numeric_c_union_reads_only_enter_their_frame_on_the_slow_path() {
+    let mir = lower_ffi_source_to_mir(
+        r#"
+extern "C" union Packet:
+    code: int32
+    flag: bool
+
+def main() -> int32:
+    packet = Packet()
+    print(packet.flag)
+    return packet.code
+"#,
+    );
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect();
+    let frameless = |name| {
+        let function = mir
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap();
+        super::frameless_leaf(function, &classes)
+    };
+    assert!(frameless("Packet.code"));
+    assert!(!frameless("Packet.flag"));
+}
+
+#[test]
+fn direct_ffi_codegen_packs_array_fields_and_struct_arrays_in_the_runtime() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    corners: array[Point, 2]
+
+extern "C" def sh_area(s: Shape) -> float32
+extern "C" def sh_make(tag: uint8) -> Shape
+extern "C" def sh_grow(s: mut Shape) -> None
+extern "C" def sh_total(points: ptr[Point], count: int32) -> float32
+extern "C" def sh_shift(points: mut ptr[Point], count: int32) -> None
+
+def main() -> int32:
+    mut shape = sh_make(1)
+    sh_grow(shape)
+    print(sh_area(shape))
+    mut points = [Point(x=1.0, y=2.0)]
+    sh_shift(points, 1)
+    print(sh_total(points, 1))
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("array fields should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "sh_area",
+        "sh_make",
+        "sh_grow",
+        "sh_total",
+        "sh_shift",
+        "aura_direct_ffi_pack_struct",
+        "aura_direct_ffi_unpack_struct",
+        "aura_direct_ffi_unpack_struct_into",
+        "aura_direct_ffi_copy_structs",
+        "aura_direct_ffi_pack_structs",
+        "aura_direct_ffi_unpack_structs",
+        "aura_direct_ffi_release_structs",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::FfiType;
+    // A `ptr[Name]` is a pointer to structs whether or not C writes them.
+    for name in ["sh_total", "sh_shift"] {
+        let call = extern_call(name);
+        let point = call.params[0].c_struct.clone().expect("an element layout");
+        assert!(call.params[0].pointer && point.is_plain());
+        assert_eq!(
+            super::foreign::foreign_param_type(&call.params[0])
+                .expect("ptr[Point] is a boundary type")
+                .ffi_type,
+            FfiType::StructPointer(point.interned())
+        );
+    }
+    let shape = extern_call("sh_area").params[0]
+        .c_struct
+        .clone()
+        .expect("a struct");
+    assert!(!shape.is_plain());
+}
+
+#[test]
 fn direct_ffi_codegen_passes_named_functions_as_c_callbacks() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -17187,6 +17589,43 @@ def main() -> int32:
         "cb_map",
         "aura_direct_ffi_callback_guard",
         "aura_direct_ffi_callback_check",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // C text reaches a callback as a pointer, which the body copies into
+    // a `str` and frees when the function returns.
+    let text = lower_ffi_source_to_mir(
+        r#"
+extern "C" def cb_words(visit: def(word: cstr, index: int32) -> int32) -> None
+
+def show(word: str, index: int32) -> int32:
+    print(word)
+    return index
+
+def main() -> int32:
+    cb_words(show)
+    cb_words(measure)
+    return 0
+
+def measure(word: str, index: int32) -> int32:
+    return len(word) as int32 + index
+"#,
+    );
+    let callbacks = super::foreign::module_callbacks(&text);
+    let (entry, _) = super::foreign::callback_signatures(&callbacks[0].1);
+    assert_eq!(entry.params, [types::I64, types::I32]);
+    let object = emit_host_object(&text).expect("a text callback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_ffi_callback_text",
+        "aura_direct_ffi_callback_local_text_guard",
+        "aura_direct_ffi_release_callback_text",
     ] {
         assert!(
             referenced
@@ -17662,4 +18101,241 @@ fn leaf_method_call_fixtures_emit_directly() {
         let mir = lower_source_to_mir(source).expect("leaf call fixture should lower");
         emit_host_object(&mir).expect("leaf call fixture should emit directly");
     }
+}
+
+#[test]
+fn stored_callables_are_called_where_they_are_kept() {
+    let source = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Rule:
+    weight: int64
+    step: Step
+
+class Board:
+    tallies: list[Tally]
+
+class Count:
+    value: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.value += amount
+        return self.value
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+def counter(start: int64) -> Tally:
+    count = Count(value=start)
+    return lambda [own count] amount: count.add(amount)
+
+def main() -> None:
+    rule = Rule(weight=3, step=make_adder(7))
+    mut acc = rule.step(1)
+    steps: list[Step] = [make_adder(1), make_adder(2)]
+    acc = steps[0](acc)
+    for step in steps:
+        acc = step(acc)
+    mut tallies: list[Tally] = [counter(1)]
+    for tally in mut tallies:
+        acc = tally(acc & 7)
+    mut board = Board(tallies=[counter(2)])
+    for tally in mut board.tallies:
+        acc = tally(acc)
+    print(acc)
+"#;
+    let module = lower_source_to_mir(source).expect("stored callables should lower");
+    let object = emit_unoptimized_object(&module).expect("stored callables should emit");
+    let wrapper = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("counter::__lambda_"))
+        .expect("closure that mutates a capture");
+    let wrapper_symbol = format!("{}__nosinks", super::mangle_symbol(&wrapper.name));
+    let defined = object_defined_aura_functions(&object);
+    assert!(
+        defined.contains(&wrapper_symbol),
+        "{wrapper_symbol} must preserve the caller's sink-free path"
+    );
+    let references = object_function_referenced_symbols(&object, &wrapper_symbol);
+    // The wrapper forwards its receiver and arguments unchanged to a leaf.
+    // Its combined body pushes both source frames only when arithmetic traps.
+    assert!(
+        references
+            .iter()
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")),
+        "{references:?}"
+    );
+    assert!(
+        !references
+            .iter()
+            .any(|name| name.ends_with("aura_direct_frame_stack")),
+        "{references:?}"
+    );
+    let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
+    for runtime_symbol in [
+        // A field's box gives the kept words of its callable.
+        "aura_direct_function_callable",
+        // Reading a Shared element as an owned value copies its words.
+        "aura_direct_vec_callable_copy",
+        // A call through a loan of a Mutable element reaches the words in
+        // the list.
+        "aura_direct_vec_callable",
+    ] {
+        assert!(
+            main_references
+                .iter()
+                .any(|symbol| symbol.ends_with(runtime_symbol)),
+            "a stored callee must be reached through `{runtime_symbol}`: {main_references:?}"
+        );
+    }
+    assert!(
+        object_contains_symbol(&object, "aura_direct_closure_value_deferred"),
+        "the shape's box adapter keeps the inline words"
+    );
+}
+
+#[test]
+fn recovered_callable_factories_emit_valid_native_control_flow() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_returned_callable.au");
+    let module = lower_source_to_mir(source).expect("callable factories lower");
+    emit_unoptimized_object(&module).expect("all three successful results transfer their callable");
+}
+
+#[test]
+fn recovered_numeric_calls_transfer_the_embedded_handle() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_numeric_values.au");
+    let mir = lower_source_to_mir(source).expect("numeric recovery lowers");
+    let object = emit_unoptimized_object(&mir).expect("numeric recovery compiles");
+    let symbols = object_function_referenced_symbols(&object, "aura_fn_main");
+    assert!(symbols
+        .iter()
+        .any(|name| name.contains(RuntimeFn::StartTaskCall.symbol())));
+    assert!(symbols
+        .iter()
+        .all(|name| !name.contains(RuntimeFn::RecoverBegin.symbol())));
+}
+
+#[test]
+fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
+    let big = Type::named("numbers.BigInt");
+    let words = Type::Named("list".into(), vec![Type::named("uint64")]);
+    let storage = Type::normalize_union(
+        vec![Type::named("int64"), words],
+        "numbers",
+        &Default::default(),
+    )
+    .unwrap();
+    let classes = HashMap::from([(
+        "numbers.BigInt".into(),
+        crate::mir::MirClass {
+            name: "numbers.BigInt".into(),
+            type_params: vec![],
+            fields: vec![class_field("storage", storage)],
+            methods: vec![],
+            copy: false,
+        },
+    )]);
+    let ty = direct_type(&big, &classes).unwrap();
+    assert!(matches!(ty, DirectType::PlainClass(_)));
+    assert!(super::layout_owns_handles(&ty));
+    assert_eq!(ty.abi_types(), vec![types::I64, types::I64]);
+    let optional = aura_core::types::optional_type(big.clone());
+    let Some(DirectType::Union(optional)) = direct_type(&optional, &classes) else {
+        panic!("a concrete optional is inline");
+    };
+    assert!(optional
+        .members
+        .iter()
+        .any(|member| member.ty == DirectType::Opaque(big.clone())));
+}
+#[test]
+fn integer_dict_index_stores_pass_both_words_without_boxing() {
+    let source = "def assign(table: mut dict[int64, int64], key: int64, value: int64):\n    table[key] = value\n\ndef main():\n    mut table = dict[int64, int64]()\n    assign(table, 1, 7)\n    print(table.len())\n";
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_host_object(&module).unwrap();
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_set_index_int64_pair"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn direct_sync_map_lookup_passes_an_integer_key_without_boxing() {
+    let module = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    let symbols = exact_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_int64"),
+        "{symbols:?}"
+    );
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_word"),
+        "{symbols:?}"
+    );
+    assert!(symbols.contains("aura_host_sync_map_get"), "{symbols:?}");
+}
+
+#[test]
+fn primitive_ordered_operations_use_the_native_receiver_abi() {
+    let source = r#"
+from collections import Deque, Heap, SortedMap, SortedSet
+
+def main():
+    mut q = Deque[int64]()
+    q.push_front(4)
+    print(q.pop_back())
+    mut h = Heap[int64].max()
+    h.push(8)
+    print(h.pop())
+    mut m = SortedMap[int64, int64]()
+    m.set(7, 9)
+    print(m.get(7))
+    mut s = SortedSet[int64]()
+    s.add(2)
+    print(s.remove(2))
+"#;
+    let module = lower_source_to_mir(source).expect("ordered receiver operations lower");
+    let object = emit_host_object(&module).expect("ordered receiver operations compile");
+    let symbols = exact_referenced_symbols(&object);
+    assert!(symbols.contains("aura_direct_ordered_i64"));
+    assert!(symbols.contains("aura_direct_ordered_i64_lookup"));
+    assert!(symbols.contains("aura_direct_ordered_local_words"));
+    assert!(symbols.contains("aura_direct_ordered_local_step"));
+}
+
+#[test]
+fn ordered_word_view_requires_a_fresh_confined_receiver() {
+    let module = lower_source_to_mir(
+        r#"
+from collections import Deque
+
+def main():
+    mut local = Deque[int64]()
+    local.push_back(4)
+    print(local.pop_back())
+    mut shared = Deque[int64]()
+    shared.push_back(7)
+    mut saved: list[Deque[int64]] = []
+    saved.append(shared)
+    mut copy = saved.pop()
+    print(copy.pop_back())
+    for i in range(3):
+        mut repeated = Deque[int64]()
+        repeated.push_front(i)
+        print(repeated.pop_front())
+"#,
+    )
+    .expect("confinement fixture lowers");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
+    assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }

@@ -18,9 +18,9 @@ use crate::randomness::SecureRandomError;
 #[cfg_attr(not(unix), allow(unused_imports))]
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
-    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot, InstanceValue,
-    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DirectCallable,
+    EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot,
+    InstanceValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
@@ -42,6 +42,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
+/// A call depth that takes several doublings of the frame stack to reach.
+const DEEP_CALLS: usize = 256;
+
+/// Makes the machine stack look used up to the frame stack's next check,
+/// until the guard drops.
+fn exhausted_machine_stack() -> crate::runtime_value::ThreadStackBounds {
+    crate::runtime_value::enter_stack_floor_for_test(usize::MAX / 2)
+}
+
 fn string_value(text: &str) -> *mut OpaqueValue {
     super::aura_direct_string_literal(text.as_ptr(), text.len())
 }
@@ -56,6 +65,349 @@ fn float_value(value: f64) -> *mut OpaqueValue {
 
 fn bool_value(value: bool) -> *mut OpaqueValue {
     super::aura_direct_box_bool(i64::from(value))
+}
+
+#[test]
+fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
+    super::with_direct_task_runtime_scope(|| {
+        let mut buffer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        // Each call returns normally so the jump buffer is never resumed.
+        unsafe {
+            for active in [false, true] {
+                super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
+                super::with_direct_task_runtime_state(|state| {
+                    if active {
+                        state.foreign_callback_cleanup_base = Some(0);
+                    } else {
+                        state.foreign_callback_failure = Some(Box::new("unfinished callback"));
+                    }
+                });
+                super::aura_direct_recover_end(std::ptr::null_mut());
+                super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
+                super::with_direct_task_runtime_state(|state| {
+                    assert!(state.foreign_callback_cleanup_base.is_none());
+                    assert!(state.foreign_callback_failure.is_none());
+                });
+                super::aura_direct_recover_end(std::ptr::null_mut());
+            }
+        }
+    });
+}
+
+#[test]
+fn recovered_formatted_assertion_keeps_each_calls_message() {
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(2, 1, b"values.au", b"validate");
+        let make = |message: &str| unsafe {
+            let text = boxed_value(Value::string(message.to_string()));
+            let result = super::aura_direct_recover_formatted_assertion(descriptor, text, 3, 5, 0);
+            super::aura_direct_release_value(text);
+            result
+        };
+        let first = make("negative -7");
+        let second = make("negative -8");
+        for (result, expected) in [(first, "negative -7"), (second, "negative -8")] {
+            let payload = super::aura_direct_variant_take_payload(result, 0);
+            unsafe {
+                super::aura_direct_release_value(result);
+                super::with_value(payload, |value| {
+                    let Value::Instance(trap) = value else {
+                        panic!("trap instance");
+                    };
+                    assert_eq!(
+                        trap.fields.get("message").unwrap().as_ref(),
+                        &Value::string(expected)
+                    );
+                    assert_eq!(
+                        trap.fields.get("path").unwrap().as_ref(),
+                        &Value::string("values.au")
+                    );
+                });
+                super::aura_direct_release_value(payload);
+            }
+        }
+    });
+}
+
+#[test]
+fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
+    // Program teardown clears its frozen values; isolate it from other
+    // runtime tests which initialize independent programs.
+    const HELPER: &str = "recovered_scalar_shared_result";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("native_runtime::tests::recovered_scalar_assertion_shares_its_result_and_copies_the_trap")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(4, 1, b"validate.au", b"validate");
+        static CELL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let message = b"invalid cost";
+        let address = descriptor as usize;
+        let start = std::sync::Barrier::new(2);
+        let read = || {
+            start.wait();
+            unsafe {
+                super::aura_direct_recover_assertion_cell(
+                    &CELL,
+                    address as *const _,
+                    message.as_ptr(),
+                    message.len(),
+                    8,
+                    5,
+                    0,
+                ) as usize
+            }
+        };
+        let (left, right) = std::thread::scope(|scope| {
+            let first = scope.spawn(read);
+            let second = scope.spawn(read);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_eq!(left, right);
+        let result = left as *mut OpaqueValue;
+        assert!(super::direct_value_is_frozen(result));
+        unsafe {
+            super::with_value(result, |value| {
+                let Value::EnumVariant(variant) = value else {
+                    panic!("result variant");
+                };
+                assert_eq!(variant.variant_name, "Err");
+                let payload = variant.payloads.get(0).unwrap();
+                let Value::Instance(trap) = payload.as_ref() else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("code").unwrap().as_ref(),
+                    &Value::string("AU4001")
+                );
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+                assert_eq!(
+                    trap.fields.get("path").unwrap().as_ref(),
+                    &Value::string("validate.au")
+                );
+                let fields = trap.fields.map();
+                assert!(
+                    matches!(&fields["frames"], Value::Vec(frames) if frames.elements.to_vec() == [Value::string("validate at 4:1")])
+                );
+            });
+        }
+        let first = super::aura_direct_variant_take_payload(result, 0);
+        let second = super::aura_direct_variant_payload(result, 0);
+        unsafe {
+            super::value_mut(first, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                trap.fields
+                    .insert("message", Value::string("changed"))
+                    .unwrap();
+            });
+            super::with_value(second, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+            });
+            super::aura_direct_release_value(first);
+            super::aura_direct_release_value(second);
+            super::aura_direct_release_value(result);
+        }
+        super::clear_direct_module_constants();
+        assert_eq!(CELL.load(std::sync::atomic::Ordering::Acquire), 0);
+    });
+}
+
+// Exercise the portable recovery ABI used when the backend cannot emit an
+// in-place jump buffer. Each argument buffer owns one reference per handle.
+fn call_recovered_thunk(thunk: super::NativeThunk, args: &[*mut OpaqueValue]) -> Value {
+    let count = args.len() as i64;
+    let buffer = super::aura_direct_arg_buffer_new(count);
+    for (index, arg) in args.iter().enumerate() {
+        super::aura_direct_arg_buffer_store(buffer, index as i64, *arg as i64);
+    }
+    unsafe {
+        let result = super::aura_direct_start_task_call(
+            thunk as usize as i64,
+            buffer,
+            count,
+            super::DIRECT_START_RECOVERS,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        );
+        super::consume_value(result)
+    }
+}
+
+#[test]
+fn recovered_thunk_restores_the_caller_and_releases_arguments_on_success_and_trap() {
+    unsafe extern "C-unwind" fn trap(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::yield_now_with_runtime_scheduler();
+        super::aura_direct_assert_fail(0, 14, 5, 0)
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let argument = int_value(29);
+            let expected = unsafe { value_ref(argument) };
+            let ok = || crate::runtime_value::result_ok(expected.clone());
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+
+            let Value::EnumVariant(error) = call_recovered_thunk(trap, &[argument]) else {
+                panic!("expected Result.Err");
+            };
+            assert_eq!(error.variant_name, "Err");
+            let payload = error.payloads.get(0).unwrap();
+            let Value::Instance(trap) = payload.as_ref() else {
+                panic!("expected control.Trap");
+            };
+            let fields = trap.fields.map();
+            assert_eq!(fields["code"], Value::string("AU4001"));
+            assert_eq!(fields["message"], Value::string("assertion failed"));
+            assert_eq!(fields["line"], Value::Int(IntegerValue::from_i64(14)));
+            assert_eq!(fields["column"], Value::Int(IntegerValue::from_i64(5)));
+
+            assert_eq!(call_recovered_thunk(test_native_thunk, &[argument]), ok());
+            assert_eq!(unsafe { &*argument }.ref_count.load(Ordering::Acquire), 1);
+            unsafe { release_value(argument) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn recovered_stack_exhaustion_reports_the_frame_the_native_caller_already_entered() {
+    unsafe extern "C-unwind" fn exhaust(_: *const i64, _: usize) -> *mut OpaqueValue {
+        // Recursive generated callers push their frame before invoking the slow check.
+        let descriptor = leaked_frame_descriptor(17, 3, b"recursive.au", b"recurse");
+        unsafe { super::aura_direct_enter_frame(descriptor) };
+        super::aura_direct_stack_exhausted();
+        let _exhausted = exhausted_machine_stack();
+        super::aura_direct_stack_exhausted();
+        panic!("a call with no stack reserve returned");
+    }
+
+    run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            let result = call_recovered_thunk(exhaust, &[]);
+            let payload = expect_variant_value(result, "Result", "Err");
+            let [Value::Instance(trap)] = payload.as_slice() else {
+                panic!("recover must return Err(control.Trap)");
+            };
+            assert_eq!(trap.class_name, "control.Trap");
+            let fields = trap.fields.map();
+            assert_eq!(fields["code"], Value::string("AU4005"));
+            assert_eq!(
+                fields["message"],
+                Value::string("call stack exhausted while calling `recurse`")
+            );
+            assert_eq!(fields["path"], Value::string("recursive.au"));
+            assert_eq!(fields["line"], Value::Int(IntegerValue::from_i64(17)));
+            assert_eq!(fields["column"], Value::Int(IntegerValue::from_i64(3)));
+            let Value::Vec(frames) = &fields["frames"] else {
+                panic!("a trap's frames must be a list");
+            };
+            assert_eq!(frames.elements.len(), 1);
+            assert_eq!(
+                frames.elements.get(0).unwrap().as_ref(),
+                &Value::string("recurse at 17:3")
+            );
+            // The restored caller still has its own stack reserve.
+            super::aura_direct_stack_exhausted();
+            Ok(Value::Unit)
+        })
+    })
+    .expect("stack exhaustion stays inside the recovered call");
+}
+
+#[test]
+fn resuming_a_native_recovery_boundary_without_a_pending_trap_fails() {
+    let message = capture_direct_boundary_error_message(|| {
+        super::aura_direct_recover_trapped();
+    });
+    assert_eq!(message, "a recovered call resumed without a trap");
+}
+
+#[test]
+fn recovered_thunk_propagates_cancellation_through_an_outer_recovered_call() {
+    unsafe extern "C-unwind" fn cancel(_: *const i64, _: usize) -> *mut OpaqueValue {
+        crate::runtime_value::cancel_current_lightweight_task_boundary()
+    }
+
+    let _guard = super::direct_task_claim_flag_test_guard();
+    let baseline = super::direct_task_claim_flag_live_count();
+    let result = run_lightweight_root_task(|| {
+        let task = spawn_lightweight_task(|| {
+            // Cancellation must cross the in-place caller without jumping to its
+            // trap handler. The buffer remains live until this task exits.
+            let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+            unsafe { super::aura_direct_recover_begin(outer.as_mut_ptr(), 1) };
+            call_recovered_thunk(cancel, &[]);
+            panic!("a cancelled recovered call returned");
+        })?;
+        let status = task
+            .wait_result_with_cancellation_observed(Some(StdDuration::from_secs(2)), None)
+            .unwrap();
+        assert!(matches!(status, TaskWaitStatus::Cancelled), "{status:?}");
+        Ok(Value::Unit)
+    });
+    assert_eq!(result.unwrap(), Value::Unit);
+    assert_eq!(super::direct_task_claim_flag_live_count(), baseline);
+}
+
+#[test]
+fn recovered_calls_move_owned_values_across_nested_boundaries() {
+    super::with_direct_task_runtime_scope(|| {
+        let argument = super::boxed_value(Value::string("owned argument"));
+        let count =
+            || super::with_direct_task_runtime_state(|state| state.owned_values().count(argument));
+        assert_eq!(count(), 1);
+        let mut outer = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        let mut inner = [0u8; super::DIRECT_RECOVER_JUMP_BUFFER_BYTES as usize];
+        // Both calls finish normally, so neither jump buffer is resumed.
+        unsafe {
+            assert_eq!(super::aura_direct_recover_begin(outer.as_mut_ptr(), 41), 41);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_begin(inner.as_mut_ptr(), 42), 42);
+            assert_eq!(count(), 0);
+            super::aura_direct_recover_adopt(argument);
+            super::aura_direct_recover_adopt(std::ptr::null_mut());
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            assert_eq!(super::aura_direct_recover_end(argument), argument);
+            assert_eq!(count(), 1);
+            super::aura_direct_release_value(argument);
+        }
+        assert!(super::with_direct_task_runtime_state(|state| state
+            .owned_values()
+            .is_empty()));
+    });
 }
 
 #[test]
@@ -569,7 +921,7 @@ fn adr0038_cleanup_and_mutable_sink_ids_roll_over_without_using_zero() {
 fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_capture".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -582,6 +934,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let captures = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_arg_buffer_store_owned(captures, 0, int_value(17) as i64);
@@ -622,7 +975,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let plain = boxed_value(Value::Function(Box::new(FunctionValue {
+            let plain = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "plain".to_string(),
                 signature: Type::Function {
                     params: Vec::new(),
@@ -633,6 +986,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
                 direct_thunk: None,
                 direct_default_binder: None,
                 closure_environment: None,
+                direct_callable: None,
             })));
             super::aura_direct_closure_capture(plain, 0);
         }),
@@ -788,7 +1142,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         }],
         return_type: Box::new(Type::named("int32")),
     };
-    let callback = boxed_value(Value::Function(Box::new(FunctionValue {
+    let callback = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "double".to_string(),
         signature,
         source_path: Some("/workspace/array.au".to_string()),
@@ -796,6 +1150,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         direct_thunk: Some(direct_array_double_thunk as *const () as usize as i64),
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let mapped = super::aura_direct_array_map(array, callback, 0, 19, 21);
     assert_eq!(
@@ -2278,6 +2633,48 @@ fn every_tensor_host_entry_reaches_its_host_function() {
         reached += 1;
     }
     assert!(reached >= 45, "{reached} tensor entries");
+}
+
+#[test]
+fn every_image_host_entry_reaches_its_host_function() {
+    let mut reached = 0;
+    for (name, entry) in super::HOST_BUILTIN_ENTRIES {
+        if !name.starts_with("image::") {
+            continue;
+        }
+        let entry = *entry;
+        let count = super::dynamic_host_abi(name)
+            .unwrap_or_else(|| panic!("`{name}` has no argument list"))
+            .params
+            .len();
+        // A bool is no argument of an image function, so each one reports
+        // the argument it could not use.
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let arguments: Vec<*mut OpaqueValue> =
+                    (0..count).map(|_| bool_value(true)).collect();
+                let value = direct_host_builtin_call_entry(entry, &arguments);
+                unsafe {
+                    release_value(value);
+                    for argument in arguments {
+                        release_value(argument);
+                    }
+                }
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("an image function rejects bool arguments");
+        assert!(
+            error.message.contains("image"),
+            "`{name}` reported `{}`",
+            error.message
+        );
+        reached += 1;
+    }
+    assert_eq!(
+        reached,
+        crate::runtime_value::image_host::IMAGE_HOST_FUNCTIONS.len()
+    );
 }
 
 fn direct_host_builtin_call_entry(
@@ -5032,7 +5429,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         ],
         return_type: Box::new(Type::named("int64")),
     };
-    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+    let function = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "selected".to_string(),
         signature: Type::Function {
             params: vec![
@@ -5065,6 +5462,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         direct_thunk: Some(11),
         direct_default_binder: Some(22),
         closure_environment: None,
+        direct_callable: None,
     })));
     let encoded = super::canonical_runtime_type_name(&concrete_function_signature);
     super::aura_direct_tag_value_type(function, encoded.as_ptr(), encoded.len());
@@ -5379,7 +5777,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         ClosureCaptureMode::Copy,
         ClosureCallKind::Repeatable,
     );
-    let value = boxed_value(Value::Function(Box::new(FunctionValue {
+    let value = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "predicate".to_string(),
         signature: actual.clone(),
         source_path: Some("/workspace/closure.au".to_string()),
@@ -5387,6 +5785,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         direct_thunk: Some(1),
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let wildcard = Type::TypeParam("T".to_string());
     let matching = closure(
@@ -5537,7 +5936,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         release_value(ordinary_value);
     }
 
-    let missing_targets = boxed_value(Value::Function(Box::new(FunctionValue {
+    let missing_targets = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "declaration-only".to_string(),
         signature,
         source_path: None,
@@ -5545,6 +5944,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     })));
     let missing_targets_address = missing_targets as usize;
     assert_eq!(
@@ -12104,9 +12504,11 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
                 }
             }
             "direct-call-depth" => unsafe {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
                 }
+                let _exhausted = exhausted_machine_stack();
+                super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
             },
             _ => {}
         }
@@ -12120,7 +12522,7 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
         ),
         (
             "direct-call-depth",
-            "maximum call depth of 256 exceeded while calling `recurse`",
+            "call stack exhausted while calling `recurse`",
         ),
     ] {
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -16249,7 +16651,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
                         }
                         let _ = task_release.recv_with_cancellation(None, None);
                         assert_eq!(
-                            super::direct_runtime_call_frames(),
+                            super::direct_runtime_call_frames().0,
                             vec![RuntimeCallFrame {
                                 function,
                                 span: runtime_source_span(&path, index + 1, 1),
@@ -16360,7 +16762,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                                 stack,
                                 "a task keeps one frame stack across yields"
                             );
-                            let frames = super::direct_runtime_call_frames();
+                            let frames = super::direct_runtime_call_frames().0;
                             assert_eq!(frames.len(), level + 1);
                             for (offset, frame) in frames.iter().enumerate() {
                                 let expected = level - offset;
@@ -16382,7 +16784,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                         for remaining in (0..descriptors.len()).rev() {
                             unsafe { generated_exit(stack) };
                             super::aura_direct_yield_now();
-                            assert_eq!(super::direct_runtime_call_frames().len(), remaining);
+                            assert_eq!(super::direct_runtime_call_frames().0.len(), remaining);
                         }
                         Value::Unit
                     }))
@@ -16456,7 +16858,7 @@ fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
             super::aura_direct_take_returned_view_projection(projection.as_ptr(), projection.len());
         assert_eq!(selected, 0);
         unsafe { super::aura_direct_exit_call() };
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
         assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
 
@@ -16566,7 +16968,7 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("call-frame probe should complete");
@@ -16847,7 +17249,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             0,
             "entering a descriptor frame must not materialize diagnostics"
         );
-        let frames = super::direct_runtime_call_frames();
+        let frames = super::direct_runtime_call_frames().0;
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].function, "helper");
         assert_eq!(frames[0].span.path.as_deref(), Some("/workspace/main.au"));
@@ -16857,7 +17259,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("descriptor frame probe should complete");
@@ -16959,24 +17361,28 @@ fn native_runtime_frame_descriptor_depth_limit_names_the_function() {
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_frame(address as *const _);
                     }
+                }
+                let _exhausted = exhausted_machine_stack();
+                unsafe {
+                    super::aura_direct_enter_frame(address as *const _);
                 }
                 Value::Unit
             }))
         })
     })
-    .expect_err("the call past the depth limit should trap");
+    .expect_err("the call that finds the stack exhausted should trap");
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(7, 3)));
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
+    assert_eq!(diagnostic.omitted_call_frames, None);
     assert_eq!(diagnostic.call_frames[0].function, "recurse");
 }
 
@@ -17044,7 +17450,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
     let diagnostic = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for index in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for index in 0..DEEP_CALLS {
                     let function: &'static str =
                         Box::leak(format!("accepted_{index}").into_boxed_str());
                     unsafe {
@@ -17059,6 +17465,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
                     }
                 }
                 let attempted = b"rejected";
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call_with_frame(
                         400,
@@ -17075,7 +17482,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
         })
     })
     .expect_err("the rejected call should fail at the scheduler boundary");
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
     assert_eq!(
         diagnostic
             .call_frames
@@ -17211,7 +17618,7 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
                     b"parent".len(),
                 );
             }
-            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+            let function = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "runtime_selected_child".to_string(),
                 signature: Type::Function {
                     params: Vec::new(),
@@ -17222,6 +17629,7 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
                 direct_thunk: Some(direct_task_frame_trap as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let args = super::aura_direct_arg_buffer_new(0);
             let group = super::aura_direct_task_group_new();
@@ -17302,7 +17710,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
     let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
         super::with_direct_task_runtime_scope(|| {
             let capture_type = Type::named("int64");
-            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+            let function = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "capturing_child".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -17330,6 +17738,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let args = super::aura_direct_arg_buffer_new(0);
             let group = super::aura_direct_task_group_new();
@@ -17387,7 +17796,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
 #[test]
 fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semantics() {
     fn closure_task_value(name: &str, captured: i64, consuming: bool) -> *mut OpaqueValue {
-        boxed_value(Value::Function(Box::new(FunctionValue {
+        boxed_value(Value::Function(Arc::new(FunctionValue {
             name: name.to_string(),
             signature: Type::Closure {
                 params: Box::new(Vec::new()),
@@ -17423,6 +17832,7 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
                 }],
                 consuming,
             ))),
+            direct_callable: None,
         })))
     }
 
@@ -17553,7 +17963,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
     let claim_flag_baseline = super::direct_task_claim_flag_live_count();
     let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
         super::with_direct_task_runtime_scope(|| {
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "retryable_child".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -17581,6 +17991,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let group = super::aura_direct_task_group_new();
             let closure_address = closure as usize;
@@ -17670,7 +18081,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
         crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
             super::with_direct_task_runtime_scope(|| {
                 Ok(super::with_task_runtime_error_capture(|| {
-                    let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                    let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                         name: "detached_closure".to_string(),
                         signature: Type::Closure {
                             params: Box::new(Vec::new()),
@@ -17698,6 +18109,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                             }],
                             true,
                         ))),
+                        direct_callable: None,
                     })));
                     let group = super::aura_direct_task_group_new();
                     let detached = unsafe {
@@ -18022,7 +18434,7 @@ fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() 
 fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_thunks() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let non_callable = int_value(7);
-    let missing_thunk = boxed_value(Value::Function(Box::new(FunctionValue {
+    let missing_thunk = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "declaration-only".to_string(),
         signature: Type::Function {
             params: Vec::new(),
@@ -18033,6 +18445,7 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
         direct_thunk: None,
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let group = super::aura_direct_task_group_new();
 
@@ -18082,7 +18495,7 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
 fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let repeatable = boxed_value(Value::Function(Box::new(FunctionValue {
+            let repeatable = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_repeatable".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
@@ -18118,6 +18531,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
 
             let mut first_args = [int_value(5) as i64];
@@ -18167,7 +18581,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
 
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let consuming = boxed_value(Value::Function(Box::new(FunctionValue {
+            let consuming = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_consuming".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18195,6 +18609,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                     }],
                     true,
                 ))),
+                direct_callable: None,
             })));
             let first = super::aura_direct_function_call(consuming, std::ptr::null_mut(), 0);
             assert_eq!(expect_int(first), 19);
@@ -18211,7 +18626,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
 fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebacks() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_mixed_args".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![
@@ -18256,6 +18671,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let mut public_args = [int_value(3) as i64, int_value(4) as i64];
             let called = super::aura_direct_function_call(closure, public_args.as_mut_ptr(), 2);
@@ -18295,7 +18711,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
 fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid_inputs() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let zero_capture_base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let zero_capture_base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_zero".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18308,6 +18724,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let zero_capture = super::aura_direct_closure_value(
                 zero_capture_base,
@@ -18339,7 +18756,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let invalid_count_base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let invalid_count_base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_invalid".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18352,6 +18769,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             super::aura_direct_closure_value(
                 invalid_count_base,
@@ -18381,7 +18799,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let ordinary = boxed_value(Value::Function(Box::new(FunctionValue {
+            let ordinary = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "selected".to_string(),
                 signature: Type::Function {
                     params: vec![FunctionParamContract {
@@ -18400,6 +18818,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                     direct_test_default_binder as *const () as usize as i64,
                 ),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let ordinary_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(ordinary, ordinary_args, 1, 0);
@@ -18417,7 +18836,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                 free_arg_buffer(ordinary_args, 1);
             }
 
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_no_defaults".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
@@ -18438,6 +18857,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                     direct_test_default_binder as *const () as usize as i64,
                 ),
                 closure_environment: Some(Arc::new(ClosureEnvironment::new(Vec::new(), false))),
+                direct_callable: None,
             })));
             let closure_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(closure, closure_args, 1, 0);
@@ -18470,7 +18890,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
 #[test]
 fn native_runtime_indirect_call_and_default_callback_traps_identify_invalid_selection() {
     fn selected_function(thunk: Option<i64>, default_binder: Option<i64>) -> *mut OpaqueValue {
-        boxed_value(Value::Function(Box::new(FunctionValue {
+        boxed_value(Value::Function(Arc::new(FunctionValue {
             name: "selected".to_string(),
             signature: Type::Function {
                 params: Vec::new(),
@@ -18481,6 +18901,7 @@ fn native_runtime_indirect_call_and_default_callback_traps_identify_invalid_sele
             direct_thunk: thunk,
             direct_default_binder: default_binder,
             closure_environment: None,
+            direct_callable: None,
         })))
     }
 
@@ -18576,7 +18997,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
         }]),
         call_kind: aura_core::types::ClosureCallKind::Consuming,
     };
-    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+    let function = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "main::__lambda_trap".to_string(),
         signature,
         source_path: Some("/workspace/main.au".to_string()),
@@ -18593,6 +19014,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             }],
             false,
         ))),
+        direct_callable: None,
     })));
     let function_address = function as usize;
 
@@ -18639,7 +19061,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
 fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
     let result = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
-            let base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_uncalled".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18658,6 +19080,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                 direct_thunk: Some(1),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let capture = string_value("never called");
             let captures = super::aura_direct_arg_buffer_new(1);
@@ -19787,7 +20210,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_call(1, 1, b"recurse".as_ptr(), b"recurse".len());
                     }
@@ -19803,6 +20226,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
                     cleanup_args,
                     1,
                 );
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call(2, 1, b"rejected".as_ptr(), b"rejected".len());
                 }
@@ -19811,20 +20235,20 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
             }))
         })
     })
-    .expect_err("the saturated call chain should fail at the task boundary");
+    .expect_err("the exhausted call chain should fail at the task boundary");
     assert_eq!(
         diagnostic.message,
-        "maximum call depth of 256 exceeded while calling `rejected`"
+        "call stack exhausted while calling `rejected`"
     );
     assert_eq!(
         unsafe { value_ref(witness) },
-        Value::String("cleanup skipped".to_string().into()),
-        "a cleanup registered at the saturated depth must not enter its callback"
+        Value::String("cleanup invoked".to_string().into()),
+        "a cleanup registered where the stack ran out still runs, in the reserve the trap kept"
     );
     assert_eq!(
         unsafe { &*witness }.ref_count.load(Ordering::SeqCst),
         1,
-        "skipping the callback must still release its retained argument snapshot"
+        "the callback must release its retained argument snapshot"
     );
     unsafe {
         release_value(witness);
@@ -20865,13 +21289,13 @@ fn native_runtime_discarded_frame_state_is_absent_when_the_same_task_key_is_reus
                 b"old_child".len(),
             );
         }
-        assert_eq!(super::direct_runtime_call_frames().len(), 1);
+        assert_eq!(super::direct_runtime_call_frames().0.len(), 1);
         assert_eq!(super::direct_runtime_task_ancestry().len(), 1);
 
         super::discard_current_direct_task_runtime_state();
         super::with_direct_task_runtime_scope(|| {
             assert!(
-                super::direct_runtime_call_frames().is_empty(),
+                super::direct_runtime_call_frames().0.is_empty(),
                 "a reused task identity must start with no retired call frames"
             );
             assert!(
@@ -22753,7 +23177,7 @@ fn coverage_native_runtime_queue_group_iteration_reports_value_closed_and_cancel
 
 #[test]
 fn coverage_native_runtime_closure_capture_and_timer_errors_preserve_diagnostics() {
-    let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+    let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "empty_capture".to_string(),
         signature: Type::Closure {
             params: Box::new(Vec::new()),
@@ -22766,6 +23190,7 @@ fn coverage_native_runtime_closure_capture_and_timer_errors_preserve_diagnostics
         direct_thunk: Some(test_native_thunk as *const () as usize as i64),
         direct_default_binder: Some(1),
         closure_environment: Some(Arc::new(ClosureEnvironment::new(Vec::new(), false))),
+        direct_callable: None,
     })));
     let closure_address = closure as usize;
     let missing_capture = capture_direct_boundary_diagnostic(move || {
@@ -22915,7 +23340,7 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     // SAFETY: the test owns the stack until it frees it below.
     let storage = unsafe { &mut *stack.as_ptr() };
     assert!(!storage.pop_call());
-    assert!(storage.materialize_innermost_first().is_empty());
+    assert!(storage.materialize_innermost_first().0.is_empty());
     for index in 0..3 {
         storage.push_owned(Box::new(DirectRuntimeCallFrame {
             function: DirectFrameText::shared(format!("frame{index}")),
@@ -22923,14 +23348,17 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
         }));
     }
     assert_eq!(storage.len(), 3);
-    let innermost_first = storage.materialize_innermost_first();
+    let innermost_first = storage.materialize_innermost_first().0;
     assert_eq!(innermost_first[0].function, "frame2");
     assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
     assert!(storage.pop_call());
-    assert_eq!(storage.materialize_innermost_first()[0].function, "frame1");
+    assert_eq!(
+        storage.materialize_innermost_first().0[0].function,
+        "frame1"
+    );
     assert!(storage.pop_call());
     assert_eq!(storage.len(), 1);
-    assert_eq!(storage.materialize_innermost_first().len(), 1);
+    assert_eq!(storage.materialize_innermost_first().0.len(), 1);
     assert!(storage.pop_call());
     assert!(!storage.pop_call());
     // SAFETY: nothing uses the stack after this.
@@ -23720,19 +24148,30 @@ fn direct_call_depth_overflow_reports_the_call_site_and_uses_the_program_path() 
     let source = "def main() -> int32:\n    return 0\n";
     super::aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
     let diagnostic = capture_direct_boundary_diagnostic(|| unsafe {
-        for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+        for _ in 0..1_000 {
             super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
         }
+        let _exhausted = exhausted_machine_stack();
+        super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
     });
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
+    assert_eq!(diagnostic.code, "AU4005");
     assert_eq!(diagnostic.span, Some(Span::new(2, 3)));
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    // A chain this deep keeps its two ends and counts the calls between.
+    assert_eq!(
+        diagnostic.call_frames.len(),
+        2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+    );
+    assert_eq!(
+        diagnostic.omitted_call_frames,
+        Some((
+            super::frame_stack::DIRECT_TRACE_FRAMES_PER_END,
+            1_000 - 2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+        ))
+    );
 }
 
 #[test]
@@ -26062,6 +26501,54 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
     let shared = unsafe { &*argument }.shared_lock().is_some();
     unsafe { super::aura_direct_release_value(argument) };
     boxed_value(Value::Bool(shared))
+}
+
+unsafe extern "C-unwind" fn child_adds_through_confined_sync_handle(
+    args: *const i64,
+    count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let confined = unsafe { &*argument }.shared_lock().is_none();
+    super::aura_direct_sync_atom(argument, 2, 1, 0);
+    unsafe { release_value(argument) };
+    boxed_value(Value::Bool(confined))
+}
+
+#[test]
+fn sync_task_arguments_share_the_atomic_word_in_separate_boxes() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let outcome = run_lightweight_root_task(|| {
+        let argument = boxed_value(Value::Sync(crate::runtime_value::SyncValue::atom(40)));
+        let group = super::aura_direct_task_group_new();
+        let args = super::aura_direct_arg_buffer_new(1);
+        super::aura_direct_arg_buffer_store(args, 0, argument as i64);
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                child_adds_through_confined_sync_handle as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        let joined = super::aura_direct_task_join(task);
+        let result = unsafe { take_value(joined) };
+        assert_eq!(super::aura_direct_sync_atom(argument, 0, 0, 0), 41);
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+            release_value(argument);
+        }
+        Ok(result)
+    })
+    .expect("the child completes");
+    assert!(matches!(outcome, Value::EnumVariant(variant)
+        if variant.payloads == vec![Value::Bool(true)].into()));
 }
 
 #[test]
@@ -28564,6 +29051,29 @@ fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
 }
 
 #[test]
+fn two_word_dict_stores_preserve_key_order_and_copied_tables() {
+    let table = super::aura_direct_map_empty();
+    for key in 0..24 {
+        super::aura_direct_map_set_index_int64_pair(table, key, -key);
+    }
+    let Value::Map(snapshot) = (unsafe { value_ref(table) }) else {
+        panic!("expected dict");
+    };
+    super::aura_direct_map_set_index_int64_key(table, -1, string_value("previous"));
+    super::aura_direct_map_set_index_int64_pair(table, -1, 11);
+    super::aura_direct_map_set_index_int64_pair(table, 0, 29);
+    let Value::Map(changed) = (unsafe { take_value(table) }) else {
+        panic!("expected dict");
+    };
+    let int = |value| Value::Int(IntegerValue::from_i64(value));
+    assert_eq!(snapshot.entries.value_of_i64(0), Some(&int(0)));
+    assert_eq!(snapshot.entries.value_of_i64(-1), None);
+    assert_eq!(changed.entries.value_of_i64(0), Some(&int(29)));
+    assert_eq!(changed.entries.value_of_i64(-1), Some(&int(11)));
+    assert_eq!(changed.entries.at_slot(24).0, int(-1));
+}
+
+#[test]
 fn entry_loans_append_scalars_to_the_list_the_map_keeps() {
     use super::DirectScalarKind as K;
     let lists = super::aura_direct_map_empty();
@@ -29115,6 +29625,36 @@ fn direct_trap_message(run: impl FnOnce() + Send + 'static) -> String {
 }
 
 #[test]
+fn direct_integer_math_preserves_results_and_diagnostics() {
+    use super::aura_direct_math_integer;
+    for (i, (left, right, expected)) in [
+        (18, -27, 9),
+        (-4, 6, 12),
+        (99, 0, 9),
+        (5, 0, 120),
+        (7, 2, 21),
+        (7, 2, 42),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(aura_direct_math_integer(i as i64, left, right), expected);
+    }
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(0, i64::MIN, 0);
+    })
+    .contains("math.gcd"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(2, -1, 0);
+    })
+    .contains("math.isqrt"));
+    assert!(direct_trap_message(|| {
+        aura_direct_math_integer(99, 0, 0);
+    })
+    .contains("invalid integer math operation"));
+}
+
+#[test]
 fn direct_time_helpers_write_parse_and_keep_the_outcome() {
     let text = |value: *mut OpaqueValue| match unsafe { take_value(value) } {
         Value::String(text) => text.to_string(),
@@ -29198,6 +29738,299 @@ fn direct_time_helpers_write_parse_and_keep_the_outcome() {
         message,
         "`time::__aura_duration_seconds` expects `Duration`, found `bool`"
     );
+}
+
+#[test]
+fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
+    use crate::runtime_value::SyncValue;
+    let atom = boxed_value(Value::Sync(SyncValue::atom(5)));
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 5);
+    assert_eq!(super::aura_direct_sync_atom(atom, 1, 8, 0), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 2, 2, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 3, 1, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 7), 1);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 9), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 7);
+
+    let cell = boxed_value(Value::Sync(SyncValue::cell(Value::string("held"))));
+    let held = super::aura_direct_sync_cell_take(cell);
+    unsafe {
+        assert_eq!(super::value_ref(held), Value::string("held"));
+    }
+    super::aura_direct_sync_cell_put(cell, held);
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(unsafe { take_value(again) }, Value::string("held"));
+    super::aura_direct_sync_cell_put(cell, boxed_value(Value::string("next")));
+
+    let count = boxed_value(Value::Sync(SyncValue::cell(Value::Int(
+        IntegerValue::from_i64(41),
+    ))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 41);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 42);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+
+    let flag = boxed_value(Value::Sync(SyncValue::cell(Value::Bool(false))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 0);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 1);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+
+    unsafe {
+        for value in [atom, cell, count, flag] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_sync_map_lookup_reads_the_same_dictionary_before_and_after_box_transfer() {
+    use crate::runtime_value::{lookup_found, lookup_missing, SyncValue};
+    let table = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(table, 2, 9);
+    let shared = SyncValue::cell(unsafe { take_value(table) });
+    let cell = boxed_value(Value::Sync(shared.clone()));
+    let read = |key| unsafe { take_value(super::aura_direct_sync_map_get_int64(cell, key)) };
+    let nine = Value::Int(IntegerValue::from_i64(9));
+    assert_eq!(read(2), lookup_found(nine.clone()));
+    let boxed = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, boxed);
+    assert_eq!(read(3), lookup_missing());
+    std::thread::spawn(move || {
+        let child = boxed_value(Value::Sync(shared));
+        let found = unsafe { take_value(super::aura_direct_sync_map_get_int64(child, 2)) };
+        assert_eq!(found, lookup_found(Value::Int(IntegerValue::from_i64(9))));
+        unsafe { release_value(child) };
+    })
+    .join()
+    .unwrap();
+    assert_eq!(read(2), lookup_found(nine));
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(again, boxed);
+    super::aura_direct_sync_cell_put(cell, again);
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn direct_sync_map_word_reads_copy_every_integer_and_distinguish_a_miss() {
+    use crate::runtime_value::SyncValue;
+    let map = super::aura_direct_map_empty();
+    for (key, value) in [(0, 0), (1, i64::MIN), (2, i64::MAX)] {
+        super::aura_direct_map_set_index_int64_pair(map, key, value);
+    }
+    let cell = boxed_value(Value::Sync(SyncValue::cell(unsafe { take_value(map) })));
+    for (key, expected) in [
+        (0, Some(0)),
+        (1, Some(i64::MIN)),
+        (2, Some(i64::MAX)),
+        (3, None),
+    ] {
+        let mut word = 42;
+        let present = unsafe { super::aura_direct_sync_map_get_word(cell, key, &mut word) };
+        assert_eq!((present != 0).then_some(word), expected);
+    }
+    let moved = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, moved);
+    let mut word = 0;
+    assert_eq!(
+        unsafe { super::aura_direct_sync_map_get_word(cell, 2, &mut word) },
+        1
+    );
+    assert_eq!(word, i64::MAX);
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn guarded_words_round_trip_through_host_and_generic_callers() {
+    use crate::runtime_value::SyncValue;
+    for (kind, initial, changed) in [(0, 41, 42), (1, 0, 1)] {
+        let as_value = |word| {
+            if kind == 0 {
+                Value::Int(IntegerValue::from_i64(word))
+            } else {
+                Value::Bool(word != 0)
+            }
+        };
+        let handle = SyncValue::cell(as_value(initial));
+        let native = boxed_value(Value::Sync(handle.clone()));
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        assert_eq!(handle.take().unwrap(), as_value(changed));
+        handle.put(as_value(initial)).unwrap();
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            initial
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        let payload = super::aura_direct_sync_cell_take(native);
+        assert_eq!(unsafe { value_ref(payload) }, as_value(changed));
+        super::aura_direct_sync_cell_put(native, payload);
+        assert_eq!(
+            super::aura_direct_sync_cell_take_word(native, kind),
+            changed
+        );
+        super::aura_direct_sync_cell_put_word(native, kind, changed);
+        unsafe { release_value(native) };
+    }
+}
+
+#[test]
+fn a_native_mutex_moves_the_same_collection_box_between_tasks() {
+    use crate::runtime_value::SyncValue;
+    let handle = SyncValue::cell(Value::Unit);
+    let cell = boxed_value(Value::Sync(handle.clone()));
+    let original = super::aura_direct_sync_cell_take(cell);
+    let items = super::aura_direct_vec_empty();
+    super::aura_direct_sync_cell_put(cell, items);
+    unsafe { release_value(original) };
+    let address = items as usize;
+    std::thread::spawn(move || {
+        let other = boxed_value(Value::Sync(handle));
+        let owned = super::aura_direct_sync_cell_take(other);
+        assert_eq!(owned as usize, address);
+        assert!(matches!(unsafe { value_ref(owned) }, Value::Vec(_)));
+        super::aura_direct_sync_cell_put(other, owned);
+        unsafe { release_value(other) };
+    })
+    .join()
+    .expect("the second task owns the box");
+    unsafe { release_value(cell) };
+}
+
+#[test]
+fn failed_native_shared_map_reads_poison_the_cell_and_preserve_the_diagnostic() {
+    use crate::runtime_value::{MapValue, SharedType, SyncValue};
+
+    let malformed = SyncValue::cell(Value::Map(MapValue {
+        key_type: SharedType::named("int64"),
+        value_type: SharedType::named("uint64"),
+        entries: vec![(
+            Value::Int(IntegerValue::from_i64(7)),
+            Value::Int(IntegerValue::from_u64(u64::MAX)),
+        )]
+        .into(),
+    }));
+    let word_map = malformed.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(word_map));
+            let mut output = 0;
+            unsafe { super::aura_direct_sync_map_get_word(handle, 7, &mut output) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the stored value cannot be returned as an int64 word");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "sync.Map.get expected an int64 value");
+    assert!(malformed.is_poisoned().unwrap());
+
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(malformed));
+            super::aura_direct_sync_cell_take_word(handle, 0);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("a later reader must observe the poisoned cell");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("poisoned"));
+
+    let wrong_type = SyncValue::cell(Value::Unit);
+    let boxed_map = wrong_type.clone();
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let handle = boxed_value(Value::Sync(boxed_map));
+            super::aura_direct_sync_map_get_int64(handle, 7);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the generic lookup also validates dictionary storage");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("dictionary"));
+    assert!(wrong_type.is_poisoned().unwrap());
+}
+
+#[test]
+fn direct_sync_helpers_report_a_wrong_handle_and_a_failed_step() {
+    use crate::runtime_value::SyncValue;
+    let failure = |run: fn()| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                run();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("the helper traps")
+        .message
+    };
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_atom(bool_value(true), 0, 0, 0);
+        }),
+        "expected `sync.Atom`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_cell_take(bool_value(true));
+        }),
+        "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_sync_cell_put(bool_value(true), bool_value(true))),
+        "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+            super::aura_direct_sync_cell_put(cell, std::ptr::null_mut());
+        }),
+        "direct runtime received a null opaque value pointer"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_map_set_index_int64_pair(std::ptr::null_mut(), 7, 9)),
+        "direct runtime received a null opaque value pointer"
+    );
+    // A cell is not an atom, an overflow traps, and a cell that is not
+    // locked takes no value back.
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_atom(cell, 0, 0, 0);
+    })
+    .contains("sync.Atom"));
+    assert!(failure(|| {
+        let atom = boxed_value(Value::Sync(SyncValue::atom(i64::MAX)));
+        let _ = super::aura_direct_sync_atom(atom, 2, 1, 0);
+    })
+    .contains("overflow"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put(cell, bool_value(true));
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put_word(cell, 0, 1);
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take(cell);
+        let _ = super::aura_direct_sync_cell_take(cell);
+    })
+    .contains("already holds"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 0);
+    })
+    .contains("int64"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 1);
+    })
+    .contains("bool"));
 }
 
 #[test]
@@ -30362,4 +31195,618 @@ fn direct_array_fill_set_slice_and_update_entries_change_the_boxed_array() {
         let _ = super::aura_direct_array_full(99, shape, super::aura_direct_box_i32(0), 3, 4);
     });
     assert_eq!(dtype.code, "AU4001", "{}", dtype.message);
+}
+
+static INLINE_CALLABLE_DROPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "C-unwind" fn inline_callable_test_drop(_words: *mut i64) {
+    INLINE_CALLABLE_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn inline_callable_test_function() -> *mut OpaqueValue {
+    boxed_value(Value::Function(Arc::new(FunctionValue {
+        name: "main::__lambda_inline".to_string(),
+        signature: Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        },
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: None,
+        direct_callable: None,
+    })))
+}
+
+/// Boxes the one capture of the test callable, which is the integer in its
+/// second word.
+unsafe extern "C-unwind" fn inline_callable_test_box(words: *mut i64) -> *mut OpaqueValue {
+    let captures = super::aura_direct_arg_buffer_new(1);
+    let capture = int_value(unsafe { *words.add(1) });
+    super::aura_direct_arg_buffer_store_owned(captures, 0, capture as i64);
+    super::aura_direct_closure_value(
+        inline_callable_test_function(),
+        captures,
+        1,
+        std::ptr::null(),
+        0,
+    )
+}
+
+fn inline_callable_test_words(capture: i64) -> [i64; 4] {
+    let mut descriptor = [0usize; 7];
+    descriptor[DirectCallable::DESCRIPTOR_DROP / 8] =
+        inline_callable_test_drop as unsafe extern "C-unwind" fn(*mut i64) as usize;
+    descriptor[DirectCallable::DESCRIPTOR_BOX_CAPTURES / 8] = inline_callable_test_box
+        as unsafe extern "C-unwind" fn(*mut i64) -> *mut OpaqueValue
+        as usize;
+    let descriptor = Box::leak(Box::new(descriptor));
+    [descriptor.as_ptr() as i64, capture, 0, 0]
+}
+
+#[test]
+fn stored_callable_abi_preserves_ownership_on_invalid_capture_count_and_diagnoses_null_reads() {
+    let function = inline_callable_test_function();
+    let address = function as usize;
+    let invalid_count = capture_direct_boundary_diagnostic(move || {
+        let words = inline_callable_test_words(41);
+        super::aura_direct_closure_value_deferred(
+            address as *mut OpaqueValue,
+            words.as_ptr(),
+            -1,
+            7,
+            0,
+        );
+    });
+    assert_eq!(invalid_count.code, "AU4001");
+    assert_eq!(invalid_count.message, "invalid closure capture count");
+    // Validating the count precedes taking ownership of the boxed function.
+    assert!(matches!(
+        unsafe { super::value_ref(function) },
+        Value::Function(_)
+    ));
+    unsafe { release_value(function) };
+
+    let missing_function = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_function_callable(std::ptr::null_mut(), 7);
+    });
+    let missing_list = capture_direct_boundary_diagnostic(|| {
+        super::aura_direct_vec_callable(std::ptr::null_mut(), 0, 7);
+    });
+    for diagnostic in [missing_function, missing_list] {
+        assert_eq!(diagnostic.code, "AU4001");
+        assert_eq!(
+            diagnostic.message,
+            "direct runtime received a null opaque value pointer"
+        );
+    }
+}
+
+#[test]
+fn native_runtime_boxed_closure_keeps_its_inline_callable() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let drops = || INLINE_CALLABLE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+            let before = drops();
+
+            // A Shared closure keeps its words after runtime code reads a
+            // capture.
+            let words = inline_callable_test_words(41);
+            let shared = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                1,
+                7,
+                0,
+            );
+            assert_eq!(
+                unsafe { (*shared).list_access.load(Ordering::Relaxed) },
+                super::FUNCTION_VIEW_ACCESS
+            );
+            let inline = super::aura_direct_function_callable(shared, 7);
+            assert_ne!(inline, 0);
+            assert_eq!(unsafe { *(inline as *const i64).add(1) }, 41);
+            assert_eq!(super::aura_direct_function_callable(shared, 8), 0);
+            let number = int_value(1);
+            assert_eq!(super::aura_direct_function_callable(number, 7), 0);
+            unsafe {
+                super::with_value(shared, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    let environment = function
+                        .closure_environment
+                        .as_ref()
+                        .expect("a capturing closure has an environment");
+                    assert_eq!(environment.capture_count(), 1);
+                    assert_eq!(
+                        environment.capture_value(0).expect("capture"),
+                        Value::Int(IntegerValue::from_signed(41))
+                    );
+                    assert_eq!(environment.capture_count(), 1);
+                    let callable = function.direct_callable.as_ref().expect("inline callable");
+                    assert_eq!(callable.capture_count(), 1);
+                    assert!(!callable.is_mutable());
+                    assert!(format!("{callable:?}").contains("DirectCallable"));
+                });
+            }
+            assert_ne!(super::aura_direct_function_callable(shared, 7), 0);
+            unsafe { super::share_direct_value(shared) };
+            assert_eq!(
+                unsafe { (*shared).list_access.load(Ordering::Relaxed) },
+                super::DirectListAccess::None as u32
+            );
+            assert_eq!(super::aura_direct_function_callable(shared, 7), inline);
+            assert_eq!(drops(), before);
+            unsafe {
+                release_value(shared);
+                release_value(number);
+            }
+            assert_eq!(drops(), before + 1);
+
+            // A Mutable closure moves its state to the boxed captures.
+            let words = inline_callable_test_words(5);
+            let mutable = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                1,
+                7,
+                1,
+            );
+            assert_ne!(super::aura_direct_function_callable(mutable, 7), 0);
+            unsafe {
+                super::with_value(mutable, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    let environment = function
+                        .closure_environment
+                        .as_ref()
+                        .expect("a capturing closure has an environment");
+                    assert_eq!(
+                        environment.capture_value(0).expect("capture"),
+                        Value::Int(IntegerValue::from_signed(5))
+                    );
+                    assert!(function
+                        .direct_callable
+                        .as_ref()
+                        .expect("inline callable")
+                        .live_words()
+                        .is_none());
+                });
+            }
+            assert_eq!(super::aura_direct_function_callable(mutable, 7), 0);
+            assert_eq!(drops(), before + 2);
+            unsafe {
+                release_value(mutable);
+            }
+            assert_eq!(drops(), before + 2);
+
+            // A list element is called in place or copied as its words.
+            static INLINE_CALLABLE_RETAINS: AtomicUsize = AtomicUsize::new(0);
+            unsafe extern "C-unwind" fn retain(_words: *mut i64) {
+                INLINE_CALLABLE_RETAINS.fetch_add(1, Ordering::SeqCst);
+            }
+            let element = |capture: i64, mutable: i64| {
+                let words = inline_callable_test_words(capture);
+                // SAFETY: the test descriptor is seven writable words.
+                unsafe {
+                    (words[0] as *mut usize)
+                        .add(DirectCallable::DESCRIPTOR_RETAIN / 8)
+                        .write(retain as unsafe extern "C-unwind" fn(*mut i64) as usize);
+                }
+                let boxed = super::aura_direct_closure_value_deferred(
+                    inline_callable_test_function(),
+                    words.as_ptr(),
+                    1,
+                    7,
+                    mutable,
+                );
+                unsafe { super::consume_owned_value(boxed) }
+            };
+            let list = boxed_value(Value::Vec(VecValue {
+                element_type: Type::named("Unknown").into(),
+                elements: vec![
+                    element(11, 0),
+                    element(12, 1),
+                    Value::Int(IntegerValue::from_signed(3)),
+                ]
+                .into(),
+                str_view: Default::default(),
+            }));
+            let at = |index: i64, key: i64| super::aura_direct_vec_callable(list, index, key);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 11);
+            assert_eq!(unsafe { *(at(-2, 7) as *const i64).add(1) }, 12);
+            assert_eq!(at(0, 8), 0);
+            assert_eq!(at(2, 7), 0);
+            assert_eq!(at(3, 7), 0);
+            assert_eq!(at(i64::MIN, 7), 0);
+            assert_eq!(at(i64::MAX, 7), 0);
+            let other = int_value(1);
+            assert_eq!(super::aura_direct_vec_callable(other, 0, 7), 0);
+            let mut copy = [0i64; 4];
+            let copied = |index: i64, key: i64, copy: &mut [i64; 4]| unsafe {
+                super::aura_direct_vec_callable_copy(list, index, key, copy.as_mut_ptr())
+            };
+            assert_eq!(copied(0, 7, &mut copy), 1);
+            assert_eq!(copy[1], 11);
+            assert_eq!(INLINE_CALLABLE_RETAINS.load(Ordering::SeqCst), 1);
+            // A Mutable callable, another contract, a value that is not a
+            // callable, and a missing element are not copied.
+            let mut untouched = [0i64; 4];
+            assert_eq!(copied(1, 7, &mut untouched), 0);
+            assert_eq!(copied(0, 8, &mut untouched), 0);
+            assert_eq!(copied(2, 7, &mut untouched), 0);
+            assert_eq!(copied(9, 7, &mut untouched), 0);
+            assert_eq!(
+                unsafe {
+                    super::aura_direct_vec_callable_copy(other, 0, 7, untouched.as_mut_ptr())
+                },
+                0
+            );
+            assert_eq!(untouched, [0i64; 4]);
+            let access = || unsafe { (*list).list_access.load(Ordering::Relaxed) };
+            assert_eq!(access(), super::DirectListAccess::Callables as u32);
+            let old = super::aura_direct_vec_set_in_place(list, 0, boxed_value(element(19, 0)));
+            unsafe { release_value(old) };
+            assert_eq!(access(), super::DirectListAccess::Values as u32);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 19);
+            // Materializing a mutable environment releases its inline words.
+            // Even a cached entry must check that the words are still live.
+            unsafe {
+                super::with_value(list, |value| {
+                    let Value::Vec(vector) = value else {
+                        unreachable!()
+                    };
+                    let Some(Value::Function(function)) = vector.elements.value_at(1) else {
+                        unreachable!()
+                    };
+                    function
+                        .closure_environment
+                        .as_ref()
+                        .unwrap()
+                        .capture_value(0)
+                        .unwrap();
+                });
+            }
+            assert_eq!(at(1, 7), 0);
+            unsafe { super::share_direct_value(list) };
+            assert_eq!(access(), super::DirectListAccess::None as u32);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 19);
+            assert_eq!(at(1, 7), 0);
+            let before_list = drops();
+            unsafe {
+                release_value(list);
+                release_value(other);
+            }
+            assert_eq!(drops(), before_list + 1);
+
+            // A callable with no captures has no environment.
+            let words = inline_callable_test_words(0);
+            let plain = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                0,
+                7,
+                0,
+            );
+            unsafe {
+                super::with_value(plain, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    assert!(function.closure_environment.is_none());
+                });
+                release_value(plain);
+            }
+            assert_eq!(drops(), before + 6);
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("inline callable checks should complete"),
+        Value::Unit
+    );
+}
+
+fn int_set(values: &[i64]) -> *mut OpaqueValue {
+    let mut elements = crate::collection_index::SetElements::new();
+    for value in values {
+        elements.insert(Value::Int(IntegerValue::from_i64(*value)));
+    }
+    boxed_value(Value::Set(SetValue {
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
+        elements,
+    }))
+}
+
+fn set_values(set: *mut OpaqueValue) -> Vec<Value> {
+    match unsafe { take_value(set) } {
+        Value::Set(set) => set.elements.iter().cloned().collect(),
+        other => panic!("expected a set, found {other:?}"),
+    }
+}
+
+fn int_values(values: &[i64]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| Value::Int(IntegerValue::from_i64(*value)))
+        .collect()
+}
+
+#[test]
+fn direct_set_algebra_opcodes_read_both_sets_and_update_consumes_the_other() {
+    let left = int_set(&[4, 1, 2]);
+    let right = int_set(&[2, 9, 4]);
+    for (opcode, expected) in [
+        (8, int_values(&[4, 1, 2, 9])),
+        (9, int_values(&[4, 2])),
+        (10, int_values(&[1])),
+        (11, int_values(&[1, 9])),
+    ] {
+        let result = super::aura_direct_collection_operation(left, right, 0, opcode);
+        match unsafe { value_ref(result) } {
+            Value::Set(set) => assert_eq!(set.element_type, Type::named("int64")),
+            other => panic!("expected a set, found {other:?}"),
+        }
+        assert_eq!(set_values(result), expected, "opcode {opcode}");
+    }
+    for (opcode, other, expected) in [
+        (12, &[1, 2, 4, 8][..], true),
+        (12, &[1, 2][..], false),
+        (13, &[1, 4][..], true),
+        (13, &[1, 5][..], false),
+        (14, &[7, 8][..], true),
+        (14, &[7, 2][..], false),
+    ] {
+        let other = int_set(other);
+        let result = super::aura_direct_collection_operation(left, other, 0, opcode);
+        assert_eq!(
+            unsafe { take_value(result) },
+            Value::Bool(expected),
+            "opcode {opcode}"
+        );
+        unsafe { release_value(other) };
+    }
+    // Both operands are still whole.
+    assert_eq!(super::aura_direct_set_len(left), 3);
+    assert_eq!(super::aura_direct_set_len(right), 3);
+
+    expect_unit(super::aura_direct_collection_operation(left, right, 0, 15));
+    assert_eq!(set_values(left), int_values(&[4, 1, 2, 9]));
+
+    let wrong = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let set = int_set(&[1]);
+            let _ = super::aura_direct_collection_operation(set, int_value(3), 0, 15);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("`update` takes a set");
+    assert!(wrong
+        .message
+        .contains("`update` requires another `set[T]` value"));
+}
+
+#[test]
+fn direct_index_reuses_an_immutable_box_for_the_same_ascii_character() {
+    let opcode = crate::text_methods::text_method_opcode("char_at").unwrap();
+    let receiver = string_value("abba");
+    let first = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), 0);
+    let last = super::aura_direct_string_text_method(opcode, receiver, std::ptr::null_mut(), -1);
+    assert_eq!(first, last);
+    assert_eq!(unsafe { take_value(first) }, Value::string("a"));
+    assert_eq!(unsafe { take_value(last) }, Value::string("a"));
+    unsafe { release_value(receiver) };
+}
+
+#[test]
+fn direct_string_scalar_reads_signed_indices_and_preserves_errors() {
+    let text = string_value("a😀z");
+    assert_eq!(super::aura_direct_string_scalar_at(text, -2), 0x1f600);
+    assert_eq!(
+        super::aura_direct_string_scalar_at(text, 0),
+        i64::from(b'a')
+    );
+    unsafe { release_value(text) };
+    for (value, index, expected) in [
+        (
+            Value::string("a😀z"),
+            i64::MIN,
+            "out of range for a string of 3 characters",
+        ),
+        (
+            Value::string(""),
+            0,
+            "out of range for a string of 0 characters",
+        ),
+        (Value::Bool(false), 0, "expected `str`"),
+    ] {
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let value = boxed_value(value);
+                super::aura_direct_string_scalar_at(value, index);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid scalar selection traps");
+        assert!(error.message.contains(expected), "{error:?}");
+    }
+}
+
+#[test]
+fn native_literal_codecs_borrow_their_source_and_preserve_encoding_errors() {
+    use crate::text_encodings::Encoding;
+    let source = string_value("A");
+    for (index, _) in Encoding::ALL.iter().enumerate() {
+        let code = index as i64;
+        let bytes = expect_result_ok_payload(super::aura_direct_text_codec(source, code, 0));
+        let bytes = boxed_value(bytes);
+        let decoded = super::aura_direct_text_codec(bytes, code, 1);
+        assert_eq!(expect_result_ok_string(decoded), "A");
+        unsafe { release_value(bytes) };
+    }
+    unsafe { release_value(source) };
+    for (source, encoding, decode, variant, index) in [
+        (string_value("A😀"), Encoding::Ascii, 0, "Unencodable", 1),
+        (
+            direct_byte_list(&[65, 0, 0]),
+            Encoding::Utf16Le,
+            1,
+            "Invalid",
+            2,
+        ),
+    ] {
+        let code = Encoding::ALL
+            .iter()
+            .position(|item| *item == encoding)
+            .unwrap() as i64;
+        let error = expect_result_err_payload(super::aura_direct_text_codec(source, code, decode));
+        let Value::EnumVariant(error) = error else {
+            panic!("expected an encoding error, got {error:?}");
+        };
+        assert_eq!(error.variant_name, variant);
+        assert_eq!(
+            error.single_payload().unwrap(),
+            &Value::Int(IntegerValue::from_i64(index))
+        );
+        unsafe { release_value(source) };
+    }
+}
+
+#[test]
+fn direct_char_at_reads_one_character_and_traps_out_of_range() {
+    assert_eq!(
+        direct_text_method("char_at", "héllo", None, 1),
+        Value::string("é")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "hello", None, -1),
+        Value::string("o")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "日本語", None, -3),
+        Value::string("日")
+    );
+    let opcode = crate::text_methods::text_method_opcode("char_at").expect("known text method");
+    for (text, index) in [("hello", 5), ("héllo", -6), ("", 0)] {
+        let trap = direct_text_method_trap(opcode, Value::string(text), None, index);
+        assert_eq!(trap.code, "AU4003");
+        assert!(trap.message.contains("is out of range for a string of"));
+    }
+}
+
+#[test]
+fn native_numbers_read_borrowed_limbs_and_return_modular_powers_in_one_word() {
+    use crate::list_elements::ListElements;
+    let words = |digits: Vec<u64>| {
+        Value::Vec(VecValue::new(
+            Type::named("uint64"),
+            ListElements::Uint64(digits.into()),
+        ))
+    };
+    let left = super::boxed_value(words(vec![1, 0, 0, 0, u64::MAX]));
+    let sum = super::aura_direct_big_add_words(left, left);
+    assert_eq!(
+        unsafe { take_value(sum) },
+        words(vec![1, 0, 0, 0, u64::MAX - 1, 1])
+    );
+    assert_eq!(
+        unsafe { take_value(left) },
+        words(vec![1, 0, 0, 0, u64::MAX])
+    );
+    assert_eq!(super::aura_direct_small_pow_mod(-2, 3, -5), -3);
+}
+
+#[test]
+fn native_bigint_failures_keep_the_borrowed_magnitude_and_report_the_domain() {
+    use crate::list_elements::ListElements;
+    let limbs = |words: Vec<u64>| {
+        Value::Vec(VecValue::new(
+            Type::named("uint64"),
+            ListElements::Uint64(words.into()),
+        ))
+    };
+    let complete = limbs(vec![1, 0, 0, 0, 7]);
+    let incomplete = limbs(vec![1, 0, 0, 0]);
+    let left = boxed_value(complete.clone()) as usize;
+    let right = boxed_value(incomplete.clone()) as usize;
+    let error = run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            let result = super::aura_direct_big_add_words(left as *mut _, right as *mut _);
+            Ok(unsafe { take_value(result) })
+        })
+    })
+    .expect_err("missing magnitude");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(error.message, "BigInt.add received an incomplete magnitude");
+    assert_eq!(unsafe { take_value(left as *mut _) }, complete);
+    assert_eq!(unsafe { take_value(right as *mut _) }, incomplete);
+
+    for (exponent, modulus, message) in [
+        (-1, 7, "`BigInt.pow_mod` needs an exponent of 0 or more"),
+        (2, 0, "division by zero"),
+    ] {
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let power = super::aura_direct_small_pow_mod(3, exponent, modulus);
+                Ok(Value::Int(IntegerValue::from_i64(power)))
+            })
+        })
+        .expect_err("invalid compact modular power");
+        assert_eq!(error.code, "AU4001");
+        assert_eq!(error.message, message);
+    }
+}
+
+#[test]
+fn native_array_subtraction_reuses_only_an_exclusively_owned_right_temporary() {
+    fn array(values: [i64; 2]) -> Value {
+        Value::Array(
+            ArrayValue::new(Box::new([2]), ArrayStorage::Int64(values.to_vec().into()))
+                .expect("two integer elements"),
+        )
+    }
+    fn buffer(value: &Value) -> *const i64 {
+        let Value::Array(array) = value else {
+            panic!("expected an array");
+        };
+        let ArrayStorage::Int64(elements) = array.storage() else {
+            panic!("expected int64 elements");
+        };
+        elements.as_ptr()
+    }
+    let scalar = int_value(10);
+    for shared in [false, true] {
+        let operand = boxed_value(array([2, 6]));
+        let alias = shared.then(|| unsafe { retain_value(operand) });
+        let original = unsafe { super::with_value(operand, buffer) };
+        let flags = super::ARRAY_BINARY_SCALAR_LEFT | super::ARRAY_BINARY_RIGHT_TEMPORARY;
+        let result = super::aura_direct_array_binary(scalar, operand, flags, 1, 0, 0, 0);
+        let result = unsafe { take_value(result) };
+        assert_eq!(result, array([8, 4]));
+        assert_eq!(buffer(&result) == original, !shared);
+        unsafe { release_value(operand) };
+        if let Some(alias) = alias {
+            assert_eq!(unsafe { take_value(alias) }, array([2, 6]));
+        }
+    }
+    unsafe { release_value(scalar) };
+}
+
+#[test]
+fn native_decimal_result_slot_is_written_only_for_compact_answers() {
+    let mut out = [7, 9];
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(0, i64::MAX, 0, 1, 0, &mut out),
+        0
+    );
+    assert_eq!(out, [7, 9]);
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(1, -25, -2, 4, 0, &mut out),
+        1
+    );
+    assert_eq!(out, [-1, 0]);
 }

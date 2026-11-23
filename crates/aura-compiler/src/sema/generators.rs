@@ -260,7 +260,7 @@ fn rewrite(function: &mut FunctionDecl) -> Result<FunctionDecl> {
                     .collect(),
             ),
             params: Vec::new(),
-            body: Box::new(call_body),
+            body: crate::ast::ClosureBody::Expression(Box::new(call_body)),
         },
         span,
     );

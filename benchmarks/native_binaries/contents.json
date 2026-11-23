@@ -29,6 +29,12 @@
     "mir_interpreter": [
       "aura_compiler::mir_runtime::"
     ],
+    "recovery": [
+      "runtime_value::recovered_trap_value",
+      "runtime_value::recovered_trap_fields",
+      "native_runtime::stop_exit_at_recovered_call",
+      "native_runtime::recycle_recovered_state"
+    ],
     "rustls": [
       "rustls::",
       "rustls_pki_types::",
@@ -68,12 +74,20 @@
       "regex::",
       "regex_automata::",
       "regex_syntax::"
+    ],
+    "image": [
+      "png::",
+      "zune_jpeg::",
+      "jpeg_encoder::",
+      "fdeflate::",
+      "aura_runtime::image_codec::"
     ]
   },
   "subjects": {
     "hello_world": {
       "source": "examples/basics/hello_world.au",
       "absent": [
+        "recovery",
         "aws_lc",
         "llvm",
         "parser",
@@ -86,7 +100,8 @@
         "url",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "known_present": [
         "libffi",
@@ -108,7 +123,8 @@
         "http",
         "httparse",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "serde_json"
@@ -130,7 +146,8 @@
         "mir_interpreter",
         "toml",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "serde_json"
@@ -149,7 +166,8 @@
         "httparse",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "rustls",
@@ -167,7 +185,8 @@
         "mir_interpreter",
         "serde_json",
         "gzip",
-        "regex"
+        "regex",
+        "image"
       ],
       "present": [
         "tungstenite",

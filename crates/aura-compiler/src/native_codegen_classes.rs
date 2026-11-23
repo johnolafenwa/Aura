@@ -101,7 +101,8 @@ impl PlainRecords {
     }
 
     pub(super) fn class_layout(&self, class_name: &str) -> Option<(LayoutTable, LayoutId)> {
-        if !self.env.classes.get(class_name)?.type_params.is_empty() {
+        let class = self.env.classes.get(class_name)?;
+        if !class.type_params.is_empty() {
             return None;
         }
         let ty = Type::named(class_name);
@@ -327,6 +328,30 @@ impl FunctionCompiler<'_> {
         Ok(self
             .class_slot(&root_ty, &segments, &ty)?
             .map(|(_, slot)| (root.to_string(), slot, ty)))
+    }
+
+    /// The root and slot of a static field place of a class kept in place
+    /// whose field lies in a box, whatever generated code holds the field
+    /// as. A callable field is such a place: its box holds a function value.
+    pub(super) fn boxed_class_place(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<(String, ClassSlot)>, String> {
+        let Some((root, path)) = place.split_once('.') else {
+            return Ok(None);
+        };
+        if self.view_places.contains_key(root) {
+            return Ok(None);
+        }
+        let Some(root_ty) = self.variable_types.get(root).cloned() else {
+            return Ok(None);
+        };
+        let segments = path.split('.').collect::<Vec<_>>();
+        let boxed = DirectType::Opaque(Type::Unit);
+        Ok(self
+            .class_slot(&root_ty, &segments, &boxed)?
+            .filter(|(_, slot)| matches!(slot.kind, SlotKind::Handle))
+            .map(|(_, slot)| (root.to_string(), slot)))
     }
 
     /// Branches to `fast_block` when the instance box `object` keeps its

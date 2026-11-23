@@ -1,0 +1,6 @@
+error[AU2003]: a `str` cannot be changed through an index
+ --> crates/aura-compiler/tests/fixtures/check-fail/str_index_assignment.au:3:5
+  |
+3 |     text[0] = "x"
+  |     ^
+  = help: build a new string, for example from slices: `text[:i] + "x" + text[i + 1:]`

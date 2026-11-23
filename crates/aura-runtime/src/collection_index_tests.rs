@@ -793,3 +793,220 @@ fn slots_walk_the_entries_in_order_past_removed_ones() {
     assert_eq!(large.next_slot(usize::MAX), None);
     assert_eq!(DictEntries::new().next_slot(0), None);
 }
+
+fn set_of(values: &[i64]) -> SetElements {
+    let mut set = SetElements::new();
+    for value in values {
+        set.insert(int(*value));
+    }
+    set
+}
+
+fn algebra_elements(method: &str, left: &[i64], right: &[i64]) -> Vec<Value> {
+    match set_algebra(method, &set_of(left), &set_of(right)).expect("a set-algebra method") {
+        SetAlgebra::Elements(elements) => elements.iter().cloned().collect(),
+        SetAlgebra::Holds(_) => panic!("`{method}` builds a set"),
+    }
+}
+
+fn algebra_holds(method: &str, left: &[i64], right: &[i64]) -> bool {
+    match set_algebra(method, &set_of(left), &set_of(right)).expect("a set-algebra method") {
+        SetAlgebra::Holds(holds) => holds,
+        SetAlgebra::Elements(_) => panic!("`{method}` answers a question"),
+    }
+}
+
+#[test]
+fn union_with_a_subset_shares_the_receivers_storage_until_a_write() {
+    let left = set_of(&(0..64).collect::<Vec<_>>());
+    let right = set_of(&[9, 2, 31]);
+    let Some(SetAlgebra::Elements(mut union)) = set_algebra("union", &left, &right) else {
+        panic!("union produces a set");
+    };
+    assert!(std::ptr::eq(
+        left.iter().next().unwrap(),
+        union.iter().next().unwrap()
+    ));
+    union.insert(int(64));
+    assert!(!left.contains_key(&int(64)));
+    assert_eq!(union.len(), 65);
+}
+
+#[test]
+fn indexed_union_appends_in_insertion_order_across_removed_slots() {
+    let mut left = set_of(&(0..40).collect::<Vec<_>>());
+    let mut right = set_of(&(25..65).rev().collect::<Vec<_>>());
+    left.remove(&int(3));
+    right.remove(&int(43));
+    right.insert(int(3));
+    let Some(SetAlgebra::Elements(union)) = set_algebra("union", &left, &right) else {
+        panic!("union should return a set");
+    };
+    let expected = (0..40)
+        .filter(|n| *n != 3)
+        .chain((40..65).rev().filter(|n| *n != 43))
+        .chain([3])
+        .map(int)
+        .collect::<Vec<_>>();
+    assert_eq!(union.iter().cloned().collect::<Vec<_>>(), expected);
+    assert_eq!(union.len(), expected.len());
+    assert!(expected.iter().all(|key| union.contains_key(key)));
+    assert!(!left.contains_key(&int(64)));
+    assert!(!right.contains_key(&int(43)));
+}
+
+#[test]
+fn set_algebra_keeps_the_receiver_order_then_the_other_sets() {
+    let ints = |values: &[i64]| values.iter().map(|value| int(*value)).collect::<Vec<_>>();
+    assert_eq!(
+        algebra_elements("union", &[4, 1, 2], &[2, 9, 1, 7]),
+        ints(&[4, 1, 2, 9, 7])
+    );
+    assert_eq!(
+        algebra_elements("intersection", &[4, 1, 2], &[2, 9, 4]),
+        ints(&[4, 2])
+    );
+    assert_eq!(
+        algebra_elements("difference", &[4, 1, 2], &[2, 9, 4]),
+        ints(&[1])
+    );
+    assert_eq!(
+        algebra_elements("symmetric_difference", &[4, 1, 2], &[2, 9, 4, 7]),
+        ints(&[1, 9, 7])
+    );
+    for method in [
+        "union",
+        "intersection",
+        "difference",
+        "symmetric_difference",
+    ] {
+        assert!(algebra_elements(method, &[], &[]).is_empty());
+    }
+    assert_eq!(algebra_elements("union", &[], &[3]), ints(&[3]));
+    assert!(algebra_elements("difference", &[3], &[3]).is_empty());
+    assert!(set_algebra("shuffle", &set_of(&[1]), &set_of(&[1])).is_none());
+    assert_eq!(SET_ALGEBRA_METHODS.len(), 7);
+    assert_eq!(SET_ALGEBRA_FIRST_OPCODE, 8);
+}
+
+#[test]
+fn set_relations_hold_for_empty_equal_and_nested_sets() {
+    assert!(algebra_holds("is_subset", &[], &[]));
+    assert!(algebra_holds("is_subset", &[], &[1]));
+    assert!(algebra_holds("is_subset", &[1, 2], &[2, 1]));
+    assert!(algebra_holds("is_subset", &[2], &[1, 2, 3]));
+    assert!(!algebra_holds("is_subset", &[1, 2, 3], &[1, 2]));
+    assert!(!algebra_holds("is_subset", &[1, 4], &[1, 2, 3]));
+    assert!(algebra_holds("is_superset", &[1, 2, 3], &[3, 1]));
+    assert!(algebra_holds("is_superset", &[1], &[]));
+    assert!(!algebra_holds("is_superset", &[1], &[1, 2]));
+    assert!(algebra_holds("is_disjoint", &[], &[]));
+    assert!(algebra_holds("is_disjoint", &[1, 2], &[3]));
+    assert!(algebra_holds("is_disjoint", &[3], &[1, 2]));
+    assert!(!algebra_holds("is_disjoint", &[1, 2, 3], &[3]));
+    assert!(!algebra_holds("is_disjoint", &[3], &[1, 2, 3]));
+}
+
+#[test]
+fn shared_union_reads_and_writes_preserve_order_and_source_snapshots() {
+    let mut left: SetElements = (0..128).map(|i| int((i * 73) % 128)).collect();
+    let mut right: SetElements = (0..128).map(|i| int(64 + (i * 53) % 128)).collect();
+    for key in [4, 8, 15, 67, 118] {
+        left.remove(&int(key));
+    }
+    for key in [70, 101, 137, 150] {
+        right.remove(&int(key));
+    }
+    let mut expected: Vec<_> = left.iter().cloned().collect();
+    for value in &right {
+        if !expected.contains(value) {
+            expected.push(value.clone());
+        }
+    }
+
+    let mut union = left.union(&right);
+    let snapshot = union.clone();
+    assert_eq!(union.len(), expected.len());
+    assert_eq!(
+        union.iter().collect::<Vec<_>>(),
+        expected.iter().collect::<Vec<_>>()
+    );
+    assert!(union.iter().rev().eq(expected.iter().rev()));
+    assert_eq!(union.first(), expected.first());
+    assert_eq!(union.last(), expected.last());
+    let mut next = union.next_slot(0);
+    for (i, value) in expected.iter().enumerate() {
+        let slot = next.unwrap();
+        assert_eq!(union.slot(slot), Some(value));
+        assert_eq!(union.get(i), Some(value));
+        assert_eq!(union.slot_where(|key| key == value), Some(slot));
+        assert_eq!(union.find(value), Some(value));
+        assert_eq!(union.at_slot(union.position(value).unwrap()), value);
+        next = union.next_slot(slot + 1);
+    }
+    assert_eq!(next, None);
+    assert_eq!(union.get(expected.len()), None);
+    assert!(union.slot(usize::MAX).is_none());
+    assert_eq!(union.next_slot(usize::MAX), None);
+
+    assert!(
+        matches!(&snapshot.storage, Storage::Union(backing) if backing.realized.get().is_none())
+    );
+    left.remove(&int(0));
+    right.remove(&int(190));
+    assert_eq!(union.remove(&int(191)), Some(int(191)));
+    expected.retain(|v| v != &int(191));
+    assert!(union.insert(int(-7)));
+    expected.push(int(-7));
+    assert!(union.iter().eq(&expected));
+    assert!(snapshot.contains_key(&int(0)));
+    assert!(snapshot.contains_key(&int(190)));
+    assert!(snapshot.contains_key(&int(191)));
+    assert!(!snapshot.contains_key(&int(-7)));
+
+    let mut second = snapshot.clone();
+    let shifted = snapshot.get(120).unwrap().clone();
+    assert_eq!(second.shift_remove_index(120), Some(shifted.clone()));
+    assert!(!second.contains_key(&shifted));
+    assert!(snapshot.contains_key(&shifted));
+    assert!(second.union(&union).contains_key(&int(-7)));
+    let dense = snapshot.clone().into_vec();
+    assert!(snapshot.iter().eq(&dense));
+    let copy = SetElements::cloned_from(dense, &snapshot);
+    assert!(snapshot.iter().eq(copy.iter()));
+    assert_eq!(copy.find(&int(191)), Some(&int(191)));
+
+    let mut cleared = snapshot.clone();
+    assert!(cleared.is_shared());
+    assert_eq!(cleared.capacity(), cleared.len());
+    assert_eq!(cleared.as_ptr(), snapshot.as_ptr());
+    cleared.clear();
+    assert!(cleared.is_empty());
+    assert!(!snapshot.is_empty());
+
+    let mut reserved = snapshot.clone();
+    reserved.try_reserve(256).unwrap();
+    assert!(reserved.capacity() >= reserved.len() + 256);
+    assert!(reserved.iter().eq(snapshot.iter()));
+}
+
+#[test]
+fn union_drops_right_snapshots_with_excluded_owned_payloads() {
+    let record = |n: i64| {
+        Value::Instance(InstanceValue {
+            class_name: "Record".to_string().into(),
+            fields: BTreeMap::from([("key".to_string(), int(n))]).into(),
+        })
+    };
+    // Equal records have distinct owned payloads. The result keeps the
+    // representative on the left and may release the right-hand duplicate
+    // as soon as the input set drops.
+    let left: SetElements = (0..16).map(record).collect();
+    let right: SetElements = (8..24).map(record).collect();
+    let union = left.union(&right);
+    assert!(matches!(union.storage, Storage::Large(_)));
+    drop(right);
+    assert!(union
+        .iter()
+        .eq((0..24).map(record).collect::<Vec<_>>().iter()));
+}

@@ -244,6 +244,54 @@
           }
         },
         {
+          "name": "string.quoted.binary.double.aura",
+          "begin": "(?<![A-Za-z0-9_])(b)(\")",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.aura"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "\"|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.binary.single.aura",
+          "begin": "(?<![A-Za-z0-9_])(b)(')",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.string.aura"
+            },
+            "2": {
+              "name": "punctuation.definition.string.begin.aura"
+            }
+          },
+          "end": "'|$",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.aura",
+              "match": "\\\\(?:x[0-9A-Fa-f]{2}|.)"
+            }
+          ]
+        },
+        {
           "name": "string.quoted.double.aura",
           "begin": "\"",
           "beginCaptures": {
@@ -314,6 +362,24 @@
               "name": "keyword.declaration.aura"
             },
             "5": {
+              "name": "entity.name.type.aura"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.ffi.union.aura",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(union)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            },
+            "3": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "4": {
               "name": "entity.name.type.aura"
             }
           }
@@ -398,6 +464,29 @@
               "name": "entity.name.type.aura"
             }
           }
+        },
+        {
+          "name": "meta.definition.function.captures.aura",
+          "begin": "^[\\t ]+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\[",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.function.aura"
+            },
+            "2": {
+              "name": "entity.name.function.aura"
+            }
+          },
+          "end": "\\]",
+          "patterns": [
+            {
+              "match": "\\b(mut|own)\\b",
+              "name": "storage.modifier.capture.aura"
+            },
+            {
+              "match": "[A-Za-z_][A-Za-z0-9_]*",
+              "name": "variable.other.capture.aura"
+            }
+          ]
         },
         {
           "name": "meta.definition.function.aura",
@@ -566,6 +655,10 @@
         {
           "name": "support.type.primitive.aura",
           "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|str|cstr|ptr|list|dict|set|Duration|Lookup|Poll|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
+        },
+        {
+          "name": "support.type.primitive.aura",
+          "match": "(?<=: |array\\[)array(?=\\[)"
         },
         {
           "name": "support.type.primitive.aura",

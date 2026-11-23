@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutably borrow `pair` while `pair[0]` remains shared-borrowed by the callable element
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_tuple_overlapping_argument.au:11:27
+   |
+11 |     print(pair[0](replace(pair)))
+   |                           ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/callable_tuple_overlapping_argument.au:11:11: shared access for the callable element begins here
+  = help: call `.clone()` before the expression when an independent value is intended, or perform the mutation in a separate statement first

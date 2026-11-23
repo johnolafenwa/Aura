@@ -1,0 +1,104 @@
+import control
+
+
+def literal(value: int64) -> int64:
+    assert value >= 0, "rejected"
+    return value
+
+
+def dynamic(value: int64) -> int64:
+    assert value >= 0, f"rejected {value}"
+    return value
+
+
+def render(trap: control.Trap) -> str:
+    assert trap.path.ends_with("control_recover_call_chains.au")
+    description = trap.describe().replace(trap.path, "site.au")
+    return description + " | " + str(trap.frames)
+
+
+def first_direct(value: int64) -> str:
+    match control.recover(literal, value):
+        case Ok(number):
+            return str(number)
+        case Err(trap):
+            return "left " + render(trap)
+
+
+def second_direct(value: int64) -> str:
+    match control.recover(literal, value):
+        case Ok(number):
+            return str(number)
+        case Err(trap):
+            return "right " + render(trap)
+
+
+def first_path(value: int64) -> int64:
+    return literal(value)
+
+
+def second_path(value: int64) -> int64:
+    return literal(value)
+
+
+def first_message(value: int64) -> int64:
+    return dynamic(value)
+
+
+def second_message(value: int64) -> int64:
+    return dynamic(value)
+
+
+def main() -> None:
+    print(first_direct(-1))
+    print(second_direct(-2))
+    match control.recover(first_path, -3):
+        case Ok(number):
+            print(number)
+        case Err(trap):
+            print(render(trap))
+    match control.recover(second_path, -4):
+        case Ok(number):
+            print(number)
+        case Err(trap):
+            print(render(trap))
+    match control.recover(first_message, -5):
+        case Ok(number):
+            print(number)
+        case Err(trap):
+            print(render(trap))
+    match control.recover(second_message, -6):
+        case Ok(number):
+            print(number)
+        case Err(trap):
+            print(render(trap))
+    match control.recover(dynamic, -7):
+        case Ok(number):
+            print(number)
+        case Err(first):
+            match control.recover(dynamic, -8):
+                case Ok(number):
+                    print(number)
+                case Err(second):
+                    print(render(first))
+                    print(render(second))
+    match control.recover(pair, false, 17):
+        case Ok(flag):
+            print(flag)
+        case Err(trap):
+            print(trap.message)
+    match control.recover(message_divides, 0):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.code)
+
+
+def pair(flag: bool, count: int64) -> bool:
+    assert flag, f"flag {flag} count {count}"
+    return flag
+
+
+def message_divides(value: int64) -> int64:
+    assert value != 0, f"ratio {10 // value}"
+    return value

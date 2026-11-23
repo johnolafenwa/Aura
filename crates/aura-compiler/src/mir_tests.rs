@@ -4267,6 +4267,118 @@ def main():
 }
 
 #[test]
+fn sync_handles_do_not_claim_local_enum_names() {
+    let source = r#"
+import sync
+
+enum Cell:
+    Open
+
+enum Atom:
+    Ready
+
+def main():
+    print(Cell.Open)
+    print(Atom.Ready)
+    print(sync.AtomicInt(12).load())
+"#;
+    let mir = crate::lower_source_to_mir(source).expect("user enums keep their local names");
+    assert!(
+        mir.classes.iter().all(|class| !matches!(
+            class.name.as_str(),
+            "Cell" | "Atom" | "sync.Cell" | "sync.Atom"
+        )),
+        "opaque host handles have no record layout"
+    );
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        "Cell.Open\nAtom.Ready\n12\n"
+    );
+}
+
+#[test]
+fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/sync_nontransfer_payload.au"),
+            "AU3008",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/sync_guarded_view_escape.au"),
+            "AU3010",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("an invalid guarded value");
+        assert_eq!(error.code, code);
+    }
+}
+
+#[test]
+fn sync_maps_preserve_snapshots_and_atomics_report_exchange_outcomes() {
+    let output = crate::run_source(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/sync_public_methods.stdout")
+    );
+}
+
+#[test]
+fn direct_lock_entries_remember_the_receiver_and_evaluate_custom_factories() {
+    let source = include_str!("../tests/fixtures/run-pass/sync_lock_binding.au");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    let env = super::layout::layout_env(&module);
+    let mut layouts = aura_core::layout::LayoutBuilder::new(&env);
+    let handle = layouts
+        .layout(&Type::Named(
+            "sync.Mutex".to_string(),
+            vec![Type::named("int64")],
+        ))
+        .unwrap();
+    assert!(matches!(
+        layouts.into_table().get(handle).kind,
+        aura_core::layout::LayoutKind::Handle
+    ));
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    for step in ["sync::__aura_cell_take", "sync::__aura_cell_put"] {
+        assert!(main.blocks.iter().flat_map(|block| &block.instructions).any(|instruction| matches!(
+            instruction,
+            Instruction::Assign { value: Rvalue::Call { callee: CallTarget::Runtime { op: RuntimeOp::Host(builtin), .. }, .. }, .. } if builtin.name() == step
+        )), "lock entries call {step} directly");
+    }
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        include_str!("../tests/fixtures/run-pass/sync_lock_binding.stdout")
+    );
+}
+
+#[test]
+fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
+    let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    validate_loan_flow(&module).expect("lock error edges have explicit ownership");
+    let output = crate::run_source(source).expect("early exits release the lock");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/sync_lock_exits.stdout")
+    );
+}
+
+#[test]
+fn generic_initializer_collection_arguments_keep_the_specialized_element_type() {
+    let source =
+        include_str!("../tests/fixtures/run-pass/generic_initializer_collection_arguments.au");
+    let output = crate::run_source(source).expect("local and imported constructors should run");
+    assert_eq!(output.stdout, "0\n[1, 255]\n[42]\n");
+}
+
+#[test]
 fn array_and_builtin_associated_results_retain_checked_types_in_mir() {
     let module = crate::lower_source_to_mir(
         r#"
@@ -9321,7 +9433,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         value: Operand::Int(1),
     });
     lowerer.with_stack.push("resource".to_string());
-    lowerer.emit_cleanup_range(0, true);
+    lowerer.emit_cleanup_range(0, true, 0);
     lowerer.terminate(Terminator::Return(Operand::Int(0)));
     assert!(lowerer.current_terminated());
     lowerer.switch_to(block);
@@ -16371,6 +16483,201 @@ fn exported_functions_are_listed_with_their_c_symbols() {
         .is_none());
 }
 
+const CALLABLE_DESTINATION_PROGRAM: &str = r#"
+class Counter:
+    total: int64
+
+    def bump(mut self) -> int64:
+        self.total = self.total + 1
+        return self.total
+
+class Button:
+    label: str
+    on_click: Callable[def() -> str]
+
+def double(value: int64) -> int64:
+    return value * 2
+
+def make_adder(amount: int64) -> Callable[def(value: int64) -> int64]:
+    return (lambda value: value + amount)
+
+def apply(step: Callable[def(value: int64) -> int64], start: int64) -> int64:
+    return step(start)
+
+def pick(flag: bool, amount: int64) -> Callable[def(value: int64) -> int64]:
+    return (lambda value: value + amount) if flag else double
+
+def maybe(flag: bool, amount: int64) -> Callable[def() -> int64] | None:
+    if flag:
+        return lambda: amount
+    return None
+
+def main():
+    print(make_adder(5)(1))
+    print(apply(lambda value: value * 3, 4))
+    print(apply(double, 4))
+    name = "save"
+    button = Button(label="Save", on_click=lambda: f"{name} clicked")
+    print(button.on_click())
+    scale = 10
+    steps: list[Callable[def(value: int64) -> int64]] = [lambda value: value + scale, double]
+    for step in steps:
+        print(step(2))
+    mut table: dict[str, Callable[def(value: int64) -> int64]] = {}
+    table["add"] = lambda value: value + scale
+    print(table["add"](1))
+    held = lambda: scale + 1
+    stored: Callable[def() -> int64] = held
+    print(stored())
+    packed = make_adder(1)
+    same: Callable[def(value: int64) -> int64] = packed
+    print(same(1))
+    mut bound: Callable[mut def() -> int64] = Counter(total=40).bump
+    print(bound())
+    print(pick(true, 2)(10))
+    print(pick(false, 2)(10))
+    squares: list[Callable[def() -> int64]] = [lambda: index * index for index in range(3)]
+    for square in squares:
+        print(square())
+    match maybe(true, 9):
+        case None:
+            print("none")
+        case _:
+            print("some")
+"#;
+
+#[test]
+fn callable_destination_packs_values_at_every_typed_site() {
+    let output = crate::run_source(CALLABLE_DESTINATION_PROGRAM)
+        .expect("callable values pack at typed destinations");
+    assert_eq!(
+        output.stdout,
+        "6\n12\n8\nsave clicked\n12\n4\n11\n11\n2\n41\n12\n20\n0\n1\n4\nsome\n"
+    );
+}
+
+const STORED_CALLABLE_PROGRAM: &str = r#"
+type Step = Callable[def(value: int64) -> int64]
+type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Total:
+    sum: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.sum = self.sum + amount
+        return self.sum
+
+class Board:
+    steps: list[Step]
+    tallies: list[Tally]
+
+    def bump(mut self, amount: int64) -> int64:
+        mut last = 0
+        for tally in mut self.tallies:
+            last = tally(amount)
+        return last
+
+def double(value: int64) -> int64:
+    return value * 2
+
+def make_adder(amount: int64) -> Step:
+    return lambda value: value + amount
+
+def running_total() -> Tally:
+    total = Total(sum=0)
+    return lambda [own total] amount: total.add(amount)
+
+def main() -> None:
+    mut tallies: list[Tally] = [running_total(), running_total()]
+    mut last = 0
+    for tally in mut tallies:
+        last = tally(3)
+    for tally in mut tallies:
+        last = tally(4)
+    print(last)
+    print(tallies[0](1))
+    mut board = Board(steps=[make_adder(1)], tallies=[running_total()])
+    print(board.bump(4))
+    print(board.bump(4))
+    for tally in mut board.tallies:
+        print(tally(2))
+    print(board.steps[0](1))
+    nested: list[list[Step]] = [[make_adder(1)], [double, make_adder(3)], []]
+    mut total = 0
+    for row in nested:
+        for step in row:
+            total = step(total + 1)
+    print(total)
+    print(nested[1][0](21))
+"#;
+
+#[test]
+fn stored_callables_keep_their_identity_through_loans_and_nested_rows() {
+    // A call through an element loan and a read of a row of a list whose
+    // rows differ in length both pass the MIR validator.
+    let output = crate::run_source(STORED_CALLABLE_PROGRAM)
+        .expect("stored callables are called through loans and nested rows");
+    assert_eq!(output.stdout, "7\n8\n4\n8\n10\n2\n10\n42\n");
+}
+
+#[test]
+fn callable_destination_lowers_to_the_packing_instruction() {
+    let module = crate::lower_source_to_mir(CALLABLE_DESTINATION_PROGRAM)
+        .expect("callable values pack at typed destinations");
+    let packs = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function lowers")
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::CallableAdapt {
+                            destination: Type::Callable(_),
+                            ..
+                        },
+                        ..
+                    }
+                )
+            })
+            .count()
+    };
+    assert_eq!(packs("make_adder"), 1);
+    assert_eq!(packs("pick"), 2);
+    assert_eq!(packs("maybe"), 1);
+    // A value that is packed already moves without a second packing.
+    assert_eq!(packs("apply"), 0);
+}
+
+#[test]
+fn local_functions_share_the_lambda_capture_and_call_contract() {
+    let source = include_str!("../tests/fixtures/run-pass/local_function_bodies.au");
+    let module = crate::lower_source_to_mir(source).expect("local functions should lower");
+    let recursive = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("walker::__lambda"))
+        .expect("recursive closure body");
+    assert!(recursive
+        .local_types
+        .iter()
+        .all(|local| local.name != "walk"));
+    let output = crate::run_source(source).expect("local function bodies should run");
+    assert_eq!(output.stdout, "4\n5\n14\n120\n11\n");
+}
+
+#[test]
+fn calling_indexed_closures_preserves_field_and_tuple_storage() {
+    let source = include_str!("../tests/fixtures/run-pass/callable_indexed_places.au");
+    let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
+    validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
+}
+
 #[test]
 fn comprehension_element_loans_end_inside_their_iteration() {
     let module = crate::lower_source_to_mir(
@@ -16444,4 +16751,14 @@ def main():
         })
         .collect::<Vec<_>>();
     assert_eq!(element_types, [Type::named("uint8")]);
+}
+
+#[test]
+fn recovered_factories_keep_the_callable_contract_in_ok() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_returned_callable.au");
+    let output = crate::run_source(source).expect("recovered callables run");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/recover_returned_callable.stdout")
+    );
 }
