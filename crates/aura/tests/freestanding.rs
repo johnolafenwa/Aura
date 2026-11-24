@@ -951,6 +951,7 @@ fn typed_pointers_run_on_both_hosted_backends() {
     let workspace = Workspace::new();
     workspace.write("Aura.toml", MEMORY_MANIFEST);
     for source in [
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/borrowed_owner.au"),
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/scalars.au"),
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/foreign.au"),
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/foreign_array.au"),
