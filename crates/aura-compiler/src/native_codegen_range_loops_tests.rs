@@ -135,6 +135,17 @@ def chained(xs: list[int64]) -> int64:
                 total += xs[k]
     return total
 
+def deep(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for a in range(2):
+        for b in range(a + 1, 3):
+            for c in range(b + 1, 4):
+                for d in range(c + 1, 5):
+                    for e in range(d + 1, 6):
+                        for f in range(e + 1, 7):
+                            total += xs[f] + xs[b]
+    return total
+
 def main():
     mut ys = [1.0, 2.0, 3.0]
     xs = [0.5, 0.25, 0.125]
@@ -161,6 +172,7 @@ def main():
     print(pairs_before(ints, 3))
     print(pairs_from(ints, 3, 1))
     print(chained(ints))
+    print(deep(ints))
 "#;
 
 fn function(name: &str) -> MirFunction {
@@ -429,6 +441,14 @@ fn an_inner_start_below_the_outer_counter_guards_the_outer_counter() {
             distance: 0
         }
     )));
+}
+
+#[test]
+fn a_start_is_followed_through_a_few_counters_only() {
+    // `b` rests on `a`. `f` rests on five counters, which is more than a
+    // lower bound is followed through, so `xs[f]` keeps its check.
+    let xs = proof("deep", "xs");
+    assert_eq!(xs.covered.len(), 1, "{xs:?}");
 }
 
 #[test]

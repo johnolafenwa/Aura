@@ -657,12 +657,11 @@ fn lower_guards(
     {
         return false;
     }
+    // Each start is within `MAX_DISTANCE` of its counter, so the sums
+    // stay far inside `int64`.
     starts[of].iter().all(|&(source, start)| {
         let (Source::Test(from) | Source::Entry(from)) = source;
-        depth > 0
-            && start.checked_add(distance).is_some_and(|distance| {
-                lower_guards(counters, starts, from, distance, depth - 1, needed)
-            })
+        depth > 0 && lower_guards(counters, starts, from, start + distance, depth - 1, needed)
     })
 }
 
@@ -794,7 +793,10 @@ fn proof_with(
                         known
                             .get(source?)?
                             .iter()
-                            .map(|(source, base)| Some((*source, base.checked_add(distance)?)))
+                            .map(|(source, base)| {
+                                let distance = base.checked_add(distance)?;
+                                (distance.abs() <= MAX_DISTANCE).then_some((*source, distance))
+                            })
                             .collect::<Option<Vec<_>>>()
                     });
                 match facts {
