@@ -145,3 +145,8 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 131. [ADR-0131 A property setter is a mutable method](0131-property-setters.md)
 132. [ADR-0132 An owner runs its class drop hook](0132-class-drop-hooks.md)
 133. [ADR-0133 Method decorators](0133-method-decorators.md)
+140. [ADR-0140 Mutable module storage](0140-mutable-module-storage.md)
+141. [ADR-0141 Fixed-size arrays](0141-fixed-size-arrays.md)
+142. [ADR-0142 Typed raw pointers](0142-typed-raw-pointers.md)
+143. [ADR-0143 C record layout controls](0143-c-record-layout-controls.md)
+144. [ADR-0144 Fixed-width bit operations and atomics](0144-fixed-width-bit-operations-and-atomics.md)
