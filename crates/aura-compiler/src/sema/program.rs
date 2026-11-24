@@ -2272,6 +2272,13 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         };
         if let Some(expected) = &expected {
             if &inferred != expected {
+                if constant.name == crate::parser::CONDITION_RESULT {
+                    return Err(Diagnostic::coded_at(
+                        "AU2071",
+                        constant.span,
+                        "a compile-time condition must have type bool",
+                    ));
+                }
                 return Err(Diagnostic::coded_at(
                     "AU2002",
                     constant.value.span,

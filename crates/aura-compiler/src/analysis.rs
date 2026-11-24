@@ -6946,7 +6946,7 @@ fn base_type_name(ty: &Type) -> &str {
     }
 }
 
-fn expression_start_span(expr: &Expr) -> Span {
+pub(crate) fn expression_start_span(expr: &Expr) -> Span {
     let leftmost_child = match &expr.kind {
         ExprKind::Membership { value, .. } => Some(value.as_ref()),
         ExprKind::CompareChain { first, .. } => Some(first.as_ref()),

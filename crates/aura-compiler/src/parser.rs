@@ -1,4 +1,5 @@
 mod conditional;
+pub(crate) const CONDITION_RESULT: &str = "conditional predicate";
 
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
