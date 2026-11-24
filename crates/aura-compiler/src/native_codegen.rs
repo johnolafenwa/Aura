@@ -19360,22 +19360,16 @@ impl<'a> FunctionCompiler<'a> {
         vars: &[Var],
         value: &ValueRef,
     ) -> std::result::Result<(), String> {
-        if matches!(value.ty, DirectType::Opaque(_)) {
-            let stored = if self.temporary_owns_opaque(value) {
-                self.clear_temporary_opaque_owned(value);
-                value.values[0]
-            } else {
-                self.retain_opaque_handle(value.values[0])
-            };
-            let Some(var) = vars.first() else {
-                return Err("direct backend expected opaque temporary result storage".to_string());
-            };
-            self.builder.def_var(*var, stored);
-            return Ok(());
+        let transferred = self.transfer_values(value);
+        if vars.len() != transferred.len() {
+            return Err(format!(
+                "direct backend expected {} temporary result words, got {}",
+                vars.len(),
+                transferred.len()
+            ));
         }
-
-        for (var, compiled) in vars.iter().zip(value.values.iter()) {
-            self.builder.def_var(*var, *compiled);
+        for (var, compiled) in vars.iter().zip(transferred.into_iter()) {
+            self.builder.def_var(*var, compiled);
         }
         Ok(())
     }
@@ -19387,9 +19381,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let values = vars.iter().map(|var| self.builder.use_var(*var)).collect();
         let value = ValueRef { values, ty };
-        if matches!(value.ty, DirectType::Opaque(_)) {
-            self.mark_temporary_opaque_owned(&value);
-        }
+        self.mark_call_result_owned(&value);
         Ok(value)
     }
 }
