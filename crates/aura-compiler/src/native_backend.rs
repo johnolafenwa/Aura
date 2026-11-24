@@ -162,7 +162,10 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
 pub enum MemoryAccess {
     /// Compute an address plus a displacement in units of the element size.
     PointerOffset,
-    WideCopy { volatile_read: bool, volatile_write: bool },
+    WideCopy {
+        volatile_read: bool,
+        volatile_write: bool,
+    },
     /// A read the optimizer may move or remove. Any alignment.
     Read,
     /// A write the optimizer may move or merge. Any alignment.
@@ -201,7 +204,11 @@ impl MemoryAccess {
         }
         !matches!(
             self,
-            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::WideCopy {..} | Self::Fence
+            Self::Write
+                | Self::VolatileWrite
+                | Self::AtomicStore
+                | Self::WideCopy { .. }
+                | Self::Fence
         )
     }
 }

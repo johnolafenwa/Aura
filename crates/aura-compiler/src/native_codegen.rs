@@ -6900,10 +6900,19 @@ impl<'a> FunctionCompiler<'a> {
                 layout,
                 volatile,
             } => self.compile_pointer_class(address, store.as_ref(), layout, *volatile, target),
-            Rvalue::CFieldAddress { root, layout, offset } if layout.name == "#fixed" => {
-                let (base, _) = self.fixed_local_address(root).ok_or("missing inline storage")?;
+            Rvalue::CFieldAddress {
+                root,
+                layout,
+                offset,
+            } if layout.name == "#fixed" => {
+                let (base, _) = self
+                    .fixed_local_address(root)
+                    .ok_or("missing inline storage")?;
                 let address = self.builder.iadd_imm(base, *offset as i64);
-                Ok(ValueRef { values: vec![address], ty: DirectType::Scalar(ScalarKind::Uint64) })
+                Ok(ValueRef {
+                    values: vec![address],
+                    ty: DirectType::Scalar(ScalarKind::Uint64),
+                })
             }
             Rvalue::CFieldAddress { root, offset, .. } => {
                 let (_, slot) = self.raw_cells.get(root).ok_or("missing C local storage")?;

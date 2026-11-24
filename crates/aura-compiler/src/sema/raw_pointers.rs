@@ -27,7 +27,8 @@ pub(super) fn pointer_type(
 
 /// These point to inline data with no compatible legacy list view.
 pub(super) fn requires_pointer_argument(ty: &Type) -> bool {
-    ty.as_fixed_array().is_some() || matches!(ty, Type::Named(name,args) if args.is_empty() && matches!(name.as_str(), "int128" | "uint128"))
+    ty.as_fixed_array().is_some()
+        || matches!(ty, Type::Named(name,args) if args.is_empty() && matches!(name.as_str(), "int128" | "uint128"))
 }
 
 pub(super) fn cast(source: &Type, target: Type, span: crate::diag::Span) -> Result<Type> {
@@ -161,10 +162,16 @@ impl ExternFunctionInfo {
             let Some(ty) = infer(&argument.value) else {
                 continue;
             };
-            let Type::Named(_, elements) = &self.signature.params[i] else { continue };
+            let Type::Named(_, elements) = &self.signature.params[i] else {
+                continue;
+            };
             let Some(element) = ty.as_raw_pointer() else {
                 if elements.first().is_some_and(requires_pointer_argument) {
-                    return Err(Diagnostic::coded_at("AU2083",argument.span,"this C parameter requires a typed raw pointer"));
+                    return Err(Diagnostic::coded_at(
+                        "AU2083",
+                        argument.span,
+                        "this C parameter requires a typed raw pointer",
+                    ));
                 }
                 continue;
             };
