@@ -4160,15 +4160,23 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
     }
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/typed-pointers/verify/src/main.au");
-    let options = Options { prove_sites: true, ..Options::default() };
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
     let report = crate::verify_path(&path, &options).expect("the pointer program checks");
     for name in ["write_raw", "relay", "use_cell"] {
-        assert!(report.obligations.iter().any(|obligation| {
-            obligation.function == name && matches!(&obligation.status,
+        assert!(
+            report.obligations.iter().any(|obligation| {
+                obligation.function == name
+                    && matches!(&obligation.status,
                 Status::Unsupported(reason) if reason.contains("raw memory"))
-        }), "{name}: {report:#?}");
+            }),
+            "{name}: {report:#?}"
+        );
         assert!(!report.proved_sites.iter().any(|site| site.0 == name));
     }
-    assert!(report.obligations.iter().any(|obligation|
-        obligation.function == "untouched" && obligation.status == Status::Proved));
+    assert!(report.obligations.iter().any(
+        |obligation| obligation.function == "untouched" && obligation.status == Status::Proved
+    ));
 }
