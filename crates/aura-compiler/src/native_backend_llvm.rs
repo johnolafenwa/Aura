@@ -185,6 +185,13 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
+        if self.freestanding.is_some()
+            && module
+                .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+                .is_some()
+        {
+            link_wide_integer_helpers(context, &module)?;
+        }
         if let Some(debug) = &lowerer.debug {
             debug.builder.finalize();
         }
@@ -800,6 +807,12 @@ enum Op {
     Iconst(i64),
     Fconst(f64),
     Unary(UnaryOp, Val),
+    IntegerBits(
+        aura_core::integer_bits::BitMethod,
+        aura_core::integer::IntegerKind,
+        Val,
+        Val,
+    ),
     Binary(BinaryOp, Val, Val),
     BinaryImm(BinaryOp, Val, i64),
     Icmp(IntCC, Val, Val),
@@ -995,6 +1008,7 @@ fn op_operands(op: &Op) -> Vec<Val> {
         | Op::IcmpImm(_, value, _) => {
             vec![*value]
         }
+        Op::IntegerBits(_, _, left, right) => vec![*left, *right],
         Op::Binary(_, left, right)
         | Op::Icmp(_, left, right)
         | Op::Fcmp(_, left, right)
@@ -1033,6 +1047,9 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
         Op::Iconst(constant) => Op::Iconst(*constant),
         Op::Fconst(constant) => Op::Fconst(*constant),
         Op::Unary(unary, source) => Op::Unary(*unary, value(*source)),
+        Op::IntegerBits(method, kind, word, count) => {
+            Op::IntegerBits(*method, *kind, value(*word), value(*count))
+        }
         Op::Binary(binary, left, right) => Op::Binary(*binary, value(*left), value(*right)),
         Op::BinaryImm(binary, left, imm) => Op::BinaryImm(*binary, value(*left), *imm),
         Op::Icmp(cc, left, right) => Op::Icmp(*cc, value(*left), value(*right)),
@@ -1486,6 +1503,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.blocks[block.0 as usize].cold = true;
     }
 
+    fn source_location(&self) -> Option<(u32, u32)> {
+        self.ir.location
+    }
+
     fn set_source_location(&mut self, line: u32, column: u32) {
         self.ir.location = Some((line, column));
     }
@@ -1918,6 +1939,17 @@ impl FunctionBackend for LlvmFunction<'_> {
     fn fneg(&mut self, value: Val) -> Val {
         let ty = self.ir.ty(value);
         self.unary(UnaryOp::Fneg, ty, value)
+    }
+
+    fn integer_bits(
+        &mut self,
+        method: aura_core::integer_bits::BitMethod,
+        kind: aura_core::integer::IntegerKind,
+        value: Val,
+        count: Val,
+    ) -> Val {
+        self.ir
+            .push_value(Op::IntegerBits(method, kind, value, count), ScalarType::I64)
     }
 
     fn fsqrt(&mut self, value: Val) -> Val {
@@ -2873,6 +2905,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             built(self.builder.build_fence(ORDER, false, ""))?;
             return Ok(None);
         }
+        if let MemoryAccess::Ordered(op, success, failure) = access {
+            return self.ordered_atomic(op, success, failure, width, operands);
+        }
         let ty = self.int_type(width);
         let natural = ty.get_bit_width() / 8;
         let pointer = built(self.builder.build_int_to_ptr(
@@ -2977,6 +3012,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
                 widen(previous.into_int_value())
+            }
+            MemoryAccess::Ordered(op, success, failure) => {
+                self.ordered_atomic(op, success, failure, width, operands)
             }
             MemoryAccess::Fence => unreachable!("a fence was lowered above"),
         }
@@ -3193,6 +3231,10 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Unary(op, operand) => {
                 let value = self.lower_unary(*op, self.result_type(inst), *operand)?;
                 self.define(inst, value);
+            }
+            Op::IntegerBits(method, kind, word, count) => {
+                let value = self.lower_integer_bits(*method, *kind, *word, *count)?;
+                self.define(inst, value.into());
             }
             Op::Binary(op, left, right) => {
                 let right = self.value(*right)?;
@@ -3763,3 +3805,30 @@ mod units;
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]
 mod tests;
+
+#[path = "native_llvm_atomics.rs"]
+mod ordered_atomics;
+
+#[path = "native_llvm_integer_bits.rs"]
+mod integer_bits;
+
+/// Supplies wide arithmetic in the target object, with no compiler support library.
+fn link_wide_integer_helpers<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+) -> Result<(), String> {
+    use inkwell::memory_buffer::MemoryBuffer;
+    let ir = include_str!("freestanding_i128.ll");
+    let buffer = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "freestanding_i128");
+    let helpers = context
+        .create_module_from_ir(buffer)
+        .map_err(|e| e.to_string())?;
+    helpers.set_triple(&module.get_triple());
+    helpers.set_data_layout(&module.get_data_layout());
+    module.link_in_module(helpers).map_err(|e| e.to_string())?;
+    module
+        .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+        .expect("linked wide arithmetic function")
+        .set_linkage(LlvmLinkage::Internal);
+    Ok(())
+}

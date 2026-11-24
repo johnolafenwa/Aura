@@ -1,0 +1,4 @@
+import mem
+
+def bad(address: uint64) -> uint8:
+    return mem.atomic_load_uint8(address, "release")

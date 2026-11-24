@@ -1,7 +1,9 @@
 mod capabilities;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+mod atomic_order;
 mod callables;
+mod integer_bits;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
     ClosureOwner, FunctionParamContract,
@@ -13644,6 +13646,7 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        atomic_order::check(function, args, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
                                 ClosureArgumentPolicy::RepeatableParameter("worker")
@@ -17395,6 +17398,11 @@ impl<'a> FunctionChecker<'a> {
                         locals,
                         expected,
                     );
+                }
+                if is_integer_type(&receiver_ty) {
+                    if let Some(method) = aura_core::integer_bits::BitMethod::of(field) {
+                        return self.check_bit_method(method, args, span, locals, receiver_ty);
+                    }
                 }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), method_name)

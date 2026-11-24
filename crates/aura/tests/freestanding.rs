@@ -702,3 +702,94 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn ordered_subword_atomics_match_in_the_interpreter_and_native_code() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    let program =
+        include_str!("../../aura-compiler/tests/fixtures/systems-integers/atomic_orders.au");
+    workspace.write("src/main.au", &format!("{program}\nextern \"C\" def malloc(n: uint64) -> uint64\nextern \"C\" def free(p: uint64) -> None\n\ndef main() -> None:\n    base = malloc(8)\n    print(exchange(base, base + 2))\n    free(base)\n"));
+    for backend in ["mir", "direct"] {
+        let run = workspace.aura(&["run", "--backend", backend, "src/main.au"]);
+        assert!(run.status.success(), "{backend}: {}", stderr(&run));
+        assert_eq!(stdout(&run), "255\n", "{backend}");
+    }
+}
+
+#[test]
+fn linked_wide_integers_preserve_high_bits_and_trap_on_signed_overflow() {
+    let Some(cc) = c_compiler() else {
+        return;
+    };
+    let workspace = Workspace::new();
+    workspace.write(
+        "wide.au",
+        include_str!("../../aura-compiler/tests/fixtures/systems-integers/wide_vectors.au"),
+    );
+    let built = workspace.aura(&["build", "--freestanding", "-o", "wide.o", "wide.au"]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    let harness = workspace.write(
+        "wide.c",
+        r#"#include <stdint.h>
+#include <stdlib.h>
+uint32_t check_vectors(uint64_t high, uint64_t low);
+int64_t signed_remainder_min(int64_t minus_one);
+int64_t overflow_divide(int64_t minus_one);
+void aura_trap(uint32_t code, const char *file, uint64_t len, uint32_t line, uint32_t column) {
+    exit(file && len && line && column ? 60 + (int)code : 1);
+}
+int main(int argc, char **argv) {
+    if (argc == 2) return (int)overflow_divide(-1);
+    return check_vectors(UINT64_C(1) << 63, 3) != 42 || signed_remainder_min(-1) != 0;
+}
+"#,
+    );
+    let binary = workspace.path.join("wide-test");
+    let link = Command::new(cc)
+        .arg(harness)
+        .arg(workspace.path.join("wide.o"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "{}", stderr(&link));
+    assert!(Command::new(&binary).status().unwrap().success());
+    assert_eq!(
+        Command::new(&binary)
+            .arg("overflow")
+            .status()
+            .unwrap()
+            .code(),
+        Some(61)
+    );
+}
+
+#[test]
+fn a_constant_scale_and_offset_share_one_overflow_check() {
+    let workspace = Workspace::new();
+    let source = workspace.write(
+        "scale.au",
+        "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n",
+    );
+    let build = Command::new(aura_bin())
+        .args([
+            "build",
+            "--freestanding",
+            "--target",
+            "x86_64-unknown-none",
+            "-o",
+        ])
+        .arg(workspace.path.join("scale.o"))
+        .arg(source)
+        .env("AURA_DUMP_LLVM_IR", workspace.path.join("scale"))
+        .output()
+        .expect("aura should start");
+    assert!(build.status.success(), "{}", stderr(&build));
+    let ir = fs::read_to_string(workspace.path.join("scale.0.ll")).unwrap();
+    assert!(!ir.contains("with.overflow"), "{ir}");
+    assert!(
+        ir.contains("6148914691236517204") || ir.contains("6148914691236517205"),
+        "{ir}"
+    );
+}

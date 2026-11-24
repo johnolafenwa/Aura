@@ -6234,6 +6234,11 @@ impl MirRuntime {
             }
             receiver => receiver,
         };
+        if let (Value::Int(value), Some(method)) =
+            (&receiver, aura_core::integer_bits::BitMethod::of(field))
+        {
+            return integer_bits::evaluate(method, *value, receiver_static_ty.as_ref(), args, env);
+        }
         match &receiver {
             Value::Float(value) if field == "sqrt" => {
                 if !args.is_empty() {
@@ -13313,3 +13318,5 @@ mod task_stack_tests;
 
 #[path = "mir_runtime_fixed_arrays.rs"]
 mod fixed_arrays;
+#[path = "mir_integer_bits.rs"]
+mod integer_bits;

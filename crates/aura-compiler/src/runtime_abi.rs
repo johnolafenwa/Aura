@@ -348,6 +348,7 @@ runtime_functions! {
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),
     JsonAsScalar => ("aura_direct_json_as_scalar", [I64, I64, I64], Some(I64)),
     IntegerToFloat => ("aura_direct_integer_to_float", [I64], Some(F64)),
+    IntegerBits => ("aura_direct_integer_bits", [I64, I64, I64], Some(I64)),
     IntegerWidthBinary => ("aura_direct_integer_width_binary", [I64, I64, I64, I64, I64, I64], Some(I64)),
     UnboxU64 => ("aura_direct_unbox_u64", [I64], Some(I64)),
     UnboxF64 => ("aura_direct_unbox_f64", [I64], Some(F64)),

@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 27);
+    assert_eq!(namespace.all_functions.len(), 37);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -687,8 +687,8 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
             "function value",
         ),
         (
-            "    wide: int128 = 5\n    return count\n",
-            "holds `wide` of type `int128`",
+            "    wide: Duration = Duration.ms(5)\n    return count\n",
+            "holds `wide` of type `Duration`",
         ),
     ] {
         assert_problem(&format!("{prelude}{body}"), expected);
@@ -868,6 +868,100 @@ fn an_emitter_fault_is_not_a_subset_report() {
         refusal.message,
         "`f` does x, which a freestanding build cannot compile"
     );
+}
+
+#[test]
+fn systems_integer_operations_emit_self_contained_objects() {
+    for source in [
+        include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|s| s == "aura_trap"), "{undefined:?}");
+        }
+    }
+}
+
+#[test]
+fn load_rejects_release_order_during_checking() {
+    let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
+    let module = crate::parse_source(source).expect("valid syntax");
+    let errors = crate::check_module_with_builtin_imports(module)
+        .err()
+        .expect("invalid order");
+    assert_eq!(errors.code, "AU2087", "{errors:?}");
+}
+
+#[test]
+fn rotation_count_type_diagnostic() {
+    let source = include_str!("../tests/fixtures/check-fail/rotation_count_type.au");
+    let error = crate::check_source(source).err().expect("invalid count");
+    assert_eq!(error.code, "AU2088");
+}
+
+#[test]
+fn integer_bit_methods_run_on_the_interpreter() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_bit_methods.au");
+    let want = include_str!("../tests/fixtures/run-pass/integer_bit_methods.stdout");
+    let run = crate::run_source(source).expect("bit operations execute");
+    assert_eq!(run.stdout, want);
+}
+
+#[test]
+fn atomic_order_diagnostics_cover_aliases_and_dynamic_orders() {
+    for (import, stmt) in [
+        ("import mem", "mem.fence(\"relaxed\")"),
+        (
+            "from mem import atomic_load_uint16 as load",
+            "load(address, order)",
+        ),
+        (
+            "import mem",
+            "mem.atomic_store_uint16(address, 1, \"acquire\")",
+        ),
+        (
+            "import mem",
+            "mem.atomic_compare_exchange_uint8(address, 0, 1, \"relaxed\", \"acquire\")",
+        ),
+        ("import mem", "f = mem.atomic_add_uint8"),
+    ] {
+        let source =
+            format!("{import}\n\ndef check(address: uint64, order: str) -> None:\n    {stmt}\n");
+        let parsed = crate::parse_source(&source).expect("ordering test source parses");
+        let error = crate::check_module_with_builtin_imports(parsed)
+            .err()
+            .expect("invalid ordering");
+        assert_eq!(error.code, "AU2087", "{stmt}: {error}");
+    }
+}
+
+#[test]
+fn constant_scale_guard_requires_matching_checked_operations() {
+    let source = "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n";
+    let module = lower(source);
+    let function = module.functions.iter().find(|f| f.name == "scale").unwrap();
+    let pattern = function
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.windows(4))
+        .find(|ops| super::freestanding_scale::guard_limit(ops).is_some())
+        .unwrap();
+    assert_eq!(
+        super::freestanding_scale::guard_limit(pattern),
+        Some((u64::MAX - 1) / 3)
+    );
+    let mut ops = pattern.to_vec();
+    if let Instruction::Assign {
+        value: Rvalue::Use(Operand::Int(multiplier)),
+        ..
+    } = &mut ops[0]
+    {
+        *multiplier = 0;
+    }
+    assert_eq!(super::freestanding_scale::guard_limit(&ops), None);
+    assert!(!object(source, FreestandingTarget::X86_64).is_empty());
 }
 
 #[test]

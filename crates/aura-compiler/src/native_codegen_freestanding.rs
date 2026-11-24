@@ -579,6 +579,7 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
     if !problems.is_empty() {
         return Err(problems);
     }
+    super::wide_numbers::install_layouts(&mut module);
     keep_reached_functions(&mut module);
     for function in &mut module.functions {
         strip_assertion_text(function);
@@ -673,6 +674,9 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::String(text) => out.push(text.clone()),
         serde_json::Value::Array(items) => items.iter().for_each(|item| collect_strings(item, out)),
+        // A resolved host operation names a runtime entry directly. Its
+        // callable-value wrapper is reachable only through a function operand.
+        serde_json::Value::Object(fields) if fields.len() == 1 && fields.contains_key("Host") => {}
         serde_json::Value::Object(fields) => {
             fields.values().for_each(|item| collect_strings(item, out))
         }
@@ -970,6 +974,21 @@ impl FunctionCompiler<'_> {
         let Some((access, kind)) = memory_operation(name) else {
             return Ok(None);
         };
+        let (access, args) = if let Some(op) = aura_core::atomic_order::AtomicOperation::of(name) {
+            let arity = op.arity();
+            let order = |index: usize| match args.get(index).map(|arg| &arg.value) {
+                None => Ok(None),
+                Some(Operand::String(text)) => Ok(Some(text.as_str())),
+                other => Err(format!("expected a constant atomic order, found {other:?}")),
+            };
+            let (success, failure) = op.orders(
+                order(arity)?,
+                order(arity + 1)?.filter(|text| !text.is_empty()),
+            )?;
+            (MemoryAccess::Ordered(op, success, failure), &args[..arity])
+        } else {
+            (access, args)
+        };
         let mut words = Vec::with_capacity(args.len());
         for argument in args {
             words.push(self.load_operand(&argument.value)?.values[0]);
@@ -1051,6 +1070,14 @@ fn check_call(
                     FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max | FunctionOp::Sqrt,
                 ),
             receiver: None,
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::Bits(_)),
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::ToFloat),
             ..
         } => None,
         // A `mem` function is one instruction.

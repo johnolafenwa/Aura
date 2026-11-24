@@ -399,6 +399,13 @@ jobs:
           echo "targets: $AURA_TEST_CROSS_TARGETS"
           cargo test --locked -p aura --test cross_targets
 
+      - name: Boot the freestanding kernel on RISC-V and AArch64
+        if: runner.arch == 'X64'
+        run: |
+          sudo apt-get install -y clang lld qemu-system-arm qemu-system-misc
+          cargo build --locked -p aura
+          examples/freestanding/kernel/test-boot.sh target/debug/aura
+
   native-binaries:
     strategy:
       fail-fast: false

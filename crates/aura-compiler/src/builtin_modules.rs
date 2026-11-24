@@ -2576,30 +2576,43 @@ fn mem_namespace() -> ModuleNamespace {
             ));
         }
     }
-    for bits in [32, 64] {
+    let atomic_function = |name: &str, mut params: Vec<Param>, result| {
+        let order_param = |name: &str, default: &str| {
+            value_param_with_default(
+                name,
+                type_ref("str", Vec::new()),
+                Expr {
+                    kind: ExprKind::String(default.to_owned()),
+                    span: builtin_span(),
+                },
+            )
+        };
+        params.push(order_param("order", "seq_cst"));
+        if name.starts_with("atomic_compare_exchange") {
+            params.push(order_param("failure_order", ""));
+        }
+        function_info("mem", name, params, result)
+    };
+    for bits in [8, 16, 32, 64] {
         let value = || value_param("value", unsigned(bits));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_load_uint{bits}"),
             vec![address()],
             unsigned(bits),
         ));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_store_uint{bits}"),
             vec![address(), value()],
             none(),
         ));
         for name in ["atomic_swap", "atomic_add"] {
-            functions.push(function_info(
-                "mem",
+            functions.push(atomic_function(
                 &format!("{name}_uint{bits}"),
                 vec![address(), value()],
                 unsigned(bits),
             ));
         }
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_compare_exchange_uint{bits}"),
             vec![
                 address(),
@@ -2609,7 +2622,7 @@ fn mem_namespace() -> ModuleNamespace {
             unsigned(bits),
         ));
     }
-    functions.push(function_info("mem", "fence", Vec::new(), none()));
+    functions.push(atomic_function("fence", Vec::new(), none()));
     function_only_namespace("mem", functions)
 }
 

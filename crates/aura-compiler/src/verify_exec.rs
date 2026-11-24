@@ -32,18 +32,15 @@ use crate::runtime_ops::{
 };
 use crate::sema::Type;
 
-/// The inclusive range of an integer type.
+use aura_core::integer::{IntegerBounds, IntegerKind};
+use aura_core::integer_bits::BitMethod;
+
+/// The integer type whose range constrains an SMT integer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct IntTy {
-    pub(super) lo: i128,
-    pub(super) hi: i128,
-}
+pub(super) struct IntTy(pub(super) IntegerKind);
 
 impl IntTy {
-    pub(super) const INT64: IntTy = IntTy {
-        lo: i64::MIN as i128,
-        hi: i64::MAX as i128,
-    };
+    pub(super) const INT64: IntTy = IntTy(IntegerKind::Int64);
 
     pub(super) fn of(ty: &Type) -> Option<Self> {
         let Type::Named(name, args) = ty else {
@@ -52,25 +49,40 @@ impl IntTy {
         if !args.is_empty() {
             return None;
         }
-        let (lo, hi): (i128, i128) = match name.as_str() {
-            "int8" => (i8::MIN as i128, i8::MAX as i128),
-            "int16" => (i16::MIN as i128, i16::MAX as i128),
-            "int32" => (i32::MIN as i128, i32::MAX as i128),
-            "int64" => (i64::MIN as i128, i64::MAX as i128),
-            "uint8" => (0, u8::MAX as i128),
-            "uint16" => (0, u16::MAX as i128),
-            "uint32" => (0, u32::MAX as i128),
-            "uint64" => (0, u64::MAX as i128),
-            _ => return None,
-        };
-        Some(Self { lo, hi })
+        IntegerKind::from_runtime_type_name(name).map(Self)
+    }
+
+    fn bounds(self) -> (i128, u128) {
+        match self.0.bounds() {
+            IntegerBounds::Signed { min, max } => (min, max as u128),
+            IntegerBounds::Unsigned { max } => (0, max),
+        }
+    }
+
+    pub(super) fn contains_literal(self, value: i128) -> bool {
+        let (lo, hi) = self.bounds();
+        value >= lo && (value < 0 || value as u128 <= hi)
     }
 
     pub(super) fn contains(self, term: &str) -> String {
+        let (lo, hi) = self.bounds();
+        format!("(and (<= {} {term}) (<= {term} {hi}))", lit(lo))
+    }
+
+    fn contains_float(self, float: FloatTy, term: &str, truncated: &str) -> String {
+        let (lo, hi) = self.bounds();
+        if self.0.bit_width() == 128 {
+            // The strict upper bound for uint128 is 2^128. Avoid rounding it
+            // on the compiler host or overflowing a Rust integer.
+            return format!(
+                "(and (not (fp.isNaN {term})) (not (fp.isInfinite {term})) {})",
+                self.contains(truncated)
+            );
+        }
         format!(
-            "(and (<= {} {term}) (<= {term} {}))",
-            lit(self.lo),
-            lit(self.hi)
+            "(and {} {})",
+            float.above(term, lo - 1),
+            float.below(term, hi as i128 + 1)
         )
     }
 }
@@ -464,6 +476,7 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    pub(super) bit_terms: super::bits::BitTerms,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -526,6 +539,7 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            bit_terms: Default::default(),
             rounded: Vec::new(),
             entry_facts: 0,
             defined: BTreeMap::new(),
@@ -2528,11 +2542,7 @@ impl<'a> Exec<'a> {
                         *span,
                         "float converts to an integer in range",
                         &state.pc.clone(),
-                        Goal::Holds(format!(
-                            "(and {} {})",
-                            float.above(term, int.lo - 1),
-                            float.below(term, int.hi + 1)
-                        )),
+                        Goal::Holds(int.contains_float(float, term, &truncated)),
                     );
                     let result = self.define("Int", "cast", format!("(to_int {truncated})"));
                     return Val::Int(result, int);
@@ -4172,6 +4182,38 @@ impl<'a> Exec<'a> {
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
                 }
+            }
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => {
+                let count = if matches!(method, BitMethod::RotateLeft | BitMethod::RotateRight) {
+                    let value = arg(self, state, 0, Some(IntTy::INT64));
+                    let Val::Int(count, _) = value else {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "nonnegative rotation count",
+                            &pc,
+                            Goal::Unsupported("the rotation count is unknown".into()),
+                        );
+                        return None;
+                    };
+                    self.oblige(
+                        ObligationKind::Overflow,
+                        self.span,
+                        "nonnegative rotation count",
+                        &pc,
+                        Goal::Holds(format!("(>= {count} 0)")),
+                    );
+                    Some(count)
+                } else {
+                    None
+                };
+                let Some(Val::Int(value, ty)) = receiver else {
+                    return None;
+                };
+                Some(
+                    self.bit_terms
+                        .evaluate(method, &value, ty, count.as_deref()),
+                )
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {
