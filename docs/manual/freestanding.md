@@ -218,22 +218,16 @@ image does not use.
 
 ## Size And Speed
 
-`benchmarks/freestanding` builds five routines with Aura, C, and Rust
-without its standard library, and links each with one harness. On an
-x86-64 Linux machine:
+The freestanding benchmark builds six routines with Aura, C and Rust, including a 16-element inline array updated over twenty million iterations. On x86-64 Linux, each executable ran on the same dedicated CPU core. The table gives the best elapsed time from nine runs per routine with the same C harness. The ratio compares Aura with the faster of C and Rust with overflow checks off. All four builds returned the same results.
 
-| Routine | Aura | C (`clang -O2`) | Rust | Rust with overflow checks |
-| --- | --- | --- | --- | --- |
-| `crc32` | 50 ms | 195 ms | 50 ms | 54 ms |
-| `collatz` | 231 ms | 157 ms | 139 ms | 302 ms |
-| `isqrt_sum` | 98 ms | 105 ms | 145 ms | 164 ms |
-| `gcd_sum` | 201 ms | 131 ms | 156 ms | 175 ms |
-| `orbit` | 832 ms | 882 ms | 778 ms | 756 ms |
-
-Aura keeps its overflow and divisor checks, and `%` rounds toward negative
-infinity, which costs a few instructions over C's remainder. The five
-functions are 993 bytes of code against 914 for C. The Aura object also
-holds 115 bytes of memory routines and the file name for the trap hook.
+| Routine | Aura | C | Rust | Rust with overflow checks | Aura / fastest C or Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `crc32` | 44.8 ms | 141.3 ms | 46.3 ms | 45.7 ms | 0.97× |
+| `collatz` | 169.0 ms | 122.4 ms | 115.1 ms | 212.9 ms | 1.47× |
+| `isqrt_sum` | 133.9 ms | 116.8 ms | 119.1 ms | 128.9 ms | 1.15× |
+| `gcd_sum` | 173.3 ms | 121.1 ms | 121.7 ms | 122.3 ms | 1.43× |
+| `orbit` | 881.6 ms | 1009.7 ms | 858.6 ms | 878.9 ms | 1.03× |
+| `ring_mix` | 13.9 ms | 17.4 ms | 17.5 ms | 17.0 ms | 0.80× |
 
 ## Current Limits
 
