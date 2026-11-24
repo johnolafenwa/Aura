@@ -986,9 +986,15 @@ fn a_freestanding_union_updates_its_overlapping_c_representation() {
     workspace.write("Aura.toml", MEMORY_MANIFEST);
     workspace.write(
         "src/main.au",
-        r#"extern "C" union Word:
+        r#"import mem
+extern "C" union Word:
     whole: uint32
     low: uint8
+
+mut WORD_SIZE: uint64 = mem.size_of(Word)
+
+export "C" def word_size() -> uint64:
+    return WORD_SIZE
 
 export "C" def replace_low(original: uint32, low: uint8) -> uint32:
     mut word = Word.from_whole(original)
@@ -1007,6 +1013,7 @@ export "C" def from_zero(low: uint8) -> uint32:
         "word.c",
         r#"#include <stdint.h>
 #include <stdlib.h>
+uint64_t word_size(void);
 uint32_t replace_low(uint32_t, uint8_t);
 uint32_t from_zero(uint8_t);
 void aura_trap(uint32_t code, const char *file, uint64_t n, uint32_t line, uint32_t column) {
@@ -1014,6 +1021,7 @@ void aura_trap(uint32_t code, const char *file, uint64_t n, uint32_t line, uint3
 }
 int main(void) {
     union { uint32_t whole; uint8_t low; } w = { .whole = 0x12345678 };
+    if (word_size() != sizeof(w)) return 1;
     w.low = 10;
     if (replace_low(0x12345678, 10) != w.whole) return 1;
     w.whole = 0;
