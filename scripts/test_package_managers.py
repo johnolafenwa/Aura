@@ -557,7 +557,12 @@ class PackageWorkflowTests(unittest.TestCase):
         self.assertNotIn("x-access-token:$HOMEBREW_TAP_TOKEN@", homebrew)
         self.assertIn('GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader"', homebrew)
         self.assertIn('git clone --depth 1 "https://github.com/$HOMEBREW_TAP.git" "$tap"', homebrew)
-        self.assertIn("--source https://push.chocolatey.org/", self.job("publish-chocolatey"))
+        choco = self.job("publish-chocolatey")
+        self.assertIn("--source https://push.chocolatey.org/", choco)
+        self.assertNotIn("grep -F", choco)
+        self.assertIn('awk -v name="$nupkg"', choco)
+        self.assertIn("if (count != 1) exit 1", choco)
+        self.assertIn("sha256sum -c -", choco)
 
     def test_release_starts_the_site_deployment_that_carries_apt(self) -> None:
         job = self.job("publish-apt")

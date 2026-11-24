@@ -518,6 +518,18 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("git merge-base --is-ancestor HEAD refs/remotes/origin/main", identity_job)
         self.assertIn("inputs.publish_extension && !inputs.publish", identity_job)
 
+    def test_existing_release_vsix_download_verifies_unique_sha256sums_entry(self) -> None:
+        publish_ext = self.workflow.split("\n  publish-extension:\n", 1)[1].split(
+            "\n  publish-homebrew:\n", 1
+        )[0]
+        download_step = publish_ext.split(
+            "      - name: Download VSIX from existing GitHub Release\n", 1
+        )[1].split("\n      - name: Setup Node\n", 1)[0]
+        self.assertIn("--pattern aura-language.vsix --pattern SHA256SUMS", download_step)
+        self.assertIn('awk -v name="aura-language.vsix"', download_step)
+        self.assertIn("if (count != 1) exit 1", download_step)
+        self.assertIn("sha256sum -c -", download_step)
+
     def test_extension_publish_job_validates_plain_marketplace_identity(self) -> None:
         self.assertIn("name: Validate VSIX Marketplace identity", self.workflow)
         self.assertIn("extension_version: ${{ steps.source.outputs.extension_version }}", self.workflow)
