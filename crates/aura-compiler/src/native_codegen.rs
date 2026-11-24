@@ -733,6 +733,10 @@ struct NativeCodegen<'a> {
     recursive_functions: HashSet<String>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
+    /// The functions that only read scalar fields of an instance they are
+    /// passed: a leaf's body with calls of total leaves, and no `mut`
+    /// parameter.
+    instance_keepers: HashSet<String>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -1052,6 +1056,15 @@ impl<'a> NativeCodegen<'a> {
             })
             .collect::<HashSet<_>>();
         let total_leaves = total_leaves(module, &classes);
+        let instance_keepers = module
+            .functions
+            .iter()
+            .filter(|function| {
+                !takes_mutable(function)
+                    && leaf_body_calling(function, &classes, Some(&total_leaves))
+            })
+            .map(|function| function.name.clone())
+            .collect();
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1259,6 +1272,7 @@ impl<'a> NativeCodegen<'a> {
             safepoints_enabled,
             recursive_functions,
             total_leaves,
+            instance_keepers,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
@@ -2566,9 +2580,92 @@ impl<'a> NativeCodegen<'a> {
                 selects: Vec::new(),
                 entries: Vec::new(),
                 expected: Vec::new(),
+                field_box: None,
             })
         })
         .collect::<Vec<_>>();
+        // The loops that read the view of a list in a field once.
+        let mut list_snapshots = list_snapshots;
+        let field_type = |place: &str| {
+            let (root, field) = place.split_once('.')?;
+            let Some(DirectType::Opaque(Type::Named(class, args))) = variable_types.get(root)
+            else {
+                return None;
+            };
+            let class = self.classes.get(class).filter(|_| args.is_empty())?;
+            let field = class.fields.iter().find(|found| found.name == field)?;
+            class.type_params.is_empty().then_some(&field.ty)
+        };
+        let scalar_list = |ty: Option<&DirectType>| {
+            matches!(ty, Some(DirectType::Opaque(Type::Named(name, args)))
+                if name == "list" && matches!(args.as_slice(), [element]
+                    if matches!(
+                        direct_type(element, &self.classes),
+                        Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+                    )))
+        };
+        let field_regions = list_snapshots::field_list_snapshot_regions(
+            function,
+            |root| {
+                !explicit_locals.loans.contains(root)
+                    && match root {
+                        "self" => function.receiver == Some(MirReceiverKind::BorrowMut),
+                        _ => function
+                            .params
+                            .iter()
+                            .find(|param| param.name == root)
+                            .is_none_or(|param| param.passing == MirReceiverKind::BorrowMut),
+                    }
+            },
+            &list_snapshots::FieldListRules {
+                lend_temps: &field_lend_temps,
+                candidate: &|place, temp| {
+                    field_type(place).is_some_and(
+                        |ty| matches!(ty, Type::Named(name, _) if name == "list"),
+                    ) && scalar_list(variable_types.get(temp))
+                },
+                pure_index: &|temp| scalar_list(variable_types.get(temp)),
+                scalar_field: &|place| {
+                    field_type(place).is_some_and(|ty| {
+                        matches!(
+                            direct_type(ty, &self.classes),
+                            Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+                        )
+                    })
+                },
+                keeps_instances: &|callee| self.instance_keepers.contains(callee),
+            },
+        );
+        for region in field_regions {
+            let [ok, access, len, elements, field_box] = [0, 1, 2, 3, 4].map(|offset| {
+                let variable = Var(variable_index as u32 + offset);
+                builder.declare_var(variable, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(variable, zero);
+                variable
+            });
+            variable_index += 5;
+            let sink = mutable_param_indices
+                .get(list_snapshots::root(&region.list))
+                .copied();
+            let scalar = list_snapshots::region_scalar_element(function, &region);
+            list_snapshots.push(list_snapshots::ListSnapshot {
+                array: None,
+                range: None,
+                scalar,
+                sink,
+                region,
+                ok,
+                access,
+                len,
+                elements,
+                ir_blocks: Vec::new(),
+                selects: Vec::new(),
+                entries: Vec::new(),
+                expected: Vec::new(),
+                field_box: Some(field_box),
+            });
+        }
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -2686,6 +2783,7 @@ impl<'a> NativeCodegen<'a> {
             shaped_boxes: HashSet::new(),
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
+            class_check_snapshot: None,
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
@@ -4069,6 +4167,10 @@ struct FunctionCompiler<'a> {
     ffi_list_length_hints: HashMap<String, usize>,
     /// Set for the next `emit_class_check` of a confined instance.
     skip_class_check: bool,
+    /// Set for the next `emit_class_check` in a loop that reads the view
+    /// of a list in a field of the instance once: the loop, whose copy
+    /// runs while the instance keeps its layout.
+    class_check_snapshot: Option<usize>,
     /// The `mut` arguments and receivers the MIR moves into their call,
     /// which take their root's value: see `ownership::moved_writebacks`.
     moved_operands: HashSet<*const Operand>,
@@ -16376,7 +16478,10 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(());
         };
         let mut sink = self.current_mutable_sink(index);
-        if let Some(snapshot) = self.snapshot_of_root(root) {
+        if let Some(snapshot) = self
+            .snapshot_of_root(root)
+            .or_else(|| self.instance_snapshot(root))
+        {
             // The loop's copy for a qualifying view runs only with no
             // sink.
             let none = self.builder.iconst(types::I64, 0);
