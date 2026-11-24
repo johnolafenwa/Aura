@@ -410,3 +410,68 @@ fn hosted_engines_refuse_freestanding_module_operations() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn every_member_of_a_static_union_needs_inline_storage() {
+    let node = "class Node:\n    next: indirect Node | None = None\n";
+    for source in [
+        format!("{node}mut cell = Node()\n"),
+        format!("{node}mut cell: Node | None = None\n"),
+        "mut cell: int32 | (int32, int32) = 3\n".into(),
+        "mut cell: (int32, int32) = (1, 2)\n".into(),
+        "mut cell: list[int32] = [3]\n".into(),
+    ] {
+        let err = program(&source).unwrap_err();
+        assert_eq!(err.code, "AU2080", "{source}: {err:?}");
+        assert!(err.span.is_some());
+    }
+}
+
+#[test]
+fn module_images_reject_runtime_inputs_and_object_size_overflow() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    for (source, code) in [
+        ("mut address: uint64 = 0\nmut device: ptr[uint8] = address as ptr[uint8]\n", "AU2080"),
+        ("mut reading: int32 = 1\ndef read() -> float32:\n    return reading as float32\nmut sample: float32 = read()\n", "AU2080"),
+        ("def fresh() -> fixed[uint8,4]:\n    return [1,2,3,4]\nmut buffer: fixed[uint8,4] = fresh()\n", "AU2080"),
+        ("copy class Pair:\n    x: int32\nmut first = Pair(x=11)\nmut second = first\n","AU2080"),
+        ("mut cell: fixed[fixed[uint8,1048576],2049] = [[0] * 1048576] * 2049\n","AU2081"),
+    ] {
+        let err = check_path_with_source_without_lockfile_profile(&path, source, true).unwrap_err();
+        assert_eq!(err.code,code,"{source}: {err:?}");
+    }
+}
+
+#[test]
+fn native_emission_reports_incomplete_static_storage_metadata() {
+    let source =
+        "mut count: int32 = 0\nexport \"C\" def set_count(value: int32):\n    count = value\n";
+    let original = lower_to_mir(&program(source).unwrap());
+    for reason in [
+        "missing static initializer",
+        "no native representation",
+        "extra module storage components",
+        "missing module storage component",
+    ] {
+        let mut mir = original.clone();
+        let state = &mut mir.constants[0].state;
+        match reason {
+            "missing static initializer" => *state = None,
+            "no native representation" => {
+                state.as_mut().unwrap().slots[0].ty = aura_core::types::Type::named("str")
+            }
+            "extra module storage components" => state.as_mut().unwrap().slots.clear(),
+            _ => {
+                let slots = &mut state.as_mut().unwrap().slots;
+                slots.push(slots[0].clone());
+            }
+        }
+        let errors = emit_freestanding_object(&mir, "main.au", source, FreestandingTarget::X86_64)
+            .unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message.contains(reason)),
+            "{reason}: {errors:?}"
+        );
+    }
+}
