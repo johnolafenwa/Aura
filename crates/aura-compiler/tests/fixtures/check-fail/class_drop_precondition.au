@@ -1,0 +1,6 @@
+class Guard:
+    ready: bool
+
+    def __drop__(mut self):
+        requires self.ready
+        print("released")

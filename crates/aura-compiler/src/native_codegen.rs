@@ -1305,6 +1305,9 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
+            if function.receiver == Some(MirReceiverKind::BorrowMut) && self.module.classes.iter().any(|c| c.methods.iter().any(|m| m.name == crate::sema::DROP_HOOK && m.function_name == function.name)) {
+                self.define_drop_thunk(function)?;
+            }
             if function.receiver.is_none() {
                 self.define_function_thunk(function)?;
                 self.define_function_default_binder(function)?;
@@ -2498,6 +2501,7 @@ impl<'a> NativeCodegen<'a> {
         })
         .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
+            has_class_hooks: self.module.classes.iter().any(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK)),
             builder,
             blocks,
             variables,
@@ -3903,7 +3907,11 @@ fn direct_reverse_postorder(
     Ok(postorder)
 }
 
+#[path = "native_codegen_class_drop.rs"]
+mod class_drop;
+
 struct FunctionCompiler<'a> {
+    has_class_hooks: bool,
     builder: &'a mut dyn FunctionBackend,
     /// The machine of a freestanding object, whose checks call the trap
     /// hook in place of the runtime.
@@ -5131,6 +5139,9 @@ impl<'a> FunctionCompiler<'a> {
             let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
             self.str_append_root = None;
             compiled?;
+            if self.has_class_hooks && !matches!(instruction, Instruction::Retain { .. } | Instruction::SourceName { .. } | Instruction::SourceLocation { .. }) {
+                self.drain_drop_hooks()?;
+            }
         }
         // No range proof names the terminator.
         self.current_snapshot_instruction = usize::MAX;
@@ -5767,6 +5778,8 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::SourceLocation { line, column } => {
                 self.builder.set_source_location(*line, *column);
             }
+            Instruction::ArmDrop { place, function } => self.arm_drop_hook(place, function)?,
+            Instruction::EndOwner { .. } => {}
             Instruction::SourceName { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -17319,6 +17332,12 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_opaque_owned(&object);
             return Ok(self.owned_opaque_result(object.values, result_ty));
         }
+        if self.has_class_hooks && matches!(op, ValueOp::Clone | ValueOp::Copy) {
+            let id = declare_runtime_function(self.builder.module(), "aura_direct_copy_class_owners", &[types::I64], Some(types::I64))?;
+            let copy = self.builder.import_function(id);
+            let result = self.builder.call(copy, &[object.values[0]]);
+            return Ok(self.owned_opaque_result(result.results, result_ty));
+        }
         let results = self.runtime_call_results(
             self.runtime[runtime_op.runtime_call().function],
             &[object.values[0]],
@@ -20784,6 +20803,7 @@ fn validate_function_in_reachable(
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::SourceName { .. }
+                | Instruction::EndOwner { .. } | Instruction::ArmDrop { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -21355,6 +21375,9 @@ fn direct_type_inner(
         }
         Type::Named(name, args) if args.is_empty() => {
             if let Some(class) = classes.get(name) {
+                if class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK) {
+                    return Some(DirectType::Opaque(ty.clone()));
+                }
                 if !visiting.insert(name.clone()) {
                     return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                 }

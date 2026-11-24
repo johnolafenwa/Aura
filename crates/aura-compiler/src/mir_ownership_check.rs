@@ -314,6 +314,7 @@ impl<'f> Checker<'f, '_> {
 
     fn instruction(&mut self, instruction: &'f Instruction, state: &mut State<'f>) {
         match instruction {
+            Instruction::EndOwner { .. } => {}
             Instruction::Retain { place } => return self.retain(state, place),
             Instruction::Release { place } => self.release(state, place),
             _ => {

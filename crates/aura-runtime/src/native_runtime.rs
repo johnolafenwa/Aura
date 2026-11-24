@@ -1961,6 +1961,10 @@ unsafe fn direct_task_arg_hands_over(ptr: *mut OpaqueValue) -> bool {
 #[doc(hidden)]
 pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+#[path = "native_class_drop.rs"]
+mod class_drop;
+pub use class_drop::{aura_direct_arm_class_drop, aura_direct_copy_class_owners, aura_direct_drain_class_drops};
+
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
 const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
 
@@ -22801,6 +22805,7 @@ fn stop_exit_at_recovered_call() {
         };
         // The function's exits ran before it recorded the exit. Its state
         // goes as a failed task's does.
+        class_drop::drop_abandoned_owners();
         if let Some(state) = leave_recovered_call() {
             recycle_recovered_state(state);
         }
