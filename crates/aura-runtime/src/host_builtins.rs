@@ -1340,7 +1340,9 @@ pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) 
             ),
         ));
     };
-    let available = crate::builtin_limit::allowance().unwrap_or(limit).min(limit);
+    let available = crate::builtin_limit::allowance()
+        .unwrap_or(limit)
+        .min(limit);
     let error = match crate::gzip_codec::gzip_decompress(&data, available) {
         Ok(bytes) => return host_bytes_value(bytes, name).map(result_ok),
         Err(GzipError::OutputTooLarge { .. }) if available < limit => {
