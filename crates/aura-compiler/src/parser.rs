@@ -462,6 +462,7 @@ fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -
 struct Parser {
     tokens: Vec<Token>,
     declaration_ifs: Vec<conditional::Suite>,
+    projected: bool,
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
@@ -491,6 +492,7 @@ impl Parser {
         Self {
             tokens,
             declaration_ifs: Vec::new(),
+            projected: false,
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
@@ -554,9 +556,12 @@ impl Parser {
         self.skip_newlines();
 
         while !self.at_eof() && !(nested && self.at_simple(&TokenKind::Dedent)) {
-            if self.at_simple(&TokenKind::KwIf) && self.is_declaration_if(&imports, &constants) {
+            let suite = (self.at_simple(&TokenKind::KwIf) && !self.projected)
+                .then(|| self.declaration_kind(&imports, &constants, seen_statement))
+                .flatten();
+            if let Some(required) = suite {
                 for mut branch in
-                    self.parse_declaration_arms(|parser| parser.parse_module_suite(true))?
+                    self.parse_declaration_arms(required, |parser| parser.parse_module_suite(true))?
                 {
                     imports.append(&mut branch.imports);
                     constants.append(&mut branch.constants);
@@ -1188,7 +1193,7 @@ impl Parser {
     ) -> Result<()> {
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::KwIf) {
-                self.parse_declaration_arms(|parser| {
+                self.parse_declaration_arms(true, |parser| {
                     parser.parse_class_members(fields, methods, invariants)
                 })?;
                 continue;

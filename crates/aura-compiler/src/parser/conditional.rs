@@ -11,15 +11,24 @@ pub(super) use resolver::Resolver;
 
 pub(super) struct Suite {
     header: Span,
-    arms: Vec<(Option<Expr>, Range<usize>)>,
+    required: bool,
+    arms: Vec<Arm>,
+}
+
+struct Arm {
+    condition: Option<Expr>,
+    lines: Range<usize>,
+    header: Range<usize>,
+    dedent: usize,
 }
 
 impl Parser {
-    pub(super) fn is_declaration_if(
+    pub(super) fn declaration_kind(
         &self,
         imports: &[ImportDecl],
         constants: &[ConstantDecl],
-    ) -> bool {
+        seen_statement: bool,
+    ) -> Option<bool> {
         let header = self.tokens[self.index + 1..]
             .iter()
             .take_while(|token| token.kind != TokenKind::Newline);
@@ -37,17 +46,13 @@ impl Parser {
                         .any(|import| predicates::imports_name(import, name))
             });
 
-        // Ordinary module-level executable conditionals continue through the
-        // statement grammar. Only suites with declaration syntax need the
-        // module grammar, including declarations nested in another guard.
+        // A declaration is valid only in a selected suite. A guard on an
+        // executable script can still have a runtime operand.
         let mut cursor = self.index;
         loop {
-            let Some(indent) = self.tokens[cursor..]
+            let indent = self.tokens[cursor..]
                 .iter()
-                .position(|token| token.kind == TokenKind::Indent)
-            else {
-                return false;
-            };
+                .position(|token| token.kind == TokenKind::Indent)?;
             cursor += indent + 1;
             let mut depth = 1;
             while let Some(token) = self.tokens.get(cursor) {
@@ -66,22 +71,8 @@ impl Parser {
                     | TokenKind::KwEnum
                     | TokenKind::KwTrait
                     | TokenKind::KwImpl
-                    | TokenKind::KwPublic => return true,
-                    TokenKind::KwDef if depth == 1 => return true,
-                    TokenKind::Identifier(_)
-                        if marker
-                            && depth == 1
-                            && matches!(
-                                self.peek_kind_at(cursor),
-                                Some(TokenKind::Equal | TokenKind::Colon)
-                            )
-                            && matches!(
-                                self.peek_kind_at(cursor - 2),
-                                Some(TokenKind::Indent | TokenKind::Newline | TokenKind::Dedent)
-                            ) =>
-                    {
-                        return true
-                    }
+                    | TokenKind::KwPublic => return Some(true),
+                    TokenKind::KwDef if depth == 1 && !seen_statement => return Some(true),
                     _ => {}
                 }
             }
@@ -89,13 +80,14 @@ impl Parser {
                 self.peek_kind_at(cursor),
                 Some(TokenKind::KwElse | TokenKind::KwElif)
             ) {
-                return false;
+                return (marker && !seen_statement).then_some(false);
             }
         }
     }
 
     pub(super) fn parse_declaration_arms<T>(
         &mut self,
+        required: bool,
         mut parse_body: impl FnMut(&mut Self) -> Result<T>,
     ) -> Result<Vec<T>> {
         self.enter_recursion("conditional declaration")?;
@@ -103,6 +95,7 @@ impl Parser {
         let mut arms = Vec::new();
         let mut bodies = Vec::new();
         loop {
+            let first = self.index;
             let keyword = self.bump();
             let condition = if keyword.kind == TokenKind::KwElse {
                 None
@@ -112,9 +105,15 @@ impl Parser {
             self.expect_simple(TokenKind::Colon)?;
             let line = self.expect_newline()?.span.line;
             self.expect_simple(TokenKind::Indent)?;
+            let header = first..self.index;
             bodies.push(parse_body(self)?);
             let end = self.expect_simple(TokenKind::Dedent)?.span.line - 1;
-            arms.push((condition, line..end));
+            arms.push(Arm {
+                condition,
+                lines: line..end,
+                header,
+                dedent: self.index - 1,
+            });
             if keyword.kind == TokenKind::KwElse
                 || !matches!(self.current_kind(), TokenKind::KwElif | TokenKind::KwElse)
             {
@@ -122,7 +121,11 @@ impl Parser {
             }
         }
         self.exit_recursion();
-        self.declaration_ifs.push(Suite { header, arms });
+        self.declaration_ifs.push(Suite {
+            header,
+            required,
+            arms,
+        });
         Ok(bodies)
     }
 
@@ -147,56 +150,72 @@ impl Parser {
         let mut declarations = std::mem::take(&mut self.declaration_ifs);
         declarations.sort_by_key(|suite| suite.header.line);
         let mut inactive = Vec::new();
+        let saw_groups = !declarations.is_empty();
+        let mut omissions = Vec::new();
         for suite in declarations {
             if !is_active(suite.header, &inactive) {
                 continue;
             }
-            let mut taken = false;
-            for (condition, lines) in suite.arms {
-                let selected =
-                    if taken {
-                        false
-                    } else if let Some(condition) = condition {
-                        predicates::evaluate(
-                            resolver,
-                            module,
-                            &self.tokens,
-                            &condition,
-                            &BTreeSet::new(),
-                            &inactive,
-                            true,
-                        )?
-                        .ok_or_else(|| {
-                            Diagnostic::coded_at("AU2071", condition.span,
-                            "a declaration condition must use build constants or const bindings")
-                        })?
-                    } else {
-                        true
-                    };
-                if selected {
-                    taken = true
+            let mut choice = None;
+            let mut runtime = false;
+            for (index, arm) in suite.arms.iter().enumerate() {
+                if let Some(guard) = &arm.condition {
+                    match predicates::evaluate(
+                        resolver,
+                        module,
+                        &self.tokens,
+                        guard,
+                        &BTreeSet::new(),
+                        &inactive,
+                        true,
+                    )? {
+                        Some(false) => continue,
+                        Some(true) => {}
+                        None if !suite.required => {
+                            runtime = true;
+                            break;
+                        }
+                        None => return Err(Diagnostic::coded_at(
+                            "AU2071",
+                            guard.span,
+                            "a declaration condition must use build constants or const bindings",
+                        )),
+                    }
+                }
+                choice = Some(index);
+                break;
+            }
+            if runtime {
+                continue;
+            }
+            for (index, arm) in suite.arms.into_iter().enumerate() {
+                if Some(index) == choice {
+                    omissions.push(arm.header);
+                    omissions.push(arm.dedent..arm.dedent + 1);
                 } else {
-                    inactive.push(lines);
+                    inactive.push(arm.lines);
+                    omissions.push(arm.header.start..arm.dedent + 1);
                 }
             }
         }
-        module
-            .imports
-            .retain(|decl| is_active(decl.span, &inactive));
-        module
-            .constants
-            .retain(|decl| is_active(decl.span, &inactive));
-        module
-            .items
-            .retain(|item| is_active(item_span(item), &inactive));
-        module
-            .top_level_stmts
-            .retain(|stmt| is_active(crate::sema::statement_span(stmt), &inactive));
-        for item in &mut module.items {
-            if let Item::Class(class) = item {
-                class.fields.retain(|decl| is_active(decl.span, &inactive));
-                class.methods.retain(|decl| is_active(decl.span, &inactive));
+        // Parse the active token stream in its original declaration order.
+        // In particular, only a retained script statement turns subsequent
+        // bare bindings into locals. All token spans remain source spans.
+        if !omissions.is_empty() || saw_groups {
+            omissions.sort_by_key(|range| range.start);
+            let mut tokens = Vec::with_capacity(self.tokens.len());
+            let mut kept = 0;
+            for range in omissions {
+                if kept < range.start {
+                    tokens.extend_from_slice(&self.tokens[kept..range.start]);
+                }
+                kept = kept.max(range.end);
             }
+            tokens.extend_from_slice(&self.tokens[kept..]);
+            let mut parser = Parser::new(tokens);
+            parser.projected = true;
+            parser.source_lines.clone_from(&self.source_lines);
+            *module = parser.parse_module()?;
         }
         statements::select(resolver, module, &self.tokens, &mut inactive)?;
         inactive.sort_by_key(|range| range.start);

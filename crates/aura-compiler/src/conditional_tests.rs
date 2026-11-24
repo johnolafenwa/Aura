@@ -154,3 +154,35 @@ fn recursive_predicate_selection_reports_a_cycle() {
     assert_eq!(error.code, "AU2071");
     assert!(error.message.contains("cyclic"));
 }
+
+#[test]
+fn discarded_script_statements_do_not_end_the_module_constant_section() {
+    let source = concat!(
+        "import build\n",
+        "if build.freestanding:\n    missing_script_entry()\n",
+        "answer = 42\n",
+        "def main():\n    print(answer)\n",
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "42\n");
+    let active = concat!(
+        "import build\n",
+        "if build.hosted:\n    print(1)\n",
+        "answer = 42\n",
+        "print(answer)\n",
+    );
+    let module = parse_source(active).unwrap();
+    assert!(module.constants.is_empty());
+    assert_eq!(run_source(active).unwrap().stdout, "1\n42\n");
+}
+
+#[test]
+fn a_static_fact_mixed_with_a_runtime_operand_keeps_script_control_flow() {
+    let source = "import build\nmut flag = true\nif build.hosted and flag:\n    print(1)\n";
+    assert_eq!(run_source(source).unwrap().stdout, "1\n");
+}
+
+#[test]
+fn selected_scopes_end_views_at_their_last_use() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_view_scope.au");
+    assert_eq!(run_source(source).unwrap().stdout, "old\nnew\n");
+}
