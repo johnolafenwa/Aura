@@ -11727,3 +11727,33 @@ fn systems_data_editor_infers_fixed_elements_and_pointer_access() {
         assert!(hover.contains(expected), "{hover}");
     }
 }
+
+#[test]
+fn systems_data_editor_resolves_memory_queries_and_addressed_places() {
+    let source = [
+        "import mem as memory",
+        "extern \"C\" packed class Header:",
+        "    tag: uint16",
+        "def get(header: mut Header) -> uint64:",
+        "    p = memory.address_of(header.tag)",
+        "    field_offset = memory.offset_of(Header, tag)",
+        "    return (p.read() as uint64) + field_offset",
+    ].join("\n");
+    let temp = TempDir::new("systems-data-editor-mem");
+    let file = temp.path().join("src/main.au");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(temp.path().join("Aura.toml"), "[package]\nname = \"inspect\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n").unwrap();
+    fs::write(&file, &source).unwrap();
+    let analysis = analyze_path_source(&file, &source);
+    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    let pointer = occurrence_at(&analysis, 4, 4);
+    assert!(pointer.hover.contains("binding p: ptr[uint16]"), "{}", pointer.hover);
+    let offset = occurrence_at(&analysis, 5, 4);
+    assert!(offset.hover.contains("binding field_offset: uint64"), "{}", offset.hover);
+    let field = occurrence_at(&analysis, 5, 44);
+    assert_eq!(field.definition.as_ref().unwrap().line, 2);
+    let completions = complete_path_source(&file, &source, 5, 26, Some('.')).unwrap();
+    for name in ["size_of", "align_of", "offset_of", "address_of"] {
+        assert!(completions.iter().any(|item| item.name == name), "{name}");
+    }
+}
