@@ -109,6 +109,9 @@ void aura_metal_buffer_release(void *buffer) {
   @public
     MPSGraph *graph;
     NSMutableArray<MPSGraphTensor *> *tensors;
+    // The wide words of the graph: each is a placeholder that every run
+    // feeds from its own buffer.
+    NSMutableDictionary<MPSGraphTensor *, MPSGraphTensorData *> *words;
 }
 @end
 
@@ -146,7 +149,8 @@ void *aura_metal_graph_new(void) {
         AuraGraph *made = [[AuraGraph alloc] init];
         made->graph = [[aura_graph_class alloc] init];
         made->tensors = [aura_array_class array];
-        if (made->graph == nil || made->tensors == nil) {
+        made->words = [aura_dictionary_class dictionary];
+        if (made->graph == nil || made->tensors == nil || made->words == nil) {
             return NULL;
         }
         return (__bridge_retained void *)made;
@@ -409,42 +413,62 @@ static MPSGraphTensor *aura_arg_reduce(MPSGraph *g, MPSGraphTensor *a, BOOL larg
     return [g reshapeTensor:[g castTensor:found toType:MPSDataTypeInt64 name:nil] withShape:result_shape name:nil];
 }
 
-// One 64-bit word as a tensor of one `int64`. A scalar constant is given
-// as a double, which cannot hold every word.
-static MPSGraphTensor *aura_word(MPSGraph *g, uint64_t word) {
-    NSData *data = [aura_bytes_class dataWithBytes:&word length:sizeof(word)];
-    return [g constantWithData:data shape:@[[aura_number_class numberWithLongLong:1]] dataType:MPSDataTypeInt64];
+// One 64-bit word as a tensor of one `int64`. The library keeps an
+// `int64` constant as a double, which rounds a word wider than 53 bits,
+// so a wide word is a placeholder that each run feeds from a buffer.
+static MPSGraphTensor *aura_word(AuraGraph *graph, uint64_t word) {
+    MPSGraph *g = graph->graph;
+    NSArray<NSNumber *> *shape = @[[aura_number_class numberWithLongLong:1]];
+    if (word < (1ULL << 53)) {
+        NSData *data = [aura_bytes_class dataWithBytes:&word length:sizeof(word)];
+        return [g constantWithData:data shape:shape dataType:MPSDataTypeInt64];
+    }
+    id<MTLBuffer> buffer = [aura_device newBufferWithBytes:&word
+                                                    length:sizeof(word)
+                                                   options:MTLResourceStorageModeShared];
+    if (buffer == nil) {
+        return nil;
+    }
+    MPSGraphTensor *made = [g placeholderWithShape:shape dataType:MPSDataTypeInt64 name:nil];
+    MPSGraphTensorData *data = [(MPSGraphTensorData *)[aura_data_class alloc] initWithMTLBuffer:buffer
+                                                                                         shape:shape
+                                                                                      dataType:MPSDataTypeInt64];
+    [graph->words setObject:data forKey:made];
+    return made;
 }
 
 // `bits` moved right by `count` places with zeros moved in, whichever
 // way the library moves a signed word.
-static MPSGraphTensor *aura_shift(MPSGraph *g, MPSGraphTensor *bits, int count) {
-    MPSGraphTensor *moved = [g bitwiseRightShiftWithPrimaryTensor:bits secondaryTensor:aura_word(g, (uint64_t)count) name:nil];
-    return [g bitwiseANDWithPrimaryTensor:moved secondaryTensor:aura_word(g, UINT64_MAX >> count) name:nil];
+static MPSGraphTensor *aura_shift(AuraGraph *graph, MPSGraphTensor *bits, int count) {
+    MPSGraph *g = graph->graph;
+    MPSGraphTensor *moved = [g bitwiseRightShiftWithPrimaryTensor:bits secondaryTensor:aura_word(graph, (uint64_t)count) name:nil];
+    return [g bitwiseANDWithPrimaryTensor:moved secondaryTensor:aura_word(graph, UINT64_MAX >> count) name:nil];
 }
 
 // The 64 random bits of each element of `index` in the stream `seed`
 // names: `random_bits` of `tensor_kernels.rs`, in wrapping `int64`
 // arithmetic.
-static MPSGraphTensor *aura_random_bits(MPSGraph *g, MPSGraphTensor *seed, MPSGraphTensor *index) {
-    MPSGraphTensor *golden = aura_word(g, 0x9E3779B97F4A7C15ULL);
+static MPSGraphTensor *aura_random_bits(AuraGraph *graph, MPSGraphTensor *seed, MPSGraphTensor *index) {
+    MPSGraph *g = graph->graph;
+    MPSGraphTensor *golden = aura_word(graph, 0x9E3779B97F4A7C15ULL);
     MPSGraphTensor *bits = [g multiplicationWithPrimaryTensor:seed secondaryTensor:golden name:nil];
     bits = [g additionWithPrimaryTensor:bits
                         secondaryTensor:[g multiplicationWithPrimaryTensor:index
-                                                           secondaryTensor:aura_word(g, 0xD1B54A32D192ED03ULL)
+                                                           secondaryTensor:aura_word(graph, 0xD1B54A32D192ED03ULL)
                                                                       name:nil]
                                    name:nil];
     bits = [g additionWithPrimaryTensor:bits secondaryTensor:golden name:nil];
-    bits = [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(g, bits, 30) name:nil];
-    bits = [g multiplicationWithPrimaryTensor:bits secondaryTensor:aura_word(g, 0xBF58476D1CE4E5B9ULL) name:nil];
-    bits = [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(g, bits, 27) name:nil];
-    bits = [g multiplicationWithPrimaryTensor:bits secondaryTensor:aura_word(g, 0x94D049BB133111EBULL) name:nil];
-    return [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(g, bits, 31) name:nil];
+    bits = [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(graph, bits, 30) name:nil];
+    bits = [g multiplicationWithPrimaryTensor:bits secondaryTensor:aura_word(graph, 0xBF58476D1CE4E5B9ULL) name:nil];
+    bits = [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(graph, bits, 27) name:nil];
+    bits = [g multiplicationWithPrimaryTensor:bits secondaryTensor:aura_word(graph, 0x94D049BB133111EBULL) name:nil];
+    return [g bitwiseXORWithPrimaryTensor:bits secondaryTensor:aura_shift(graph, bits, 31) name:nil];
 }
 
 // A `float32` in `[0, 1)` from the top 24 bits of each word.
-static MPSGraphTensor *aura_unit(MPSGraph *g, MPSGraphTensor *bits) {
-    MPSGraphTensor *top = [g castTensor:aura_shift(g, bits, 40) toType:MPSDataTypeFloat32 name:nil];
+static MPSGraphTensor *aura_unit(AuraGraph *graph, MPSGraphTensor *bits) {
+    MPSGraph *g = graph->graph;
+    MPSGraphTensor *top = [g castTensor:aura_shift(graph, bits, 40) toType:MPSDataTypeFloat32 name:nil];
     return [g multiplicationWithPrimaryTensor:top
                               secondaryTensor:[g constantWithScalar:1.0 / 16777216.0 dataType:MPSDataTypeFloat32]
                                          name:nil];
@@ -452,7 +476,8 @@ static MPSGraphTensor *aura_unit(MPSGraph *g, MPSGraphTensor *bits) {
 
 // Random `float32` elements of `shape`: `filled` of `tensor_kernels.rs`.
 // `fill` is 0 for uniform floats and 1 for normal ones.
-static MPSGraphTensor *aura_random(MPSGraph *g, int32_t fill, MPSGraphTensor *seed, NSArray<NSNumber *> *shape) {
+static MPSGraphTensor *aura_random(AuraGraph *graph, int32_t fill, MPSGraphTensor *seed, NSArray<NSNumber *> *shape) {
+    MPSGraph *g = graph->graph;
     if (![g respondsToSelector:@selector(bitwiseXORWithPrimaryTensor:secondaryTensor:name:)] ||
         ![g respondsToSelector:@selector(bitwiseANDWithPrimaryTensor:secondaryTensor:name:)] ||
         ![g respondsToSelector:@selector(bitwiseRightShiftWithPrimaryTensor:secondaryTensor:name:)] ||
@@ -470,13 +495,13 @@ static MPSGraphTensor *aura_random(MPSGraph *g, int32_t fill, MPSGraphTensor *se
     index = [g castTensor:index toType:MPSDataTypeInt64 name:nil];
     MPSGraphTensor *made;
     if (fill == 0) {
-        made = aura_unit(g, aura_random_bits(g, seed, index));
+        made = aura_unit(graph, aura_random_bits(graph, seed, index));
     } else {
         // The method of Box and Muller, over two uniform floats.
-        MPSGraphTensor *even = [g multiplicationWithPrimaryTensor:index secondaryTensor:aura_word(g, 2) name:nil];
-        MPSGraphTensor *odd = [g additionWithPrimaryTensor:even secondaryTensor:aura_word(g, 1) name:nil];
-        MPSGraphTensor *first = aura_unit(g, aura_random_bits(g, seed, even));
-        MPSGraphTensor *second = aura_unit(g, aura_random_bits(g, seed, odd));
+        MPSGraphTensor *even = [g multiplicationWithPrimaryTensor:index secondaryTensor:aura_word(graph, 2) name:nil];
+        MPSGraphTensor *odd = [g additionWithPrimaryTensor:even secondaryTensor:aura_word(graph, 1) name:nil];
+        MPSGraphTensor *first = aura_unit(graph, aura_random_bits(graph, seed, even));
+        MPSGraphTensor *second = aura_unit(graph, aura_random_bits(graph, seed, odd));
         MPSGraphTensor *one = [g constantWithScalar:1.0 dataType:MPSDataTypeFloat32];
         MPSGraphTensor *spread = [g logarithmWithTensor:[g subtractionWithPrimaryTensor:one secondaryTensor:first name:nil]
                                                    name:nil];
@@ -588,7 +613,7 @@ int32_t aura_metal_graph_step(void *handle, int32_t kind, int32_t code, const in
                 made = aura_arg_reduce(g, a, code == 1, (NSUInteger)numbers[0], numbers[1], result_shape);
                 break;
             case 16:
-                made = aura_random(g, code, a, result_shape);
+                made = aura_random(graph, code, a, result_shape);
                 break;
             default:
                 break;
@@ -621,6 +646,7 @@ int32_t aura_metal_graph_run(void *handle, int32_t feeds, const int32_t *placeho
                                                                            dataType:tensor.dataType];
                 [feed setObject:data forKey:tensor];
             }
+            [feed addEntriesFromDictionary:graph->words];
             NSMutableDictionary<MPSGraphTensor *, MPSGraphTensorData *> *results = [aura_dictionary_class dictionary];
             for (int32_t index = 0; index < count; index++) {
                 MPSGraphTensor *result = graph->tensors[(NSUInteger)targets[index]];
