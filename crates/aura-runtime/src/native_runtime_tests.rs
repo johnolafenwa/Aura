@@ -26996,9 +26996,17 @@ fn a_shared_list_of_lists_takes_in_place_appends_in_for_two_readers_at_once() {
             let lent = super::aura_direct_vec_lend(outer, index, 1, 1);
             assert_eq!(lent as usize & 1, 1, "the outer list lends its boxes");
             let inner = lent.wrapping_byte_sub(1);
-            assert!(!append_like_generated_code(inner, 10, DirectListAccess::Int64));
+            assert!(!append_like_generated_code(
+                inner,
+                10,
+                DirectListAccess::Int64
+            ));
             for bits in 11..14 {
-                assert!(append_like_generated_code(inner, bits, DirectListAccess::Int64));
+                assert!(append_like_generated_code(
+                    inner,
+                    bits,
+                    DirectListAccess::Int64
+                ));
             }
             assert_ne!(list_view_capacity(inner), 0);
         }
@@ -27029,11 +27037,9 @@ fn a_list_of_lists_takes_each_new_list_in_its_box_with_no_general_write() {
     let outer_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     let inner_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     let inner_type = super::canonical_runtime_type_name(&list_of(Type::named("int64")));
-    let outer_type =
-        super::canonical_runtime_type_name(&list_of(list_of(Type::named("int64"))));
-    let new_inner = || {
-        super::aura_direct_vec_empty_tagged(&inner_cell, inner_type.as_ptr(), inner_type.len())
-    };
+    let outer_type = super::canonical_runtime_type_name(&list_of(list_of(Type::named("int64"))));
+    let new_inner =
+        || super::aura_direct_vec_empty_tagged(&inner_cell, inner_type.as_ptr(), inner_type.len());
     let outer =
         super::aura_direct_vec_empty_tagged(&outer_cell, outer_type.as_ptr(), outer_type.len());
     let shape = |list: *mut OpaqueValue| unsafe { &*list }.shape_tag.load(Ordering::Relaxed);
@@ -27045,7 +27051,9 @@ fn a_list_of_lists_takes_each_new_list_in_its_box_with_no_general_write() {
     super::aura_direct_vec_push_in_place(outer, first);
     assert_eq!(list_view_access(outer), DirectListAccess::Boxes as u32);
     assert!(shape(outer).is_null());
-    unsafe { &*outer }.shape_tag.store(tagged, Ordering::Relaxed);
+    unsafe { &*outer }
+        .shape_tag
+        .store(tagged, Ordering::Relaxed);
     // The rest join in their own boxes and leave the shape as it is.
     let mut boxes = vec![first];
     for _ in 0..20 {
@@ -27087,20 +27095,36 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
     };
     let list = super::aura_direct_vec_empty();
     // The first append gives the list its form and its room.
-    assert!(!append_like_generated_code(list, 0, DirectListAccess::Int64));
+    assert!(!append_like_generated_code(
+        list,
+        0,
+        DirectListAccess::Int64
+    ));
     let room = list_view_capacity(list);
     for bits in 1..room as i64 {
-        assert!(append_like_generated_code(list, bits, DirectListAccess::Int64));
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            DirectListAccess::Int64
+        ));
     }
     // The list is full, so the call grows it after taking in the appends.
     let shape = header(list).shape_tag.load(Ordering::Relaxed);
-    assert!(!append_like_generated_code(list, room as i64, DirectListAccess::Int64));
+    assert!(!append_like_generated_code(
+        list,
+        room as i64,
+        DirectListAccess::Int64
+    ));
     assert_eq!(list_view_len(list), room + 1);
     assert!(list_view_capacity(list) > room + 1);
     assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
     assert_eq!(header(list).shape_tag.load(Ordering::Relaxed), shape);
     // It left room, so the next append needs no call.
-    assert!(append_like_generated_code(list, 99, DirectListAccess::Int64));
+    assert!(append_like_generated_code(
+        list,
+        99,
+        DirectListAccess::Int64
+    ));
     let mut expected: Vec<i64> = (0..=room as i64).collect();
     expected.push(99);
     assert_eq!(values(list), expected);
