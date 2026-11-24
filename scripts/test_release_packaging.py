@@ -236,7 +236,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         deploy = workflow.split("\n  deploy:\n", 1)[1]
         needs = re.search(r"^    needs: (.+)$", deploy, re.MULTILINE)
         self.assertIsNotNone(needs)
-        self.assertEqual(needs.group(1), "[build, examples]")
+        self.assertEqual(needs.group(1), "[build, apt, examples]")
 
 
 class LandingAndInstallerTests(unittest.TestCase):

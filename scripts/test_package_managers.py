@@ -411,15 +411,25 @@ class PackageWorkflowTests(unittest.TestCase):
         self.assertIn("    permissions:\n      actions: write\n", job)
         self.assertIn('gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main\n', job)
         docs = DOCS_WORKFLOW.read_text(encoding="utf-8")
-        build = docs[docs.index("\n  build:\n"):docs.index("\n  examples:\n")]
-        step = build[build.index("      - name: Add the apt repository\n"):]
-        step = step[:step.index("\n\n")]
-        self.assertIn("if: github.event_name != 'pull_request'\n", step)
-        self.assertIn("APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}\n", step)
-        self.assertIn("run: scripts/publish-apt-repository.sh docs/.vitepress/dist/apt", step)
+        build = docs[docs.index("\n  build:\n"):docs.index("\n  apt:\n")]
+        apt = docs[docs.index("\n  apt:\n"):docs.index("\n  examples:\n")]
+        deploy = docs[docs.index("\n  deploy:\n"):]
+        self.assertNotIn("APT_SIGNING_KEY", build)
+        self.assertNotIn("publish-apt-repository.sh", build)
+        self.assertIn("if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'\n", apt)
+        self.assertIn("    environment: apt-signing\n", apt)
+        self.assertIn("APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}\n", apt)
+        self.assertIn("scripts/publish-apt-repository.sh apt-repository", apt)
+        self.assertNotIn("setup-node", apt)
+        self.assertNotIn("npm ci", apt)
+        self.assertNotIn("docs:build", apt)
         self.assertEqual(docs.count("secrets.APT_SIGNING_KEY"), 1)
+        self.assertIn("rm -rf pages-site/apt\n", deploy)
+        self.assertIn("cp docs/public/install.sh pages-site/install.sh\n", deploy)
+        self.assertIn("cp docs/public/install.ps1 pages-site/install.ps1\n", deploy)
         self.assertLess(
-            build.index("- name: Add the apt repository"), build.index("- name: Upload Pages artifact")
+            deploy.index("uses: actions/upload-pages-artifact@"),
+            deploy.index("uses: actions/deploy-pages@"),
         )
 
     def test_ci_installs_every_package_before_a_release_depends_on_it(self) -> None:
