@@ -110,7 +110,7 @@ impl FunctionChecker<'_> {
             return self.union_image(ty, union, expr);
         }
         let expr = grouped_expr(expr);
-        if matches!(ty, Type::Named(name, _) if name == "ptr") {
+        if ty.as_raw_pointer().is_some() {
             if let ExprKind::Cast { expr: value, .. } = &expr.kind {
                 if let ExprKind::Int(address) = grouped_expr(value).kind {
                     let address = u64::try_from(address).map_err(|_| literal_error(expr))?;
@@ -182,7 +182,18 @@ impl FunctionChecker<'_> {
             .cloned()
             .zip(args.iter().cloned())
             .collect();
-        let c_layout = ffi_struct_layout(ty, self.classes);
+        let c_layout = if class.decl.c_layout {
+            Some(
+                self.module_namespace(&class.module_name)
+                    .and_then(|module| {
+                        ffi_struct_layout(&Type::named(&class.decl.name), &module.all_classes)
+                    })
+                    .or_else(|| ffi_struct_layout(ty, self.classes))
+                    .ok_or_else(|| literal_error(expr))?,
+            )
+        } else {
+            None
+        };
         let mut locations = c_layout.as_ref().map(|layout| layout.field_locations());
         let mut image = StateImage {
             bytes: vec![0; c_layout.as_ref().map_or(0, |layout| layout.size())],
@@ -465,7 +476,10 @@ impl FunctionChecker<'_> {
             return Ok(false);
         }
         let ty = self.type_of_member_object_expr(object, locals)?;
-        if !ffi_struct(&ty, self.classes).is_some_and(|class| {
+        let Type::Named(name, _) = &ty else {
+            return Ok(false);
+        };
+        if !self.resolve_class_info(name).is_some_and(|class| {
             class.decl.c_union.is_some() && class.methods.contains_key(&format!("__write_{field}"))
         }) {
             return Ok(false);

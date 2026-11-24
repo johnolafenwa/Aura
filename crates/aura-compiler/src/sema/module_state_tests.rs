@@ -273,11 +273,18 @@ fn tagged_module_state_packs_fixed_leaves_as_little_endian_words() {
 
 #[test]
 fn static_initializer_uses_the_imported_record_definition() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
     let source = "import records\nmut saved: records.Record = records.Record(tag=7, count=67305985)\nexport \"C\" def read() -> uint32:\n    return saved.count\n";
-    let checked = check_freestanding_path(&path,Some(source)).unwrap();
+    let checked = check_freestanding_path(&path, Some(source)).unwrap();
     let image = checked.constants["saved"].state.as_ref().unwrap();
-    assert_eq!(image.bytes, [7,1,2,3,4]);
-    assert_eq!(image.alignment,1);
-    emit_freestanding_object(&lower_to_mir(&checked),"main.au",source,FreestandingTarget::Aarch64).unwrap();
+    assert_eq!(image.bytes, [7, 1, 2, 3, 4]);
+    assert_eq!(image.alignment, 1);
+    emit_freestanding_object(
+        &lower_to_mir(&checked),
+        "main.au",
+        source,
+        FreestandingTarget::Aarch64,
+    )
+    .unwrap();
 }
