@@ -3382,10 +3382,14 @@ fn property_write_discovery_rewrites_only_sites_in_the_current_module() {
         module_name: "foreign".into(),
         ..ModuleContext::default()
     };
-    let direct_error = check_with_context_once(generated.clone(), foreign.clone()).unwrap_err();
-    let error = check_with_property_reads(generated.clone(), ModuleContext::default(), |_, _| {
+    let checked = check_with_property_reads(generated.clone(), ModuleContext::default(), |_, _| {
         check_with_context_once(generated.clone(), foreign.clone())
     })
-    .unwrap_err();
-    assert_eq!(error, direct_error);
+    .unwrap();
+    let Some(Item::Function(main)) = checked.module.items.last() else {
+        panic!("expected main");
+    };
+    assert!(
+        matches!(&main.body[1], Stmt::Assign(assign) if matches!(&assign.target, AssignTarget::Member {field, ..} if field == "count"))
+    );
 }
