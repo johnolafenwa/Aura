@@ -2635,6 +2635,12 @@ impl<'a> NativeCodegen<'a> {
             borrowing: &self.borrowing,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
+            appended_temps: elements::appended_temps(function, |temp| {
+                !explicit_locals.tracked.contains(temp) && !explicit_locals.loans.contains(temp)
+            })
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             tracked_roots: explicit_locals.tracked,
             moved_operands: explicit_locals.moved,
             loan_locals: explicit_locals.loans,
@@ -4073,6 +4079,10 @@ struct FunctionCompiler<'a> {
     /// whose layout owns a handle holds a boxed Copy value, which the
     /// backend drops itself: see `release_boxed_copy_roots`.
     tracked_roots: HashSet<String>,
+    /// The untracked temporaries whose one use is as the element an
+    /// append adds, whose box the list takes (see
+    /// `elements::appended_temps`).
+    appended_temps: HashSet<String>,
     /// Class locals whose fields need no layout check (see
     /// `classes::confined_instances`).
     confined_instances: HashSet<String>,
@@ -11966,6 +11976,21 @@ impl<'a> FunctionCompiler<'a> {
         self.load_operand_with_integer_hint(operand, hint)
     }
 
+    /// Whether `temp`, an argument of an append to a list of `element`,
+    /// is one of [`Self::appended_temps`] that holds a box of its own of
+    /// the element's type, which the append may take as it is.
+    fn hands_appended_temp(
+        &mut self,
+        temp: &str,
+        element: &DirectType,
+    ) -> std::result::Result<bool, String> {
+        Ok(self.appended_temps.contains(temp)
+            && !self.lent_places.contains(temp)
+            && !self.lent_elements.contains_key(temp)
+            && matches!(self.local_type(temp)?, DirectType::Opaque(_))
+            && self.local_type(temp)? == *element)
+    }
+
     fn load_operand_as_opaque_direct(
         &mut self,
         operand: &Operand,
@@ -17727,8 +17752,16 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push => {
-                let value =
-                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let value = match &args[0].value {
+                    // A boxed Copy temporary nothing reads after the append
+                    // hands its box over instead of a copy.
+                    Operand::Place(temp)
+                        if self.hands_appended_temp(temp, &element_direct_ty)? =>
+                    {
+                        self.take_place(temp)?
+                    }
+                    operand => self.load_operand_as_opaque_direct(operand, &element_direct_ty)?,
+                };
                 let value = self.transfer_owned_opaque_value(&value);
                 self.builder.call(function, &[list, value]);
                 self.store_receiver_back(receiver_place, &object)?;

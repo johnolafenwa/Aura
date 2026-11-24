@@ -711,6 +711,72 @@ fn assignments(function: &MirFunction) -> HashMap<&str, usize> {
     assigned
 }
 
+/// The temporaries of `function` whose box an append may take: each is
+/// assigned once, and its one other mention is as the element a later
+/// `List(Push)` in the same block adds, so nothing reads it after the
+/// append. `owns` says which locals hold a box of their own that the MIR
+/// never releases, as a boxed Copy value does.
+pub(super) fn appended_temps(function: &MirFunction, owns: impl Fn(&str) -> bool) -> HashSet<&str> {
+    let assigned = assignments(function);
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let mut named = Vec::new();
+            instruction_place_mentions(instruction, &mut named);
+            for place in named {
+                *mentions.entry(root(place)).or_default() += 1;
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *mentions.entry(root(place)).or_default() += 1;
+        }
+    }
+    let mut temps = HashSet::new();
+    for block in &function.blocks {
+        let mut defined = HashSet::new();
+        for instruction in &block.instructions {
+            if let Instruction::Assign { target, .. } = instruction {
+                defined.insert(target.as_str());
+            }
+            let Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::List(ListOp::Push),
+                                receiver: Some(Operand::Place(receiver)),
+                                ..
+                            },
+                        args,
+                        ..
+                    },
+            } = instruction
+            else {
+                continue;
+            };
+            let [arg] = args.as_slice() else {
+                continue;
+            };
+            let Operand::Place(temp) = &arg.value else {
+                continue;
+            };
+            if temp.starts_with("%t")
+                && arg.writeback_place.is_none()
+                && defined.contains(temp.as_str())
+                && root(receiver) != temp
+                && root(target) != temp
+                && assigned.get(temp.as_str()) == Some(&1)
+                && mentions.get(temp.as_str()) == Some(&1)
+                && owns(temp)
+            {
+                temps.insert(temp.as_str());
+            }
+        }
+    }
+    temps
+}
+
 /// The loans of `function` that hold a union member's payload of a root
 /// local, each begun once, with that local. The union keeps the payload's
 /// box while it is unchanged, as a variant does.

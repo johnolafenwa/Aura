@@ -1,0 +1,48 @@
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+    Empty
+
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+
+
+def made(i: int64) -> Shape:
+    return Shape.Rect(i as float64, 2.0)
+
+
+def main():
+    mut shapes: list[Shape] = []
+    # Each variant is built for the append, which takes its box.
+    for i in range(4):
+        shapes.append(Shape.Circle(i as float64))
+        shapes.append(Shape.Rect(1.0, i as float64))
+        shapes.append(Shape.Empty)
+        shapes.append(made(i))
+    # A local still read after the append keeps its own value.
+    kept = Shape.Circle(5.0)
+    shapes.append(kept)
+    mut other: list[Shape] = []
+    other.append(kept)
+    print(area(kept))
+    mut pairs: list[(int64, Shape)] = []
+    for i in range(3):
+        pairs.append((i, Shape.Circle(i as float64)))
+    mut total = 0.0
+    for shape in shapes:
+        total += area(shape)
+    for pair in pairs:
+        total += area(pair[1]) + pair[0] as float64
+    print(total)
+    print(shapes.len())
+    print(area(other[0]))
+    shapes[0] = Shape.Empty
+    print(area(shapes[0]))
+    print(area(other[0]))

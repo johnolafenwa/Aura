@@ -1426,3 +1426,56 @@ fn a_copy_parameter_lent_is_owned() {
         vec![false]
     );
 }
+
+const APPENDS: &str = r#"
+enum Shape:
+    Circle(float64)
+    Empty
+
+def fills(n: int64) -> int64:
+    mut shapes: list[Shape] = []
+    for i in range(n):
+        shapes.append(Shape.Circle(i as float64))
+        shapes.append(Shape.Empty)
+    kept = Shape.Circle(1.0)
+    shapes.append(kept)
+    mut other: list[Shape] = []
+    other.append(kept)
+    return shapes.len() + other.len()
+
+def main():
+    print(fills(2))
+"#;
+
+#[test]
+fn a_copy_temporary_only_appended_hands_its_box_to_the_list() {
+    let mir = lower_source_to_mir(APPENDS).expect("the source should lower");
+    let fills = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "fills")
+        .expect("the function should exist");
+    let temps = super::appended_temps(fills, |_| true);
+    // The two variants built for their appends, and the two copies of the
+    // local made for its appends, each of which holds a box of its own.
+    assert_eq!(temps.len(), 4, "{temps:?}");
+    assert!(temps.iter().all(|temp| temp.starts_with("%t")));
+    // A temporary the MIR releases itself keeps its value.
+    assert!(super::appended_temps(fills, |_| false).is_empty());
+    // One named again after the append is read there.
+    let mut named = fills.clone();
+    let temp = temps.iter().next().expect("a temporary").to_string();
+    let block = named
+        .blocks
+        .iter_mut()
+        .find(|block| {
+            block.instructions.iter().any(
+                |instruction| matches!(instruction, Instruction::Assign { target, .. } if *target == temp),
+            )
+        })
+        .expect("the temporary is assigned");
+    block.instructions.push(Instruction::Eval {
+        value: Operand::Place(temp.clone()),
+    });
+    assert!(!super::appended_temps(&named, |_| true).contains(temp.as_str()));
+}
