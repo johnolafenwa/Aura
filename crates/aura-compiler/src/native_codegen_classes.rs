@@ -267,17 +267,19 @@ fn passes_lent_field(instruction: &Instruction, temp: &str, root: &str) -> bool 
         .count();
     passed == 1
         && !names_root(target, temp, root)
-        && args.iter().all(|arg| {
-            arg.writeback_place.is_none()
-                && !matches!(
-                    &arg.value,
-                    Operand::Place(place) if place != temp && names_root(place, temp, root)
-                )
-                && !matches!(
-                    &arg.value,
-                    Operand::MovePlace(place) if names_root(place, temp, root)
-                )
-        })
+        && args
+            .iter()
+            .all(|arg| arg.writeback_place.is_none() && !reaches_lent_field(&arg.value, temp, root))
+}
+
+/// Whether the argument `value` moves the lent temporary `temp` or names
+/// it, or the instance `root`, as any place other than `temp` itself.
+fn reaches_lent_field(value: &Operand, temp: &str, root: &str) -> bool {
+    match value {
+        Operand::Place(place) => place != temp && names_root(place, temp, root),
+        Operand::MovePlace(place) => names_root(place, temp, root),
+        _ => false,
+    }
 }
 
 /// Whether `instruction` is a runtime operation on the lent temporary

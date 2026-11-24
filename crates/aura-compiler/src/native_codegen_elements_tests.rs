@@ -1297,6 +1297,32 @@ fn a_field_lent_to_a_call_that_borrows_it_lends_its_box() {
         .instructions
         .insert(lend + 1, Instruction::Safepoint);
     assert!(crate::native_codegen::classes::field_lend_temps(&probe, |_| true).is_empty());
+    // A further argument that is a constant leaves the field lent; one that
+    // moves the instance, or names the field's temporary, may reach it.
+    let with_arg = |value: Operand| {
+        let mut probe = method("probe").clone();
+        let call = probe.blocks[0]
+            .instructions
+            .iter_mut()
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            args,
+                            ..
+                        },
+                    ..
+                } if borrowing.contains_key(name) => Some(args),
+                _ => None,
+            })
+            .expect("the field is passed to a call");
+        call.push(arg(value));
+        crate::native_codegen::classes::field_lend_temps(&probe, borrows).len()
+    };
+    assert_eq!(with_arg(Operand::Int(1)), 1);
+    assert_eq!(with_arg(Operand::MovePlace("self".to_string())), 0);
+    assert_eq!(with_arg(Operand::Place("self.next".to_string())), 0);
 }
 
 #[test]
