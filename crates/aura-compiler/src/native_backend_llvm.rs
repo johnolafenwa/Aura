@@ -1222,11 +1222,8 @@ impl FunctionIr {
         // of a loop inside it or across it.
         let mut work = set.iter().copied().collect::<Vec<_>>();
         while let Some(block) = work.pop() {
-            for copy in self.block_copies.get(&block).into_iter().flatten() {
-                if set.insert(*copy) {
-                    work.push(*copy);
-                }
-            }
+            let copies = self.block_copies.get(&block).into_iter().flatten();
+            work.extend(copies.filter(|copy| set.insert(**copy)));
         }
         let members = self
             .layout
