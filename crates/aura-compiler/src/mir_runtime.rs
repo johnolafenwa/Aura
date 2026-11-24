@@ -2861,7 +2861,7 @@ impl MirRuntime {
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.find_trait_impl_method_for_trait(receiver_ty, None, field)
+        self.find_trait_impl_method_for_trait(receiver_ty, None, field, None)
     }
 
     fn find_trait_impl_method_for_trait(
@@ -2869,6 +2869,7 @@ impl MirRuntime {
         receiver_ty: &Type,
         trait_name: Option<&str>,
         field: &str,
+        selected: Option<&str>,
     ) -> Option<&MirMethod> {
         let mut best = None;
         let mut best_specificity = 0usize;
@@ -2888,7 +2889,8 @@ impl MirRuntime {
                 continue;
             }
             for method in &trait_impl.methods {
-                if method.name == field {
+                if method.name == field && selected.is_none_or(|name| method.function_name == name)
+                {
                     let specificity = crate::sema::trait_impl_specificity_parts(
                         &trait_impl.for_type,
                         &trait_impl.trait_args,
@@ -5941,7 +5943,12 @@ impl MirRuntime {
                 receiver_place,
                 ..
             } => {
-                if let CallTarget::TraitMember { trait_name, .. } = callee {
+                if let CallTarget::TraitMember {
+                    trait_name,
+                    dispatch,
+                    ..
+                } = callee
+                {
                     let receiver_static_ty = self
                         .resolve_operand_type(object, env)
                         .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)));
@@ -5980,6 +5987,10 @@ impl MirRuntime {
                             &resolved_receiver_ty,
                             Some(trait_name),
                             field,
+                            match dispatch {
+                                Some(crate::mir::MethodDispatch::Static { function }) => Some(function),
+                                _ => None,
+                            },
                         )
                         .cloned()
                         .ok_or_else(|| {

@@ -1227,7 +1227,12 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &canonical_type_names,
                 &class_type_param_scope,
             )?;
-            super::types::reject_span_type(&lowered, field.ty.span, "a field type")?;
+            super::types::reject_span_type(&lowered, field.ty.span, "a field type").map_err(
+                |error| {
+                    super::delegation::view_field_error(&module, &class_decl.name, &field.name)
+                        .unwrap_or(error)
+                },
+            )?;
             if !field.ty.indirect && type_contains_named(&lowered, &class_decl.name) {
                 return Err(Diagnostic::at(
                     field.span,
@@ -1756,6 +1761,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     }
 
     let mut module = module;
+    super::delegation::expand_parents(&mut module, &traits, &module_name, |ty, decl| {
+        let mut params = BTreeSet::new();
+        collect_type_ref_type_params(ty, &type_names, &mut params, false);
+        params.extend(decl.type_params.iter().cloned());
+        lower_type(
+            ty,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &params.into_iter().map(|name| (name, ())).collect(),
+        )
+    })?;
     inherit_trait_contracts(&mut module, &traits)?;
     let module = module;
     let mut trait_impls = Vec::new();
@@ -1770,6 +1787,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         })
         .collect::<Vec<_>>();
     impl_decls.sort_by_key(|impl_decl| inherited_assoc_depth(&impl_decl.trait_name, &traits, 16));
+    super::delegation::order_after_field_impls(&mut impl_decls, &classes);
+    let mut forwarded_span = 0;
     for impl_decl in impl_decls {
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;
         for method in &impl_decl.methods {
@@ -1784,9 +1803,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 format!("unknown trait `{}`", impl_decl.trait_name),
             )
         })?;
-        let (impl_decl, open_assoc_types) =
+        let (mut impl_decl, open_assoc_types) =
             impl_with_assoc_type_args(impl_decl, trait_info, &traits)?;
-        let impl_decl = &impl_decl;
         let mut implicit_type_params = BTreeSet::new();
         collect_type_ref_type_params(
             &impl_decl.for_type,
@@ -1848,7 +1866,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
-        let (trait_args, impl_type_params) = if open_assoc_types.is_empty() {
+        let (trait_args, impl_type_params) = if impl_decl.delegation.is_none() && open_assoc_types.is_empty() {
             (trait_args, impl_type_params)
         } else {
             let checker = FunctionChecker::new(
@@ -1865,12 +1883,14 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 &imported_modules,
                 &context.module_registry,
             );
-            let found = checker.inherited_assoc_types(
-                trait_info,
-                &trait_args,
-                &for_type,
-                &open_assoc_types,
-            );
+            let found = if impl_decl.delegation.is_some() {
+                super::delegation::elaborate(
+                    &checker.with_type_params(impl_type_param_scope.clone(), impl_type_param_bounds.clone()),
+                    &mut impl_decl, trait_info, &for_type, &trait_args, &open_assoc_types, &mut forwarded_span,
+                )?
+            } else {
+                checker.inherited_assoc_types(trait_info, &trait_args, &for_type, &open_assoc_types)
+            };
             if let Some(missing) = open_assoc_types
                 .iter()
                 .find(|open| !found.contains_key(*open))
@@ -1899,6 +1919,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     .collect::<Vec<_>>(),
             )
         };
+        let impl_decl = &impl_decl;
         let display = super::is_prelude_display(trait_info);
         if display {
             super::display::validate_display_target(
@@ -3305,7 +3326,7 @@ fn impl_with_assoc_type_args(
             .find(|binding| binding.name == assoc.name);
         let arg = match binding {
             Some(binding) => binding.target.clone(),
-            None if inherited.contains(&assoc.name) => {
+            None if impl_decl.delegation.is_some() || inherited.contains(&assoc.name) => {
                 open.push(crate::ast::assoc_type_param_name(&assoc.name));
                 super::assoc_bounds::inherited_placeholder(&assoc.name, impl_decl.span)
             }

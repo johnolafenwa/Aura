@@ -1,0 +1,18 @@
+trait Named:
+    def name(self) -> str
+
+class Engine:
+    label: str
+
+impl Named for Engine:
+    def name(self) -> str:
+        return self.label.clone()
+
+class Car:
+    engine: Engine
+
+impl Named for Car by engine
+
+def main():
+    car = Car(engine=Engine(label="electric"))
+    print(car.name())

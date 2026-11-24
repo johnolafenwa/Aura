@@ -25997,6 +25997,9 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(value) = self.lower_delegated_call(expr, callee, args) {
+            return value;
+        }
         if let Some(info) = self.recursive_local_call(callee).cloned() {
             let mut forwarded = info
                 .captures
@@ -32051,6 +32054,8 @@ fn mir_class_type_name(
         })
 }
 
+#[path = "mir_delegation.rs"]
+mod delegation;
 #[path = "mir_spans.rs"]
 mod spans;
 
