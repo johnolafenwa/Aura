@@ -1,11 +1,13 @@
 //! Parse declaration suites in their surrounding grammar. Selection runs
 //! after syntax parsing and before a module's imports leave the parser.
 use super::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 mod predicates;
+mod resolver;
 mod statements;
+pub(super) use resolver::Resolver;
 
 pub(super) struct Suite {
     header: Span,
@@ -21,7 +23,7 @@ impl Parser {
         let header = self.tokens[self.index + 1..]
             .iter()
             .take_while(|token| token.kind != TokenKind::Newline);
-        header
+        let marker = header
             .filter_map(|token| match &token.kind {
                 TokenKind::Identifier(name) => Some(name.as_str()),
                 _ => None,
@@ -33,43 +35,63 @@ impl Parser {
                     || imports
                         .iter()
                         .any(|import| predicates::imports_name(import, name))
-            })
-            || self.has_declaration_in_suite()
-    }
+            });
 
-    fn has_declaration_in_suite(&self) -> bool {
-        let Some(start) = self.tokens[self.index..]
-            .iter()
-            .position(|t| t.kind == TokenKind::Indent)
-        else {
-            return false;
-        };
-        let mut depth = 1;
-        for token in &self.tokens[self.index + start + 1..] {
-            match &token.kind {
-                TokenKind::Dedent => {
-                    depth -= 1;
-                    if depth == 0 {
-                        break;
+        // Ordinary module-level executable conditionals continue through the
+        // statement grammar. Only suites with declaration syntax need the
+        // module grammar, including declarations nested in another guard.
+        let mut cursor = self.index;
+        loop {
+            let Some(indent) = self.tokens[cursor..]
+                .iter()
+                .position(|token| token.kind == TokenKind::Indent)
+            else {
+                return false;
+            };
+            cursor += indent + 1;
+            let mut depth = 1;
+            while let Some(token) = self.tokens.get(cursor) {
+                cursor += 1;
+                match &token.kind {
+                    TokenKind::Indent => depth += 1,
+                    TokenKind::Dedent => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
                     }
+                    TokenKind::KwImport
+                    | TokenKind::KwExtern
+                    | TokenKind::KwClass
+                    | TokenKind::KwEnum
+                    | TokenKind::KwTrait
+                    | TokenKind::KwImpl
+                    | TokenKind::KwPublic => return true,
+                    TokenKind::KwDef if depth == 1 => return true,
+                    TokenKind::Identifier(_)
+                        if marker
+                            && depth == 1
+                            && matches!(
+                                self.peek_kind_at(cursor),
+                                Some(TokenKind::Equal | TokenKind::Colon)
+                            )
+                            && matches!(
+                                self.peek_kind_at(cursor - 2),
+                                Some(TokenKind::Indent | TokenKind::Newline | TokenKind::Dedent)
+                            ) =>
+                    {
+                        return true
+                    }
+                    _ => {}
                 }
-                TokenKind::Indent => depth += 1,
-                TokenKind::KwImport
-                | TokenKind::KwFrom
-                | TokenKind::KwExtern
-                | TokenKind::KwClass
-                | TokenKind::KwEnum
-                | TokenKind::KwImpl
-                | TokenKind::KwTrait
-                | TokenKind::KwPublic
-                    if depth == 1 =>
-                {
-                    return true
-                }
-                _ => {}
+            }
+            if !matches!(
+                self.peek_kind_at(cursor),
+                Some(TokenKind::KwElse | TokenKind::KwElif)
+            ) {
+                return false;
             }
         }
-        false
     }
 
     pub(super) fn parse_declaration_arms<T>(
@@ -104,7 +126,11 @@ impl Parser {
         Ok(bodies)
     }
 
-    pub(super) fn select_conditionals(&mut self, module: &mut Module) -> Result<()> {
+    pub(super) fn select_conditionals(
+        &mut self,
+        module: &mut Module,
+        resolver: &mut Resolver,
+    ) -> Result<()> {
         if self.declaration_ifs.is_empty()
             && !module.constants.iter().any(|binding| binding.required)
             && module.imports.is_empty()
@@ -132,6 +158,7 @@ impl Parser {
                         false
                     } else if let Some(condition) = condition {
                         predicates::evaluate(
+                            resolver,
                             module,
                             &self.tokens,
                             &condition,
@@ -171,7 +198,7 @@ impl Parser {
                 class.methods.retain(|decl| is_active(decl.span, &inactive));
             }
         }
-        statements::select(module, &self.tokens, &mut inactive)?;
+        statements::select(resolver, module, &self.tokens, &mut inactive)?;
         inactive.sort_by_key(|range| range.start);
         module.inactive_lines = inactive;
         Ok(())

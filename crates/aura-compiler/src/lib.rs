@@ -428,6 +428,15 @@ fn verify_program(program: &Program, options: &verify::Options) -> Result<verify
     verify::verify_module(program, &module, options)
 }
 
+/// Parse a file's selected declarations, resolving only imports needed by its guards.
+pub fn parse_path_with_source(path: &Path, source: &str) -> Result<ast::Module> {
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    let _config = loader.package_config();
+    let path = absolutize(path);
+    loader.stack.push(path.clone());
+    parser::parse_for_path(source, &mut loader, &path)
+}
+
 pub fn check_path(path: &Path) -> Result<Program> {
     let mut loader = ModuleLoader::new(path)?;
     let program = loader.load_program(path)?;
@@ -685,7 +694,7 @@ impl ModuleLoader {
             })?
         };
         let display_path = path.display().to_string();
-        let module = parse_source(&source)
+        let module = parser::parse_for_path(&source, self, &path)
             .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
         if module.uses_ffi() {
             match &self.package_graph {
