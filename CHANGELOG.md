@@ -35,6 +35,23 @@ in this file.
   fields.
 - `aura verify` proves the body of a generator function with its `requires`
   clauses known, and reports its checks under the generator's name.
+- `aura verify` with no path, a directory, or several files verifies every
+  module of a package and prints each file's summary and one line of
+  totals. Such a run fails only when a check failed, a file does not
+  compile, or a `--must-verify` function is open. `--deny not-modeled`,
+  `--deny undecided` and `--deny all` make the other outcomes fail it too.
+  A run on one file is unchanged: it fails unless every check is proved.
+- `aura verify --must-verify <function>` reports `AU5122` when the named
+  function has a check that is not proved.
+- `aura test --verify` verifies the package before it runs the tests.
+- `aura verify` on one file says how many imported modules it did not
+  check.
+- `aura verify` verifies the statements a module writes outside every
+  function, and reports them as `<module>`. Before, they were not checked.
+- `aura verify` reports a check in a copy of a function made for a
+  generator argument once, under the function's own name. Before, it was
+  reported a second time under a name starting with `__aura_with_`. A
+  module constant's initializer is reported under the constant's name.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

@@ -651,6 +651,7 @@ fn every_kind_and_status_has_a_report() {
                 status,
             })
             .collect(),
+        ..Report::default()
     };
     assert_eq!(report.proved(), 1);
     assert!(!report.is_proved());

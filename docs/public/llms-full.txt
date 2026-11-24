@@ -3643,8 +3643,8 @@ aura check app.au
 | `aura fmt [--check] [paths...]` | Format Aura source files in place, or report files that would change. |
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
-| `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
-| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
+| `aura test [-k substring] [--format json] [--timeout-ms N] [--verify] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. `--verify` proves the package's checks first. |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--deny CLASS] [--must-verify NAME] [--no-cache] [--format json] [paths...]` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. One file is verified alone. A directory, several files, or no path verifies every module of the package. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -4216,6 +4216,14 @@ A second teardown failure appears as `secondary`, with `stage` plus either
 
 Assertions run normally in every mode. `aura test` has no option to strip
 assertions.
+
+**Verification.** `aura test --verify` first verifies the package in the
+current directory, as `aura verify` with no path does. It prints the
+verification report, then runs the tests. When a check failed, the command
+exits with status 1 and runs no test. In JSON mode a passing verification
+adds a `verification` object with the totals to the test document. A
+failing one prints the verification document in its place. See
+[Verifying a Package](/manual/verification#verifying-a-package).
 
 ## VS Code And LSP
 
@@ -8902,6 +8910,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
 | `AU5104` | check outside the verified subset | The check reads the result of a step the verifier does not model yet, such as `split`, a slice, a comprehension, a bit operation, a power with a large or unknown exponent, or a contract expression it cannot read. The message names the step. No counterexample is given. | Keep it as a runtime check, or restate the code or the contract with modeled operations. |
 | `AU5120` | contract can never hold | The `requires` clauses and class invariants a function assumes on entry contradict each other, so no call can meet them and every check in the function would pass for nothing. | Fix the contradictory clause. The function does not count as proved until some input meets its contract. |
+| `AU5122` | function marked verified has unproved checks | A function named with `aura verify --must-verify` has a check that failed, is not modeled, or is undecided. The note counts them, and each has its own diagnostic. | Fix or restate each open check, or drop the function from `--must-verify`. See [Functions That Must Verify](/manual/verification#functions-that-must-verify). |
 
 ## Diagnostic Structure
 
@@ -29185,11 +29194,13 @@ repository, which installs the version Aura's own tests use.
 ## What It Proves
 
 `aura verify` proves each of these checks on every path through each
-function:
+function. The statements a module writes outside every function are
+verified as one more function, which reports show as `<module>`:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| overflow | `a << n`, `a >> n`, `a ** n`, `math.floor(x)`, `math.isqrt(n)` | `AU4002` a shift count outside the width, a left shift that loses bits, or a result outside the type; `AU4001` a negative exponent or an argument outside a `math` function's domain |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
@@ -29387,7 +29398,8 @@ receives beyond their type.
 ## Reports
 
 `aura verify` prints a diagnostic for each check it could not prove, then a
-summary line. It exits with status 0 only when every check was proved.
+summary line. With one file it exits with status 0 only when every check
+was proved.
 
 ```text
 error[AU5101]: cannot prove integer result in range
@@ -29411,6 +29423,7 @@ outcome: failed, not modeled, and undecided.
 | `AU5103` | No solver could be started. |
 | `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
 | `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
+| `AU5122` | A function named with `--must-verify` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
 
 A failure is reported only when the program can reach it. In this function
 the verifier does not model `split`, so it cannot tell that the result has
@@ -29428,6 +29441,82 @@ fact that holds. Add it as a `requires` on the function, an `invariant` on
 the loop, or an `ensures` on the callee, and the verifier proves the fact
 where it is stated and uses it where it is needed.
 
+A check in a copy the compiler makes of a function is reported under the
+function's own name, at the place it is written. The compiler makes such
+copies for a generic function and for a function that receives a generator
+as an argument.
+
+## Verifying a Package
+
+With one file, `aura verify` proves the functions of that file. It reads
+the contracts of the modules the file imports and does not prove their
+bodies. The summary says so:
+
+```text
+imported modules not checked: 1 (util); `aura verify` with no path checks every module
+```
+
+With no path, `aura verify` proves every module of the package in the
+current directory. A directory, or several files, work the same way:
+
+```bash
+aura verify              # the package in the current directory
+aura verify services/api # the package in that directory
+aura verify src/bank.au src/ledger.au
+```
+
+A directory stands for its `src` directory when it has one. Every `.au`
+file under it is verified once, as the entry of its own run. The report has
+each file's diagnostics and summary line, then one line of totals:
+
+```text
+verified src/main.au: 1 of 1 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+verified src/util.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 1 failed, 0 not modeled, 0 undecided
+verified 2 files: 4 of 5 checks proved in 3 functions; 1 failed, 0 not modeled, 0 undecided
+```
+
+A run over a package exits with status 1 when a check failed, when a file
+does not compile, or when a function that must verify does not. A check
+that is not modeled or undecided is reported and does not fail the run.
+This differs from a run on one file, which fails unless every check is
+proved. `--deny` makes those outcomes fail a package run too:
+
+| Option | A package run also fails when |
+| --- | --- |
+| `--deny not-modeled` | a check is not modeled |
+| `--deny undecided` | the solver could not decide a check |
+| `--deny all` | any check is not proved |
+
+`aura test --verify` verifies the package in the current directory before
+it runs the tests. A failed check fails the command, and no test runs. See
+[Testing](/manual/cli-and-tooling#testing).
+
+### Functions That Must Verify
+
+`--must-verify <function>` names a function whose checks must all be
+proved. Give the name a report shows, such as `withdraw` or
+`Account.deposit`. Repeat the option for more functions.
+
+```bash
+aura verify --must-verify withdraw --must-verify Account.deposit
+```
+
+A named function with a check that failed, is not modeled, or is undecided
+reports `AU5122` at its `def`, and the run fails in every mode:
+
+```text
+error[AU5122]: function `power` marked verified has unproved checks
+ --> src/util.au:6:1
+  |
+6 | public def power(x: float64) -> float64:
+  | ^
+  = note: checks not proved: 2; each has its own diagnostic
+```
+
+A name that matches no verified function also fails the run, so a
+misspelled name cannot pass. Aura has no marker in the source for this.
+
 ### Options
 
 | Option | Meaning |
@@ -29435,8 +29524,10 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--deny <class>` | Make a package run fail on checks that are `not-modeled`, `undecided`, or `all` of both. See [Verifying a Package](#verifying-a-package). |
+| `--must-verify <name>` | Report `AU5122` when function `name` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, then the diagnostics. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
 
 ### Proof Cache
 
@@ -29500,6 +29591,21 @@ booleans, with each integer type's range as a check:
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
+- integer bit operations and shifts. `<<` and `>>` are exact, with the
+  count and lost-bits checks of the run time; `>>` keeps the sign. `&`,
+  `|`, and `^` with a literal operand, and `~`, are exact. Of two values
+  that are not literals, `&`, `|`, and `^` have only the bounds the
+  operands' signs give, such as `0 <= a & b <= a` for `a >= 0`
+- the `wrapping_` and `saturating_` methods of integers, exactly
+- integer `**` with a literal exponent up to 63, or with a literal base,
+  as in `2 ** k`. A power of two values that are not literals has only
+  its sign and the cases of exponent 0 and 1
+- `as` casts between numbers in contracts, with the same checks as in code
+- of the `math` module: `floor`, `ceil`, `trunc`, `sqrt`, `is_nan`,
+  `is_inf`, `is_finite`, `isqrt`, and `factorial` exactly, each with the
+  check of its argument; `gcd`, `lcm`, `comb`, and `perm` by their bounds;
+  `sin` and `cos` between -1 and 1, and `exp` not below 0. The overflow of
+  `lcm`, `comb`, `perm`, and `exp` is not checked
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - parameters, class fields, and function results of a callable alias with
   a contract ([Callable Contracts](/manual/contracts#callable-contracts)):

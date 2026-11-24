@@ -20,7 +20,8 @@ repository, which installs the version Aura's own tests use.
 ## What It Proves
 
 `aura verify` proves each of these checks on every path through each
-function:
+function. The statements a module writes outside every function are
+verified as one more function, which reports show as `<module>`:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
@@ -233,7 +234,8 @@ receives beyond their type.
 ## Reports
 
 `aura verify` prints a diagnostic for each check it could not prove, then a
-summary line. It exits with status 0 only when every check was proved.
+summary line. With one file it exits with status 0 only when every check
+was proved.
 
 ```text
 error[AU5101]: cannot prove integer result in range
@@ -257,6 +259,7 @@ outcome: failed, not modeled, and undecided.
 | `AU5103` | No solver could be started. |
 | `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
 | `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
+| `AU5122` | A function named with `--must-verify` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
 
 A failure is reported only when the program can reach it. In this function
 the verifier does not model `split`, so it cannot tell that the result has
@@ -274,6 +277,82 @@ fact that holds. Add it as a `requires` on the function, an `invariant` on
 the loop, or an `ensures` on the callee, and the verifier proves the fact
 where it is stated and uses it where it is needed.
 
+A check in a copy the compiler makes of a function is reported under the
+function's own name, at the place it is written. The compiler makes such
+copies for a generic function and for a function that receives a generator
+as an argument.
+
+## Verifying a Package
+
+With one file, `aura verify` proves the functions of that file. It reads
+the contracts of the modules the file imports and does not prove their
+bodies. The summary says so:
+
+```text
+imported modules not checked: 1 (util); `aura verify` with no path checks every module
+```
+
+With no path, `aura verify` proves every module of the package in the
+current directory. A directory, or several files, work the same way:
+
+```bash
+aura verify              # the package in the current directory
+aura verify services/api # the package in that directory
+aura verify src/bank.au src/ledger.au
+```
+
+A directory stands for its `src` directory when it has one. Every `.au`
+file under it is verified once, as the entry of its own run. The report has
+each file's diagnostics and summary line, then one line of totals:
+
+```text
+verified src/main.au: 1 of 1 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+verified src/util.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 1 failed, 0 not modeled, 0 undecided
+verified 2 files: 4 of 5 checks proved in 3 functions; 1 failed, 0 not modeled, 0 undecided
+```
+
+A run over a package exits with status 1 when a check failed, when a file
+does not compile, or when a function that must verify does not. A check
+that is not modeled or undecided is reported and does not fail the run.
+This differs from a run on one file, which fails unless every check is
+proved. `--deny` makes those outcomes fail a package run too:
+
+| Option | A package run also fails when |
+| --- | --- |
+| `--deny not-modeled` | a check is not modeled |
+| `--deny undecided` | the solver could not decide a check |
+| `--deny all` | any check is not proved |
+
+`aura test --verify` verifies the package in the current directory before
+it runs the tests. A failed check fails the command, and no test runs. See
+[Testing](/manual/cli-and-tooling#testing).
+
+### Functions That Must Verify
+
+`--must-verify <function>` names a function whose checks must all be
+proved. Give the name a report shows, such as `withdraw` or
+`Account.deposit`. Repeat the option for more functions.
+
+```bash
+aura verify --must-verify withdraw --must-verify Account.deposit
+```
+
+A named function with a check that failed, is not modeled, or is undecided
+reports `AU5122` at its `def`, and the run fails in every mode:
+
+```text
+error[AU5122]: function `power` marked verified has unproved checks
+ --> src/util.au:6:1
+  |
+6 | public def power(x: float64) -> float64:
+  | ^
+  = note: checks not proved: 2; each has its own diagnostic
+```
+
+A name that matches no verified function also fails the run, so a
+misspelled name cannot pass. Aura has no marker in the source for this.
+
 ### Options
 
 | Option | Meaning |
@@ -281,8 +360,10 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--deny <class>` | Make a package run fail on checks that are `not-modeled`, `undecided`, or `all` of both. See [Verifying a Package](#verifying-a-package). |
+| `--must-verify <name>` | Report `AU5122` when function `name` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, then the diagnostics. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
 
 ### Proof Cache
 

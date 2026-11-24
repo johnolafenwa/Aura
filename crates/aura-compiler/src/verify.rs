@@ -31,6 +31,12 @@ pub mod smt;
 mod spec;
 #[path = "verify_text.rs"]
 mod text;
+#[path = "verify_workflow.rs"]
+mod workflow;
+pub use workflow::{
+    package_source_root, unmatched_must_verify, verify_files, Deny, FileReport, MustVerify,
+    PackageReport, Totals, MODULE_BODY,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -134,6 +140,11 @@ pub struct Report {
     /// no bounds check, by MIR function name, block, and position.
     pub proved_sites: BTreeSet<(String, usize, usize)>,
     pub obligations: Vec<ObligationReport>,
+    /// Each function [`Options::must_verify`] names, and how many of its
+    /// checks are not proved.
+    pub must_verify: Vec<MustVerify>,
+    /// The imported modules whose functions this run did not verify.
+    pub unchecked_modules: Vec<String>,
 }
 
 impl Report {
@@ -226,6 +237,7 @@ impl Report {
                 };
                 Some(diagnostic)
             })
+            .chain(self.unverified().map(MustVerify::diagnostic))
             .collect()
     }
 }
@@ -247,6 +259,9 @@ pub struct Options {
     /// Also prove which element accesses can skip their bounds check, for
     /// a build that removes proved checks.
     pub prove_sites: bool,
+    /// The functions that must verify completely, by the name a report
+    /// shows. One with a check that is not proved is reported as `AU5122`.
+    pub must_verify: Vec<String>,
 }
 
 impl Default for Options {
@@ -258,6 +273,7 @@ impl Default for Options {
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
             cache_dir: None,
             prove_sites: false,
+            must_verify: Vec::new(),
         }
     }
 }
@@ -1161,7 +1177,11 @@ pub fn verify_module(
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
-    for function in &module.functions {
+    // The module body is verified like a function. A build that removes
+    // proved checks leaves it alone.
+    let top_level = module.top_level.iter().filter(|_| !options.prove_sites);
+    let mut function_spans: BTreeMap<String, Span> = BTreeMap::new();
+    for function in module.functions.iter().chain(top_level) {
         let is_primary = verified_function(program, &cx, function);
         let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
         if !is_primary && !is_auxiliary {
@@ -1172,14 +1192,20 @@ pub fn verify_module(
                 continue;
             }
         }
-        if is_primary {
-            report.functions += 1;
-        }
-        // A check in a generator's body is reported under the generator.
-        let public = match cx.generator_of_body(&function.name) {
-            Some((generator, _)) => generator,
-            None => crate::mir::public_function_name(&function.name),
+        // A check in a generator's body is reported under the generator,
+        // and one in a copy made for a generator argument under the
+        // function that was copied, at the place it was written.
+        let (public, is_copy) = match cx.generator_of_body(&function.name) {
+            Some((generator, _)) => (generator, false),
+            None => workflow::reported_name(&function.name),
         };
+        let reported_span = |span: Span| if is_copy { span.written() } else { span };
+        if is_primary && !is_copy {
+            report.functions += 1;
+            function_spans
+                .entry(public.clone())
+                .or_insert(function.span);
+        }
         let module_order = if function.module_name == program.module_name {
             String::new()
         } else {
@@ -1245,7 +1271,7 @@ pub fn verify_module(
             .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
         let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
             Some(statuses) => {
-                if is_primary {
+                if is_primary && !is_copy {
                     report.cached += 1;
                 }
                 statuses
@@ -1291,9 +1317,15 @@ pub fn verify_module(
             if obligation.kind == ObligationKind::Satisfiable && status == Status::Proved {
                 continue;
             }
+            let span = reported_span(obligation.span);
+            let status = if is_copy {
+                workflow::copy_status(status)
+            } else {
+                status
+            };
             let key = (
                 module_order.clone(),
-                (obligation.span.line, obligation.span.column),
+                (span.line, span.column),
                 obligation.kind,
                 obligation.message.clone(),
             );
@@ -1310,7 +1342,7 @@ pub fn verify_module(
                         ObligationReport {
                             kind: obligation.kind,
                             function: public.clone(),
-                            span: obligation.span,
+                            span,
                             message: obligation.message.clone(),
                             status,
                         },
@@ -1326,6 +1358,8 @@ pub fn verify_module(
         );
     }
     report.obligations = merged.into_values().collect();
+    report.must_verify = workflow::must_verify(&options.must_verify, &function_spans, &report);
+    report.unchecked_modules = workflow::unchecked_modules(program, module);
     // A lemma that is not proved may have let the verifier assume what no
     // run checks, so no access counts as proved.
     if !erased_open {
@@ -1854,6 +1888,10 @@ mod tests_collections;
 #[cfg(test)]
 #[path = "verify_integers_tests.rs"]
 mod tests_integers;
+
+#[cfg(test)]
+#[path = "verify_workflow_tests.rs"]
+mod tests_workflow;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
