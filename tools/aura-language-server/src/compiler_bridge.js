@@ -141,7 +141,11 @@ function requestCompiler(method, params, cancellationToken) {
     });
     compilerServiceKey = key;
   }
-  return compilerService.request(method, params, cancellationToken);
+  return compilerService.request(
+    method,
+    process.env.AURA_LSP_FREESTANDING === "1" ? { ...params, freestanding: true } : params,
+    cancellationToken
+  );
 }
 
 class CompilerService {

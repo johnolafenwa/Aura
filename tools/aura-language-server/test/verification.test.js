@@ -237,3 +237,16 @@ test("verifying on save is on unless turned off", () => {
   assert.equal(verifyOnSave({ AURA_LSP_VERIFY: "0" }), false);
   assert.equal(typeof verifyOnSave(), "boolean");
 });
+
+test("the verifier uses the freestanding profile when selected", async () => {
+  const { spawnImpl, calls } = fakeSpawn();
+  const previous = process.env.AURA_LSP_FREESTANDING;
+  try {
+    process.env.AURA_LSP_FREESTANDING = "1";
+    await runVerifier({ cmd: "aura", args: [] }, "kernel.au", "", spawnImpl);
+    assert.ok(calls[0].args.includes("--freestanding"));
+  } finally {
+    if (previous === undefined) delete process.env.AURA_LSP_FREESTANDING;
+    else process.env.AURA_LSP_FREESTANDING = previous;
+  }
+});

@@ -346,6 +346,37 @@
     "declarations": {
       "patterns": [
         {
+          "name": "meta.definition.ffi.layout-class.aura",
+          "begin": "\\b(extern)\\s+(\"C\")(?=\\s+(?:packed|align)\\b)",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            }
+          },
+          "end": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)|$",
+          "endCaptures": {
+            "1": {
+              "name": "keyword.declaration.aura"
+            },
+            "2": {
+              "name": "entity.name.type.aura"
+            }
+          },
+          "patterns": [
+            {
+              "name": "storage.modifier.layout.aura",
+              "match": "\\b(?:packed|align)\\b"
+            },
+            {
+              "name": "constant.numeric.aura",
+              "match": "\\b(?:0[xX][\\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[\\d_]+)\\b"
+            }
+          ]
+        },
+        {
           "name": "meta.definition.ffi.opaque.aura",
           "match": "\\b(extern)\\s+(\"C\")\\s+(opaque)\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -599,6 +630,24 @@
               "name": "keyword.control.aura"
             }
           }
+        },
+        {
+          "name": "meta.definition.ffi.bit-field.aura",
+          "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*:\\s*(uint(?:8|16|32|64))\\s+(bits)\\s*\\(\\s*((?:0[xX][\\da-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|[\\d_]+))\\s*\\)",
+          "captures": {
+            "1": {
+              "name": "variable.other.member.aura"
+            },
+            "2": {
+              "name": "support.type.primitive.aura"
+            },
+            "3": {
+              "name": "storage.modifier.layout.aura"
+            },
+            "4": {
+              "name": "constant.numeric.aura"
+            }
+          }
         }
       ]
     },
@@ -663,6 +712,10 @@
         {
           "name": "support.type.primitive.aura",
           "match": "\\b(Callable|TaskCallable)\\b"
+        },
+        {
+          "name": "support.type.primitive.aura",
+          "match": "\\bfixed(?=\\s*\\[)"
         }
       ]
     },

@@ -41,9 +41,10 @@ function runVerifier(
   return new Promise((resolve) => {
     let child;
     try {
+      const profile = process.env.AURA_LSP_FREESTANDING === "1" ? ["--freestanding"] : [];
       child = spawnImpl(
         command.cmd,
-        [...command.args, "verify", "--format", "json", "--stdin", filePath],
+        [...command.args, "verify", ...profile, "--format", "json", "--stdin", filePath],
         {
           cwd: command.cwd,
           env: { AURA_OFFLINE: "1", ...process.env },
