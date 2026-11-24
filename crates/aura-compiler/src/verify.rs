@@ -768,6 +768,31 @@ impl<'a> VerifyContext<'a> {
         self.decls.get(spec::base_name(name)).copied()
     }
 
+    /// The generator function whose body MIR function `name` holds: its
+    /// MIR name and its declaration. The checker gives the body function
+    /// the generator's own span, which no function a program declares
+    /// under such a name can share.
+    pub(crate) fn generator_of_body(&self, name: &str) -> Option<(String, &'a FunctionDecl)> {
+        let name = spec::base_name(name);
+        let at = name.rfind("::").map_or(0, |at| at + 2);
+        let generator = name[at..].strip_prefix(crate::diag::GENERATOR_BODY_PREFIX)?;
+        let generator = format!("{}{generator}", &name[..at]);
+        let decl = self.decl(&generator)?;
+        (self.decl(name)?.span == decl.span).then_some((generator, decl))
+    }
+
+    /// The declaration whose `requires` hold on entry to MIR function
+    /// `name`: its own, or the generator function's for a generator's body.
+    /// Each call of the generator proves them, and the body runs later on
+    /// the same argument values: a generator takes no `mut` parameter, its
+    /// closure owns the others, and no clause can read shared state.
+    pub(crate) fn entry_decl(&self, name: &str) -> Option<&'a FunctionDecl> {
+        match self.generator_of_body(name) {
+            Some((_, decl)) => Some(decl),
+            None => self.decl(name),
+        }
+    }
+
     /// The contract declaration of an `extern` function by its C link symbol.
     pub(crate) fn extern_decl(&self, symbol: &str) -> Option<&'a FunctionDecl> {
         self.extern_decls.get(symbol).copied()
@@ -963,13 +988,30 @@ fn substitute(ty: &Type, substitutions: &BTreeMap<&str, &Type>) -> Type {
     }
 }
 
+/// Prefix of the function that builds the frame of a generator the checker
+/// also spells as a state machine, and of the frame's class.
+const GENERATOR_FRAME_NEW_PREFIX: &str = "__aura_frame_new_";
+const GENERATOR_FRAME_CLASS_PREFIX: &str = "__aura_frame_";
+
+/// Whether `function` is the checker's state-machine copy of a generator:
+/// the function that builds its frame, or the frame's method. The copy
+/// repeats the statements of the generator's body, which is verified as
+/// written, and its checks would read the frame's fields with no memory of
+/// the statements that ran before the last `yield`.
+fn generator_frame_function(function: &MirFunction) -> bool {
+    function.span.column >= crate::diag::GENERATED_COLUMN_STRIDE
+        && (function.name.starts_with(GENERATOR_FRAME_NEW_PREFIX)
+            || (function.name.starts_with(GENERATOR_FRAME_CLASS_PREFIX)
+                && function.name.contains('.')))
+}
+
 /// Whether `function` is one the report covers: a function of the entry
 /// module that is not a `spec def`.
 fn verified_function(program: &Program, cx: &VerifyContext<'_>, function: &MirFunction) -> bool {
     if function.module_name != program.module_name {
         return false;
     }
-    if function.name.contains("::__default_") {
+    if function.name.contains("::__default_") || generator_frame_function(function) {
         return false;
     }
     // A class's invariant check runs where the invariant must hold, and
@@ -1037,7 +1079,11 @@ pub fn verify_module(
         if is_primary {
             report.functions += 1;
         }
-        let public = crate::mir::public_function_name(&function.name);
+        // A check in a generator's body is reported under the generator.
+        let public = match cx.generator_of_body(&function.name) {
+            Some((generator, _)) => generator,
+            None => crate::mir::public_function_name(&function.name),
+        };
         let module_order = if function.module_name == program.module_name {
             String::new()
         } else {
@@ -1661,6 +1707,10 @@ mod tests;
 #[cfg(test)]
 #[path = "verify_tests_outcomes.rs"]
 mod tests_outcomes;
+
+#[cfg(test)]
+#[path = "verify_tests_generators.rs"]
+mod tests_generators;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

@@ -438,7 +438,7 @@ impl Exec<'_> {
     /// well-defined: every call proves it.
     pub(super) fn assume_entry_requires(&mut self, state: &State) {
         let name = self.function.name.clone();
-        let Some(decl) = self.cx.decl(&name) else {
+        let Some(decl) = self.cx.entry_decl(&name) else {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
