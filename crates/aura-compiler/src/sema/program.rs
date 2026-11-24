@@ -2313,6 +2313,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         checker.consume_value_expr(&constant.value, &mut scope)?;
         constant_closure_infos.extend(checker.closure_infos.borrow().clone());
         constant_comprehension_infos.extend(checker.comprehension_infos.borrow().clone());
+        let folded = super::c_layout_queries::folded_binding(constant, &imported_modules, &classes);
         constants.insert(
             constant.name.clone(),
             ConstantInfo {
@@ -2320,15 +2321,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 state: constant
                     .mutable
                     .then(|| {
-                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &constant.value)
+                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &folded.value)
                     })
                     .transpose()?
                     .map(std::sync::Arc::new),
-                decl: super::c_layout_queries::folded_binding(
-                    constant,
-                    &imported_modules,
-                    &classes,
-                ),
+                decl: folded,
                 ty: expected.unwrap_or(inferred),
             },
         );
