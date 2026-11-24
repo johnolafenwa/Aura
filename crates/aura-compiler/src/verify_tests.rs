@@ -4158,13 +4158,19 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
         assert!(std::env::var_os("CI").is_none());
         return;
     }
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/typed-pointers/verify/src/main.au");
+    let package = script_dir("typed-pointer-effects");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/typed-pointers/verify");
+    std::fs::create_dir(package.join("src")).unwrap();
+    std::fs::copy(fixture.join("Aura.toml"), package.join("Aura.toml")).unwrap();
+    let path = package.join("src/main.au");
+    std::fs::copy(fixture.join("src/main.au"), &path).unwrap();
     let options = Options {
         prove_sites: true,
         ..Options::default()
     };
     let report = crate::verify_path(&path, &options).expect("the pointer program checks");
+    std::fs::remove_dir_all(package).unwrap();
     for name in [
         "write_raw",
         "relay",
