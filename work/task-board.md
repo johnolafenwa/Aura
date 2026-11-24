@@ -4,7 +4,7 @@ Last updated: 2026-11-24
 
 ## Class items for 0.18
 
-Field delegation, property setters, destructor hooks and method decorators passed 54 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
+Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
 
 ## Release 0.17.0-preview (complete)
 
