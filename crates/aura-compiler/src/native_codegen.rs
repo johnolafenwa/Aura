@@ -17492,11 +17492,10 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                if self.holds_field_box() {
-                    self.builder.call(function, &words);
-                } else {
-                    self.emit_scalar_list_push(list, bits, kind, function, &words);
-                }
+                // A field's or an element's own box takes the scalar in
+                // place too: the runtime takes it in when it next reaches
+                // the box through its holder.
+                self.emit_scalar_list_push(list, bits, kind, function, &words);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -17506,13 +17505,7 @@ impl<'a> FunctionCompiler<'a> {
                     .expect("checked above");
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
-                // A field's or an element's own box takes the record by
-                // call, which keeps the list's records in place.
-                if self.holds_field_box() {
-                    self.push_plain_record_by_call(&record, list, &value);
-                } else {
-                    self.emit_plain_list_push(&record, list, &value);
-                }
+                self.emit_plain_list_push(&record, list, &value);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

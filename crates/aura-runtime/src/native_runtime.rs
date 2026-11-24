@@ -1478,9 +1478,10 @@ pub struct OpaqueValue {
     /// while `list_len` is below it stores the element past the end and
     /// raises `list_len`. The next access adopts that length and sets this
     /// back to 0, so runtime code always sees every element. A read of a
-    /// held box (see [`Self::held_value`]) sets it to 0 too, since a copy
-    /// it makes shares the storage. That read may run on several threads at
-    /// once under a shared holder's lock, so the word is atomic.
+    /// held box (see [`Self::held_value`]) adopts the length and sets it
+    /// to 0 too, since a copy it makes shares the storage. That read may
+    /// run on several threads at once under a shared holder's lock, so the
+    /// word is atomic.
     list_capacity: AtomicU32,
     /// The value's index in the list of the ledger that links it.
     slot: std::cell::Cell<u32>,
@@ -1629,20 +1630,62 @@ impl OpaqueValue {
 
     /// The value of a box its holder owns and reaches it through: a list
     /// element's box or an instance field's box. The holder's access covers
-    /// it, so it takes no access of its own, and generated code never runs
-    /// its list view ahead of it (see `native_class_layouts.rs`), so there
-    /// is nothing to take in. The caller may copy the value, and the copy
-    /// shares its storage, so the box gives up its room as an access
+    /// it, so it takes no access of its own. Generated code appends to a
+    /// list in such a box in place while the holder is confined, so the
+    /// elements it appended are taken in first (see
+    /// [`Self::settle_held_list`]). The caller may copy the value, and the
+    /// copy shares its storage, so the box gives up its room as an access
     /// would: generated code then calls the runtime to change the list,
     /// which copies the storage first, until the next write through the box
     /// or its holder finds the storage unshared again.
     fn held_value(&self) -> &Value {
-        if self.list_capacity.load(Ordering::Relaxed) != 0 {
-            self.list_capacity.store(0, Ordering::Relaxed);
+        if self.list_capacity.load(Ordering::Acquire) != 0 {
+            self.settle_held_list();
         }
         // SAFETY: the holder's access covers the box, and a write takes the
         // holder mutably, so no `&mut Value` exists while this borrow lives.
         unsafe { &*self.value.get() }
+    }
+
+    /// Takes in the elements generated code appended in place to the list
+    /// in a held box, and takes back its room. Every read or write of a
+    /// held box's value through its holder starts here, as every access to
+    /// any other box starts at [`Self::adopt_appended_elements`].
+    ///
+    /// Generated code appends only while the holder is confined, but the
+    /// holder may become shared with elements still to take in, and then
+    /// several readers may come here at once under its lock. One of them
+    /// takes the elements in under a lock of its own and only then clears
+    /// the room, so a reader that finds no room finds the whole list, and
+    /// one that finds room waits here.
+    #[cold]
+    #[inline(never)]
+    fn settle_held_list(&self) {
+        static SETTLING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SETTLING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.list_capacity.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        // SAFETY: room is only set by a write that has ended, and every
+        // reader of a held box comes here before it reads while there is
+        // room, so no reference into the value is live. The room also
+        // means the storage is unshared, and generated code wrote each
+        // element up to `list_len` before it raised the length.
+        if let Value::Vec(vector) = unsafe { &mut *self.value.get() } {
+            unsafe { vector.elements.adopt_appended(self.list_len.get()) };
+        }
+        self.list_capacity.store(0, Ordering::Release);
+    }
+
+    /// [`Self::settle_held_list`] for a caller that holds the box's holder
+    /// for writing, or owns the box, so no other reader can come.
+    #[inline]
+    fn settle_held_list_for_write(&self) {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
+            self.adopt_appended_elements();
+        }
     }
 
     /// Takes in the elements generated code appended in place since the
@@ -3527,6 +3570,9 @@ impl DirectListLayout {
             // Then the 4-byte room count.
             0x0801_0204,
             4,
+            // The runtime takes in what generated code appended in place
+            // to a list in a field's or an element's box.
+            1,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
@@ -15852,8 +15898,8 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
     if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
         return None;
     }
-    // A held box never runs its list view ahead of the list, so the
-    // elements generated code appended are taken in now.
+    // The elements generated code appended are taken in now, so the
+    // holder's first read of the box has nothing to take in.
     if header.list_capacity.load(Ordering::Relaxed) != 0 {
         header.adopt_appended_elements();
     }
