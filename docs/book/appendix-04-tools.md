@@ -1,10 +1,11 @@
 # Appendix D: Useful tools
 
 The `aura` command does more than compile and run programs. It formats code,
-runs tests, generates API documentation, and powers the editor support in VS
-Code. This appendix is a tour of those tools, in roughly the order you will
-want them. The [CLI and tooling](/manual/cli-and-tooling) page of the Manual
-lists every command and flag.
+runs tests, proves that a program's checks cannot fail, generates API
+documentation, and powers the editor support in VS Code. This appendix is a
+tour of those tools, in roughly the order you will want them. The
+[CLI and tooling](/manual/cli-and-tooling) page of the Manual lists every
+command and flag.
 
 ## The everyday commands
 
@@ -16,6 +17,9 @@ they divide the work:
   when it does.
 - `aura run file.au` checks and then runs the program. Arguments after `--`
   reach the program through `sys.args()`.
+- `aura verify file.au` proves that the program's contracts, arithmetic,
+  and indexes cannot fail, without running it. It has
+  [its own section](#proving-with-aura-verify) below.
 - `aura build -o path file.au` produces a standalone native executable.
   Add `--debug` for a build a debugger can step through.
 - `aura new name` creates a project directory with `Aura.toml`,
@@ -162,6 +166,119 @@ ok tests/smoke.au
 changes the per-test limit. Chapter 11 covers testing properly, including
 test functions, setup and teardown, and parameterized cases.
 
+## Proving with `aura verify`
+
+A test runs the inputs you wrote down. `aura verify` reasons about all of
+them. It reads the contracts in a file (`requires`, `ensures`, loop and
+class `invariant`, `decreases`) and proves that each one holds on every
+path, and it proves the checks you never wrote as well: that no integer
+operation overflows, no divisor is zero, no list index is out of range, and
+no dictionary read misses its key. For each check it cannot prove, it
+prints a diagnostic, with the inputs that break the check when the solver
+can name them. [Section 11.4](/book/ch11-04-contracts-and-proofs) teaches
+the method; this is the tool.
+
+It needs an SMT solver, a separate program that answers logic questions,
+and it looks for `z3` and then `cvc5` on your `PATH`. Install Z3 with
+`brew install z3`, `apt install z3`, or `pip install z3-solver`. Nothing is
+added to the compiler or to the programs you build.
+
+Here is a function with a contract and a classic mistake:
+
+*Filename: src/mid.au*
+
+```aura
+def midpoint(low: int64, high: int64) -> int64:
+    requires 0 <= low and low <= high
+    ensures low <= result and result <= high
+    return (low + high) // 2
+
+
+def main():
+    print(midpoint(10, 20))
+```
+
+```console
+$ aura verify src/mid.au
+error[AU5101]: cannot prove integer result in range
+ --> src/mid.au:4:13
+  |
+4 |     return (low + high) // 2
+  |             ^
+  = note: in `midpoint` (overflow check)
+  = note: counterexample: low = 9223372036854775807, high = 9223372036854775807
+verified src/mid.au: 4 of 5 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ echo $?
+1
+```
+
+The diagnostic has the same parts as a compiler error, plus two notes: the
+function and the kind of check, and a counterexample. The last line is the
+summary, and it ends with the solver that was used. The exit status is 0
+only when every check was proved, so `aura verify` can gate a CI job the
+way `aura test` does. Writing the sum as `low + (high - low) // 2` fixes
+the overflow:
+
+```console
+$ aura verify src/mid.au
+verified src/mid.au: 6 of 6 checks proved in 2 functions, 1 from the proof cache (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The count went from five to six because the new expression has one more
+arithmetic step to prove. `main` did not change between the two runs, so
+its result came from the proof cache. `aura verify` stores each function's
+results under `~/.cache/aura/verify` (or under `verify` in
+`AURA_CACHE_DIR`), and answers from there when the function, the contracts
+it relies on, the solver version, and the time limit are all unchanged.
+Verifying again after a small edit solves only what the edit touched.
+
+The command takes one file and follows its imports. Its options are:
+
+- `--function name` verifies only the functions whose name contains `name`.
+  Use it to work on one function of a large file.
+- `--timeout ms` sets the time limit for each check. The default is 10000.
+  A check the solver cannot decide in time is reported as `AU5102`.
+- `--solver path` names the solver to run. Without it, `aura verify` uses
+  the `AURA_SMT_SOLVER` environment variable if it is set, then `z3`, then
+  `cvc5`.
+- `--no-cache` solves every check again and ignores the proof cache.
+- `--format json` prints the report as JSON: one entry for each check with
+  its kind, function, line, column, and status (`proved`, `failed`,
+  `unknown`, or `unsupported`), followed by the diagnostics in the same form
+  as `aura check --format json`.
+
+Four diagnostic codes belong to the verifier. `AU5101` means a check can
+fail, or the verifier is missing a fact it needs. `AU5102` means the solver
+gave up. `AU5103` means no solver could be started. `AU5104` means the check
+depends on something the verifier does not model.
+[Appendix E](/book/appendix-05-common-diagnostics#proofs) shows each one
+and what to do about it.
+
+Two things about a proof are easy to get wrong. The first is that it is
+about the contracts as written: a function that proves is a function that
+keeps its `ensures` whenever its `requires` holds, and if the `requires`
+asks for something no caller can supply, the proof says very little. The
+second is that the verifier knows nothing about what most library calls
+return, including everything read from a file, a process, or a socket.
+Code that checks such a value before using it verifies; code that trusts it
+does not. The [Verification](/manual/verification) page of the Manual lists
+what is modeled.
+
+`aura verify` changes nothing in the program. Every check it proved is
+still made when the program runs. To build a native binary without them,
+pass `--remove-proved-checks` to `aura build`, which runs the verifier and
+reports how many checks it removed:
+
+```console
+$ aura build --remove-proved-checks -o scores src/main.au
+aura: 7 checks proved and removed (1 bounds, 4 arithmetic, 2 assertion)
+aura: built `scores` with direct backend
+```
+
+That run is from [Chapter 17](/book/ch17-01-run-and-build#proving-the-trap-away),
+which explains what stays in the binary and what the build trusts when a
+check goes.
+
 ## API documentation with `aura doc`
 
 A triple-quoted string as the first statement of a module, class, or function
@@ -244,6 +361,12 @@ binding to see its type. If you get colours but no diagnostics or hover, the
 extension cannot start the compiler. Run `aura --version` in VS Code's
 integrated terminal to see what the editor's environment finds, and open
 **View → Output**, then **Aura Language Server**, to read the startup log.
+
+The extension also runs `aura verify` each time an Aura file is opened or
+saved. A check it cannot prove shows up at the check as a diagnostic with
+its counterexample, and a line whose checks are all proved ends with a
+`✓ proved` hint, until you edit the file again. Set `aura.verifyOnSave` to
+`false` to turn this off.
 
 Formatting in the editor uses the same rules as `aura fmt`. Run **Format
 Document**, or set `"editor.formatOnSave": true` to format every time you

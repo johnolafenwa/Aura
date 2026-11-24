@@ -17,6 +17,12 @@ The third is that the compiler checks the whole program before any of it
 runs, so the mistakes this chapter shows you are ones you find at your desk,
 not in production.
 
+That last theme goes further than types. A function can state what it needs
+from its callers and what it promises them, and the `aura verify` command
+proves those statements, along with the arithmetic and list indexes around
+them, for every input. You'll write your first contracts in this chapter,
+next to your first functions and loops.
+
 The examples are small and mostly self-contained, so you can paste each one
 into a file and run it with `aura run`. We'll come back to a small
 temperature-conversion program in several sections, ending with a function

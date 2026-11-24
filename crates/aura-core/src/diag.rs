@@ -414,6 +414,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "verify",
         title: "check outside the verified subset",
     },
+    DiagnosticCodeInfo {
+        code: "AU5120",
+        band: "verify",
+        title: "contract can never hold",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

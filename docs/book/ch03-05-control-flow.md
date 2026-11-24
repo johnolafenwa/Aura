@@ -106,7 +106,7 @@ def main():
 
 `for` visits each element of a collection in turn. It's the loop you'll use
 most often, because it can't go out of bounds and can't loop forever.
-Listing 3-6 averages a list of sensor readings, and uses `continue` and
+Listing 3-7 averages a list of sensor readings, and uses `continue` and
 `break` to deal with bad data.
 
 *Filename: src/main.au*
@@ -127,7 +127,7 @@ def main():
     print(f"{count} readings, average {total / count.to_float():.2f}")
 ```
 
-<span class="caption">Listing 3-6: Skipping and stopping inside a `for` loop</span>
+<span class="caption">Listing 3-7: Skipping and stopping inside a `for` loop</span>
 
 ```console
 $ aura run src/main.au
@@ -294,7 +294,7 @@ new block; one extra level of four spaces is the usual choice.
 
 ## Putting it together: a conversion table
 
-Let's finish the temperature program. Listing 3-7 prints a table of Celsius
+Let's finish the temperature program. Listing 3-8 prints a table of Celsius
 temperatures, their Fahrenheit equivalents, and a description, using most of
 what this chapter has covered.
 
@@ -337,7 +337,7 @@ def main():
     print_table(0, 30, step=15)
 ```
 
-<span class="caption">Listing 3-7: A temperature conversion table</span>
+<span class="caption">Listing 3-8: A temperature conversion table</span>
 
 ```console
 $ aura run src/main.au
@@ -365,6 +365,61 @@ braces. One small difference from Python shows up in `main`: `print` always
 takes exactly one argument, so a blank line is `print("")` rather than
 `print()`.
 
+## Proving the loop
+
+`print_table` has two requirements that nothing states yet. A `step` of zero
+never moves `celsius`, so the loop would print the same row forever. And
+`celsius += step` is an addition, so a large enough `stop` and `step` would
+overflow it. Both are the caller's to avoid, which makes them `requires`
+clauses. The loop gets two lines of its own:
+
+```aura fragment
+def print_table(start: int64, stop: int64, *, step: int64 = 10):
+    """Print Celsius, Fahrenheit, and a description from `start` up to `stop`.
+
+    Args:
+        start: The first Celsius value in the table.
+        stop: The last Celsius value; included if the steps land on it.
+        step: The distance between rows.
+    """
+    requires -1000 <= start and stop <= 1000
+    requires 1 <= step and step <= 100
+    print(f"{'C':>6} {'F':>7}  description")
+    mut celsius = start
+    while celsius <= stop:
+        invariant start <= celsius
+        decreases stop - celsius
+        value = celsius.to_float()
+        print(f"{celsius:>6} {to_fahrenheit(value):>7.1f}  {describe(value)}")
+        celsius += step
+```
+
+<span class="caption">Listing 3-9: The table loop with its contract</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 12 of 12 checks proved in 4 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The clauses come after the docstring and before the first statement. The
+`decreases` line names a number that gets smaller on every pass and never
+goes below zero, here the distance left to `stop`. A loop with such a
+number must end, and `aura verify` proves that this one has it. Take away
+`1 <= step` and that proof fails, because a step of zero leaves the distance
+unchanged.
+
+The `invariant` line is a fact that holds every time the loop tests its
+condition. The verifier proves a loop one pass at a time, starting from an
+arbitrary pass in the middle, so inside the body it knows only the loop
+condition and the invariants. Without `start <= celsius` it can't rule out a
+`celsius` far below `start`, and it reports that `stop - celsius` might
+overflow. With it, all twelve checks are proved: the arithmetic, the
+invariant, the `decreases` measure, and both `requires` clauses at both calls
+in `main`. The program prints the same two tables as before, with every
+clause checked as it runs.
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs) has more on
+invariants, including a loop that needs one to bound a running total.
+
 A few things to try if you want to keep going: add a Kelvin column, make
 `describe` take its thresholds as parameters with defaults, or print the
 table in reverse by counting down from `stop`.
@@ -377,7 +432,10 @@ they started with. Integers, floats, booleans, strings, `None`, and tuples
 cover most values, nothing converts between types unless you ask, and
 overflow and division by zero stop the program instead of producing a wrong
 answer. Functions spell out their parameter and return types, can take
-arguments by name and have defaults, and must return on every path. Comments
+arguments by name and have defaults, and must return on every path. A
+function can also state what it needs with `requires` and what it promises
+with `ensures`, a loop can state an `invariant`, and `aura verify` proves
+those clauses and the arithmetic around them for every input. Comments
 and docstrings document your code for readers and for your editor. `if`,
 `while`, `for`, and `range` give you decisions and loops, with a `bool`
 required for every condition.

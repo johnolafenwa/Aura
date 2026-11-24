@@ -762,6 +762,12 @@ to compare the two or to rule the wide ones out. `--target-cpu` in
 [CLI and Tooling](/manual/cli-and-tooling) is the matching choice for the
 program's own compiled code.
 
+## Verification
+
+`aura verify` does not model `Array` values. An element read, a shape, and
+a `matmul` are not checks of a proof, and a mismatch is a runtime failure.
+See [What It Does Not Model](/manual/verification#what-it-does-not-model).
+
 ## Status
 
 Contiguous numeric Arrays and explicit scalar and Array integer arithmetic

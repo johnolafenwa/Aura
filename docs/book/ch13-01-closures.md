@@ -645,6 +645,131 @@ $ aura run slow.au
 the original in place. `filter` gives back copies of the elements it keeps, so
 the list `requests` is still whole for the `sorted` and `sum` that follow.
 
+## Function values and proofs
+
+Earlier we called a function type's parameters, modes, and result its
+contract. [Chapter 11](/book/ch11-04-contracts-and-proofs) used the same
+word for `requires` and `ensures` clauses, and the two meet here: a function
+type can carry those clauses too, so that `aura verify` can prove code that
+calls a function it has never seen.
+
+Suppose we want one total over the durations in different units. The unit
+conversion is a function value, and the total is only safe if that function
+never makes a duration larger. We say so on a type alias, by ending it with
+`:` and a block of clauses over the callable's named parameters and `result`:
+
+*Filename: scale.au*
+
+```aura
+type Scale = def(ms: int64) -> int64:
+    requires 0 <= ms and ms <= 86_400_000
+    ensures 0 <= result and result <= ms
+
+def to_seconds(ms: int64) -> int64:
+    requires ms >= 0
+    ensures result == ms // 1000
+    return ms // 1000
+
+def doubled(ms: int64) -> int64:
+    requires 0 <= ms and ms <= 86_400_000
+    ensures result == ms * 2
+    return ms * 2
+
+def total_scaled(durations: list[int64], scale: Scale) -> int64:
+    requires len(durations) <= 10_000
+    requires forall(ms in durations, 0 <= ms and ms <= 86_400_000)
+    ensures result >= 0
+    mut total = 0
+    for i in range(len(durations)):
+        invariant 0 <= total and total <= i * 86_400_000
+        total += scale(durations[i])
+    return total
+
+def main():
+    durations = [12_000, 1_840_000, 35_000]
+    print(total_scaled(durations, to_seconds))
+```
+
+<span class="caption">Listing 13-8: A callable alias with a contract, and a function that is proved to fit it</span>
+
+```console
+$ aura verify scale.au
+verified scale.au: 19 of 19 checks proved in 4 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ aura run scale.au
+1887
+```
+
+Two separate proofs happen here. Inside `total_scaled`, the call
+`scale(durations[i])` is treated like a call to any function with a
+contract. The verifier proves `Scale`'s `requires`, which holds because
+every duration is at most a day of milliseconds, and then assumes its
+`ensures`, which bounds the result and keeps the invariant. It never needs
+to know which function `scale` is.
+
+At the call in `main`, the verifier proves that `to_seconds` fits `Scale`:
+every argument `Scale` allows meets `to_seconds`'s own `requires`, and what
+`to_seconds` promises implies what `Scale` promises. A function that doesn't
+fit is reported where it's passed. Add
+`print(total_scaled(durations, doubled))` to `main`:
+
+```console
+$ aura verify scale.au
+error[AU5101]: cannot prove `doubled` keeps the `ensures` of `Scale`
+ --> scale.au:28:5
+   |
+28 |     print(total_scaled(durations, doubled))
+   |     ^
+  = note: in `main` (ensures check)
+verified scale.au: 22 of 23 checks proved in 4 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+A callable contract exists for the verifier. The running program doesn't
+check it, so `aura run` accepts `doubled` and prints a total; each function
+still checks its own `requires` and `ensures` when it's called. The alias
+names every parameter and takes none as `mut`. The
+[Manual](/manual/contracts#callable-contracts) shows the same contract on a
+class field and on a function's result.
+
+Only named functions can be proved to fit. Lambdas and local `def`
+functions are where the verifier's knowledge runs out today, and the reason
+is the capture. Take a lambda that divides by a captured unit:
+
+```aura
+def main():
+    durations = [12_000, 1_840_000, 35_000]
+    unit = 1000
+    print(durations.map(lambda ms: ms // unit))
+```
+
+```console
+$ aura verify unit.au
+error[AU5101]: cannot prove integer result in range
+ --> unit.au:4:36
+  |
+4 |     print(durations.map(lambda ms: ms // unit))
+  |                                    ^
+  = note: in `main::__lambda_4_25` (overflow check)
+  = note: counterexample: unit = -1, ms = -9223372036854775808
+error[AU5101]: cannot prove divisor is not zero
+ --> unit.au:4:36
+  |
+4 |     print(durations.map(lambda ms: ms // unit))
+  |                                    ^
+  = note: in `main::__lambda_4_25` (division by zero check)
+  = note: counterexample: unit = 0, ms = 0
+verified unit.au: 1 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+We can see that `unit` is 1000 on the line above. The verifier checks a
+closure's body as a function of its own, and in that function a captured
+value is a parameter it knows nothing about, so it reports that `unit` could
+be 0. The same holds for a local `def`, which also can't state a `requires`,
+and a caller learns nothing about what either one returns. A lambda passed
+where a `Scale` is expected is reported as `AU5104`. None of this changes
+how the program runs: the division is still checked at run time. When a
+callback's arithmetic matters enough to prove, make it a named function
+with a contract, as `to_seconds` is.
+
 ## Choosing between a lambda and a named function
 
 A lambda earns its place when the behavior is short and only makes sense next

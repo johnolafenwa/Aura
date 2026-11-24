@@ -331,6 +331,132 @@ pattern is the one you've seen for parameters and loops: bare for reading,
 are copied into their bindings in every form, so they never cause these
 errors.
 
+## Proving every arm
+
+The compiler checks that a `match` has an arm for every variant. It doesn't
+check what the arms compute. That is the job of `aura verify`, the command
+that proves a function's contract and its arithmetic for every input (see
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs)), and it follows
+a `match` the way the compiler does, one arm at a time.
+
+Here is a function that works out how far into a book a command leaves us.
+Its contract says the position never moves backwards and never passes the
+last page:
+
+*Filename: src/main.au*
+
+```aura
+enum Command:
+    Read(title: str, pages: int64)
+    Finish(str)
+    List
+    Quit
+
+def pages_after(command: Command, pages_read: int64, total: int64) -> int64:
+    requires 0 <= pages_read and pages_read <= total
+    ensures pages_read <= result and result <= total
+    match command:
+        case Command.Read(_, pages):
+            return min(pages_read + pages, total)
+        case Command.Finish(_):
+            return total
+        case Command.List | Command.Quit:
+            return pages_read
+
+def main():
+    print(pages_after(Command.Read(title="Dune", pages=40), 103, 412))
+    print(pages_after(Command.Finish("Dune"), 103, 412))
+    print(pages_after(Command.List, 103, 412))
+```
+
+```console
+$ aura run src/main.au
+143
+412
+103
+$ aura verify src/main.au
+error[AU5101]: cannot prove `ensures` clause `pages_read <= result and result <= total`
+ --> src/main.au:9:13
+  |
+9 |     ensures pages_read <= result and result <= total
+  |             ^
+  = note: in `pages_after` (ensures check)
+  = note: counterexample: variant of command = 3, command.Finish[0] = "", command.Read[0] = "", command.Read[1] = -1, pages_read = 9223372036854775807, total = 9223372036854775807
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:12:24
+   |
+12 |             return min(pages_read + pages, total)
+   |                        ^
+  = note: in `pages_after` (overflow check)
+  = note: counterexample: variant of command = 3, command.Finish[0] = "", command.Read[0] = "", command.Read[1] = 9223372036854775807, pages_read = 1, total = 1
+verified src/main.au: 3 of 5 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The program prints what we expected, and the verifier still found two
+inputs we didn't think of. A counterexample for an enum takes a moment to
+read. It numbers the variants in alphabetical order from 0, so variant 3 of
+`Finish`, `List`, `Quit`, and `Read` is `Read`, and `command.Read[1]` is that
+variant's second payload, the page count. The payloads listed for other
+variants are filler. So the first counterexample is a `Read` command with
+`pages` of -1, which moves the position backwards and breaks the `ensures`
+clause. The second is a `Read` with an enormous page count, which overflows
+the addition before `min` can cap it. The `Finish`, `List`, and `Quit` arms
+are fine: neither counterexample lands in them.
+
+A payload is data from outside, here from whatever the user typed, so the
+`Read` arm has to deal with any `int64`. A guard handles the bad counts, and
+taking the smaller of `pages` and the pages left removes the addition that
+could overflow:
+
+```aura
+enum Command:
+    Read(title: str, pages: int64)
+    Finish(str)
+    List
+    Quit
+
+def pages_after(command: Command, pages_read: int64, total: int64) -> int64:
+    requires 0 <= pages_read and pages_read <= total
+    ensures pages_read <= result and result <= total
+    match command:
+        case Command.Read(_, pages) if pages > 0:
+            return pages_read + min(pages, total - pages_read)
+        case Command.Finish(_):
+            return total
+        case Command.Read(_, _) | Command.List | Command.Quit:
+            return pages_read
+
+def main():
+    print(pages_after(Command.Read(title="Dune", pages=40), 103, 412))
+    print(pages_after(Command.Read(title="Dune", pages=-5), 103, 412))
+    print(pages_after(Command.Finish("Dune"), 103, 412))
+    print(pages_after(Command.List, 103, 412))
+```
+
+<span class="caption">Listing 6-9: A `match` whose arms are all proved to keep the contract</span>
+
+```console
+$ aura run src/main.au
+143
+103
+412
+103
+$ aura verify src/main.au
+verified src/main.au: 8 of 8 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier understands the guard too. In the first arm it knows `pages` is
+positive, and in the last arm it knows that a `Read` that got there has a
+count of zero or less. Exhaustiveness and verification answer different
+questions about the same `match`: the compiler says every variant has an
+arm, and the verifier says every arm keeps the promise.
+
+One limit applies today. The verifier follows a `match` statement, like the
+one above, whose arms `return`. It does not yet model the value of a `match`
+used as an expression, as in `return match command:`, so an `ensures` clause
+that depends on one is reported as unproved. Write the statement form in a
+function whose result you want proved.
+
 ## A recursive match
 
 Now we can evaluate the `Expr` tree from the previous section. Each variant
@@ -357,7 +483,7 @@ def main():
     print(expr)
 ```
 
-<span class="caption">Listing 6-9: Evaluating an expression tree with a recursive `match`</span>
+<span class="caption">Listing 6-10: Evaluating an expression tree with a recursive `match`</span>
 
 ```console
 $ aura run src/main.au

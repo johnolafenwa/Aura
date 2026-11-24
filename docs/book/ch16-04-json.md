@@ -407,6 +407,132 @@ diffable and lets you use dumped JSON as a cache key or a test fixture
 without worrying about dictionary order. `indent=2` gives two spaces per
 level; leave it out for compact output on one line.
 
+## Checking what the decoder accepts
+
+The decoder guarantees the shape of a `Config`: `timeout_ms` is an integer
+that fits in an `int64`. It does not know what the number means. Copy
+*checks.json* to *negative.json*, change the timeout to `-5`, and run:
+
+```console
+$ aura run src/main.au -- negative.json
+notes: missing
+greeting: error (process.Error.Io(io.Error.InvalidInput))
+web: error (io.Error.InvalidInput)
+admin: error (io.Error.InvalidInput)
+1 passed, 4 failed
+```
+
+The config decoded without complaint, and then every probe that takes a
+timeout refused it. The report blames four healthy services for one bad
+number in our own file. Input like this should be rejected where it enters
+the program, once, and the rest of the program should be able to rely on
+that.
+
+Contracts are how we write "rely on that" down. In
+[Chapter 11](/book/ch11-04-contracts-and-proofs) we stated what a function
+needs with `requires`, and `aura verify` proved that every caller meets it.
+Let's give the conversion to a `Duration` a function of its own, and have it
+say what a timeout is:
+
+```aura fragment
+def probe_timeout(config: Config) -> Duration:
+    requires 1 <= config.timeout_ms and config.timeout_ms <= 600_000
+    return Duration.ms(config.timeout_ms)
+```
+
+In `main`, `timeout = Duration.ms(config.timeout_ms)` becomes
+`timeout = probe_timeout(config)`. Nothing validates the config yet, and
+the verifier notices:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `requires` of `probe_timeout` holds: `1 <= config.timeout_ms and config.timeout_ms <= 600_000`
+ --> src/main.au:117:5
+    |
+117 |     timeout = probe_timeout(config)
+    |     ^
+  = note: in `main` (requires check)
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:124:13
+    |
+124 |             failed += 1
+    |             ^
+  = note: in `main` (overflow check)
+verified src/main.au: 22 of 24 checks proved in 80 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The first error is the one we asked for. To the verifier, what
+`json.decode_text` returns is a `Config` whose fields could hold anything,
+because the result of a library call is a value it knows nothing about. That
+is the right way to think about a file somebody else wrote. So `main` has to
+earn the call, with a test between loading the config and using it:
+
+```aura fragment
+    if config.timeout_ms < 1 or config.timeout_ms > 600_000:
+        print(f"{path}: timeout_ms must be from 1 to 600000, found {config.timeout_ms}")
+        return 2
+
+    timeout = probe_timeout(config)
+```
+
+After that `if`, every path that reaches `probe_timeout` carries a timeout
+from 1 to 600,000 milliseconds, and the verifier can see it. The bad file
+now fails the way a bad config should, with the same exit status as a file
+that does not decode:
+
+```console
+$ aura run src/main.au -- negative.json
+negative.json: timeout_ms must be from 1 to 600000, found -5
+$ echo $?
+2
+```
+
+The second error is about our own arithmetic. The loop over `config.checks`
+adds to `failed` on each failure, and nothing the verifier knows ties a
+counter kept by hand in a `for check in ...` loop to the length of the list,
+so as far as it can tell the count might run past the top of `int64`. A list
+that long could not exist, but the proof needs the reason spelled out. The
+count is a fact about `outcomes`, so let's compute it from `outcomes`, in a
+loop over an index where an invariant can bound it:
+
+```aura fragment
+def count_failed(outcomes: list[Outcome]) -> int64:
+    ensures 0 <= result and result <= len(outcomes)
+    mut failed = 0
+    for i in range(len(outcomes)):
+        invariant 0 <= failed and failed <= i
+        if not outcomes[i].passed:
+            failed += 1
+    return failed
+```
+
+In `main`, the `mut failed` binding and the `failed += 1` in the loop go
+away, and one line after the loop replaces them:
+`failed = count_failed(outcomes)`. The `ensures` clause is what makes the
+next line safe: `outcomes.len() - failed` cannot go below zero, because
+`failed` is at most the length.
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 28 of 28 checks proved in 81 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Most of those 81 functions are the codecs the compiler derived for us. The
+checks are ours: every list index, every addition and subtraction, and the
+`requires` at the one call of `probe_timeout`.
+
+Be clear about what this proof covers. It says that `main` never hands
+`probe_timeout` a timeout outside the range we wrote, and that the counting
+cannot overflow or index past the end of a list. It says nothing about
+whether `Duration.ms`, `process.run`, or `http.Client` accept the value,
+because the verifier does not read library code. The range in the
+`requires` clause is our statement of what those calls need, and the run
+with *negative.json* is how we learned it. This is the pattern for every
+program in this chapter. The file, the child process, and the socket hand
+you values the verifier cannot see into. Test them once, where they arrive,
+and put a `requires` on the code behind that test, so that `aura verify`
+tells you when a new caller skips it.
+
 ## Working with `json.Value` directly
 
 A derived codec is the right tool when you know the shape. Sometimes you do
@@ -550,8 +676,9 @@ returns a plain `str`. Its failures, such as a `Float` holding infinity that
 you built by hand, are bugs in the program rather than bad input, so they
 trap instead of returning an error.
 
-`checkup` is finished: it reads its checks from JSON, probes files,
-commands, and URLs, and writes a report another program can parse. Its HTTP
+`checkup` is finished: it reads its checks from JSON, rejects a timeout
+that makes no sense, probes files, commands, and URLs, and writes a report
+another program can parse. Its HTTP
 probe only ever looked at a status code, though, and the `net` module has
 more in it than the two protocols we used. The next two sections cover the
 rest: calling HTTP services in earnest, and the other kinds of socket.
