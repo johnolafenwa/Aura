@@ -18059,6 +18059,107 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     emit_host_object(&mir).expect("the leaf methods should emit optimized");
 }
 
+const FRAMELESS_CALLER_SOURCE: &str = r#"
+copy class Vec2:
+    x: float64
+    y: float64
+
+    def dot(self, other: Vec2) -> float64:
+        return self.x * other.x + self.y * other.y
+
+    def scale(self, k: float64) -> Vec2:
+        return Vec2(x=self.x * k, y=self.y * k)
+
+    def normalized(self) -> Vec2:
+        return self.scale(1.0 / sqrt(self.dot(self)))
+
+class Scene:
+    light: Vec2
+    count: int64
+
+    def lit(self, point: Vec2, k: float64) -> float64:
+        return point.scale(k).dot(point)
+
+    def brightness(self) -> float64:
+        return self.light.dot(self.light)
+
+def twice(a: float64) -> float64:
+    return a * 2.0
+
+def next(a: int64) -> int64:
+    return a + 1
+
+def ratio(a: float64, b: float64) -> float64:
+    return twice(a) / twice(b)
+
+def stepped(a: int64) -> int64:
+    return next(a) * 2
+
+def summed(n: int64) -> float64:
+    mut total = 0.0
+    mut i = 0
+    while i < n:
+        total = total + twice(total + 1.0)
+        i = i + 1
+    return total
+
+def nested(a: float64, b: float64) -> float64:
+    return ratio(a, b) + 1.0
+
+def main() -> None:
+    v = Vec2(x=3.0, y=4.0).normalized()
+    scene = Scene(light=v, count=1)
+    print(scene.lit(v, 2.0) + scene.brightness())
+    print(nested(1.0, 2.0))
+    print(stepped(1))
+    print(summed(3))
+"#;
+
+#[test]
+fn a_function_that_only_calls_total_leaves_keeps_no_frame() {
+    let mir = lower_source_to_mir(FRAMELESS_CALLER_SOURCE).expect("the callers should lower");
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    let total = super::total_leaves(&mir, &classes);
+    // Float arithmetic, a field read, and a construction cannot stop the
+    // program. A checked sum can, and so can a function that calls.
+    for name in ["Vec2.dot", "Vec2.scale", "twice"] {
+        assert!(total.contains(name), "{name}: {total:?}");
+    }
+    for name in ["next", "ratio", "Vec2.normalized", "Scene.brightness", "main"] {
+        assert!(!total.contains(name), "{name}: {total:?}");
+    }
+    // A caller of total leaves is no leaf, and keeps no frame either. Its
+    // own division and its loop are a leaf's.
+    for name in ["Vec2.normalized", "Scene.lit", "ratio", "summed"] {
+        assert!(!super::frameless_leaf(function(name), &classes), "{name}");
+        assert!(
+            super::frameless_caller(function(name), &classes, &total),
+            "{name}"
+        );
+    }
+    // A callee that may stop the program pushes its own record, so its
+    // caller's must be below it.
+    for name in ["stepped", "nested", "main"] {
+        assert!(
+            !super::frameless_caller(function(name), &classes, &total),
+            "{name}"
+        );
+    }
+    crate::native_backend::without_optimization(|| emit_host_object(&mir))
+        .expect("the callers should emit unoptimized");
+    emit_host_object(&mir).expect("the callers should emit");
+}
+
 #[test]
 fn a_large_leaf_is_left_to_the_optimizer() {
     let mut source = String::from("def spread(n: int64) -> int64:\n    mut total = n\n");
