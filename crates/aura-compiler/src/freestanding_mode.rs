@@ -43,10 +43,71 @@ pub fn with_freestanding_target<T>(target: FreestandingTarget, run: impl FnOnce(
     run()
 }
 
+/// Library calls LLVM emits for Aura's float32 and float64 operations with
+/// the x86-64 soft-float ABI. The kernel supplies these at link time.
+pub(crate) fn is_soft_float_helper(name: &str) -> bool {
+    freestanding_check_target() == Some(FreestandingTarget::X86_64Kernel)
+        && [
+            "__addsf3",
+            "__adddf3",
+            "__subsf3",
+            "__subdf3",
+            "__mulsf3",
+            "__muldf3",
+            "__divsf3",
+            "__divdf3",
+            "__eqsf2",
+            "__eqdf2",
+            "__nesf2",
+            "__nedf2",
+            "__ltsf2",
+            "__ltdf2",
+            "__lesf2",
+            "__ledf2",
+            "__gtsf2",
+            "__gtdf2",
+            "__gesf2",
+            "__gedf2",
+            "__unordsf2",
+            "__unorddf2",
+            "__extendsfdf2",
+            "__truncdfsf2",
+            "__fixsfsi",
+            "__fixsfdi",
+            "__fixdfsi",
+            "__fixdfdi",
+            "__fixunssfsi",
+            "__fixunssfdi",
+            "__fixunsdfsi",
+            "__fixunsdfdi",
+            "__floatsisf",
+            "__floatsidf",
+            "__floatdisf",
+            "__floatdidf",
+            "__floatunsisf",
+            "__floatunsidf",
+            "__floatundisf",
+            "__floatundidf",
+            "sqrtf",
+            "sqrt",
+        ]
+        .contains(&name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::FreestandingTarget::{Aarch64, X86_64};
+
+    #[test]
+    fn only_kernel_objects_may_reference_soft_float_helpers() {
+        assert!(!is_soft_float_helper("__adddf3"));
+        with_freestanding_target(crate::FreestandingTarget::X86_64Kernel, || {
+            assert!(is_soft_float_helper("__adddf3"));
+            assert!(is_soft_float_helper("sqrt"));
+            assert!(!is_soft_float_helper("__arbitrary_helper"));
+        });
+    }
 
     #[test]
     fn a_target_is_scoped_to_its_request_and_thread() {
