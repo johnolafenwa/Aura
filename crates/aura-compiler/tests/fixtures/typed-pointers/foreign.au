@@ -1,0 +1,9 @@
+extern "C" def malloc(size: uint64) -> ptr[uint8]
+extern "C" def free(block: mut ptr[uint8]) -> None
+extern "C" def memset(block: mut ptr[uint8], value: int32, length: uint64) -> ptr[uint8]
+
+def main() -> None:
+    p = malloc(8)
+    assert memset(p, 130, 8) == p
+    assert p.offset(7).read() == 130
+    free(p)
