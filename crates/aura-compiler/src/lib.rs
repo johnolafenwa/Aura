@@ -837,7 +837,7 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        if builtin_sources::has_source_part(module_path) {
+                        if builtin_sources::needs_registry_entry(module_path) {
                             self.source_parts.insert(module_path[0].clone());
                         }
                         for imported_name in names {
@@ -893,7 +893,7 @@ impl ModuleLoader {
                 }
                 ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_sources::importable_builtin_namespace(path) {
-                        if builtin_sources::has_source_part(path) {
+                        if builtin_sources::needs_registry_entry(path) {
                             self.source_parts.insert(path[0].clone());
                         }
                         if let Some(alias) = alias {

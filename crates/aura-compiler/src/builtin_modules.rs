@@ -3664,7 +3664,7 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
     static METADATA: OnceLock<BTreeMap<String, HostBuiltinMetadata>> = OnceLock::new();
     METADATA
         .get_or_init(|| {
-            builtin_module_registry()
+            builtin_registry_for_imports(false)
                 .into_values()
                 .flat_map(|namespace| namespace.functions.into_values())
                 .map(|function| {
@@ -3721,8 +3721,13 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 }
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
+    builtin_registry_for_imports(true)
+}
+
+pub(crate) fn builtin_registry_for_imports(
+    imports_build: bool,
+) -> BTreeMap<String, ModuleNamespace> {
     [
-        "build",
         "io",
         "fs",
         "net",
@@ -3753,6 +3758,7 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
         "sync",
     ]
     .into_iter()
+    .chain(imports_build.then_some("build"))
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
     .collect()
 }
