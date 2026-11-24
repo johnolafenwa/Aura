@@ -763,41 +763,7 @@ fn linked_frozen_collections_use_aura_indexing_and_lookup_rules() {
     let workspace = Workspace::new();
     workspace.write(
         "table.au",
-        r#"
-class Dimensions:
-    height: int64
-    width: int64
-
-    def area(self) -> int64:
-        return self.height * self.width
-
-enum Mode:
-    Missing
-    Ready(int64)
-
-MODE = Mode.Ready(4)
-ROWS = [[11, 13], [21, 23]]
-CODES = {10: 2, 40: 5}
-IDS = {10, 40}
-SHAPE = Dimensions(height=2, width=3)
-PAIR = (7, 9)
-TEXT = "λx"
-BYTES = b"ABC"
-NAMES = {"a": 2, "λx": 5}
-
-def mode_code() -> int64:
-    match MODE:
-        case Mode.Ready(value):
-            return value
-        case Mode.Missing:
-            return -1
-
-export "C" def total(i: int64, key: int64) -> int64:
-    mut total = ROWS[i][-1] + ROWS.len() + SHAPE.area() + PAIR[1] + TEXT.byte_len() + TEXT.len() + NAMES["λx"] + mode_code()
-    if key in IDS and key in CODES:
-        total += CODES[key]
-    return total + (BYTES[-1] as int64)
-"#,
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/compile_time_frozen_projections.au"),
     );
     let build = workspace.aura(&["build", "--freestanding", "-o", "table.o", "table.au"]);
     assert!(build.status.success(), "{}", stderr(&build));
@@ -807,12 +773,13 @@ export "C" def total(i: int64, key: int64) -> int64:
 #include <stdint.h>
 #include <stdlib.h>
 int64_t total(int64_t i, int64_t key);
+int64_t nested(int64_t i);
 void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) {
     exit(code);
 }
 int main(int argc, char **argv) {
     if (argc > 1) { total(-3, 10); return 1; }
-    return (total(-1, 40) == 126 && total(0, 30) == 111) ? 0 : 1;
+    return (total(-1, 40) == 126 && total(0, 30) == 111 && nested(0) == 47 && nested(1) == 52) ? 0 : 1;
 }
 "#,
     );
