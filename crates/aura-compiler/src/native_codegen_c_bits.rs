@@ -57,7 +57,7 @@ impl FunctionCompiler<'_> {
 }
 
 impl FunctionCompiler<'_> {
-    pub(super) fn store_controlled_struct(
+    pub(in crate::native_codegen) fn store_controlled_struct(
         &mut self,
         layout: &CStruct,
         value: &ValueRef,
@@ -85,7 +85,7 @@ impl FunctionCompiler<'_> {
         }
     }
 
-    pub(super) fn load_controlled_struct(
+    pub(in crate::native_codegen) fn load_controlled_struct(
         &mut self,
         layout: &CStruct,
         slot: Val,

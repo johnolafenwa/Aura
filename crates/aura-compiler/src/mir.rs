@@ -26003,13 +26003,7 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
-        if let Some(Ok(value)) = crate::sema::c_layout_queries::evaluate(
-            callee,
-            args,
-            &self.program.imported_modules,
-            &self.program.classes,
-            |name| self.binding_is_visible(name),
-        ) {
+        if let Some(Ok(value)) = self.c_layout_query(callee, args) {
             let place = self.new_typed_temp(Type::named("uint64"));
             self.emit(Instruction::Assign {
                 target: place.clone(),
@@ -29373,13 +29367,7 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
-            if crate::sema::c_layout_queries::evaluate(
-                callee,
-                args,
-                &self.program.imported_modules,
-                &self.program.classes,
-                |name| self.binding_is_visible(name),
-            )
+            if self.c_layout_query(callee, args)
             .is_some()
             {
                 return Some(Type::named("uint64"));

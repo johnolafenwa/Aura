@@ -1320,7 +1320,7 @@ impl Parser {
             // A member that is a class crosses as itself. A scalar or an
             // array crosses as the one field of a class declared for it.
             let boxed = members.c_arrays.contains_key(member)
-                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
+                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if name == "fixed" || C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
             let copy = if members.c_arrays.contains_key(member) {
                 "[:]"
             } else {

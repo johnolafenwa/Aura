@@ -3,6 +3,11 @@
 use super::*;
 
 impl Lowerer<'_> {
+    pub(super) fn c_layout_query(&self, callee: &Expr, args: &[Argument]) -> Option<crate::diag::Result<usize>> {
+        let (modules, classes) = self.current_module_namespace().map(|ns| (&ns.imported_modules, &ns.all_classes)).unwrap_or((&self.program.imported_modules, &self.program.classes));
+        crate::sema::c_layout_queries::evaluate(callee, args, modules, classes, |name| self.binding_is_visible(name))
+    }
+
     pub(super) fn check_member_bit_store(&mut self, assign: &AssignStmt, value: &Operand) {
         let AssignTarget::Member { object, field } = &assign.target else {
             return;

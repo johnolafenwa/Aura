@@ -564,7 +564,7 @@ def field_offset() -> uint64:
 | `extern "C" packed class Header:` | Caps member alignment at one byte. A nested record retains its own internal layout. |
 | `align(N)` before `class` | Takes a literal power of two from 1 to 8192. Natural alignment still applies unless the record is packed. |
 | `field: uintN bits(W)` | Declares an unsigned bit-field. A positive literal width must fit the 8-, 16-, 32- or 64-bit base type. |
-| `mem.size_of(T)`, `mem.align_of(T)` | Give the target size and alignment in bytes as `uint64` constants. Use a C scalar, class or union. |
+| `mem.size_of(T)`, `mem.align_of(T)` | Give the target size and alignment in bytes as `uint64` constants. Use a C scalar, class, union, typed pointer or fixed array. |
 | `mem.offset_of(T, field)` | Gives the byte offset of an addressable field as a `uint64` constant. Union members start at zero. |
 
 A bit-field read returns its declared unsigned type. A write checks the value fits before updating the field. The platform C ABI determines bit allocation. In particular, Windows starts a new allocation unit when adjacent fields have different base widths. Use matching declarations in C and Aura.

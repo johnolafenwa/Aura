@@ -11728,12 +11728,8 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
-        if let Some(layout) =
-            c_layout_queries::evaluate(callee, args, self.imported_modules, self.classes, |name| {
-                locals.contains_key(name)
-            })
-        {
-            return layout.map(|_| Type::named("uint64"));
+        if let Some(result) = self.c_layout_query(callee, args, locals) {
+            return result.map(|_| Type::named("uint64"));
         }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)

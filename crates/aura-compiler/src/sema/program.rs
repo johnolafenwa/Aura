@@ -2300,7 +2300,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             constant.name.clone(),
             ConstantInfo {
                 module_name: module_name.clone(),
-                decl: constant.clone(),
+                decl: super::c_layout_queries::folded_binding(constant, &imported_modules, &classes),
                 ty: expected.unwrap_or(inferred),
             },
         );

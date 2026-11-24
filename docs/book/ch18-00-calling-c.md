@@ -621,6 +621,30 @@ boundary. A `Material` that comes back from C always has four elements in
 holds a list cannot be a `copy class`, so a `Material` moves when we assign
 it, like any other class with a list inside.
 
+### Matching a packed C header
+
+A packet header often puts a four-byte field immediately after a byte. In
+this declaration the serial number starts at byte 1. The fields `urgent`
+and `channel` share the next byte.
+
+```aura fragment
+import mem
+
+extern "C" packed class Header:
+    kind: uint8
+    serial: uint32
+    urgent: uint8 bits(1)
+    channel: uint8 bits(7)
+
+def serial_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+Assigning `header.urgent = 1` sets a single bit and preserves all seven
+channel bits. A C declaration on the other side must specify the same
+packing and bit widths. Use `mem.size_of(Header)` and `mem.align_of(Header)`
+to compare with the C compiler's `sizeof` and `_Alignof` for the target.
+
 ### Unions
 
 A C union is several types laid over the same bytes. SDL, the library
@@ -707,11 +731,10 @@ member to read, and checking it first is our job.
 
 Reading a member gives us a copy. `event.key` builds a new `KeyboardEvent`
 each time, which is why the loop binds it to `pressed` and reads two
-fields from that. For the same reason Aura rejects `event.kind = 1` and
-`event.key.state = 0` with `AU2045`: a member is read-only. To change a
-union, build a new one with a `from_` function. The
-bytes themselves are also there, as the list `event.bytes`, for the rare
-case where nothing else will do.
+fields from that. Assign the whole member to change a mutable union.
+For example, `event.kind = 1` writes the tag and preserves the rest of
+the bytes. To update the key state, read `event.key` into a mutable
+local, update its `state`, then assign the local back to `event.key`.
 
 ## Callbacks
 
