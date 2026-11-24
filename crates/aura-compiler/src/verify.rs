@@ -53,6 +53,9 @@ pub enum ObligationKind {
     /// A `dict` key read with brackets, or a `set` element removed, is
     /// there.
     KeyPresent,
+    /// The `requires` clauses and class invariants a function assumes on
+    /// entry can hold together.
+    Satisfiable,
 }
 
 impl ObligationKind {
@@ -68,6 +71,7 @@ impl ObligationKind {
             Self::Decreases => "decreases",
             Self::ClassInvariant => "class invariant",
             Self::KeyPresent => "key present",
+            Self::Satisfiable => "satisfiable contract",
         }
     }
 }
@@ -130,6 +134,29 @@ impl Report {
             .count()
     }
 
+    /// How many checks failed: the solver found inputs that break them,
+    /// or their function's contract can never hold.
+    pub fn failed(&self) -> usize {
+        self.count(|status| matches!(status, Status::Failed { .. }))
+    }
+
+    /// How many checks depend on a step the verifier does not model.
+    pub fn not_modeled(&self) -> usize {
+        self.count(|status| matches!(status, Status::Unsupported(_)))
+    }
+
+    /// How many checks the solver could not decide in time.
+    pub fn undecided(&self) -> usize {
+        self.count(|status| *status == Status::Unknown)
+    }
+
+    fn count(&self, is: impl Fn(&Status) -> bool) -> usize {
+        self.obligations
+            .iter()
+            .filter(|obligation| is(&obligation.status))
+            .count()
+    }
+
     /// Whether every obligation was proved.
     pub fn is_proved(&self) -> bool {
         self.proved() == self.obligations.len()
@@ -144,6 +171,17 @@ impl Report {
                 let what = &obligation.message;
                 let diagnostic = match &obligation.status {
                     Status::Proved => return None,
+                    Status::Failed { .. } if obligation.kind == ObligationKind::Satisfiable => {
+                        Diagnostic::coded_at(
+                            "AU5120",
+                            obligation.span,
+                            format!("{what} can never hold"),
+                        )
+                        .with_note(format!(
+                            "in `{}`: no call can meet this, so its checks pass for nothing and it does not count as proved",
+                            obligation.function
+                        ))
+                    }
                     Status::Failed { counterexample } => {
                         let mut diagnostic = Diagnostic::coded_at(
                             "AU5101",
@@ -1009,9 +1047,19 @@ pub fn verify_module(
         exec.prove_sites = options.prove_sites;
         let entry = exec.entry_state();
         exec.prove_weakened_requires(&entry);
+        let before = exec.facts.len();
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
         exec.assume_entry_parameters(&entry);
+        if exec.facts.len() > before {
+            exec.oblige(
+                ObligationKind::Satisfiable,
+                function.span,
+                format!("the contract `{public}` assumes on entry"),
+                "true",
+                exec::Goal::CanHold,
+            );
+        }
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
             if !is_primary {
@@ -1080,6 +1128,11 @@ pub fn verify_module(
                 continue;
             }
             if !is_primary && status == Status::Proved {
+                continue;
+            }
+            // A contract that can hold is not a check of the program, so
+            // only one that cannot is reported.
+            if obligation.kind == ObligationKind::Satisfiable && status == Status::Proved {
                 continue;
             }
             let key = (
@@ -1158,7 +1211,15 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
                 part("unsupported");
                 part(reason);
             }
+            exec::Goal::CanHold => part("can hold"),
         }
+    }
+    // A failed check's status names the unmodeled step it depends on.
+    for (name, step) in &exec.unmodeled {
+        let (what, span) = &exec.unmodeled_steps[*step];
+        part(name);
+        part(what);
+        part(&span.line.to_string());
     }
     hasher
         .finalize()
@@ -1448,7 +1509,7 @@ fn solve(
                     .chain(exec.obligations.iter().filter_map(
                         |obligation| match &obligation.goal {
                             exec::Goal::Holds(goal) => Some(goal.as_str()),
-                            exec::Goal::Unsupported(_) => None,
+                            exec::Goal::Unsupported(_) | exec::Goal::CanHold => None,
                         },
                     )),
             );
@@ -1491,6 +1552,21 @@ fn solve(
         let goal = match &obligation.goal {
             exec::Goal::Unsupported(reason) => {
                 statuses.push(Status::Unsupported(reason.clone()));
+                continue;
+            }
+            // Unsatisfiable facts are a contract no input meets. A solver
+            // that cannot tell is not a reason to report one.
+            exec::Goal::CanHold => {
+                let status = match solver.ask("(push 1)\n", None)? {
+                    Status::Proved => Status::Failed {
+                        counterexample: Vec::new(),
+                    },
+                    _ => Status::Proved,
+                };
+                if trace {
+                    eprintln!("; the entry contract can hold => {status:?}");
+                }
+                statuses.push(status);
                 continue;
             }
             exec::Goal::Holds(goal) => goal,
@@ -1558,6 +1634,20 @@ fn solve(
         }
         statuses.push(status);
     }
+    // A check that fails only by the solver's choice of a result the
+    // encoding does not model has no counterexample: the program may never
+    // produce that result.
+    for (obligation, status) in exec.obligations.iter().zip(&mut statuses) {
+        if !matches!(status, Status::Failed { .. }) {
+            continue;
+        }
+        if let Some((what, span)) = exec.unmodeled_cause(obligation) {
+            *status = Status::Unsupported(format!(
+                "it depends on {what} at line {}, which the verifier does not model",
+                span.line
+            ));
+        }
+    }
     solver.close();
     if let Some(rough) = rough {
         rough.close();
@@ -1568,6 +1658,9 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "verify_tests_outcomes.rs"]
+mod tests_outcomes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
