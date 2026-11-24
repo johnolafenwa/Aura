@@ -553,6 +553,8 @@ pub(crate) fn half_bytes(elements: &ArrayValue) -> Result<Vec<u8>> {
 }
 
 /// A `float32` Array of `shape` from half-precision bits.
+// Only the CUDA device reads halves back as bytes.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub(crate) fn from_half_bytes(shape: &[usize], bytes: &[u8]) -> Result<ArrayValue> {
     let values: Box<[f32]> = bytes
         .chunks_exact(2)
