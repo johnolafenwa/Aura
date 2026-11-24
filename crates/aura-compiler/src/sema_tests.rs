@@ -34218,3 +34218,17 @@ fn fixed_arrays_check_element_counts_and_iteration() {
     let bad = include_str!("../tests/fixtures/check-fail/fixed_array_wrong_length.au");
     assert_eq!(crate::check_source(bad).unwrap_err().code, "AU2082");
 }
+
+#[test]
+fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
+    for ty in [
+        "fixed[int32, 0]",
+        "fixed[fixed[uint64, 1048576], 1048576]",
+        "fixed[str, 2]",
+        "fixed[Message, 2]",
+    ] {
+        let source = format!("class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n");
+        let error = crate::check_source(&source).expect_err(ty);
+        assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
+}
