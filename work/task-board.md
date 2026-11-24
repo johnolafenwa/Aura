@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-24
 
+## Verification in the documentation (complete)
+
+- Target: John's 2026-11-24 request that `aura verify` be prominent across
+  the documentation and the book. Details are in
+  `2026-11-24-verification-in-docs.md`.
+- Done: the README, the site landing page, the install guides, the Manual
+  and chapters 1 to 21 of the book present contracts and proofs, and
+  `docs/manual/verification.md` lists what the verifier does not model.
+- Follow-up: update that list and the book passages that state a limit as
+  each verifier gap closes.
+
 ## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and
@@ -15,6 +26,22 @@ Last updated: 2026-11-24
   after they pass, find what `raytracer` and `order_book` run more of,
   keep the set union test out of the plain dictionary lookup, and renew
   the extension publishing token before 2026-12-01.
+
+## Verification gaps (in progress)
+
+- Target: John's 2026-11-24 request to close the gaps a survey of
+  `aura verify` found on 0.17.0. Notes are in
+  `2026-11-24-verification-gaps.md`.
+- Stage 1, wrong answers: a check that reads an unmodeled result is
+  reported as not modeled instead of failed, a contract that can never
+  hold is `AU5120`, `Span`, view and `Array` indexes are checked,
+  generator bodies assume their `requires`, trait implementation methods
+  assume class invariants, and a call keeps the fields its callee cannot
+  write.
+- Next: stage 2 models comprehensions, slices, `sort`, `sum`, `str`
+  methods, bit operations and closures. Stage 3 adds package mode, a
+  "must verify" marker, `aura test --verify`, failure recovery, shared
+  state, tensor shapes and a solver cross-check.
 
 ## Combined feature verification
 

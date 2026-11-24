@@ -16,7 +16,7 @@ edges are.
 
 Everything a user can put in a settings file is something our loader has to
 expect. A missing `=`, a misspelled number, a forgotten key: none of these mean
-our code is wrong, and all of them will happen. That's why Listing 9-5 turns
+our code is wrong, and all of them will happen. That's why Listing 9-6 turns
 each one into a `ConfigError`. The caller can print it, log it, or fall back to
 defaults, and the program keeps whatever state it had.
 
@@ -71,7 +71,7 @@ def main():
             print(error)
 ```
 
-<span class="caption">Listing 9-6: Validate at the edge with `Result`, then state the invariant with `assert`</span>
+<span class="caption">Listing 9-7: Validate at the edge with `Result`, then state the invariant with `assert`</span>
 
 ```console
 $ aura run src/main.au
@@ -93,6 +93,87 @@ out of range, a division by zero, an integer overflow: when these happen, the
 code made an assumption that wasn't true. Aura traps on them because returning
 a `Result` from every `+` and every `[i]` would bury real errors under
 impossible ones.
+
+## Proving the bug is absent
+
+The assertion in `share` is a claim about the whole program: no code anywhere
+builds a `Settings` with fewer than one worker. An `assert` tests that claim
+each time `share` runs. `aura verify`, which we used in [the first
+section](/book/ch09-01-traps#proving-a-trap-cannot-happen), can prove it once
+for every run, if we attach the claim to the type it's about. A class
+`invariant` is a condition that every object of the class satisfies:
+
+*Filename: src/main.au*
+
+```aura
+enum ConfigError:
+    OutOfRange(str, int64)
+
+class Settings:
+    port: int64
+    workers: int64
+    invariant 1 <= self.workers and self.workers <= 64
+
+def share(budget: int64, settings: Settings) -> int64:
+    return budget // settings.workers
+
+def plan(budget: int64, workers: int64) -> Result[int64, ConfigError]:
+    if workers < 1 or workers > 64:
+        return Result.Err(ConfigError.OutOfRange("workers", workers))
+    settings = Settings(port=9000, workers=workers)
+    return Result.Ok(share(budget, settings))
+
+def main():
+    print(plan(1000, 0))
+    print(plan(1000, 4))
+```
+
+<span class="caption">Listing 9-8: The worker range as a class invariant, with no assertion left in `share`</span>
+
+```console
+$ aura run src/main.au
+Result.Err(ConfigError.OutOfRange(workers, 0))
+Result.Ok(250)
+$ aura verify src/main.au
+verified src/main.au: 4 of 4 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+`plan` is the edge now. It takes a worker count that could be anything,
+returns `OutOfRange` for the bad ones, and only then builds a `Settings`. The
+verifier proves that the constructor call keeps the invariant, because the
+`if` above it has already returned for every count outside 1 to 64. In
+`share` it assumes the invariant, as it would a `requires`, and that's enough
+to prove the division: the divisor isn't zero, and it isn't the `-1` that
+overflows. `share` no longer needs to defend itself, because a `Settings`
+with zero workers can't be built.
+
+To see what the proof is worth, lose half of the range test. Suppose an edit
+leaves `plan` with `if workers > 64:`.
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove class invariant holds: `1 <= self.workers and self.workers <= 64`
+ --> src/main.au:15:5
+   |
+15 |     settings = Settings(port=9000, workers=workers)
+   |     ^
+  = note: in `plan` (class invariant check)
+  = note: counterexample: budget = 0, workers = 0
+verified src/main.au: 3 of 4 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The report names the constructor call and an input that breaks it. The
+division in `share` is still proved, so the mistake shows up where the bad
+`Settings` would be made, not three calls later where it would be divided
+by. An invariant is checked when the program runs too: with this edit,
+`plan(1000, 0)` stops with `AU4009`, naming the invariant that failed.
+
+There's one limit to know about today. The verifier doesn't carry a class
+invariant through a `Result` or an optional value. If `plan` returned a
+`Result[Settings, ConfigError]` and `main` matched the `Settings` out to pass
+to `share`, that call would be reported as unproved, although the invariant
+was proved where the object was built. Keeping the construction and the use
+on the same side of the `Result`, as `plan` does, avoids the report.
 
 ## When you know more than the compiler
 
@@ -170,8 +251,10 @@ When you're unsure, these questions usually settle it:
    something outside it? Return a `Result`.
 2. Would a caller ever want to react differently to different failures? Give
    the error an enum type, not a `str`.
-3. Can the failure happen only if some code in this program is wrong? Trap, and
-   use an `assert` with a message that explains the broken assumption.
+3. Can the failure happen only if some code in this program is wrong? Trap.
+   State the assumption as a `requires` clause or a class `invariant` so
+   `aura verify` can prove that no caller breaks it, and use an `assert` with a
+   message for what a contract can't say.
 4. Is a missing value normal and not an error at all? Return `T | None`, or, for collection lookups, use the `Lookup` that `get` gives you.
 
 One more rule keeps errors from slipping away. A `Result` can't simply be
@@ -207,8 +290,9 @@ next reader that ignoring the error was a decision, not an oversight.
 
 At a trap, Aura runs cleanup and reports a diagnostic with the code,
 location and call chain. The task ends unless a call to `control.recover`
-contains the failure. A `Result[T, E]` is an ordinary value that carries
-either a success or
+contains the failure. A trap means the program has a bug, and `aura verify`
+proves that a given trap can't happen, or shows an input that causes it. A
+`Result[T, E]` is an ordinary value that carries either a success or
 an error. The compiler makes you look inside it before using the success,
 `match` makes you handle both cases, and `try` passes an error up to the
 caller, changing its type only through a `From` conversion you wrote. A small

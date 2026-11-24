@@ -84,7 +84,7 @@ def main():
     print("group closed")
 ```
 
-<span class="caption">Listing 15-5: Cancelling a task after a timeout</span>
+<span class="caption">Listing 15-6: Cancelling a task after a timeout</span>
 
 ```console
 $ time aura run src/main.au
@@ -153,7 +153,7 @@ def main():
     print("group closed")
 ```
 
-<span class="caption">Listing 15-6: A loop that stops when its task is cancelled</span>
+<span class="caption">Listing 15-7: A loop that stops when its task is cancelled</span>
 
 ```console
 $ aura run src/main.au
@@ -169,7 +169,7 @@ the exit on the way. The group then finishes joining and `main` carries on.
 
 ### The loop that never stops
 
-The `while not cancelled()` in Listing 15-6 isn't decoration. Let's see what
+The `while not cancelled()` in Listing 15-7 isn't decoration. Let's see what
 happens without it:
 
 ```aura

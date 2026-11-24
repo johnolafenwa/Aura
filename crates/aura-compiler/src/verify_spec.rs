@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use super::exec::{
-    conjoin, key_sort, lit, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
-    State, Val,
+    array_parts, array_shape, bind_span_views, conjoin, key_sort, lit, not, scalar_val, smt_string,
+    span_range_names, structural_eq, Exec, FloatTy, Goal, IntTy, State, Val,
 };
 use super::ObligationKind;
 use crate::ast::{
@@ -44,7 +44,8 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = pre.iter().cloned().collect();
+        let mut env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut env);
         let display = public_name(callee);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
@@ -66,7 +67,7 @@ impl Exec<'_> {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
                 // No run checks the invariant on entry to a method that
                 // only reads `self`; the method's proof assumes it.
-                let reads_only = self.reads_only(callee);
+                let reads_only = self.reads_only(callee) || self.cx.impl_guard(callee).is_some();
                 let erasing = self.erasing;
                 self.erasing |= reads_only;
                 for clause in clauses {
@@ -154,6 +155,15 @@ impl Exec<'_> {
     /// assume they do.
     pub(super) fn prove_return_invariants(&mut self, state: &State, result: &Val) {
         let mut values = vec![("the result".to_string(), result.clone())];
+        // No run checks the invariant a `mut self` method of a trait
+        // implementation leaves, and its callers assume it.
+        if self.function.receiver == Some(crate::mir::MirReceiverKind::BorrowMut)
+            && self.cx.impl_guard(&self.function.name).is_some()
+        {
+            if let Some(value) = state.env.get("self") {
+                values.push(("`self`".to_string(), value.clone()));
+            }
+        }
         for param in &self.function.params {
             if param.passing == crate::mir::MirReceiverKind::BorrowMut {
                 if let Some(value) = state.env.get(&param.name) {
@@ -208,12 +218,14 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let pre_env: Env = pre.iter().cloned().collect();
+        let mut pre_env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut pre_env);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
             match clause.kind {
                 ContractKind::Ensures => {
                     let mut env: Env = post.iter().cloned().collect();
+                    bind_span_views(&mut env);
                     env.insert("result".to_string(), result.clone());
                     let mut olds_ok = true;
                     let prev_proving = self.proving;
@@ -438,11 +450,12 @@ impl Exec<'_> {
     /// well-defined: every call proves it.
     pub(super) fn assume_entry_requires(&mut self, state: &State) {
         let name = self.function.name.clone();
-        let Some(decl) = self.cx.decl(&name) else {
+        let Some(decl) = self.cx.entry_decl(&name) else {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = state.env.clone();
+        let mut env: Env = state.env.clone();
+        bind_span_views(&mut env);
         for clause in &decl.contracts {
             if clause.kind == ContractKind::Requires {
                 self.assume_clause_in(state, clause, &env, decl_module);
@@ -479,22 +492,68 @@ impl Exec<'_> {
     }
 
     /// The invariant clauses that hold on entry to `callee` and on its
-    /// return, when it is a public method of a class with invariants that
-    /// takes `mut self` (where they are checked when the program runs) or
-    /// `self` (where each call is proved to keep them).
+    /// return. For a public method of a class with invariants they are
+    /// checked when the program runs if it takes `mut self`, and each call
+    /// is proved to keep them if it takes `self`. For a method of a trait
+    /// implementation no run checks them: each call that names the method
+    /// proves them, and a call on a trait object relies on the object
+    /// holding them (see `verify_guard`). A call whose implementation is
+    /// picked at run time names no class.
     fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
-        let decl = self.cx.decl(callee)?;
-        if !decl.public
-            || !matches!(
-                decl.receiver,
-                Some(crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow)
-            )
-        {
+        if self.dynamic_call {
             return None;
         }
-        let (class, _) = base_name(callee).rsplit_once('.')?;
+        let class = match self.cx.impl_guard(callee) {
+            Some(class) => class,
+            None => {
+                let decl = self.cx.decl(callee)?;
+                if !decl.public
+                    || !matches!(
+                        decl.receiver,
+                        Some(
+                            crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow
+                        )
+                    )
+                {
+                    return None;
+                }
+                base_name(callee).rsplit_once('.')?.0
+            }
+        };
         let (module_name, clauses) = self.cx.class_invariant(class)?;
         (!clauses.is_empty()).then(|| (module_name.to_string(), clauses.to_vec()))
+    }
+
+    /// A value that becomes a trait object holds its class invariant when
+    /// a trait implementation method of its class assumes it: a call on
+    /// the object proves nothing about what it holds.
+    pub(super) fn prove_held_invariant(&mut self, state: &State, value: &Val) {
+        let Val::Record(class, _) = value else {
+            return;
+        };
+        if !self.cx.guards_class(class) {
+            return;
+        }
+        let (inv_module, clauses) = self.record_invariant(value).expect("a guarded class");
+        let env: Env = [("self".to_string(), value.clone())].into();
+        let erasing = self.erasing;
+        self.erasing = true;
+        for clause in clauses {
+            let message = format!(
+                "class invariant holds for the value a trait object takes: `{}`",
+                clause.text
+            );
+            self.prove_clause_in(
+                state,
+                ObligationKind::ClassInvariant,
+                self.span,
+                message,
+                &clause,
+                &env,
+                Some(&inv_module),
+            );
+        }
+        self.erasing = erasing;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -776,6 +835,13 @@ impl Exec<'_> {
                     }
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let Some((len, rank, dims)) = array_parts(&receiver) {
+                        return match field.as_str() {
+                            "len" => Ok(Val::Int(len, IntTy::INT64)),
+                            "shape" => Ok(array_shape(rank, dims)),
+                            _ => Err(format!("`Array.{field}` is not modeled in contracts yet")),
+                        };
+                    }
                     if let (Val::List { .. }, "contains", [arg]) =
                         (&receiver, field.as_str(), args.as_slice())
                     {
@@ -829,6 +895,11 @@ impl Exec<'_> {
                 let mut values = Vec::new();
                 for arg in args {
                     values.push(self.spec(&arg.value, env, wd, depth)?);
+                }
+                if let ("len", [value]) = (name.as_str(), values.as_slice()) {
+                    if let Some((len, ..)) = array_parts(value) {
+                        return Ok(Val::Int(len, IntTy::INT64));
+                    }
                 }
                 match (name.as_str(), values.as_slice()) {
                     (
@@ -1537,9 +1608,22 @@ impl<'a> Exec<'a> {
                 // A name the clause binds itself, or a function.
                 continue;
             }
+            if state.is_view(&local) {
+                // A view is left to the lowered code: the local of a span
+                // made here names its whole base list, not its range.
+                continue;
+            }
             let value = self.read_place(state, &local);
+            // A span parameter is read with its range.
+            for hidden in span_range_names(&local) {
+                if self.place_type(&hidden).is_some() {
+                    let value = self.read_place(state, &hidden);
+                    env.insert(hidden, value);
+                }
+            }
             env.insert(name, value);
         }
+        bind_span_views(&mut env);
         env
     }
 }

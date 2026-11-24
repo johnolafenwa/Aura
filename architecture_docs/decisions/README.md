@@ -141,3 +141,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
+150. [ADR-0150: A check that reads an unmodeled result is not a failure](0150-unmodeled-results-are-not-failures.md) — Accepted; made-up results are recorded and a refuted check that reads one is reported as not modeled, with no counterexample
+151. [ADR-0151: A contract that can never hold is reported](0151-contracts-that-cannot-hold.md) — Accepted; one satisfiability query for the entry assumptions, `AU5120`

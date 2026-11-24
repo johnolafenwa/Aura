@@ -651,6 +651,52 @@ Operations in the selected arm keep their runtime codes:
 | `AU4004` | Zero divisor. |
 | `AU4005` | Resource or I/O failure. |
 
+## Verification
+
+`aura verify` follows each `match` arm with the variant and payload that arm
+binds, and it follows `is None` tests on a union such as `int64 | None`. A
+contract is proved on every arm.
+
+```aura
+enum Signal:
+    Red
+    Amber(int64)
+    Green
+
+
+def wait_seconds(signal: Signal) -> int64:
+    ensures 0 <= result and result <= 60
+    match signal:
+        case Signal.Red:
+            return 60
+        case Signal.Amber(left):
+            if 0 <= left and left <= 5:
+                return left
+            return 5
+        case Signal.Green:
+            return 0
+
+
+def or_zero(value: int64 | None) -> int64:
+    ensures result >= 0
+    if value is None:
+        return 0
+    if value < 0:
+        return 0
+    return value
+
+
+def main():
+    print(wait_seconds(Signal.Amber(3)))
+    print(or_zero(None))
+```
+
+`aura verify` proves both `ensures` clauses. In the `Amber` arm it knows
+only that `left` is an `int64`, so the `if` is what makes the result fit the
+contract.
+
+See [Verification](/manual/verification) for the report, the options, and what the verifier models.
+
 ## Backend Support
 
 MIR execution and direct native generation both implement:

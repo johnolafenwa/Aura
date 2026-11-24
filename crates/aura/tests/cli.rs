@@ -17753,6 +17753,12 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         "{stderr}"
     );
     assert!(stderr.contains("counterexample: x = "), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("not proved: 1 failed, 0 not modeled, 0 undecided"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 
     let output = Command::new(aura_bin())
         .env("AURA_CACHE_DIR", &cache)
@@ -17773,6 +17779,9 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["functions"], 1);
     assert_eq!(report["proved"], 0);
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["not_modeled"], 0);
+    assert_eq!(report["undecided"], 0);
     assert_eq!(report["obligations"][0]["status"], "failed");
     assert_eq!(report["obligations"][0]["kind"], "overflow");
     assert_eq!(report["obligations"][0]["line"], 2);

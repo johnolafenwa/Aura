@@ -600,6 +600,8 @@ CI run.
 ## Limits
 
 - No integer division. `Array` has none either.
+- `aura verify` does not model tensors. It checks no shape, device, or
+  index of one, so a mismatch is a runtime failure.
 - Convolution and pooling take square kernels over two dimensions, with
   one stride and one padding for both. There is no dilation, no groups,
   and no one- or three-dimensional form.

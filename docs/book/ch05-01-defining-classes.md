@@ -351,6 +351,42 @@ is set on no path at all. Python would let this through, and the first read
 of `book.pages_read` would raise an `AttributeError` far from the cause. In
 Aura, an instance with an unset field can't exist.
 
+### Stating the rule an initializer keeps
+
+The `if` in Listing 5-5 is there to keep a rule: a book has at least one
+page. The rule is real, but it lives in one branch of one function, where the
+next person to edit the class may not notice it. A class can state such a
+rule in its body, with an `invariant` line:
+
+```aura
+class Book:
+    title: str
+    pages: int64
+    pages_read: int64
+    invariant self.pages >= 1
+```
+
+An invariant is a `bool` expression over `self` that must be true of every
+instance. Aura checks it each time an instance is built, so a `Book` that
+breaks it stops the program with `AU4009` at the construction, before
+anything can use the book. And `aura verify`, the command that proves a
+file's checks for every input (see
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs)), proves that the
+initializer keeps the rule. With the line added to Listing 5-5:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 3 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier followed both branches of the `if` and found `self.pages` at
+least 1 at the end of each, for any `pages` a caller could pass. Replace the
+`if` with a plain `self.pages = pages` and the proof fails with the
+counterexample `pages = 0`. The invariant has turned a habit of the
+initializer into a rule the class states and the tools check. We'll use
+invariants again in [Methods](/book/ch05-03-methods), where they have more
+work to do.
+
 Notice the `own` on `title`. The initializer stores the string in a field,
 which keeps it, so it needs ownership. If we write `title: str` instead, the
 compiler catches the assignment that tries to keep a borrowed value:

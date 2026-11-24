@@ -59,7 +59,7 @@ def main():
     print(a.sum())
 ```
 
-<span class="caption">Listing 8-31: Building lane values and operating on every lane</span>
+<span class="caption">Listing 8-34: Building lane values and operating on every lane</span>
 
 ```console
 $ aura run src/main.au
@@ -119,7 +119,7 @@ def main():
     print(energy_lanes(samples))
 ```
 
-<span class="caption">Listing 8-32: Summing squares four samples at a time</span>
+<span class="caption">Listing 8-35: Summing squares four samples at a time</span>
 
 ```console
 $ aura run src/main.au
@@ -155,7 +155,7 @@ Is it faster? Let's time both functions on the same data. `time.monotonic()`
 reads a clock that only moves forward, and subtracting two readings gives a
 `Duration`. We will meet the `time` module properly in
 [Chapter 20](/book/ch20-02-time-and-dates). Add `import time` at the top of
-Listing 8-32, add a function that makes test data, and replace `main`:
+Listing 8-35, add a function that makes test data, and replace `main`:
 
 ```aura fragment
 import time
@@ -187,7 +187,7 @@ def main():
     print(f"lanes:      {lanes_ms} ms")
 ```
 
-<span class="caption">Listing 8-33: Timing the two loops</span>
+<span class="caption">Listing 8-36: Timing the two loops</span>
 
 Lane values only pay off in native code, so build the program instead of
 running it with `aura run`:
@@ -249,7 +249,7 @@ def main():
     print(samples)
 ```
 
-<span class="caption">Listing 8-34: Scaling and clamping samples in place</span>
+<span class="caption">Listing 8-37: Scaling and clamping samples in place</span>
 
 ```console
 $ aura run src/main.au
@@ -294,7 +294,7 @@ def main():
     print(total([9223372036854775807, 0, 0, 0, 1, 0, 0, 0]))
 ```
 
-<span class="caption">Listing 8-35: A checked integer sum in four lanes</span>
+<span class="caption">Listing 8-38: A checked integer sum in four lanes</span>
 
 ```console
 $ aura run src/main.au
@@ -310,6 +310,10 @@ that did not fit. Its position is inside the `simd` module's own source,
 which is where the lane addition is written, and the call chain leads back
 to `total` and `main`. Integer sums have no rounding, so when nothing
 overflows the lane loop and the plain loop always agree exactly.
+
+Those checks stay run-time checks. `aura verify` doesn't model lane values
+today, so it reports the loads and sums of a lane loop as unproved, where the
+plain loop with an `invariant` can be proved.
 
 There are no `int32` lanes. Aura computes an `int32` in a 64-bit register
 and checks its range afterward, and when the project measured eight `int32`

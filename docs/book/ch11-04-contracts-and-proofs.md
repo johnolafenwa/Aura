@@ -50,8 +50,8 @@ error[AU4009]: `requires` clause failed: `0 <= percent and percent <= 100`
 
 That's already better than an `assert` buried in the body, because the
 condition is where every caller and every reader will look for it. The
-details of contracts, including `old()` for values on entry and `spec def`
-helpers, are in the [contracts manual page](/manual/contracts).
+[contracts manual page](/manual/contracts) has the full rules for what a
+clause may say.
 
 ## Proving it
 
@@ -200,40 +200,12 @@ next reader and guards it in every run.
 
 A proof doesn't remove anything by default. Every contract and every bounds
 check stays in the program, which is why a `requires` that the verifier
-couldn't prove still stops a bad call with a clear diagnostic. When you want
-the proofs to pay for themselves, `aura build --remove-proved-checks` builds
-a native binary without the bounds, overflow, divisor, and `assert` checks
-the verifier proves can never fail, and keeps every other check.
+couldn't prove still stops a bad call with a clear diagnostic. A contract
+you haven't proved yet is still a contract: it documents the function and
+guards it in every run, and the proof can come later.
 
-The verifier reads strings, dictionaries, and sets too, so it proves that
-a `prices[item]` read finds its key when a `requires item in prices` says
-so. Floats are IEEE-754 values, so a contract over them means what the
-hardware computes, NaN included. It doesn't model everything yet: most
-library calls are outside what it reads today, and a check that depends on them is reported
-as `AU5104` and stays a run-time check. Quantifiers are modeled:
-a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
-call and assumed inside the function. The [verification manual page](/manual/verification)
-lists exactly what is modeled.
-
-## Summary
-
-You can now test Aura code with nothing but the `aura` command. A test is a
-parameterless `test_` function that asserts what should be true, and the runner
-reports each case by file and name, with the operands of a failed comparison
-printed for you. A trap in the code under test fails the case with its full
-diagnostic and call chain. You can narrow a run to a file, a directory, or any
-case whose name contains a substring, set time limits, share setup and teardown
-between cases, generate cases from a list, and produce JSON for CI, while the
-exit status tells any script whether the suite passed. Where a test checks
-the inputs you chose, a contract states what must hold for all of them, and
-`aura verify` proves it or shows you an input that breaks it.
-
-Along the way the tests did more than catch mistakes. They found a real bug in
-`format_cents`, forced a decision about the average of an empty cart, and
-pushed `load_prices` apart into a pure parser and a thin file reader. The
-verifier found two more, in inputs nobody would have written a test for.
-That's the usual effect of writing tests and contracts early, and it's the
-approach we'll take in the next chapter. In
-[Chapter 12](/book/ch12-00-log-analyzer) we'll put everything from the last
-few chapters together and build a command-line log analyzer, starting from an
-empty directory.
+So far the contracts have been about single integers, and the one loop we
+proved clamps every price because it knows nothing about the list it was
+given. Real carts are lists and dictionaries, and real loops search and
+build things. In the next section we'll say what is true of every element
+of a list, prove what a loop builds, and prove that a loop ends.

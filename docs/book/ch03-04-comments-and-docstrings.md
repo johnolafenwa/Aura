@@ -84,7 +84,7 @@ def round_trip(celsius: float64) -> float64:
     return to_celsius(to_fahrenheit(celsius))
 ```
 
-<span class="caption">Listing 3-5: A documented module</span>
+<span class="caption">Listing 3-6: A documented module</span>
 
 The string at the very top of the file documents the module as a whole. The
 first string inside each function body documents that function. The
@@ -193,6 +193,12 @@ that must not be empty, a unit of measurement, a result that may be `None`),
 and leave the how to the code and its comments. Private helpers benefit from
 a docstring when their name doesn't say everything, but there's no need to
 document `def is_empty(self) -> bool`.
+
+When the thing a caller could get wrong can be written as a condition, such
+as a list that must not be empty, write it as a `requires` clause as well,
+on the line after the docstring. The docstring tells the reader. The clause
+is checked on every call, and `aura verify` proves it at each call site, as
+we saw in [Functions](/book/ch03-03-functions).
 
 With bindings, types, functions, and documentation covered, the last piece is
 control flow: making decisions and repeating work.

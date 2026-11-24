@@ -164,6 +164,56 @@ together. The function declares that it will change its argument, and the
 caller declares that its binding may change. When you read `mut scores =` at
 the top of a function, you know to look for something that modifies it.
 
+### Saying how the argument changes
+
+The signature of `add_bonus` says that it may change the list. It doesn't say
+how. That matters to `aura verify`, the command that proves a file's run-time
+checks can't fail (see
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs)). Suppose `main`
+reads the bonus back with `print(scores[3])` after the call. The program
+prints `5`, but the verifier can't prove that the index is in range:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:7:18
+  |
+7 |     print(scores[3])
+  |                  ^
+  = note: in `main` (index in range check)
+verified src/main.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier checks each function on its own, from the signatures and
+contracts of the functions it calls. After a call that took `mut` access, all
+it knows about `scores` is that it may have changed. An `ensures` clause
+fills the gap. Inside one, `old(values)` is the list as it was when the
+function was entered:
+
+```aura
+def add_bonus(values: mut list[int64]):
+    ensures len(values) == len(old(values)) + 1
+    values.append(5)
+
+def main():
+    mut scores = [10, 20, 30]
+    add_bonus(scores)
+    print(scores[3])
+```
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 3 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Now the contract says the list grows by exactly one element, the verifier
+proves that `add_bonus` does that, and `main` can rely on it: three elements
+before the call, four after, so index 3 exists. The access mode and the
+contract divide the work. `mut` says whether a function changes its
+argument, and `ensures` says in what way. With a bare parameter there is
+nothing to add: the verifier knows what you know, that the list is the same
+after the call as before it.
+
 ## Mutable access is exclusive
 
 Shared borrows can overlap freely, since nobody is changing anything. Mutable
