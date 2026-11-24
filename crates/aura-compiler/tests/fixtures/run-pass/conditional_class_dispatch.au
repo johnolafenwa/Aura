@@ -1,12 +1,16 @@
 import build
 
+
 trait Readable:
     def read(self) -> int64
 
+
 type Method = Callable[def(self: Counter) -> int64]
+
 
 def doubled(f: own Method) -> Method:
     return Method(lambda [own f] self: f(self) * 2)
+
 
 class Counter:
     stored: int64
@@ -37,18 +41,22 @@ class Counter:
         def score(self) -> int64:
             return self.count
 
+
 impl Readable for Counter:
     def read(self) -> int64:
         return self.score()
+
 
 class Pair:
     left: Counter
     right: Counter
 
+
 if "alternate" in build.cfg:
     impl Readable for Pair by right
 else:
     impl Readable for Pair by left
+
 
 def main():
     mut c = Counter(stored=0)
