@@ -278,6 +278,27 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[test]
+    fn a_stack_adapter_preserves_scalar_c_arguments_and_reuses_its_signature() {
+        extern "C" fn subtract(first: u32, second: u32) -> u32 {
+            first - second
+        }
+        let sig = FfiSignature::new(vec![FfiType::U32, FfiType::U32], FfiType::U32);
+        let function = HostFunction::new(subtract as *const () as *mut _).unwrap();
+        for (first, second) in [(20, 3), (14, 8)] {
+            let mut args = [FfiValue::U32(first), FfiValue::U32(second)];
+            assert!(matches!(
+                invoke(function, &sig, &mut args).unwrap(),
+                FfiValue::U32(result) if result == first - second
+            ));
+        }
+        assert!(matches!(
+            call("__aura_missing_scalar_host_function__", &sig, &mut []),
+            Err(FfiError::SymbolNotFound { .. })
+        ));
+    }
+
     #[cfg(all(target_arch = "x86_64", unix))]
     #[test]
     fn a_sysv_stack_adapter_passes_an_aligned_value_and_preserves_the_input() {
