@@ -180,3 +180,9 @@ fn a_static_fact_mixed_with_a_runtime_operand_keeps_script_control_flow() {
     let source = "import build\nmut flag = true\nif build.hosted and flag:\n    print(1)\n";
     assert_eq!(run_source(source).unwrap().stdout, "1\n");
 }
+
+#[test]
+fn selected_scopes_end_views_at_their_last_use() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_view_scope.au");
+    assert_eq!(run_source(source).unwrap().stdout, "old\nnew\n");
+}
