@@ -9,7 +9,10 @@ pub(super) fn pointer_type(
     names.uses_raw_pointer.set(true);
     fn eligible(ty: &Type, names: &TypeDefinitions) -> bool {
         ffi_scalar_type(ty)
-            || ty.as_fixed_array().is_some_and(|(element, _)| eligible(element, names))
+            || matches!(ty,Type::Named(name,args) if args.is_empty() && (name == "int128" || name == "uint128"))
+            || ty
+                .as_fixed_array()
+                .is_some_and(|(element, _)| eligible(element, names))
             || matches!(ty, Type::Named(name, _) if names.c_class_names.contains(name))
     }
     match args.as_slice() {
@@ -20,6 +23,11 @@ pub(super) fn pointer_type(
             "ptr[T] needs a scalar, a C class or a fixed array of those types",
         )),
     }
+}
+
+/// These point to inline data with no compatible legacy list view.
+pub(super) fn requires_pointer_argument(ty: &Type) -> bool {
+    ty.as_fixed_array().is_some() || matches!(ty, Type::Named(name,args) if args.is_empty() && matches!(name.as_str(), "int128" | "uint128"))
 }
 
 pub(super) fn cast(source: &Type, target: Type, span: crate::diag::Span) -> Result<Type> {
@@ -99,7 +107,10 @@ impl FunctionChecker<'_> {
         let state = self.is_state_place(place, locals);
         let valid = match &place.kind {
             ExprKind::Name(_) => state,
-            ExprKind::Index { object, .. } => self.type_of_expr(object, locals)?.as_fixed_array().is_some(),
+            ExprKind::Index { object, .. } => self
+                .type_of_expr(object, locals)?
+                .as_fixed_array()
+                .is_some(),
             ExprKind::Member { object, field } => {
                 self.imported_state(object, field).is_some()
                     || matches!(self.type_of_member_object_expr(object, locals)?, Type::Named(name, _)
@@ -150,10 +161,11 @@ impl ExternFunctionInfo {
             let Some(ty) = infer(&argument.value) else {
                 continue;
             };
+            let Type::Named(_, elements) = &self.signature.params[i] else { continue };
             let Some(element) = ty.as_raw_pointer() else {
-                continue;
-            };
-            let Type::Named(_, elements) = &self.signature.params[i] else {
+                if elements.first().is_some_and(requires_pointer_argument) {
+                    return Err(Diagnostic::coded_at("AU2083",argument.span,"this C parameter requires a typed raw pointer"));
+                }
                 continue;
             };
             if elements.first() != Some(element) {
@@ -218,7 +230,11 @@ mod tests {
             ("p: ptr[int32]", "return p == (0 as ptr[int16])", "AU2083"),
             ("p: ptr[int32]", "return p < p", "AU2083"),
             ("p: int16", "return mem.address_of(p)", "AU3032"),
-            ("p: int16", "return mem.address_of(Pair(first=0, second=1).first)", "AU3032"),
+            (
+                "p: int16",
+                "return mem.address_of(Pair(first=0, second=1).first)",
+                "AU3032",
+            ),
             ("p: int16", "return mem.address_of()", "AU2083"),
         ] {
             let source = format!("{prefix}\ndef operation({args}) -> bool:\n    {body}\n");
@@ -228,7 +244,10 @@ mod tests {
         assert_eq!(check(mismatch).unwrap_err().code, "AU2083");
         let pointer = Type::Named("ptr".into(), vec![Type::named("int16")]);
         assert_eq!(pointer.as_raw_pointer(), Some(&Type::named("int16")));
-        assert_eq!(raw_pointer_result(&Type::named("int16"), "offset"), Some(pointer));
+        assert_eq!(
+            raw_pointer_result(&Type::named("int16"), "offset"),
+            Some(pointer)
+        );
         assert!(raw_pointer_result(&Type::Unit, "unknown").is_none());
     }
 }

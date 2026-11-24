@@ -24,6 +24,12 @@ pub(super) fn access(name: &str, args: &[Value]) -> Option<Result<Value>> {
     ) {
         return None;
     }
+    if !matches!(
+        operation,
+        "read" | "write" | "volatile_read" | "volatile_write"
+    ) {
+        return None;
+    }
     let volatile = operation.starts_with("volatile_");
     let write = operation.ends_with("write");
     Some((|| {
@@ -104,4 +110,45 @@ pub(super) fn access(name: &str, args: &[Value]) -> Option<Result<Value>> {
                 .expect("value loaded at its declared width"),
         ))
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_memory_rejects_wrong_addresses_and_values() {
+        let mut cell = 3_u64;
+        let address = Value::Int(IntegerValue::from_u64((&mut cell as *mut u64) as u64));
+        for (name, args) in [
+            ("mem::write_int16", vec![address.clone()]),
+            (
+                "mem::write_float64",
+                vec![address.clone(), Value::Bool(true)],
+            ),
+            ("mem::read_bool", vec![address.clone()]),
+            ("mem::read_int16", vec![Value::Bool(false)]),
+            (
+                "mem::read_int64",
+                vec![Value::Int(IntegerValue::from_i64(-1))],
+            ),
+            ("mem::__pointer_offset", vec![address.clone()]),
+        ] {
+            assert!(access(name, &args).unwrap().is_err(), "{name}");
+        }
+        assert!(access("mem::noise_int32", &[address.clone()]).is_none());
+        let offset = access(
+            "mem::__pointer_offset",
+            &[
+                address,
+                Value::Int(IntegerValue::from_i64(-2)),
+                Value::Int(IntegerValue::from_u64(2)),
+            ],
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(offset, Value::Int(value) if value.as_i128() == Some((&mut cell as *mut u64 as usize) as i128 - 4))
+        );
+    }
 }

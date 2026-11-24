@@ -873,7 +873,7 @@ fn validate_ffi_parameter(
             && elements
                 .iter()
                 .all(|element| ffi_struct(element, classes).is_some());
-        if !structs && !elements.iter().all(ffi_scalar_type) {
+        if !structs && !elements.iter().all(|ty| ffi_scalar_type(ty) || raw_pointers::requires_pointer_argument(ty)) {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 span,

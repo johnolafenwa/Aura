@@ -27,9 +27,20 @@ pub(super) fn parameter_layouts(module: &MirModule) -> ParameterLayouts {
     let mut layouts = ParameterLayouts::new();
     for function in &module.functions {
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
-            if let Instruction::Assign { value: Rvalue::CFieldAddress {root,layout,..}, .. } = instruction {
-                if function.params.iter().any(|param| param.name == *root && param.passing != MirReceiverKind::Value) {
-                    layouts.entry(function.name.clone()).or_default().insert(root.clone(), layout.clone());
+            if let Instruction::Assign {
+                value: Rvalue::CFieldAddress { root, layout, .. },
+                ..
+            } = instruction
+            {
+                if function
+                    .params
+                    .iter()
+                    .any(|param| param.name == *root && param.passing != MirReceiverKind::Value)
+                {
+                    layouts
+                        .entry(function.name.clone())
+                        .or_default()
+                        .insert(root.clone(), layout.clone());
                 }
             }
         }
@@ -73,8 +84,10 @@ impl Env {
     ) -> Result<u64> {
         if !self.raw_cells.contains_key(root) {
             let value = self.read_place(root)?;
-            self.raw_cells
-                .insert(root.to_string(), Arc::new(Mutex::new(CellBytes::new(layout, &value)?)));
+            self.raw_cells.insert(
+                root.to_string(),
+                Arc::new(Mutex::new(CellBytes::new(layout, &value)?)),
+            );
         }
         let mut cell = self.raw_cells[root].lock().expect("C local storage");
         Ok(cell
@@ -83,23 +96,36 @@ impl Env {
             .wrapping_add(cell.start + offset) as usize as u64)
     }
 
-    pub(super) fn borrowed_cells(&mut self, function:&MirFunction, args:&[MirArg], params:Option<&HashMap<String,CStruct>>) -> Result<SharedCells> {
+    pub(super) fn borrowed_cells(
+        &mut self,
+        function: &MirFunction,
+        args: &[MirArg],
+        params: Option<&HashMap<String, CStruct>>,
+    ) -> Result<SharedCells> {
         let mut cells = SharedCells::new();
         for (i, arg) in args.iter().enumerate() {
-            let Some(param) = arg.name.as_ref().and_then(|name| function.params.iter().find(|p| &p.name == name))
-                .or_else(||function.params.get(i)) else { continue };
-            if param.passing == MirReceiverKind::Value { continue; }
+            let Some(param) = arg
+                .name
+                .as_ref()
+                .and_then(|name| function.params.iter().find(|p| &p.name == name))
+                .or_else(|| function.params.get(i))
+            else {
+                continue;
+            };
+            if param.passing == MirReceiverKind::Value {
+                continue;
+            }
             let place = match (&arg.writeback_place, &arg.value) {
                 (Some(place), _) | (_, Operand::Place(place)) => self.resolve_loan_place(place)?,
                 _ => continue,
             };
             if !self.raw_cells.contains_key(&place) {
                 if let Some(layout) = params.and_then(|p| p.get(&param.name)) {
-                    self.raw_field_address(&place,layout,0)?;
+                    self.raw_field_address(&place, layout, 0)?;
                 }
             }
             if let Some(cell) = self.raw_cells.get(&place) {
-                cells.insert(param.name.clone(),Arc::clone(cell));
+                cells.insert(param.name.clone(), Arc::clone(cell));
             }
         }
         Ok(cells)
@@ -114,7 +140,7 @@ impl Env {
                     *root = held;
                 } else {
                     let path = fields[1..].iter().map(String::as_str).collect::<Vec<_>>();
-                    write_nested_place(root,&path,held,name)?;
+                    write_nested_place(root, &path, held, name)?;
                 }
             }
         }
@@ -127,7 +153,11 @@ impl Env {
                 let value = self.place_ref(place)?;
                 let mut guard = cell.lock().expect("C local storage");
                 let cell = &mut *guard;
-                pack(&value, &cell.layout, &mut cell.allocation[cell.start..cell.start + cell.layout.size()])?;
+                pack(
+                    &value,
+                    &cell.layout,
+                    &mut cell.allocation[cell.start..cell.start + cell.layout.size()],
+                )?;
             }
         }
         Ok(())
@@ -169,6 +199,32 @@ pub(super) fn access(
         _ => None,
     }
     .ok_or_else(|| Diagnostic::coded("AU4032", "raw storage needs a pointer-sized address"))?;
+    if matches!(layout.name.as_str(), "#int128" | "#uint128") {
+        // SAFETY: the caller of a typed pointer operation supplies the required
+        // range, access rights, and (for volatility) alignment.
+        return unsafe {
+            match store {
+                Some(value)
+                    if aura_runtime::raw_wide_memory::write(
+                        address as *mut u128,
+                        value,
+                        volatile,
+                    ) =>
+                {
+                    Ok(Value::Unit)
+                }
+                Some(_) => Err(Diagnostic::coded(
+                    "AU4032",
+                    "wide memory write needs an integer",
+                )),
+                None => Ok(aura_runtime::raw_wide_memory::read(
+                    address as *const u128,
+                    layout.name == "#int128",
+                    volatile,
+                )),
+            }
+        };
+    }
     let ptr = address as *mut u8;
     let mut bytes = vec![0; layout.size()];
     // SAFETY: the FFI grant places the address range and lifetime under the
@@ -199,14 +255,8 @@ pub(super) fn access(
     }
 }
 
-pub(super) fn requires_package_grant(value: &Rvalue) -> bool {
-    match value {
-        Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. } => true,
-        Rvalue::Call { callee: CallTarget::Name(name), .. } => name.starts_with("mem::"),
-        Rvalue::Call { callee: CallTarget::Runtime { op: RuntimeOp::Host(host), .. }, .. } =>
-            host.name().starts_with("mem::"),
-        _ => false,
-    }
+pub(super) fn permission_error() -> Diagnostic {
+    Diagnostic::coded("AU2084","raw memory operations require a manifest-checked path with allow_ffi = true")
 }
 
 #[cfg(test)]
@@ -222,13 +272,15 @@ mod tests {
 
     #[test]
     fn typed_pointer_memory_needs_manifest_checked_mir() {
-        for method in ["return p.read()", "p.write(1)\n    return 0"] {
-            let source = format!("def operation(p: ptr[int32]) -> int32:\n    {method}\n");
-            let module = lower(&source);
-            assert_eq!(reject_untrusted_extern_calls(&module).unwrap_err().code, "AU2084");
+        let mut cell = 1_i32;
+        let addr = &mut cell as *mut i32 as usize;
+        for operation in ["p.read()", "p.write(2)"] {
+            let source = format!("def main() -> None:\n    p = {addr} as ptr[int32]\n    {operation}\n");
+            assert_eq!(crate::mir_runtime::run(&lower(&source)).unwrap_err().code,"AU2084");
         }
-        let source = "extern \"C\" class Item:\n    value: int32\n\ndef operation(p: ptr[Item]) -> int32:\n    return p.read().value\n";
-        assert_eq!(reject_untrusted_extern_calls(&lower(source)).unwrap_err().code, "AU2084");
+        let source = format!("extern \"C\" class Item:\n    value: int32\n\ndef main() -> None:\n    p = {addr} as ptr[Item]\n    p.read()\n");
+        assert_eq!(crate::mir_runtime::run(&lower(&source)).unwrap_err().code,"AU2084");
+        assert_eq!(cell,1);
     }
 
     #[test]
@@ -237,8 +289,10 @@ mod tests {
             include_str!("../tests/fixtures/typed-pointers/scalars.au"),
             include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
             include_str!("../tests/fixtures/typed-pointers/foreign.au"),
+            include_str!("../tests/fixtures/typed-pointers/foreign_array.au"),
             include_str!("../tests/fixtures/typed-pointers/links.au"),
             include_str!("../tests/fixtures/typed-pointers/widths.au"),
+            include_str!("../tests/fixtures/typed-pointers/wide.au"),
             include_str!("../tests/fixtures/typed-pointers/fixed.au"),
         ] {
             let output = crate::mir_runtime::run_trusted(&lower(source))
