@@ -1000,6 +1000,11 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let (access, args) = if let Some(op) = aura_core::atomic_order::AtomicOperation::of(name) {
+            // A function operand in saved MIR, or even a string naming this
+            // wrapper, can keep it alive. It receives its order as a parameter.
+            if self.freestanding.is_none() && self.current_function_name == name {
+                return Ok(None);
+            }
             let arity = op.arity();
             let order = |index: usize| match args.get(index).map(|arg| &arg.value) {
                 None => Ok(None),
