@@ -107,3 +107,77 @@ fn unsupported_frozen_operations_keep_the_freestanding_subset_diagnostic() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn dotted_tuple_reads_expand_atomically_in_instructions_and_terminators() {
+    let mut module = crate::lower_source_to_mir("def size() -> int64:\n    return 0\n").unwrap();
+    let function = module
+        .functions
+        .iter_mut()
+        .find(|f| f.name == "size")
+        .unwrap();
+    let word = Type::named("int64");
+    let nested = Type::Tuple(vec![word.clone()]);
+    let tuple = Type::Tuple(vec![nested.clone(), Type::named("Range")]);
+    let mut types = HashMap::from([("table".into(), tuple)]);
+    let addresses = HashSet::from(["table".into()]);
+    let block = &mut function.blocks[0];
+    block.instructions = vec![
+        Instruction::Eval {
+            value: Operand::MovePlace("table.0.0".into()),
+        },
+        Instruction::Eval {
+            value: Operand::Place("table.0.0.extra".into()),
+        },
+    ];
+    block.terminator = Terminator::ForRange {
+        binding: "index".into(),
+        iterable: Operand::Place("table.1".into()),
+        body_label: "body".into(),
+        exit_label: "end".into(),
+    };
+
+    assert!(places::expand(
+        function,
+        &addresses,
+        &mut types,
+        &HashMap::new()
+    ));
+    let block = &function.blocks[0];
+    let [Instruction::Assign {
+        target: outer,
+        value: Rvalue::TupleElement { index: 0, .. },
+    }, Instruction::Assign {
+        target: inner,
+        value:
+            Rvalue::TupleElement {
+                index: 0,
+                tuple: Operand::Place(parent),
+                ..
+            },
+    }, Instruction::Eval {
+        value: Operand::MovePlace(moved),
+    }, Instruction::Eval {
+        value: Operand::Place(unchanged),
+    }, Instruction::Assign {
+        target: last,
+        value: Rvalue::TupleElement { index: 1, .. },
+    }] = block.instructions.as_slice()
+    else {
+        panic!("{:?}", block.instructions);
+    };
+    assert_eq!(outer, parent);
+    assert_eq!(inner, moved);
+    assert_eq!(types[outer], nested);
+    assert_eq!(types[inner], word);
+    assert_eq!(unchanged, "table.0.0.extra");
+    assert!(
+        matches!(&block.terminator, Terminator::ForRange { iterable: Operand::Place(name), .. } if name == last)
+    );
+    assert!(!places::expand(
+        function,
+        &addresses,
+        &mut types,
+        &HashMap::new()
+    ));
+}
