@@ -18024,3 +18024,31 @@ fn native_run_selects_constants_before_consulting_the_program_cache() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn native_windows_process_examples_use_the_platform_command_and_c_symbol() {
+    for (example, expected) in [
+        ("examples/packages/ffi_getpid/src/main.au", "true\n"),
+        (
+            "examples/io/process_run.au",
+            "aura process\n14\n0\nExitStatus.Exited(0)\n",
+        ),
+    ] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", "direct"])
+            .arg(repo_root().join(example))
+            .output()
+            .expect("run the maintained Windows example");
+        assert!(
+            output.status.success(),
+            "{example}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{example}"
+        );
+    }
+}
