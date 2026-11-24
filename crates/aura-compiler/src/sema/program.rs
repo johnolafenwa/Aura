@@ -1791,7 +1791,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         })
         .collect::<Vec<_>>();
     impl_decls.sort_by_key(|impl_decl| inherited_assoc_depth(&impl_decl.trait_name, &traits, 16));
-    super::delegation::order_after_field_impls(&mut impl_decls, &classes);
+    super::delegation::order_after_field_impls(&mut impl_decls, &classes, &traits);
     let mut forwarded_span = 0;
     for impl_decl in impl_decls {
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;

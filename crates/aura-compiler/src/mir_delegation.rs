@@ -215,9 +215,19 @@ pub(super) fn associated_alias_for_bound(
     ty: &Type,
     name: &str,
 ) -> Option<String> {
-    let mut candidates = program.trait_impls.iter().chain(program.module_registry.values().flat_map(|namespace| &namespace.trait_impls));
-    if !candidates.any(|owner| owner.decl.delegation.is_some()
-        && owner.methods.get(name).is_some_and(|method| crate::sema::delegation::deferred_associated(owner, method))) {
+    let mut candidates = program.trait_impls.iter().chain(
+        program
+            .module_registry
+            .values()
+            .flat_map(|namespace| &namespace.trait_impls),
+    );
+    if !candidates.any(|owner| {
+        owner.decl.delegation.is_some()
+            && owner
+                .methods
+                .get(name)
+                .is_some_and(|method| crate::sema::delegation::deferred_associated(owner, method))
+    }) {
         return None;
     }
     let resolver = Lowerer::new(
