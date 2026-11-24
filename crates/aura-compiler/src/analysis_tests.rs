@@ -11820,6 +11820,7 @@ fn systems_data_editor_shows_declared_c_layout_in_field_order() {
         "extern \"C\" packed align(8) class Sample:",
         "    whole: uint32",
         "    flags: uint8 bits(3)",
+        "    grid: array[array[int16, 3], 2]",
         "def first(s: Sample) -> uint32:",
         "    return s.whole",
     ].join("\n");
@@ -11830,6 +11831,6 @@ fn systems_data_editor_shows_declared_c_layout_in_field_order() {
     fs::write(&file, &source).unwrap();
     let analysis = analyze_path_source(&file, &source);
     assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
-    let sample = occurrence_at(&analysis, 3, 13);
-    assert!(sample.hover.contains("extern \"C\" packed align(8) class Sample:\n    whole: uint32\n    flags: uint8 bits(3)"), "{}", sample.hover);
+    let sample = occurrence_at(&analysis, 4, 13);
+    assert!(sample.hover.contains("extern \"C\" packed align(8) class Sample:\n    whole: uint32\n    flags: uint8 bits(3)\n    grid: array[array[int16, 3], 2]"), "{}", sample.hover);
 }
