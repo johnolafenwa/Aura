@@ -132,7 +132,7 @@ pub fn bit_chunks(start: u8, width: u8) -> impl Iterator<Item = (u8, u8, u8)> {
 #[derive(Clone, Copy)]
 pub enum StoragePart {
     Scalar(super::CLeaf),
-    Inline { offset: usize },
+    Inline { offset: usize, bytes: usize },
 }
 
 impl CStruct {
@@ -142,7 +142,10 @@ impl CStruct {
         fn visit(record: &CStruct, base: usize, parts: &mut Vec<StoragePart>) {
             use super::{CFieldKind, CLeaf};
             if record.layout_controls.inline_union {
-                parts.push(StoragePart::Inline { offset: base });
+                parts.push(StoragePart::Inline {
+                    offset: base,
+                    bytes: record.size(),
+                });
                 return;
             }
             for (field, position) in record.positions() {
@@ -154,7 +157,10 @@ impl CStruct {
                         bits: position.bits,
                     })),
                     CFieldKind::Struct(inner) => visit(inner, offset, parts),
-                    CFieldKind::Array(_, _) => parts.push(StoragePart::Inline { offset }),
+                    CFieldKind::Array(_, _) => parts.push(StoragePart::Inline {
+                        offset,
+                        bytes: field.kind.size(),
+                    }),
                 }
             }
         }

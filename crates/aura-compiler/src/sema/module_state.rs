@@ -96,6 +96,14 @@ fn scalar_word(name: &str, data: &[u8]) -> Option<u64> {
     })
 }
 
+fn append_inline_words(words: &mut Vec<u64>, bytes: &[u8]) {
+    for chunk in bytes.chunks(8) {
+        let mut word = [0; 8];
+        word[..chunk.len()].copy_from_slice(chunk);
+        words.push(u64::from_le_bytes(word));
+    }
+}
+
 impl FunctionChecker<'_> {
     pub(super) fn state_image(&self, ty: &Type, expr: &Expr) -> Result<StateImage> {
         if let Type::Union(union) = ty {
@@ -278,8 +286,12 @@ impl FunctionChecker<'_> {
             if let Some(layout) = &slot.record {
                 use crate::c_layout::StoragePart;
                 for part in layout.storage_parts() {
-                    let StoragePart::Scalar(leaf) = part else {
-                        return Err(literal_error(expr));
+                    let leaf = match part {
+                        StoragePart::Scalar(leaf) => leaf,
+                        StoragePart::Inline { offset, bytes } => {
+                            append_inline_words(&mut words, &data[offset..offset + bytes]);
+                            continue;
+                        }
                     };
                     let bytes = &data[leaf.offset..];
                     if let Some((start, width)) = leaf.bits {
@@ -295,6 +307,13 @@ impl FunctionChecker<'_> {
                         words.push(scalar_word(&name, bytes).ok_or_else(|| literal_error(expr))?);
                     }
                 }
+                continue;
+            }
+            if slot.ty.as_fixed_array().is_some() {
+                let (bytes, _) = self
+                    .fixed_storage_shape(&slot.ty)
+                    .ok_or_else(|| literal_error(expr))?;
+                append_inline_words(&mut words, &data[..bytes as usize]);
                 continue;
             }
             words.push(scalar_word(&slot.ty.to_string(), data).ok_or_else(|| literal_error(expr))?);
@@ -319,6 +338,10 @@ impl FunctionChecker<'_> {
     fn state_words(&self, ty: &Type, depth: usize) -> Option<usize> {
         if depth > crate::limits::RECURSION_LIMIT {
             return None;
+        }
+        if ty.as_fixed_array().is_some() {
+            let (bytes, _) = self.fixed_storage_shape(ty)?;
+            return Some(bytes.div_ceil(8) as usize);
         }
         if ty == &Type::Unit {
             return Some(1);
@@ -400,7 +423,11 @@ impl FunctionChecker<'_> {
             .filter(|binding| binding.decl.mutable)
     }
 
-    pub(super) fn is_state_place(&self, expr: &Expr, locals: &HashMap<String, LocalBinding>) -> bool {
+    pub(super) fn is_state_place(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> bool {
         match &grouped_expr(expr).kind {
             ExprKind::Name(name) => locals
                 .get(name)
