@@ -1,7 +1,14 @@
 import mem
 
+def identity(a: mut fixed[uint16, 3], p: ptr[uint16]) -> bool:
+    q = mem.address_of(a[0])
+    q.write(4)
+    return q == p
+
 export "C" def probe(index: int32) -> uint16:
     mut a: fixed[uint16, 3] = [4, 5, 6]
+    if not identity(a, mem.address_of(a[0])):
+        return 0
     item = mem.address_of(a[index])
     item.write(19)
     a[2] = 25
