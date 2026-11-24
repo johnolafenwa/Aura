@@ -138,6 +138,17 @@ impl NativeCodegen<'_> {
         // An export is declared before any body is built, so a body that
         // names the same symbol, as a check names the trap hook, calls the
         // export.
+        if self
+            .module
+            .foreign_link
+            .asm_arch
+            .as_deref()
+            .is_some_and(|arch| arch != target.arch())
+        {
+            return Err("assembly requires the freestanding target it was checked for".into());
+        }
+        let fragments = &self.module.foreign_link.module_asm;
+        self.module_backend()?.set_module_asm(fragments);
         let mut exports = Vec::new();
         for export in &self.module.foreign_link.exports {
             let function = self
@@ -253,6 +264,7 @@ fn declared_symbols(module: &MirModule) -> HashSet<&str> {
         .iter()
         .map(|export| export.symbol.as_str())
         .collect::<HashSet<_>>();
+    symbols.extend(module.foreign_link.asm_externs.iter().map(String::as_str));
     for instruction in module
         .functions
         .iter()
@@ -552,7 +564,7 @@ impl FunctionCompiler<'_> {
 pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<Diagnostic>> {
     let mut module = module.clone();
     let mut problems = Vec::new();
-    if module.foreign_link.exports.is_empty() {
+    if module.foreign_link.exports.is_empty() && module.foreign_link.module_asm.is_empty() {
         problems.push(
             Diagnostic::coded(
                 UNSUPPORTED,
@@ -820,6 +832,7 @@ fn check_function(
                     span = crate::diag::Span::new(*line as usize, *column as usize);
                     continue;
                 }
+                Instruction::InlineAsm { .. } => continue,
                 Instruction::Safepoint
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }

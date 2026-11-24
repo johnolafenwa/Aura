@@ -144,6 +144,10 @@ pub fn docstring_summary(text: &str, limit: usize) -> Option<String> {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub module_asm: Vec<String>,
+    #[serde(skip)]
+    pub asm_span: Option<Span>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
     pub imports: Vec<ImportDecl>,
@@ -157,7 +161,8 @@ impl Module {
     /// package with `allow_ffi = true` may do: it holds an FFI declaration
     /// or imports the `mem` module.
     pub fn uses_ffi(&self) -> bool {
-        self.items.iter().any(Item::declares_ffi)
+        self.asm_span.is_some()
+            || self.items.iter().any(Item::declares_ffi)
             || self.imports.iter().any(|import| match &import.kind {
                 ImportKind::Module { path, .. } => path == &["mem"],
                 ImportKind::From { module_path, .. } => module_path == &["mem"],
