@@ -741,8 +741,13 @@ fn target_selects_declarations_before_checking_and_building() {
         "import build\nif build.arch == \"riscv64\":\n    export \"C\" def answer() -> int64:\n        return 42\nelse:\n    import unavailable_elsewhere\n",
     );
     let build = workspace.aura(&[
-        "build", "main.au", "--freestanding", "--target", "riscv64gc-unknown-none-elf",
-        "-o", "target.o",
+        "build",
+        "main.au",
+        "--freestanding",
+        "--target",
+        "riscv64gc-unknown-none-elf",
+        "-o",
+        "target.o",
     ]);
     assert!(build.status.success(), "{}", stderr(&build));
     let check = workspace.aura(&["check", "--all-targets", "main.au"]);
