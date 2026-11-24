@@ -7,6 +7,7 @@ pub(crate) fn evaluate(
     args: &[Argument],
     modules: &BTreeMap<String, ModuleNamespace>,
     classes: &BTreeMap<String, ClassInfo>,
+    shadowed: impl Fn(&str) -> bool,
 ) -> Option<Result<usize>> {
     let ExprKind::Member { object, field } = &callee.kind else {
         return None;
@@ -15,7 +16,8 @@ pub(crate) fn evaluate(
         return None;
     };
     let ns = modules.get(alias)?;
-    if ns.path != "mem"
+    if shadowed(alias)
+        || ns.path != "mem"
         || ns.source_path.is_some()
         || !matches!(field.as_str(), "size_of" | "align_of" | "offset_of")
     {
@@ -30,8 +32,22 @@ pub(crate) fn evaluate(
                 "a C layout query expects a type name, with a field name for offset_of",
             ));
         }
-        let ExprKind::Name(name) = &args[0].value.kind else {
-            return Err(error("expected a C type name in the layout query"));
+        let (name, classes) = match &args[0].value.kind {
+            ExprKind::Name(name) => (name, classes),
+            ExprKind::Member { object, field } => {
+                let ExprKind::Name(module) = &object.kind else {
+                    return Err(error("expected a C type name in the layout query"));
+                };
+                let namespace = modules
+                    .get(module)
+                    .filter(|_| !shadowed(module))
+                    .ok_or_else(|| error("expected an imported module in the layout query"))?;
+                if !namespace.classes.contains_key(field) {
+                    return Err(error("expected a public C class or union"));
+                }
+                (field, &namespace.all_classes)
+            }
+            _ => return Err(error("expected a C type name in the layout query")),
         };
         let ty = Type::named(name);
         if let Some(scalar) = ffi_scalar(&ty) {

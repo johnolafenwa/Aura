@@ -542,6 +542,35 @@ def main() -> int32:
 `own ptr[Name]` is `AU3004`. Lists of C unions follow the same pointer
 rules as lists of C structs.
 
+#### Packing, Alignment And Bit-Fields
+
+Use `packed` for one-byte member packing and `align(N)` to request a minimum alignment for the whole class. The final size includes the padding required for an array of the class.
+
+```aura fragment
+import mem
+
+extern "C" packed align(8) class Header:
+    kind: uint8
+    serial: uint32
+    count: uint16 bits(5)
+    mode: uint16 bits(3)
+
+def field_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+| Form | Rule |
+| --- | --- |
+| `extern "C" packed class Header:` | Caps member alignment at one byte. A nested record retains its own internal layout. |
+| `align(N)` before `class` | Takes a literal power of two from 1 to 8192. Natural alignment still applies unless the record is packed. |
+| `field: uintN bits(W)` | Declares an unsigned bit-field. A positive literal width must fit the 8-, 16-, 32- or 64-bit base type. |
+| `mem.size_of(T)`, `mem.align_of(T)` | Give the target size and alignment in bytes as `uint64` constants. Use a C scalar, class or union. |
+| `mem.offset_of(T, field)` | Gives the byte offset of an addressable field as a `uint64` constant. Union members start at zero. |
+
+A bit-field read returns its declared unsigned type. A write checks the value fits before updating the field. The platform C ABI determines bit allocation. In particular, Windows starts a new allocation unit when adjacent fields have different base widths. Use matching declarations in C and Aura.
+
+`AU2085` reports an invalid alignment or field width. Use a supported power of two for alignment and an unsigned field type with sufficient bits. `AU2086` reports a layout query whose type or field lacks the requested layout. For a bit-field, query an enclosing record or an addressable sibling. A borrow of a bit-field reports `AU3033`. Copy it to a local and assign the result back. A value too large for a bit-field reports `AU4033`.
+
 #### Unions
 
 `extern "C" union Name:` declares a C union. Every member starts at offset
@@ -586,15 +615,16 @@ parts:
 | Part | Meaning |
 | --- | --- |
 | `Name()` | a union of zero bytes |
-| `value.member` | a read-only property: the leading bytes of the union, read as the member's type |
+| `value.member` | the leading bytes of the union, read as the member's type |
+| `value.member = item` | stores the member in a mutable union, preserving bytes beyond that member |
 | `Name.from_member(value)` | a union that holds `value` in that member, with every other byte zero |
 | `value.bytes` | the bytes themselves, which the program can read and write |
 
 - **A member read makes a new value.** `event.key` is a `KeyEvent` built
   from the bytes at that moment. Changing it does not change the union.
-- **Members cannot be assigned.** `event.kind = 2` and
-  `event.key.code = 2` are `AU2045`, because a member is a property. Build a new union with `from_member`, or write
-  `bytes`.
+- **Assignment writes one member.** `event.kind = 2` sets the bytes of
+  `kind`. To update a nested field, read the member into a mutable
+  local, edit it and assign the member back.
 - **No member is the active one.** A C union carries no tag, and neither
   does this one. Which member holds meaning is the library's convention,
   usually a first field every member shares. Reading another member

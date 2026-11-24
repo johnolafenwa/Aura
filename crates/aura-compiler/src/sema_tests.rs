@@ -34211,3 +34211,12 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         "{error:?}"
     );
 }
+
+#[test]
+fn c_bit_field_cannot_be_lent_as_an_independent_scalar() {
+    let source = "extern \"C\" class Flags:\n    code: uint8 bits(3)\n\ndef set(value: mut uint8) -> None:\n    value = 127\n\ndef change() -> None:\n    mut f = Flags(code=1)\n    set(f.code)\n";
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU3033"
+    );
+}

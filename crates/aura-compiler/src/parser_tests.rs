@@ -6210,6 +6210,12 @@ fn parses_extern_layout_controls_and_diagnoses_invalid_sizes() {
         source.replace("align(16)", "align(3)"),
         source.replace("bits(3)", "bits(17)"),
         source.replace("uint16", "float32"),
+        source.replace("packed", "packed packed"),
+        source.replace("align(16)", "align(8) align(16)"),
+        source.replace("align(16)", "align(n)"),
+        source.replace("align(16)", "align(18446744073709551616)"),
+        source.replace("packed align(16) class", "union"),
+        include_str!("../tests/fixtures/parse-fail/c_bit_field_width.au").to_owned(),
     ] {
         assert_eq!(crate::parse_source(&source).unwrap_err().code, "AU2085");
     }

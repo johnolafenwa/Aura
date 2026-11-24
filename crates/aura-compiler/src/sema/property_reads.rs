@@ -549,6 +549,22 @@ impl FunctionChecker<'_> {
         action: &str,
         locals: &mut std::collections::HashMap<String, super::LocalBinding>,
     ) -> Result<()> {
+        if let ExprKind::Member { object, field } = &super::grouped_expr(expr).kind {
+            if let Ok(ty) = self.type_of_expr_without_move_state(object, locals, None) {
+                if super::ffi_struct(&ty, self.classes)
+                    .is_some_and(|class| class.decl.layout_controls.bit_widths.contains_key(field))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU3033",
+                        expr.span,
+                        format!("C bit-field `{field}` cannot be {action} through a reference"),
+                    )
+                    .with_help(
+                        "read the field into a local, then assign the result back to the field",
+                    ));
+                }
+            }
+        }
         match self.property_read_on_place_path(expr, locals) {
             Some((property, span)) => Err(property_use_error(span, &property, action)),
             None => Ok(()),

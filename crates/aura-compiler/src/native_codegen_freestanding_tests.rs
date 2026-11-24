@@ -879,3 +879,27 @@ fn c_layout_queries_are_target_constants_in_freestanding_objects() {
         assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
     }
 }
+
+#[test]
+fn freestanding_union_member_write_keeps_runtime_out_of_every_object() {
+    let source = r#"
+extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+export "C" def replace_low(original: uint32, low: uint8) -> uint32:
+    mut w = Word.from_whole(original)
+    w.low = low
+    return w.whole
+"#;
+    let mut module = crate::parse_source(source).unwrap();
+    module.use_freestanding_c_layout();
+    let program = crate::check_module_with_builtin_imports(module).unwrap();
+    let mir = crate::mir::lower_with_source_locations(&program);
+    for target in TARGETS {
+        let bytes = emit_freestanding_object(&mir, "kernel.au", source, target).unwrap();
+        let (globals, _, undefined) = symbols(&bytes);
+        assert!(globals.iter().any(|s| s == "replace_low"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}

@@ -1664,3 +1664,19 @@ impl Pattern {
         matches!(self, Self::Rest(_))
     }
 }
+
+impl Module {
+    /// Selects ELF record layout for a freestanding target, including on a
+    /// Windows host. Every C union uses an inline byte array in this profile.
+    pub fn use_freestanding_c_layout(&mut self) {
+        for item in &mut self.items {
+            if let Item::Class(class) = item {
+                class.layout_controls.microsoft_bit_fields = false;
+                class.layout_controls.inline_union = class.c_union.is_some();
+                if class.c_union.is_some() {
+                    class.copy = true;
+                }
+            }
+        }
+    }
+}

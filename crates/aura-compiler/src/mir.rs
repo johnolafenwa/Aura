@@ -26008,6 +26008,7 @@ impl<'a> Lowerer<'a> {
             args,
             &self.program.imported_modules,
             &self.program.classes,
+            |name| self.binding_is_visible(name),
         ) {
             let place = self.new_typed_temp(Type::named("uint64"));
             self.emit(Instruction::Assign {
@@ -29377,6 +29378,7 @@ impl<'a> Lowerer<'a> {
                 args,
                 &self.program.imported_modules,
                 &self.program.classes,
+                |name| self.binding_is_visible(name),
             )
             .is_some()
             {

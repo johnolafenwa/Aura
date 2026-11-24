@@ -567,7 +567,17 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
-    let mut module = module;
+    check_with_profile(module, context, false)
+}
+
+pub(crate) fn check_with_profile(
+    mut module: Module,
+    context: ModuleContext,
+    freestanding: bool,
+) -> Result<Program> {
+    if freestanding {
+        module.use_freestanding_c_layout();
+    }
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
     // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a

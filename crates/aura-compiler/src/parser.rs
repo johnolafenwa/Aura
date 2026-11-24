@@ -1287,6 +1287,13 @@ impl Parser {
                 .replace("at least one field", "at least one member");
             error
         })?;
+        if !members.layout_controls.bit_widths.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2085",
+                members.span,
+                "declare bit-fields inside a C class",
+            ));
+        }
         let holder = crate::ast::c_union_members_class(&members.name);
         let name = std::mem::replace(&mut members.name, holder);
         if let Some(member) = members

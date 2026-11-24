@@ -11729,7 +11729,9 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         if let Some(layout) =
-            c_layout_queries::evaluate(callee, args, self.imported_modules, self.classes)
+            c_layout_queries::evaluate(callee, args, self.imported_modules, self.classes, |name| {
+                locals.contains_key(name)
+            })
         {
             return layout.map(|_| Type::named("uint64"));
         }

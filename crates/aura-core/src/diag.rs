@@ -350,6 +350,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3033",
+        band: "ownership",
+        title: "borrow of a C bit-field",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
