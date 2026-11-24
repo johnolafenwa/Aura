@@ -19,16 +19,30 @@ function uriToPath(uri, platform = process.platform) {
     return null;
   }
 
+  // `new URL` normalizes `file://localhost/...` to an empty host; any remaining
+  // host denotes a remote or UNC authority, which local file resolution rejects.
+  if (parsed.host) {
+    return null;
+  }
+
+  if (/%(?:2f|5c)/i.test(parsed.pathname)) {
+    return null;
+  }
+
   let pathname;
   try {
     pathname = decodeURIComponent(parsed.pathname);
   } catch (_error) {
     return null;
   }
+
+  if (pathname.includes("\0")) {
+    return null;
+  }
+
   if (platform === "win32") {
-    if (parsed.host) {
-      const segments = pathname.split("/").filter(Boolean).join("\\");
-      return `\\\\${parsed.host}${segments ? `\\${segments}` : ""}`;
+    if (pathname.startsWith("//")) {
+      return null;
     }
     if (/^\/[A-Za-z]:/.test(pathname)) {
       return pathname.slice(1).replace(/\//g, "\\");
@@ -36,9 +50,6 @@ function uriToPath(uri, platform = process.platform) {
     return pathname.replace(/\//g, "\\");
   }
 
-  if (parsed.host) {
-    return `//${parsed.host}${pathname}`;
-  }
   return pathname;
 }
 
