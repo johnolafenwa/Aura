@@ -250,6 +250,17 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
                     installer,
                 )
 
+    def test_z3_installer_pins_wheel_hashes_and_requires_binary_wheels(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-z3.sh").read_text(encoding="utf-8")
+        requirements_path = REPO_ROOT / "scripts" / "z3-requirements.txt"
+        self.assertTrue(requirements_path.is_file(), "scripts/z3-requirements.txt must exist")
+        requirements = requirements_path.read_text(encoding="utf-8")
+        self.assertIn("z3-solver==5.3.3.0", requirements)
+        hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", requirements)
+        self.assertGreaterEqual(len(hashes), 6, "all supported platform wheels must be hash-pinned")
+        self.assertEqual(installer.count("--only-binary=:all: --require-hashes -r"), 2)
+        self.assertNotIn('"z3-solver==$version"', installer)
+
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())
         build_script = AURA_COMPILER_BUILD.read_text(encoding="utf-8")
