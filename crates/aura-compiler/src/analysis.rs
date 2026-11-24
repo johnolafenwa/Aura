@@ -471,15 +471,18 @@ impl<'a> AnalysisBuilder<'a> {
         for constant in &self.program.module.constants {
             self.visit_expr(&constant.value, &top_level_scope);
             if let Some(info) = self.program.constants.get(&constant.name) {
-                top_level_scope.insert(
-                    constant.name.clone(),
-                    BindingInfo {
-                        ty: info.ty.clone(),
-                        trait_bounds: Vec::new(),
-                        definition: self.constant_definition(info),
-                        hover: self.constant_hover(&constant.name, info),
-                    },
-                );
+                let binding = self.constant_binding_info(&constant.name, info);
+                if constant.mutable {
+                    self.push_occurrence(
+                        binding.definition.clone(),
+                        binding.hover.clone(),
+                        Some(binding.definition.clone()),
+                    );
+                    if let Some(annotation) = &constant.annotation {
+                        self.visit_type_reference(annotation);
+                    }
+                }
+                top_level_scope.insert(constant.name.clone(), binding);
             }
         }
         self.visit_stmts(&self.program.top_level_stmts, &mut top_level_scope);
