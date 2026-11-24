@@ -123,3 +123,31 @@ fn file_predicates_can_call_a_function_from_an_import() {
         "9\n"
     );
 }
+
+#[test]
+fn computed_guard_selects_targets_in_called_function_bodies() {
+    let source = concat!(
+        "import build\n",
+        "def probe() -> bool:\n",
+        "    if build.hosted:\n        return true\n",
+        "    else:\n        return absent_native_call()\n",
+        "const ready = probe()\n",
+        "if ready:\n    def value() -> int64:\n        return 19\n",
+        "def main():\n    print(value())\n",
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "19\n");
+}
+
+#[test]
+fn recursive_predicate_selection_reports_a_cycle() {
+    let source = concat!(
+        "def probe() -> bool:\n",
+        "    if ready:\n        return true\n",
+        "    return false\n",
+        "const ready = probe()\n",
+        "if ready:\n    def selected() -> bool:\n        return true\n",
+    );
+    let error = check_source(source).unwrap_err();
+    assert_eq!(error.code, "AU2071");
+    assert!(error.message.contains("cyclic"));
+}
