@@ -83,7 +83,7 @@ function terminateVerifierProcess(child, platform, killProcess, spawnImpl, env) 
 // What the editor shows for each status other than `proved`: the
 // diagnostic severity (2 warning, 3 information), the code `aura verify`
 // reports, and the message.
-const OPEN_STATUSES = {
+const OPEN_STATUSES = Object.assign(Object.create(null), {
   failed: { severity: 2, code: "AU5101", text: (message) => `cannot prove ${message}` },
   unknown: {
     severity: 3,
@@ -91,7 +91,7 @@ const OPEN_STATUSES = {
     text: (message) => `the solver could not decide ${message}`
   },
   unsupported: { severity: 3, code: "AU5104", text: (message) => `cannot check ${message}` }
-};
+});
 
 // Runs the verifier on `source`, the text of the file at `filePath`. It
 // resolves the report, or null when there is none: no solver, a program

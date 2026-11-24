@@ -52,7 +52,11 @@ def render(value, _internal_dict):
         return "<unavailable>"
     # lldb quotes a C string; the runtime already quoted a `str`.
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        text = text[1:-1].encode("utf-8").decode("unicode_escape").encode("latin-1").decode("utf-8")
+        inner = text[1:-1]
+        try:
+            text = inner.encode("utf-8").decode("unicode_escape").encode("latin-1").decode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            text = inner
     return text
 
 

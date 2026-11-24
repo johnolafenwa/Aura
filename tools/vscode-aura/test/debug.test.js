@@ -388,7 +388,11 @@ test("a launch builds the program with --debug and starts lldb-dap on it", async
       {
         command: "/opt/aura",
         args: ["build", "--debug", "-o", binary, "--", program],
-        options: { cwd: path.dirname(program) }
+        options: {
+          cwd: path.dirname(program),
+          maxBuffer: 4 * 1024 * 1024,
+          timeout: 120_000
+        }
       }
     ]);
     assert.equal(fs.statSync(path.dirname(binary)).isDirectory(), true);
@@ -519,3 +523,55 @@ test("Debug File debugs the given or active file", async () => {
   assert.equal(await nothing(), false);
   assert.deepEqual(empty.warnings, ["Aura: open an .au file first."]);
 });
+
+test("adapterConfiguration escapes backticks and rejects newlines or NUL bytes in formatter path", () => {
+  const escaped = adapterConfiguration(
+    { program: "/w/app.au" },
+    "/store/debug-builds/app",
+    "/ext/`demo`/aura_lldb.py"
+  );
+  assert.deepEqual(escaped.initCommands, [
+    'command script import "/ext/\\`demo\\`/aura_lldb.py"'
+  ]);
+  for (const invalid of [
+    "/ext/line1\nline2/aura_lldb.py",
+    "/ext/line1\rline2/aura_lldb.py",
+    "/ext/null\0byte/aura_lldb.py"
+  ]) {
+    assert.throws(
+      () => adapterConfiguration({ program: "/w/app.au" }, "/store/debug-builds/app", invalid),
+      /control characters/
+    );
+  }
+});
+
+test("aura_lldb.py render tolerates malformed escape sequences without raising", () => {
+  const { execFileSync } = require("node:child_process");
+  const scriptPath = path.join(__dirname, "..", "debug", "aura_lldb.py");
+  const py = [
+    "import importlib.util, sys, types",
+    "fake_lldb = types.SimpleNamespace(",
+    "    eSymbolTypeCode=1, LLDB_INVALID_ADDRESS=0xffffffffffffffff, eLanguageTypeC=1,",
+    "    SBExpressionOptions=lambda: types.SimpleNamespace(",
+    "        SetTimeoutInMicroSeconds=lambda _v: None,",
+    "        SetTryAllThreads=lambda _v: None,",
+    "        SetUnwindOnError=lambda _v: None,",
+    "        SetIgnoreBreakpoints=lambda _v: None,",
+    "        SetLanguage=lambda _v: None,",
+    "    )",
+    ")",
+    "sys.modules['lldb'] = fake_lldb",
+    `spec = importlib.util.spec_from_file_location('aura_lldb', ${JSON.stringify(scriptPath)})`,
+    "mod = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(mod)",
+    "sym = types.SimpleNamespace(IsValid=lambda: True, GetName=lambda: 'aura_debug_render', GetStartAddress=lambda: types.SimpleNamespace(GetLoadAddress=lambda _t: 0x1000))",
+    "target = types.SimpleNamespace(FindSymbols=lambda _n, _k: [types.SimpleNamespace(GetSymbol=lambda: sym)])",
+    "expr_res = types.SimpleNamespace(GetError=lambda: types.SimpleNamespace(Success=lambda: True), GetSummary=lambda: '\"\\\\xZZ\"')",
+    "frame = types.SimpleNamespace(IsValid=lambda: True, EvaluateExpression=lambda _e, _o: expr_res)",
+    "val = types.SimpleNamespace(GetNonSyntheticValue=lambda: types.SimpleNamespace(GetChildMemberWithName=lambda _n: types.SimpleNamespace(GetValueAsUnsigned=lambda _d: 0x2000)), GetFrame=lambda: frame, GetTarget=lambda: target)",
+    "out = mod.render(val, {})",
+    "assert out == '\\\\xZZ', repr(out)"
+  ].join("\n");
+  execFileSync("python3", ["-c", py], { encoding: "utf8" });
+});
+

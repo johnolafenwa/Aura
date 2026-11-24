@@ -563,6 +563,29 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
       args: [],
       cwd: workspace
     });
+
+    // An explicit absolute path scopes workspace compiler opt-in to that checkout only.
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = path.join(tempRoot, "other-checkout");
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = workspace;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: path.join(workspace, "target", "debug", binaryName()),
+      args: [],
+      cwd: workspace
+    });
+
+    // A directory path in AURA_LSP_AURA_PATH is ignored rather than treated as a binary.
+    delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+    process.env.AURA_LSP_AURA_PATH = tempRoot;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {

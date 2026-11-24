@@ -229,6 +229,18 @@ test("open checks become diagnostics at the check", () => {
     start: { line: 98, character: 2 },
     end: { line: 98, character: 2 }
   });
+  assert.deepEqual(
+    verificationDiagnostics(
+      {
+        obligations: [
+          { ...REPORT.obligations[3], status: "toString" },
+          { ...REPORT.obligations[3], status: "constructor" }
+        ]
+      },
+      SOURCE
+    ),
+    []
+  );
 });
 
 test("a line whose checks are all proved gets a hint at its end", () => {

@@ -108,8 +108,15 @@ function environmentList(env) {
   return Object.entries(env || {}).map(([name, value]) => `${name}=${value}`);
 }
 
+const DEBUG_BUILD_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const DEBUG_BUILD_TIMEOUT_MS = 120_000;
+
 function escapeLldbPath(value) {
-  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const text = String(value);
+  if (/[\r\n\0]/.test(text)) {
+    throw new Error("Aura: LLDB script path contains invalid control characters.");
+  }
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`");
 }
 
 // The launch request lldb-dap receives for an Aura configuration whose
@@ -229,7 +236,11 @@ function registerDebugger(
       );
     }
     const command = resolvedCompiler || "aura";
-    const options = resolvedCompiler ? { cwd: path.dirname(program) } : {};
+    const options = {
+      ...(resolvedCompiler ? { cwd: path.dirname(program) } : {}),
+      maxBuffer: DEBUG_BUILD_MAX_BUFFER_BYTES,
+      timeout: DEBUG_BUILD_TIMEOUT_MS
+    };
     return new Promise((resolve) => {
       runFile(
         command,
