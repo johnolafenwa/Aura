@@ -47,6 +47,17 @@ of `benchmarks/tensor` on an Apple M2 Pro.
 - One defect was found there: MPSGraph keeps an `int64` constant as a
   double, which rounded the four multipliers of the random hash. A word
   wider than 53 bits is fed from a buffer on each run.
+- A timing run found two more defects, both fixed and tested on the
+  Mac. MPSGraph computed `2 * index + 1` wrongly past 2^24 elements
+  when only the final tensor was an output, so a large normal tensor
+  repeated values. The two indices are now columns of one coordinate
+  tensor. MPSGraph also gathers integers through `float32`, which
+  rounds a value past 2^24, so slices and index selects of integer
+  tensors run in host memory on Metal.
+- At full size the eight workloads give the CPU device's results on
+  Metal. `kmeans` and `cnn_train` differ in the last digits from run to
+  run, because a float `index_add` adds repeated indices in an order
+  the library does not fix.
 - With `AURA_TENSOR_TRACE=1`, the workloads show two kinds of work still
   in host memory on Metal: the sum of an `int64` tensor, which is
   checked for overflow, and a cast from `float32` to `int64`, which is

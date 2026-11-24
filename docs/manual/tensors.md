@@ -543,6 +543,9 @@ On a GPU device these run on the GPU:
   `expand`, `argmax`, `argmin`, and the random tensors. On Metal the
   indexed operations need macOS 12 and the random tensors need macOS 13.
   An older system runs them on the CPU.
+  Metal moves integer elements through `float32`, so `slice` and
+  `index_select` of an integer tensor run on the CPU there. A normal
+  tensor of more than 1,073,741,823 elements also runs on the CPU.
 - conversions from an integer dtype to a float dtype, and from `int32` to
   `int64`
 
@@ -580,7 +583,7 @@ The directory can be deleted at any time.
 | `sum`, `mean`, `matmul` | Within a few units in the last place. The GPU adds in a different order. |
 | `exp`, `log`, `sin`, `cos`, `pow`, `tanh`, `sigmoid`, `erf`, `randn` | Within a few units in the last place. |
 | `slice`, `index_select`, `cat`, `expand`, `argmax`, `argmin`, `rand` | Equal. |
-| `index_add` | Within a few units in the last place. The GPU adds in a different order. |
+| `index_add` | Within a few units in the last place. The GPU adds in a different order, and the order can differ from one run to the next. |
 
 The test suite checks these on a machine with a GPU. The hosted CI
 machines have no usable GPU, so the GPU checks run on a developer Mac and
