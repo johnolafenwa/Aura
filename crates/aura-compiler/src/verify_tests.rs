@@ -4244,3 +4244,192 @@ def main():
         "strengthened impl requires must fail weakening check: {report:#?}",
     );
 }
+
+#[test]
+fn loan_aliasing_and_framing_subcases() {
+    let cases: [(&str, usize, &str); 9] = [
+        (
+            "whole-place view mut clear",
+            0,
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = xs
+    v.clear()
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "mut call on list element",
+            // Only the two `idx[0]` accesses may be proved (`len(idx) > 0`); `ys[idx[0]]` must remain checked.
+            2,
+            r#"
+def set_neg(x: mut int64):
+    x = -1
+
+def f(idx: mut list[int64], ys: list[int64]) -> int64:
+    requires len(idx) > 0 and len(ys) > 0 and idx[0] == 0
+    set_neg(idx[0])
+    return ys[idx[0]]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "element view append then WriteLoan reset then pop",
+            // Only `grid[0]` may be proved (`len(grid) > 0`); `v.pop()` must remain open.
+            1,
+            r#"
+def f(grid: mut list[list[int64]]) -> int64:
+    requires len(grid) > 0
+    view mut v = grid[0]
+    v.append(1)
+    v = []
+    return v.pop()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "element view append then WriteLoan reset then is_empty",
+            1,
+            r#"
+def f(grid: mut list[list[int64]]):
+    requires len(grid) > 0
+    view mut v = grid[0]
+    v.append(1)
+    v = []
+    assert not v.is_empty()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure capturing live view mut",
+            0,
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = xs
+    mut clear_it: def(int64) -> None = lambda [mut v] _: v.clear()
+    clear_it(0)
+    _ = len(v)
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure capturing returned view mut",
+            0,
+            r#"
+def pick(xs: mut list[int64]) -> view mut list[int64] from xs:
+    return view mut xs
+
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = pick(xs)
+    mut clear_it: def(int64) -> None = lambda [mut v] _: v.clear()
+    clear_it(0)
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "merged loan WriteLoan via or-pattern",
+            0,
+            r#"
+enum Two:
+    A(int64 | str)
+    B(int64 | str)
+
+def f(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    mut t = Two.A(0)
+    match mut t:
+        case Two.A(int64 as v) | Two.B(int64 as v):
+            v = -10
+        case _:
+            pass
+    match t:
+        case Two.A(int64 as idx):
+            return xs[idx]
+        case _:
+            return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "loop multi-origin loan",
+            0,
+            r#"
+def f(flag: bool, xs: mut list[int64], ys: mut list[int64]) -> int64:
+    requires len(xs) > 0 and len(ys) > 0
+    mut i = 0
+    while i < 2:
+        if flag:
+            view mut v = xs
+            v = []
+        else:
+            view mut v = ys
+            v = []
+        i = i + 1
+    return xs[0] + ys[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "callee frame multi-origin loan",
+            0,
+            r#"
+def maybe_clear(flag: bool, xs: mut list[int64], ys: mut list[int64]):
+    if flag:
+        view mut v = xs
+        v = []
+    else:
+        view mut v = ys
+        v = []
+
+def caller(flag: bool, xs: mut list[int64], ys: mut list[int64]) -> int64:
+    requires len(xs) > 0 and len(ys) > 0
+    maybe_clear(flag, xs, ys)
+    return xs[0] + ys[0]
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, max_removed_bounds, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        assert!(!report.is_proved(), "{label} must not prove: {report:#?}");
+        let program = crate::check_source(source).expect("checks");
+        let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        assert!(
+            removed.bounds <= max_removed_bounds,
+            "{label} removed too many bounds checks: {removed:?} (max {max_removed_bounds})"
+        );
+    }
+}

@@ -362,9 +362,9 @@ enum Loan {
         index: String,
         projection: String,
     },
-    /// A loan the encoding does not follow. A write through it makes the
-    /// root local unknown.
-    Unknown(String),
+    /// A loan the encoding does not follow. A write through it makes each
+    /// root local in the set unknown.
+    Unknown(BTreeSet<String>),
     /// A loan of something inside an element of the collection at this
     /// place, which the encoding does not follow further. A write through
     /// it may change any element, and leaves the collection's own length
@@ -1004,10 +1004,41 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
-        // A view of a whole place reads that place.
-        if let Some(Loan::Place(source)) = state.loans.get(&root) {
-            let source = join_path(source, &rest.join("."));
-            return self.read_place(state, &source);
+        // A view always reads through its loan target, never a shadowed `state.env` entry.
+        match state.loans.get(&root).cloned() {
+            Some(Loan::Place(source)) => {
+                let source = join_path(&source, &rest.join("."));
+                let value = self.read_place(state, &source);
+                return if value == Val::Opaque {
+                    self.fresh_local(path)
+                } else {
+                    value
+                };
+            }
+            Some(Loan::Element {
+                list,
+                index,
+                projection,
+            }) => {
+                let list_value = self.read_place(state, &list);
+                let mut value = self.element(&list_value, &index, &root);
+                let full_projection = join_path(&projection, &rest.join("."));
+                for segment in full_projection
+                    .split('.')
+                    .filter(|segment| !segment.is_empty())
+                {
+                    value = project(&value, segment).unwrap_or(Val::Opaque);
+                }
+                return if value == Val::Opaque {
+                    self.fresh_local(path)
+                } else {
+                    value
+                };
+            }
+            Some(Loan::Inside(_) | Loan::Unknown(_)) => {
+                return self.fresh_local(path);
+            }
+            None => {}
         }
         if !state.env.contains_key(&root) {
             let value = self.fresh_local(&root);
@@ -1042,21 +1073,35 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
-        // A write through a view changes what it views: the place itself,
-        // or, where the encoding does not follow the view, anything in the
-        // local it came from.
+        // A write through a view updates its target without shadowing `state.env[loan]`.
         match state.loans.get(&root).cloned() {
             Some(Loan::Place(source)) => {
                 let source = join_path(&source, &rest.join("."));
                 return self.write_place(state, &source, value);
             }
-            Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
-                self.havoc_inside(state, &list)
+            Some(Loan::Element {
+                list,
+                index,
+                projection,
+            }) => {
+                let full_projection = join_path(&projection, &rest.join("."));
+                return self.write_element_loan(state, &list, &index, &full_projection, value);
             }
-            Some(Loan::Unknown(source)) => self.unmodeled(
-                "a write through a borrow the verifier does not follow",
-                |exec| exec.havoc_root(state, &source),
-            ),
+            Some(Loan::Inside(list)) => {
+                self.havoc_inside(state, &list);
+                return;
+            }
+            Some(Loan::Unknown(roots)) => {
+                self.unmodeled(
+                    "a write through a borrow the verifier does not follow",
+                    |exec| {
+                        for source in &roots {
+                            exec.havoc_root(state, source);
+                        }
+                    },
+                );
+                return;
+            }
             None => {}
         }
         if rest.is_empty() {
@@ -1071,6 +1116,45 @@ impl<'a> Exec<'a> {
             state.env.insert(root, root_value);
         } else {
             self.havoc_root(state, &root);
+        }
+    }
+
+    fn write_element_loan(
+        &mut self,
+        state: &mut State,
+        list: &str,
+        index: &str,
+        projection: &str,
+        value: Val,
+    ) {
+        let current = self.read_place(state, list);
+        match current {
+            Val::List {
+                len,
+                data: Some(data),
+                elem,
+            } => {
+                let list_value = Val::List {
+                    len: len.clone(),
+                    data: Some(data.clone()),
+                    elem: elem.clone(),
+                };
+                // A write through a field of the element rewrites the whole element.
+                let element = if projection.is_empty() {
+                    Some(value)
+                } else {
+                    let mut element = self.element(&list_value, index, "element");
+                    let segments: Vec<&str> = projection.split('.').collect();
+                    set_in(&mut element, &segments, value).then_some(element)
+                };
+                let data = match element {
+                    Some(element) => self.put_or_fresh(&data, &elem, index, &element, "store"),
+                    None => self.fresh_store(&elem, "store"),
+                };
+                self.write_place(state, list, Val::List { len, data, elem });
+            }
+            Val::List { .. } | Val::Map { .. } => self.havoc_inside(state, list),
+            _ => self.havoc_place(state, list),
         }
     }
 
@@ -1599,7 +1683,8 @@ impl<'a> Exec<'a> {
                 .into_iter()
                 .filter_map(|(name, step)| step.map(|step| (name, step)))
                 .filter(|(name, _)| {
-                    lp.writes.contains(name) && !loan_roots.values().any(|root| root == name)
+                    lp.writes.contains(name)
+                        && !loan_roots.values().any(|roots| roots.contains(name))
                 })
                 .collect();
             // A local some other instruction writes is no counter.
@@ -1850,16 +1935,47 @@ impl<'a> Exec<'a> {
             let merged = self.merge_vals(&pcs, &values, &key);
             env.insert(key, merged);
         }
-        let first = &states[0].loans;
-        let loans = first
-            .iter()
-            .filter(|(name, loan)| {
-                states
+        let mut loan_names: BTreeSet<String> = BTreeSet::new();
+        for state in &states {
+            loan_names.extend(state.loans.keys().cloned());
+        }
+        let mut loans = BTreeMap::new();
+        for name in loan_names {
+            let first = states[0].loans.get(&name);
+            if let Some(first_loan) = first {
+                if states
                     .iter()
-                    .all(|state| state.loans.get(*name) == Some(*loan))
-            })
-            .map(|(name, loan)| (name.clone(), loan.clone()))
-            .collect();
+                    .all(|state| state.loans.get(&name) == Some(first_loan))
+                {
+                    loans.insert(name, first_loan.clone());
+                    continue;
+                }
+            }
+            // If every branch borrows an element inside the exact same collection place,
+            // preserve that collection's length and keys on writes.
+            let same_inside = states
+                .iter()
+                .map(|state| match state.loans.get(&name) {
+                    Some(Loan::Element { list, .. } | Loan::Inside(list)) => Some(list.as_str()),
+                    _ => None,
+                })
+                .collect::<Option<Vec<&str>>>()
+                .filter(|lists| lists.iter().all(|list| *list == lists[0]))
+                .map(|lists| lists[0].to_string());
+            if let Some(list) = same_inside {
+                loans.insert(name, Loan::Inside(list));
+                continue;
+            }
+            let mut roots = BTreeSet::new();
+            for state in &states {
+                if let Some(loan) = state.loans.get(&name) {
+                    roots.extend(loan_target_roots(&state.loans, loan));
+                }
+            }
+            if !roots.is_empty() {
+                loans.insert(name, Loan::Unknown(roots));
+            }
+        }
         State { pc, env, loans }
     }
 
@@ -2214,6 +2330,7 @@ impl<'a> Exec<'a> {
                 }
             }
             Instruction::BeginLoan { loan, source, .. } => {
+                state.env.remove(loan);
                 state
                     .loans
                     .insert(loan.clone(), Loan::Place(source.clone()));
@@ -2243,14 +2360,15 @@ impl<'a> Exec<'a> {
                         }
                     }
                     (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
-                    _ => Loan::Unknown(root_of(source).to_string()),
+                    _ => Loan::Unknown(roots_of_place(&state.loans, source)),
                 };
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::BeginReturnedLoan { loan, origin, .. } => {
-                state
-                    .loans
-                    .insert(loan.clone(), Loan::Unknown(root_of(origin).to_string()));
+                let roots = roots_of_place(&state.loans, origin);
+                state.env.remove(loan);
+                state.loans.insert(loan.clone(), Loan::Unknown(roots));
             }
             Instruction::Reborrow {
                 loan,
@@ -2270,10 +2388,11 @@ impl<'a> Exec<'a> {
                         index,
                         projection: join_path(&inner, projection),
                     },
-                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
+                    Some(Loan::Unknown(roots)) => Loan::Unknown(roots),
                     Some(Loan::Inside(place)) => Loan::Inside(place),
-                    None => Loan::Unknown(root_of(parent).to_string()),
+                    None => Loan::Unknown(roots_of_place(&state.loans, parent)),
                 };
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::ReborrowElement {
@@ -2298,7 +2417,7 @@ impl<'a> Exec<'a> {
                                 }
                             }
                             (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(place),
-                            _ => Loan::Unknown(root_of(&place).to_string()),
+                            _ => Loan::Unknown(roots_of_place(&state.loans, &place)),
                         }
                     }
                     // An element of an element is still inside the
@@ -2306,14 +2425,22 @@ impl<'a> Exec<'a> {
                     Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
                         Loan::Inside(list)
                     }
-                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
-                    None => Loan::Unknown(root_of(parent).to_string()),
+                    Some(Loan::Unknown(roots)) => Loan::Unknown(roots),
+                    None => Loan::Unknown(roots_of_place(&state.loans, parent)),
                 };
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::ReadLoan { target, loan } => {
                 let value = match state.loans.get(loan).cloned() {
-                    Some(Loan::Place(place)) => self.read_place(state, &place),
+                    Some(Loan::Place(place)) => {
+                        let value = self.read_place(state, &place);
+                        if value == Val::Opaque {
+                            self.fresh_local(target)
+                        } else {
+                            value
+                        }
+                    }
                     Some(Loan::Element {
                         list,
                         index,
@@ -2345,39 +2472,15 @@ impl<'a> Exec<'a> {
                         list,
                         index,
                         projection,
-                    }) => {
-                        let current = self.read_place(state, &list);
-                        match current {
-                            Val::List { len, data, elem } => {
-                                let list_value = Val::List {
-                                    len: len.clone(),
-                                    data: data.clone(),
-                                    elem: elem.clone(),
-                                };
-                                // A write through a field of the element
-                                // rewrites the whole element.
-                                let element = if projection.is_empty() {
-                                    Some(value)
-                                } else {
-                                    let mut element = self.element(&list_value, &index, "element");
-                                    let segments: Vec<&str> = projection.split('.').collect();
-                                    set_in(&mut element, &segments, value).then_some(element)
-                                };
-                                let data = match (data, element) {
-                                    (Some(data), Some(element)) => {
-                                        self.put_or_fresh(&data, &elem, &index, &element, "store")
-                                    }
-                                    _ => self.fresh_store(&elem, "store"),
-                                };
-                                self.write_place(state, &list, Val::List { len, data, elem });
+                    }) => self.write_element_loan(state, &list, &index, &projection, value),
+                    Some(Loan::Unknown(roots)) => self.unmodeled(
+                        "a write through a borrow the verifier does not follow",
+                        |exec| {
+                            for root in &roots {
+                                exec.havoc_root(state, root);
                             }
-                            _ => self.havoc_place(state, &list),
-                        }
-                    }
-                    Some(Loan::Unknown(root)) => self
-                        .unmodeled("a write through a borrow the verifier does not follow", |exec| {
-                            exec.havoc_root(state, &root)
-                        }),
+                        },
+                    ),
                     Some(Loan::Inside(place)) => self.havoc_inside(state, &place),
                     None => self.havoc_root(state, root_of(loan)),
                 }
@@ -2868,10 +2971,12 @@ impl<'a> Exec<'a> {
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
                 for root in self.captured.clone() {
-                    self.unmodeled(
-                        format!("a closure that may change `{root}`, which it captures"),
-                        |exec| exec.havoc_root(state, &root),
-                    );
+                    if !state.loans.contains_key(&root) {
+                        self.unmodeled(
+                            format!("a closure that may change `{root}`, which it captures"),
+                            |exec| exec.havoc_root(state, &root),
+                        );
+                    }
                 }
                 result
             }
@@ -5230,9 +5335,61 @@ fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
     }
 }
 
-/// The locals a closure made in `function` captures by reference.
+/// Every root local reachable from `loan` in `loans`.
+fn loan_target_roots(loans: &BTreeMap<String, Loan>, loan: &Loan) -> BTreeSet<String> {
+    let mut visited = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    let mut work = vec![loan.clone()];
+    while let Some(current) = work.pop() {
+        match current {
+            Loan::Place(place) | Loan::Element { list: place, .. } | Loan::Inside(place) => {
+                let root = root_of(&place).to_string();
+                if let Some(next) = loans.get(&root) {
+                    if visited.insert(root) {
+                        work.push(next.clone());
+                    }
+                } else {
+                    roots.insert(root);
+                }
+            }
+            Loan::Unknown(names) => {
+                for name in names {
+                    let root = root_of(&name).to_string();
+                    if let Some(next) = loans.get(&root) {
+                        if visited.insert(root) {
+                            work.push(next.clone());
+                        }
+                    } else {
+                        roots.insert(root);
+                    }
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// Every root local reached from `place`, following any active loans in `loans`.
+fn roots_of_place(loans: &BTreeMap<String, Loan>, place: &str) -> BTreeSet<String> {
+    let root = root_of(place);
+    match loans.get(root) {
+        Some(loan) => loan_target_roots(loans, loan),
+        None => BTreeSet::from([root.to_string()]),
+    }
+}
+
+/// The locals a closure made in `function` captures by reference, expanded
+/// through any loans they alias.
 pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
+    let roots = loan_roots(&function.blocks);
     let mut captured = BTreeSet::new();
+    let mut record = |place: &str| {
+        let root = root_of(place);
+        captured.insert(root.to_string());
+        if let Some(origins) = roots.get(root) {
+            captured.extend(origins.iter().cloned());
+        }
+    };
     for block in &function.blocks {
         for instruction in &block.instructions {
             let (Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. }) =
@@ -5248,10 +5405,10 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
                     continue;
                 }
                 if let Some(place) = &capture.source_place {
-                    captured.insert(root_of(place).to_string());
+                    record(place);
                 }
                 if let Operand::Place(place) | Operand::MovePlace(place) = &capture.value {
-                    captured.insert(root_of(place).to_string());
+                    record(place);
                 }
             }
         }
@@ -5259,22 +5416,32 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
     captured
 }
 
-/// The root local each loan of `blocks` reaches, following reborrows.
-fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
-    let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
+/// The root locals each loan of `blocks` can reach, following all reborrows
+/// and multi-branch bindings.
+fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, BTreeSet<String>> {
+    let mut parents: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for block in blocks {
         for instruction in &block.instructions {
             match instruction {
                 Instruction::BeginLoan { loan, source, .. }
                 | Instruction::BeginElementLoan { loan, source, .. } => {
-                    parents.insert(loan, root_of(source));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(source));
                 }
                 Instruction::BeginReturnedLoan { loan, origin, .. } => {
-                    parents.insert(loan, root_of(origin));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(origin));
                 }
                 Instruction::Reborrow { loan, parent, .. }
                 | Instruction::ReborrowElement { loan, parent, .. } => {
-                    parents.insert(loan, root_of(parent));
+                    parents
+                        .entry(loan.as_str())
+                        .or_default()
+                        .insert(root_of(parent));
                 }
                 _ => {}
             }
@@ -5282,16 +5449,24 @@ fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
     }
     let mut roots = BTreeMap::new();
     for &loan in parents.keys() {
-        let mut current = loan;
-        let mut steps = 0;
-        while let Some(parent) = parents.get(current) {
-            current = parent;
-            steps += 1;
-            if steps > parents.len() {
-                break;
+        let mut seen = BTreeSet::from([loan]);
+        let mut work = vec![loan];
+        let mut target_roots = BTreeSet::new();
+        while let Some(current) = work.pop() {
+            if let Some(nexts) = parents.get(current) {
+                for &parent in nexts {
+                    if seen.insert(parent) {
+                        work.push(parent);
+                    }
+                }
+            } else {
+                target_roots.insert(current.to_string());
             }
         }
-        roots.insert(loan.to_string(), current.to_string());
+        if target_roots.is_empty() {
+            target_roots.insert(loan.to_string());
+        }
+        roots.insert(loan.to_string(), target_roots);
     }
     roots
 }
@@ -5386,15 +5561,15 @@ fn is_constant(operand: &Operand, defs: &BTreeMap<&str, Vec<&Rvalue>>, depth: us
 /// `Assign` to a root local does not count.
 fn collect_writes(
     block: &BasicBlock,
-    loan_roots: &BTreeMap<String, String>,
+    loan_roots: &BTreeMap<String, BTreeSet<String>>,
     root_assigns: bool,
     writes: &mut BTreeSet<String>,
 ) {
     let mut place = |place: &str| {
         let root = root_of(place);
         writes.insert(root.to_string());
-        if let Some(source) = loan_roots.get(root) {
-            writes.insert(source.clone());
+        if let Some(sources) = loan_roots.get(root) {
+            writes.extend(sources.iter().cloned());
         }
     };
     for instruction in &block.instructions {
