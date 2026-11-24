@@ -20,7 +20,11 @@ fn hardware_api_selects_target_for_each_request() {
         with_freestanding_target(target, || {
             check(source).unwrap();
             if target.arch() != "x86_64" {
-                assert_eq!(check(wrong).unwrap_err().code, "AU2097");
+                let err = check(wrong).unwrap_err();
+                assert_eq!(
+                    format!("error[{}]: {}", err.code, err.message),
+                    include_str!("../tests/fixtures/machine-hardware/wrong-target.diag").trim()
+                );
             } else {
                 let err = check(include_str!(
                     "../tests/fixtures/machine-hardware/wrong-width.au"
@@ -31,7 +35,10 @@ fn hardware_api_selects_target_for_each_request() {
         });
     }
     let err = check(include_str!("../tests/fixtures/machine-hardware/hosted.au")).unwrap_err();
-    assert_eq!(err.code, "AU2097");
+    assert_eq!(
+        format!("error[{}]: {}", err.code, err.message),
+        include_str!("../tests/fixtures/machine-hardware/hosted.diag").trim()
+    );
     assert_eq!(check(wrong).unwrap_err().code, "AU2097");
 }
 
@@ -145,4 +152,28 @@ fn unavailable_machine_members_report_the_architecture() {
     ] {
         assert_ne!(check(source).unwrap_err().code, "AU2097");
     }
+}
+
+#[test]
+fn verification_follows_machine_calls_through_mem_imports() {
+    let options = verify::Options {
+        // An assembly boundary is independent of the configured solver.
+        solver: Some("aura-missing-solver-for-hardware-proof".to_owned()),
+        ..Default::default()
+    };
+    let verify = |source| {
+        let program =
+            with_freestanding_target(FreestandingTarget::X86_64, || check(source)).unwrap();
+        let mir = mir::lower_for_verification(&program);
+        verify::verify_module(&program, &mir, &options).unwrap_err()
+    };
+    let used = verify("from mem import in_uint8 as input_byte\nexport \"C\" def sample(port: uint16) -> uint8:\n    return input_byte(port)\n");
+    assert_eq!(used.code, "AU4035");
+    assert!(used.message.contains("assembly"));
+
+    let unused = verify("import mem\nexport \"C\" def sample(address: uint64) -> uint8:\n    return mem.read_uint8(address)\n");
+    assert_eq!(
+        unused.code, "AU5103",
+        "ordinary mem reaches solver selection"
+    );
 }

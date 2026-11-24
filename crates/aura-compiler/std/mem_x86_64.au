@@ -24,43 +24,43 @@ public def out_uint32(port: uint16, value: uint32) -> None:
 
 public def read_cr0() -> uint64:
     mut value: uint64 = 0
-    asm("movq %cr0, $0", output("reg", value), options("preserves_flags"))
+    asm("movq %cr0, $0", output("reg", value))
     return value
 
 public def write_cr0(value: uint64) -> None:
-    asm("movq $0, %cr0", input("reg", value), options("preserves_flags"))
+    asm("movq $0, %cr0", input("reg", value))
 
 public def read_cr2() -> uint64:
     mut value: uint64 = 0
-    asm("movq %cr2, $0", output("reg", value), options("preserves_flags"))
+    asm("movq %cr2, $0", output("reg", value))
     return value
 
 public def write_cr2(value: uint64) -> None:
-    asm("movq $0, %cr2", input("reg", value), options("preserves_flags"))
+    asm("movq $0, %cr2", input("reg", value))
 
 public def read_cr3() -> uint64:
     mut value: uint64 = 0
-    asm("movq %cr3, $0", output("reg", value), options("preserves_flags"))
+    asm("movq %cr3, $0", output("reg", value))
     return value
 
 public def write_cr3(value: uint64) -> None:
-    asm("movq $0, %cr3", input("reg", value), options("preserves_flags"))
+    asm("movq $0, %cr3", input("reg", value))
 
 public def read_cr4() -> uint64:
     mut value: uint64 = 0
-    asm("movq %cr4, $0", output("reg", value), options("preserves_flags"))
+    asm("movq %cr4, $0", output("reg", value))
     return value
 
 public def write_cr4(value: uint64) -> None:
-    asm("movq $0, %cr4", input("reg", value), options("preserves_flags"))
+    asm("movq $0, %cr4", input("reg", value))
 
 public def read_cr8() -> uint64:
     mut value: uint64 = 0
-    asm("movq %cr8, $0", output("reg", value), options("preserves_flags"))
+    asm("movq %cr8, $0", output("reg", value))
     return value
 
 public def write_cr8(value: uint64) -> None:
-    asm("movq $0, %cr8", input("reg", value), options("preserves_flags"))
+    asm("movq $0, %cr8", input("reg", value))
 
 public def read_msr(index: uint32) -> uint64:
     mut value: uint64 = 0
