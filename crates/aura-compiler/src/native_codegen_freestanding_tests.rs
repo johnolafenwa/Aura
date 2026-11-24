@@ -1109,6 +1109,10 @@ fn typed_pointer_objects_use_target_memory_operations() {
 fn hosted_pointer_objects_preserve_wide_accesses_and_parameter_storage() {
     for (source, expected) in [
         (
+            include_str!("../tests/fixtures/typed-pointers/borrowed_owner.au"),
+            &["aura_direct_instance_set_field_owned"][..],
+        ),
+        (
             include_str!("../tests/fixtures/typed-pointers/wide.au"),
             &[
                 "aura_direct_pointer_wide_read",

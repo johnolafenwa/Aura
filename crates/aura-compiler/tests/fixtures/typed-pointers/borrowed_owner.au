@@ -12,6 +12,8 @@ class Owner:
         print(self.words[1])
 
 def update(owner: mut Owner):
+    first = mem.address_of(owner.words[0])
+    assert first.read() == 5
     owner.point.x = 17
     owner.words[1] = 23
 
