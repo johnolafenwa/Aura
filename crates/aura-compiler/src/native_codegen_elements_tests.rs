@@ -1220,3 +1220,36 @@ fn a_copy_element_only_read_is_lent() {
     );
     assert!(found.lists.is_empty(), "{found:?}");
 }
+
+#[test]
+fn a_copy_of_a_part_reads_the_element() {
+    let (module, _) = copies_module();
+    for name in ["copies"] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist");
+        let found = lent(function);
+        assert!(
+            found.lists.values().any(|list| list == "nodes"),
+            "{name}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn a_copy_of_a_part_made_in_place_reads_the_element() {
+    let found = lent_after(|tail, temp| {
+        tail.insert(
+            0,
+            runtime_call(
+                "%t_copy",
+                RuntimeOp::Value(crate::runtime_ops::ValueOp::Copy),
+                &format!("{temp}.tags"),
+                Vec::new(),
+            ),
+        )
+    });
+    assert!(!found.lists.is_empty(), "{found:?}");
+}

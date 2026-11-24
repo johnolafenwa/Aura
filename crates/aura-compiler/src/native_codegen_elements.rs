@@ -396,7 +396,8 @@ fn read_receiver(instruction: &Instruction) -> Option<&str> {
         return None;
     };
     let reads = match op {
-        RuntimeOp::Str(_) => true,
+        // `clone()`, `copy()` and `to_string()` make a new value.
+        RuntimeOp::Str(_) | RuntimeOp::Value(_) => true,
         RuntimeOp::List(op) => reads_list(*op),
         RuntimeOp::Dict(op) => matches!(
             op,
