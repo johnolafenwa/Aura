@@ -59,7 +59,7 @@ def main():
     print(f"{students[0].name} now has {students[0].points}")
 ```
 
-<span class="caption">Listing 8-27: A shared view and a mutable view of list elements</span>
+<span class="caption">Listing 8-30: A shared view and a mutable view of list elements</span>
 
 ```console
 $ aura run src/main.au
@@ -271,7 +271,7 @@ def main():
     print(students[1].points)
 ```
 
-<span class="caption">Listing 8-28: Functions that return a shared and a mutable view</span>
+<span class="caption">Listing 8-31: Functions that return a shared and a mutable view</span>
 
 ```console
 $ aura run src/main.au
@@ -374,7 +374,7 @@ def main():
     print(temps)
 ```
 
-<span class="caption">Listing 8-29: Reading and changing a range of a list through spans</span>
+<span class="caption">Listing 8-32: Reading and changing a range of a list through spans</span>
 
 ```console
 $ aura run src/main.au
@@ -402,6 +402,10 @@ because those would change the length of a list it does not own. When you do
 want an independent copy of the range, `to_list()` makes one. That is also
 how you print a span: a span has no text form of its own, and `print(afternoon)`
 is an error whose help line suggests `to_list()`.
+
+One thing a span doesn't have yet is support in `aura verify`. The verifier
+can't prove that an index into a span is in range today, even under a
+`requires len(values) > 0`, so a function you want proved takes a `list[T]`.
 
 ### An in-place sort
 
@@ -442,7 +446,7 @@ def main():
     print(partly)
 ```
 
-<span class="caption">Listing 8-30: Quicksort over mutable spans</span>
+<span class="caption">Listing 8-33: Quicksort over mutable spans</span>
 
 ```console
 $ aura run src/main.au

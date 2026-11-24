@@ -304,6 +304,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - The direct backend is the maintained native backend for the implemented language surface.
 - `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
 - Editor tooling uses a persistent compiler service. If that process is unavailable, recovery is lexical only, with no semantic diagnostics or member inference.
+- `aura verify` takes one file and verifies only the functions that file defines. It has no package or workspace mode. It treats the results of comprehensions, slices, bit operations, closures, generators, most library calls, `Array`, and tensors as unknown values. [What It Does Not Model](/manual/verification#what-it-does-not-model) has the full list.
 - `aura fmt` has one fixed style with an 88-column width and no configuration. A statement without brackets cannot break, so it may stay longer than 88 columns.
 - `aura test` discovers each parameterless `def test_*()` function as a separate result. A file with no such function still runs as one file-level test.
 - Optional `setup()` and `teardown()` run for each selected case. Teardown runs even after a setup or body failure.

@@ -45,7 +45,7 @@ def main():
     field_count("connection pool exhausted")
 ```
 
-<span class="caption">Listing 13-8: A decorator that wraps a function with trace output</span>
+<span class="caption">Listing 13-9: A decorator that wraps a function with trace output</span>
 
 ```console
 $ aura run tools.au
@@ -232,6 +232,14 @@ error[AU3003]: module bindings are immutable; `mut` module state is not supporte
 A decorator in Aura transforms one function and nothing else. When we need a
 table of tools later, we'll write it out explicitly.
 
+A decorated function can still state `requires` and `ensures` clauses, and
+they are checked on every call that reaches it through the wrapper.
+`aura verify` proves the function's body against them as usual. It can't see
+through the wrapper, though. The decorated name is a closure value, so
+callers aren't asked to prove the `requires` and learn nothing from the
+`ensures`, and the verifier reports the `requires` as `AU5104` at the
+decorated function to say that it stays a run-time check.
+
 ## Stacking decorators
 
 More than one decorator can sit above a function. The decorator expressions
@@ -267,7 +275,7 @@ def main():
     print(double(21))
 ```
 
-<span class="caption">Listing 13-9: A decorator factory, stacked twice</span>
+<span class="caption">Listing 13-10: A decorator factory, stacked twice</span>
 
 ```console
 $ aura run tools.au
@@ -329,7 +337,7 @@ def main():
     print(double(21))
 ```
 
-<span class="caption">Listing 13-10: A generic decorator factory that fits any one-argument tool</span>
+<span class="caption">Listing 13-11: A generic decorator factory that fits any one-argument tool</span>
 
 ```console
 $ aura run tools.au
@@ -402,7 +410,7 @@ def main():
     print(json.dumps(json.encode(CountArgs(level="WARN", service=None))))
 ```
 
-<span class="caption">Listing 13-11: Decoding and encoding a class through a derived codec</span>
+<span class="caption">Listing 13-12: Decoding and encoding a class through a derived codec</span>
 
 ```console
 $ aura run tools.au
@@ -670,7 +678,7 @@ def main():
                 print(f"error {message}")
 ```
 
-<span class="caption">Listing 13-12: A typed tool runner with decorated tools and derived codecs</span>
+<span class="caption">Listing 13-13: A typed tool runner with decorated tools and derived codecs</span>
 
 ```console
 $ aura run tools.au
@@ -723,7 +731,10 @@ and you choose how each capture is held: copied or moved in by default,
 borrowed with `[name]` or `[mut name]`, or taken with `[own name]`. What the
 body does with its captures makes it callable any number of times, once, or
 only through a `mut` binding. To return or store a capturing closure, give
-the destination a `Callable[...]` type, and the closure packs into it.
+the destination a `Callable[...]` type, and the closure packs into it. A
+type alias for a thin function type can also carry `requires` and `ensures`
+clauses, and then `aura verify` proves both the code that calls through it
+and each named function passed as one.
 
 Decorators are built from those pieces. A decorator is a function from a
 `Callable` to a `Callable` of the same contract, applied once when the module

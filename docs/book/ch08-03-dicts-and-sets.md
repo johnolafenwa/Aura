@@ -33,7 +33,7 @@ def main():
     print(grades)
 ```
 
-<span class="caption">Listing 8-12: Adding, updating, reading, and removing entries</span>
+<span class="caption">Listing 8-14: Adding, updating, reading, and removing entries</span>
 
 ```console
 $ aura run src/main.au
@@ -84,6 +84,59 @@ list `get` does, with `Lookup.Found(value)` holding a copy of the value, and
 for the same reason: a dictionary's value could itself be `None`, and
 `Lookup.Missing` can't be confused with it. Unlike Python's `dict.get`, it
 takes no default argument; the `Missing` arm is where the default goes.
+
+When a function reads a key that must be there, it can say so. A `requires`
+clause makes the key's presence the caller's job, and `aura verify`, which we
+met in [the lists section](/book/ch08-01-lists#proving-list-code), checks
+every call against it:
+
+*Filename: src/main.au*
+
+```aura
+def grade_of(grades: dict[str, int64], name: str) -> int64:
+    requires name in grades
+    return grades[name]
+
+def main():
+    mut grades = {"ada": 72, "grace": 95}
+    grades["alan"] = 64
+    print(grade_of(grades, "alan"))
+    print(grade_of(grades, "kathy"))
+```
+
+<span class="caption">Listing 8-15: A lookup that requires its key</span>
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `requires` of `grade_of` holds: `name in grades`
+ --> src/main.au:9:5
+  |
+9 |     print(grade_of(grades, "kathy"))
+  |     ^
+  = note: in `main` (requires check)
+verified src/main.au: 2 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier followed the dictionary through `main`. The literal holds `ada`
+and `grace`, the assignment adds `alan`, and nothing adds `kathy`, so the
+first call is proved and the second is not. The third check is the read
+`grades[name]` inside `grade_of`. It's proved because the `requires` clause
+is all the function needs to know: whoever calls it has already shown the key
+is present. Put the last call under `if "kathy" in grades:` and the report
+changes to this:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 3 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+A `requires` is also checked when the program runs, so without the `if` the
+second call would stop with `AU4009` at the clause, naming the key and
+printing the dictionary, before `grades[name]` had a chance to trap. The
+verifier models dictionaries and sets whose keys are integers or strings,
+along with a dictionary's values when they are integers, booleans, or
+strings. For a `dict[str, list[int64]]`, which we'll build shortly, it knows
+which keys are present but not how long each list is.
 
 `remove(key)` takes the entry out and gives you its value, moved out of the
 dictionary, inside a `Lookup.Found`. If the key wasn't there you get
@@ -186,7 +239,7 @@ def main():
     print(best)
 ```
 
-<span class="caption">Listing 8-13: Grouping scores by name (this won't compile yet)</span>
+<span class="caption">Listing 8-16: Grouping scores by name (this won't compile yet)</span>
 
 ```console
 $ aura check src/main.au
@@ -320,7 +373,7 @@ def main():
     print(struggling)
 ```
 
-<span class="caption">Listing 8-14: Collecting names in a set</span>
+<span class="caption">Listing 8-17: Collecting names in a set</span>
 
 ```console
 $ aura run src/main.au
@@ -340,8 +393,10 @@ to own each name it holds, and `name` belongs to the snapshot list that
 `in` and `not in` test membership, in constant time on average, which is the
 reason to choose a set over a list when membership is the question. To take
 a value out, use `remove`, which traps with `AU4008` if the value isn't there,
-or `discard`, which does nothing in that case. An empty set prints as
-`set()`, because `{}` would read as an empty dictionary.
+or `discard`, which does nothing in that case. When a value must be present,
+a `requires name in struggling` clause lets `aura verify` prove that the
+`remove` can't trap, as it did for the dictionary read. An empty set prints
+as `set()`, because `{}` would read as an empty dictionary.
 
 That last point applies to literals too. A brace literal with colons is a
 dictionary and one without is a set, so `{1, 2, 3}` is a `set[int64]`. An

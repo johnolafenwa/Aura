@@ -87,7 +87,22 @@ native execution and `aura build` also need a host C toolchain:
 
 Each platform guide gives the exact commands.
 
+## Proofs With `aura verify`
+
+`aura verify` proves a program's [contracts](/manual/contracts) with an SMT
+solver, a program that answers logic questions. It runs Z3 or cvc5 from
+`PATH`. Install one:
+
+- macOS: `brew install z3`
+- Ubuntu and WSL: `sudo apt install -y z3`
+- Windows, or any host with Python: `pip install z3-solver`
+
+No other command needs the solver. See
+[Verification](/manual/verification).
+
 ## Next Step
 
 Continue with [Hello, world](/book/ch01-02-hello-world) in the book to
 write a program, run it, and build a native executable.
+[Hello, packages](/book/ch01-03-hello-packages) then proves a first contract
+with `aura verify`.

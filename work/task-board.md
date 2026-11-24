@@ -6,6 +6,17 @@ Last updated: 2026-11-24
 
 Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
 
+## Verification in the documentation (complete)
+
+- Target: John's 2026-11-24 request that `aura verify` be prominent across
+  the documentation and the book. Details are in
+  `2026-11-24-verification-in-docs.md`.
+- Done: the README, the site landing page, the install guides, the Manual
+  and chapters 1 to 21 of the book present contracts and proofs, and
+  `docs/manual/verification.md` lists what the verifier does not model.
+- Follow-up: update that list and the book passages that state a limit as
+  each verifier gap closes.
+
 ## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

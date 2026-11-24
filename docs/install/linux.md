@@ -96,6 +96,36 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## 8. Install A Solver For `aura verify`
+
+`aura verify` proves a program's [contracts](/manual/contracts) with an SMT
+solver, a program that answers logic questions. Install Z3:
+
+```bash
+sudo apt install -y z3
+z3 --version
+```
+
+Save this as `clamp.au` and prove it:
+
+```aura
+def clamp(x: int64, lo: int64, hi: int64) -> int64:
+    requires lo <= hi
+    ensures lo <= result and result <= hi
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+```
+
+```bash
+aura verify clamp.au
+```
+
+The last line of the report says that every check is proved. See
+[Verification](/manual/verification).
+
 ## Install With apt Or Homebrew Instead
 
 Packages for apt on Ubuntu and Debian and for Homebrew are built but not

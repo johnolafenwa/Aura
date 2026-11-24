@@ -6,13 +6,13 @@ Z3 proved all six obligations in the delegated contract example. Changing the ar
 
 All 31 new run fixtures produced their expected output on the MIR and native back ends. The combined regression covers temporary native values created while a decorated method receives an object with a destructor. The full runnable-fixture layout and native-object suites passed, as did all 1,124 documentation examples and Clippy.
 
-Callgrind measured the release compiler and runtime on the same Linux host using the benchmark manifest inputs. The baseline was 6642a7c2 and the feature revision was cbfabf58.
+Callgrind measured the release compiler and runtime on the same Linux host using the benchmark manifest inputs. The baseline was 6642a7c2 and the feature revision was 6beb31a5.
 
 | Program | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| bank_ledger | 1,331,285,470 | 1,330,222,357 | −0.0799% |
-| raytracer | 870,708,926 | 870,712,496 | +0.0004% |
-| hashing | 271,220,674 | 271,239,698 | +0.0070% |
+| bank_ledger | 1,331,285,470 | 1,330,230,102 | −0.0793% |
+| raytracer | 870,708,926 | 870,708,196 | −0.0001% |
+| hashing | 271,220,674 | 271,247,645 | +0.0099% |
 
 [Hosted verification and merge status](https://github.com/johnolafenwa/Aura/pull/317)
 

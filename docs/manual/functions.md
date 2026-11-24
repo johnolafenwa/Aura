@@ -630,6 +630,34 @@ Runtime diagnostics:
 
 A callee's `AU4002`, `AU4003`, `AU4004`, or `AU4005` keeps the same typed Aura call frames and task ancestry on mid-level intermediate representation (MIR) execution and on direct-native execution.
 
+## Verification
+
+A function body can open with [contract](/manual/contracts) clauses.
+`requires` states what each caller must pass, and `ensures` states what the
+function returns. `aura verify` proves both for every input: it proves each
+`ensures` on every path through the body, and each `requires` at every call.
+It also proves that the body cannot overflow an integer, divide by zero, or
+index out of range.
+
+```aura
+def percent_of(part: int64, whole: int64) -> int64:
+    requires 0 <= part and part <= whole
+    requires 0 < whole and whole <= 1000000
+    ensures 0 <= result and result <= 100
+    return part * 100 // whole
+
+
+def main():
+    print(percent_of(3, 12))
+```
+
+`aura verify` reports `5 of 5 checks proved` for this file. Without
+`whole <= 1000000`, it reports that `part * 100` can overflow, with a value
+of `part` that does. A caller relies only on the contract of the function it
+calls, never on its body.
+
+See [Verification](/manual/verification) for the report, the options, and what the verifier models.
+
 ## Backend Support
 
 Ordinary, returned-view, indirect function-value, generic, imported, associated, trait-dispatched, and maintained task-target calls are implemented for MIR execution and for direct native builds. Shared semantic checking and the forced parity matrix require identical call results and primary failures on both. Compiler analysis and the language server use the same resolved signature metadata, including inferred clone-safety obligations.
