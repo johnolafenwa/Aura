@@ -401,3 +401,59 @@ const folded = make()(40)
 
 #[path = "const_eval_transport_tests.rs"]
 mod compile_time_transport;
+
+#[test]
+fn constant_evaluation_checks_the_effects_of_local_class_drop_hooks() {
+    let source = r#"class Guard:
+    n: int32
+
+    def __drop__(mut self):
+        assert self.n > 0, "invalid guard"
+
+def read(n: int32) -> int32:
+    guard = Guard(n)
+    return guard.n
+
+const answer = read(42)
+
+def main():
+    print(answer)
+"#;
+    assert!(check_source(source)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::answer"));
+    let error = check_source(&source.replace("read(42)", "read(0)")).unwrap_err();
+    assert_eq!(error.code, "AU3026");
+    assert!(error
+        .call_frames
+        .iter()
+        .any(|f| f.function.contains("__drop__")));
+
+    let effectful = source.replace("assert self.n > 0, \"invalid guard\"", "print(self.n)");
+    assert_eq!(check_source(&effectful).unwrap_err().code, "AU3025");
+    let ordinary = effectful.replace("const answer", "answer");
+    assert!(!check_source(&ordinary)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::answer"));
+    assert_eq!(run_source(&ordinary).unwrap().stdout, "42\n42\n");
+}
+
+#[test]
+fn values_with_a_live_drop_hook_keep_their_runtime_owner() {
+    let source = r#"class Guard:
+    n: int32
+
+    def __drop__(mut self):
+        assert self.n > 0, "invalid guard"
+
+values = [Guard(42)]
+"#;
+    assert!(!check_source(source)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::values"));
+    let required = source.replace("values =", "const values =");
+    assert_eq!(check_source(&required).unwrap_err().code, "AU3025");
+}
