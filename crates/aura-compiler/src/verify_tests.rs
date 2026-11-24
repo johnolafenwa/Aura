@@ -4165,7 +4165,13 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
         ..Options::default()
     };
     let report = crate::verify_path(&path, &options).expect("the pointer program checks");
-    for name in ["write_raw", "relay", "use_cell"] {
+    for name in [
+        "write_raw",
+        "relay",
+        "use_cell",
+        "replace_counter",
+        "use_counter",
+    ] {
         assert!(
             report.obligations.iter().any(|obligation| {
                 obligation.function == name
