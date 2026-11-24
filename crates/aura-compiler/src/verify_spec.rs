@@ -417,6 +417,8 @@ impl Exec<'_> {
             Ok((accepts, keeps)) => (Goal::Holds(accepts), Goal::Holds(keeps)),
             Err(reason) => (Goal::Unsupported(reason.clone()), Goal::Unsupported(reason)),
         };
+        let erasing = self.erasing;
+        self.erasing = true;
         self.oblige(
             ObligationKind::Requires,
             span,
@@ -431,6 +433,7 @@ impl Exec<'_> {
             &pc,
             keeps,
         );
+        self.erasing = erasing;
     }
 
     /// When an implementation of a trait method states its own `requires`,

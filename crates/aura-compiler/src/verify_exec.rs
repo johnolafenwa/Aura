@@ -1228,6 +1228,8 @@ impl<'a> Exec<'a> {
             Val::Func(name) => self.oblige_unfollowed(name, pc),
             Val::Contracted(alias) => {
                 let span = self.span;
+                let erasing = self.erasing;
+                self.erasing = true;
                 self.oblige(
                     ObligationKind::Requires,
                     span,
@@ -1238,6 +1240,7 @@ impl<'a> Exec<'a> {
                             .into(),
                     ),
                 );
+                self.erasing = erasing;
             }
             _ => {}
         }
@@ -1279,6 +1282,8 @@ impl<'a> Exec<'a> {
             _ => {
                 let span = self.span;
                 let pc = state.pc.clone();
+                let erasing = self.erasing;
+                self.erasing = true;
                 self.oblige(
                     ObligationKind::Requires,
                     span,
@@ -1289,6 +1294,7 @@ impl<'a> Exec<'a> {
                             .into(),
                     ),
                 );
+                self.erasing = erasing;
             }
         }
     }
@@ -1299,6 +1305,45 @@ impl<'a> Exec<'a> {
         let (parent, field) = path.rsplit_once('.')?;
         match self.place_type(parent)? {
             Type::Named(class, _) => self.cx.field_contract(&class, field),
+            _ => None,
+        }
+    }
+
+    /// The callable alias and field name a write through `loan` targets, when
+    /// `loan` points to a class field declared as a contracted callable alias.
+    fn loan_contract(&self, state: &State, loan: &str) -> Option<(String, String)> {
+        match state.loans.get(loan)? {
+            Loan::Place(place) => {
+                let alias = self.place_contract(place)?;
+                let field = place.rsplit('.').next().unwrap_or(place).to_string();
+                Some((alias, field))
+            }
+            Loan::Element {
+                list, projection, ..
+            } if !projection.is_empty() => {
+                let Type::Named(name, args) = self.place_type(list)? else {
+                    return None;
+                };
+                if name != "list" || args.len() != 1 {
+                    return None;
+                }
+                let segments: Vec<&str> = projection
+                    .split('.')
+                    .filter(|segment| !segment.is_empty())
+                    .collect();
+                let (&field, parent_segments) = segments.split_last()?;
+                let mut ty = args[0].clone();
+                for segment in parent_segments {
+                    ty = self.cx.project_type(&ty, segment)?;
+                }
+                match ty {
+                    Type::Named(class, _) => self
+                        .cx
+                        .field_contract(&class, field)
+                        .map(|alias| (alias, field.to_string())),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -2484,6 +2529,20 @@ impl<'a> Exec<'a> {
             Instruction::WriteLoan { loan, value } => {
                 let hint = self.loan_int_ty(state, loan);
                 let value = self.rvalue(state, None, value, hint);
+                if let Some((alias, field)) = self.loan_contract(state, loan) {
+                    self.fit_callable(
+                        state,
+                        &value,
+                        &alias,
+                        &format!("the value stored in field `{field}`"),
+                    );
+                } else if matches!(
+                    state.loans.get(loan),
+                    Some(Loan::Element { .. } | Loan::Unknown(_) | Loan::Inside(_)) | None
+                ) {
+                    let pc = state.pc.clone();
+                    self.oblige_escape(&value, &pc);
+                }
                 match state.loans.get(loan).cloned() {
                     Some(Loan::Place(place)) => self.write_place(state, &place, value),
                     Some(Loan::Element {

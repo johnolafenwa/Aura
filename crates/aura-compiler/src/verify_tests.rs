@@ -4736,3 +4736,172 @@ def main():
         "unproved bounds check after reordered kwargs must not be removed"
     );
 }
+
+#[test]
+fn callable_alias_contracts_enforce_erased_open_writeloan_toplevel_and_imports() {
+    // 1. Failed callable refinement must mark `erased_open` so `--remove-proved-checks`
+    //    does not remove bounds checks inside the callee assuming the alias contract.
+    let bad_call = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+def main():
+    print(read(bad, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let program = crate::check_source(bad_call).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "failed callable refinement must block bounds check removal: {removed:?}"
+    );
+
+    // 2. Writing a non-conforming function to a contracted field through `view mut` (`WriteLoan`)
+    //    must fail verification and block check removal.
+    let write_loan = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def good(x: int64) -> int64:
+    ensures result == 0
+    return 0
+
+def bad(x: int64) -> int64:
+    return -10
+
+class Holder:
+    cb: PosFn
+
+def use_holder(h: mut Holder, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    view mut slot = h.cb
+    slot = bad
+    idx = h.cb(0)
+    return xs[idx]
+
+def main():
+    mut h = Holder(cb=good)
+    print(use_holder(h, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(write_loan) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "WriteLoan storing non-conforming callable must fail verification: {report:#?}"
+    );
+    let program = crate::check_source(write_loan).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "WriteLoan callable failure must block bounds check removal: {removed:?}"
+    );
+
+    // 3. Top-level code passing a non-conforming function must be verified and block removal.
+    let top_level = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+print(read(bad, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(top_level) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "top-level non-conforming callable call must fail verification: {report:#?}"
+    );
+    let program = crate::check_source(top_level).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "top-level callable failure must block bounds check removal: {removed:?}"
+    );
+
+    // 4. Cross-module imported function supplying a non-conforming callable must block removal.
+    let dir = script_dir("callable-cross-module");
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"cbmod\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/helper.au"),
+        r#"public type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+public def supply() -> PosFn:
+    return bad
+"#,
+    )
+    .expect("helper.au");
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"from helper import PosFn, supply
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+def main():
+    print(read(supply(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#,
+    )
+    .expect("main.au");
+    let program = crate::check_path(&main).expect("cross-module checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unverified imported callable supplier must block bounds check removal: {removed:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

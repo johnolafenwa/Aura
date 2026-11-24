@@ -950,6 +950,10 @@ impl<'a> VerifyContext<'a> {
         self.callable_contracts.get(name).copied()
     }
 
+    pub(crate) fn has_erased_contracts(&self) -> bool {
+        !self.callable_contracts.is_empty() || !self.class_invariants.is_empty()
+    }
+
     pub(crate) fn spec_def(&self, name: &str) -> Option<&'a FunctionDecl> {
         self.spec_defs.get(spec::base_name(name)).copied()
     }
@@ -1149,16 +1153,30 @@ pub fn verify_module(
     let mut merged: BTreeMap<(String, (usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
-    let mut erased_open = false;
+    let mut erased_open = options.prove_sites && options.function_filter.is_some();
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
-    for function in &module.functions {
-        let is_primary = verified_function(program, &cx, function);
-        let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
-        if !is_primary && !is_auxiliary {
+    let top_level_name = module.top_level.as_ref().map(|f| f.name.as_str());
+    for function in module.functions.iter().chain(module.top_level.iter()) {
+        let is_top_level = top_level_name == Some(function.name.as_str());
+        let is_primary = !is_top_level && verified_function(program, &cx, function);
+        let is_auxiliary =
+            is_top_level || (!is_primary && auxiliary_verified_function(program, &cx, function));
+        // When removing proved checks, also check erased obligations of imported
+        // functions so an unverified caller in an imported module cannot violate
+        // an erased callable contract or class invariant.
+        let is_imported_erased = !is_primary
+            && !is_auxiliary
+            && options.prove_sites
+            && function.module_name != program.module_name
+            && !generator_frame_function(function)
+            && !spec::base_name(&function.name)
+                .ends_with(&format!(".{}", crate::ast::CLASS_INVARIANT_METHOD))
+            && !cx.decl(&function.name).is_some_and(|decl| decl.spec);
+        if !is_primary && !is_auxiliary && !is_imported_erased {
             continue;
         }
         if let Some(filter) = &options.function_filter {
@@ -1180,7 +1198,7 @@ pub fn verify_module(
             function.module_name.clone()
         };
         let mut exec = exec::Exec::new(&cx, function);
-        exec.prove_sites = options.prove_sites;
+        exec.prove_sites = options.prove_sites && !is_imported_erased;
         let entry = exec.entry_state();
         exec.prove_weakened_requires(&entry);
         let before = exec.facts.len();
@@ -1197,6 +1215,8 @@ pub fn verify_module(
             );
         }
         if let Some(target) = cx.charged(&function.name) {
+            let erasing = exec.erasing;
+            exec.erasing = true;
             exec.oblige(
                 ObligationKind::ClassInvariant,
                 function.span,
@@ -1209,11 +1229,17 @@ pub fn verify_module(
                     "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
                 ),
             );
+            exec.erasing = erasing;
         }
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
-            if !is_primary {
-                erased_open |= cx.decl(&function.name).is_some_and(|decl| decl.lemma);
+            if cx.has_erased_contracts()
+                || (!is_primary && cx.decl(&function.name).is_some_and(|decl| decl.lemma))
+            {
+                erased_open = true;
+            }
+            if is_imported_erased {
+                continue;
             }
             let key = (
                 module_order,
@@ -1231,6 +1257,9 @@ pub fn verify_module(
                     status: Status::Unsupported(reason),
                 },
             );
+            continue;
+        }
+        if is_imported_erased && !exec.obligations.iter().any(|ob| ob.erased) {
             continue;
         }
         let cache = options
@@ -1273,6 +1302,9 @@ pub fn verify_module(
         let mut sites: BTreeMap<(usize, usize), bool> = BTreeMap::new();
         for (obligation, status) in exec.obligations.iter().zip(statuses) {
             erased_open |= obligation.erased && status != Status::Proved;
+            if is_imported_erased {
+                continue;
+            }
             if let Some(site) = obligation.site {
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
@@ -1312,16 +1344,18 @@ pub fn verify_module(
                 }
             }
         }
-        proved_sites.extend(
-            sites
-                .into_iter()
-                .filter(|(_, proved)| *proved)
-                .map(|((block, position), _)| (function.name.clone(), block, position)),
-        );
+        if !is_imported_erased {
+            proved_sites.extend(
+                sites
+                    .into_iter()
+                    .filter(|(_, proved)| *proved)
+                    .map(|((block, position), _)| (function.name.clone(), block, position)),
+            );
+        }
     }
     report.obligations = merged.into_values().collect();
-    // A lemma that is not proved may have let the verifier assume what no
-    // run checks, so no access counts as proved.
+    // A lemma or erased contract obligation that is not proved may have let the
+    // verifier assume what no run checks, so no access counts as proved.
     if !erased_open {
         report.proved_sites = proved_sites;
     }
