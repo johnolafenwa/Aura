@@ -30300,37 +30300,33 @@ A quantifier over a `str`, or over a list of other elements, is reported as
 
 ## What It Does Not Model
 
-The verifier treats each of these as a value it knows nothing about. A check
-that depends on one is reported as `AU5101`, and its counterexample may show
-a value the program cannot produce. State the fact the check needs as an
-`ensures` on a helper function, or as a `requires` on the function that
+The verifier treats each of these as a value it knows nothing about, or knows
+only part of. A check that fails only because of such a value is reported as
+`AU5104`, naming the step and its line, instead of as a failure with a
+counterexample the program cannot produce. State the fact the check needs as
+an `ensures` on a helper function, or as a `requires` on the function that
 relies on it.
 
 | Feature | What the verifier knows |
 | --- | --- |
-| Comprehensions, slices such as `xs[0:2]`, `sum`, `sorted`, `list.sort`, and `x in xs` on a list | Nothing about the result, including its length. |
-| Nested lists such as `grid[r][c]`, and a `dict` whose values are lists | The outer length and keys. Not the inner lengths or elements. |
-| `Span[T]` | An index into a span is not proved from `len(span)`. |
-| `&`, `\|`, `^`, `<<`, `>>`, and the `wrapping_` and `saturating_` methods | Nothing about the result. `<<` and `>>` report `AU5104`. |
-| Most `str` methods, such as `split`, `to_lower`, and `trim`, and f-strings | Nothing about the result. |
-| Lambdas and local `def` functions | Each body is verified with its captured values unknown. A caller learns nothing about the result. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
-| Generator functions | The body is verified without the generator's `requires`. Yielded values have no contract. |
-| Methods in an `impl` of a trait | They do not assume the class invariants. A `public` method of the class does. |
-| Fields after a call of a `mut self` method | Only what the method's `ensures` says, also for a field the method does not assign. |
+| Comprehensions and `sum` | The length of a comprehension that maps (`len(xs)`) or filters (at most `len(xs)`). Not its elements, and nothing about `sum` or a nested comprehension. |
+| `sorted` and `list.sort` with `key=`, or on `str` and `float` elements | The length and the elements, not their order. Plain `int` lists are known to be in order. |
+| Slices with a step, such as `xs[::2]` | Nothing about the result. Slices without a step are modeled, and their bounds are a check. |
+| A `dict` whose values are lists or objects | The keys and the length. Not the inner lists, and not the class invariant of a value. |
+| `&` between two unknown values, and any bit operation on `int128` or `uint128` | Its sign and bounds only. `&` with a literal, and `\|`, `^`, `~`, `<<`, `>>` on other widths are exact. |
+| `str` methods `trim`, `replace`, `to_lower`, `to_upper`, `count`, and the digits of an integer in an f-string | Bounds on the length only. `split`, `find`, indexing, slicing, `strip_prefix`, `strip_suffix`, and `split_once` are exact. |
+| Lambdas and local `def` functions that escape, or are called in a loop while they keep state | Each body is verified with its captured values unknown, and a caller learns nothing about the result. One called where it is made is followed into its body with the values it captured. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
+| Decorated functions | A caller learns nothing from the contract, and its `requires` is reported as `AU5104`. |
+| Generator functions | Yielded values have no contract. The body is verified with the generator's `requires` known. |
 | `control.recover` | The target's `requires` is proved at the call. Nothing is known about the `Result`. |
 | `sync` values, `Queue` items, and `mem` reads | Unknown each time they are read, since another task or a device may change them. |
-| `tensor` and `Array` values | Not modeled. An `Array` index and a shape mismatch are not checks of the proof, and stay runtime failures. |
+| `tensor` values | Not modeled. A shape mismatch stays a runtime failure. An `Array` index is a check of the proof. |
 | Library calls, such as `json`, `io`, `regex`, and `time` | Nothing about the result. |
+| Recursive spec functions | Unfolded eight levels deep. A check that needs more is reported as `AU5104`. |
 
-Two more limits apply to every proof:
-
-- A `requires` clause that no input can meet, such as
-  `requires x > 0 and x < 0`, makes every check in the function proved.
-  `aura verify` does not report it.
-- `aura verify` takes one file and verifies the functions that file defines.
-  At a call of an imported function it uses that function's contract, but it
-  does not verify the imported module's own functions. Run it on each module.
-  It has no package or workspace mode.
+A `requires` clause that no input can meet, such as
+`requires x > 0 and x < 0`, is reported as `AU5120`, since every check in
+the function would hold for no reason.
 
 ## Trust
 
@@ -38095,11 +38091,9 @@ count of zero or less. Exhaustiveness and verification answer different
 questions about the same `match`: the compiler says every variant has an
 arm, and the verifier says every arm keeps the promise.
 
-One limit applies today. The verifier follows a `match` statement, like the
-one above, whose arms `return`. It does not yet model the value of a `match`
-used as an expression, as in `return match command:`, so an `ensures` clause
-that depends on one is reported as unproved. Write the statement form in a
-function whose result you want proved.
+The verifier follows a `match` used as an expression, as in
+`return match command:`, the same way: it knows which arm produced the value,
+so an `ensures` clause that depends on it is proved arm by arm.
 
 ## A recursive match
 
@@ -38405,11 +38399,10 @@ whether a value is there. A contract says which values the function has to
 be right for. A `match` with `case int64 as page:` and `case None:` arms is
 proved the same way.
 
-One limit applies today. A clause that talks about an optional value across
-a call, such as `ensures result is None or result < len(titles)` on `find`,
-is checked while the program runs, but the verifier does not yet hand that
-fact to the caller. A caller that wants a proved index compares the narrowed
-value with `len(titles)` itself before using it.
+A clause that talks about an optional value, such as
+`ensures result is None or result < len(titles)` on `find`, also reaches the
+caller. Once the caller has tested `index is not None`, the verifier knows
+`index < len(titles)`, and `titles[index]` is proved in range.
 
 ## No `Option`, no `T?`
 
@@ -41300,11 +41293,11 @@ The `requires` clause says what a usable name is: not empty, and free of the
 colon we're about to use as a separator. The verifier proves that `main`'s
 literal meets it, and that every line `report_line` returns starts with the
 name and has exactly the length the pieces add up to. It knows `len`, `+`,
-`==` and the ordering comparisons, `in`, `contains`, `starts_with`, and
-`ends_with`. The results of the other methods in this section, such as
-`split`, `trim`, `find`, `replace`, and `to_upper`, and the text an f-string
-builds, are values it knows nothing about today, so a promise about
-`name.to_upper()` is reported as unproved.
+`==` and the ordering comparisons, `in`, `contains`, `starts_with`,
+`ends_with`, indexing and slicing, `split`, `find`, and the text an f-string
+builds. For `trim`, `replace`, `to_upper`, and `to_lower` it knows only how
+long the result can be, so a promise about the letters of
+`name.to_upper()` is reported as not modeled rather than proved.
 
 Strings compare with `==` and `!=`, and order with `<` and friends by their
 UTF-8 bytes, which is the same order `sort` uses. The full list of string
@@ -42061,10 +42054,13 @@ One more note on `sum`: it uses the same checked `+` as the rest of the
 language, so adding up `int64` values that overflow stops with `AU4002`
 instead of wrapping around to a negative number.
 
-These one-liners have a cost if you use `aura verify`. The verifier doesn't
-model what a comprehension, `sum`, `min`, `max`, or `sorted` returns today, so
-a check that depends on one of those results is reported as unproved. When
-you want a proof about a total or a maximum, write the loop with an
+`aura verify` knows part of what these one-liners return. A comprehension
+that maps has the length of its source, and one that filters is no longer.
+`min` and `max` of a non-empty list return one of its elements, no larger or
+smaller than any other. `sorted` keeps the elements, and puts a list of
+integers in order. It doesn't know the elements a comprehension builds or
+what `sum` adds up to, so a check that depends on those is reported as not
+modeled. When you want a proof about a total, write the loop with an
 `invariant`, as `highest` did in [the lists
 section](/book/ch08-01-lists#proving-list-code).
 
@@ -43452,9 +43448,9 @@ want an independent copy of the range, `to_list()` makes one. That is also
 how you print a span: a span has no text form of its own, and `print(afternoon)`
 is an error whose help line suggests `to_list()`.
 
-One thing a span doesn't have yet is support in `aura verify`. The verifier
-can't prove that an index into a span is in range today, even under a
-`requires len(values) > 0`, so a function you want proved takes a `list[T]`.
+`aura verify` reasons about a span as it does about a list: under a
+`requires len(values) > 0`, `values[0]` is proved in range, and a write
+through the span is a write to the list it came from.
 
 ### An in-place sort
 
@@ -44496,9 +44492,9 @@ $ aura verify src/main.au
 verified src/main.au: 2 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
 ```
 
-The two checks are `parts[0]` and `parts[1]`. The verifier knows nothing
-about what `split` returns, so it can't assume there are two parts. It
-follows the `if` instead: any path that reaches the last line has tested
+The two checks are `parts[0]` and `parts[1]`. The verifier knows that
+`split` returns at least one part, but not that there are two. It
+follows the `if` for that: any path that reaches the last line has tested
 `parts.len() != 2` and not returned, so the list has exactly two elements
 there. Returning an error early and proving the code after it safe are the
 same act.
@@ -50039,45 +50035,25 @@ the limit with `--timeout`, give the solver a stepping stone with an
 `AU5103` means no solver could be started, and the fix is to install Z3 or
 point `AURA_SMT_SOLVER` at one.
 
-`AU5104` means the check depends on an operation the verifier doesn't read
-yet. A left shift is one:
-
-```aura
-def bulk_units(packs: int64) -> int64:
-    requires 0 <= packs and packs <= 10
-    return 1 << packs
-
-def main():
-    print(bulk_units(3))
-```
-
-```console
-$ aura verify src/main.au
-error[AU5104]: cannot check operation outside the verified subset: `Shl` is not modeled yet
- --> src/main.au:3:12
-  |
-3 |     return 1 << packs
-  |            ^
-  = note: in `bulk_units` (overflow check)
-verified src/main.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
-```
-
-Nothing is wrong with the code. The check is not proved, and it stays a
-run-time check as it always was.
+`AU5104` means the check depends on a step the verifier doesn't model, and
+the message names that step and its line. We'll meet one in the next
+section.
 
 ## What the verifier doesn't model yet
 
 Aura is a preview, and the verifier covers less of the language than the
-compiler does. It reasons exactly about integers of every width, `bool`,
-floats, strings, lists, dictionaries and sets with integer or string keys,
-tuples, classes, enums, and unions. It helps to know where the edges are
-before you run into them.
+compiler does. It reasons exactly about integers of every width, bit
+operations and shifts, `bool`, floats, strings and most of their methods,
+lists, slices, nested lists, spans, dictionaries and sets with integer or
+string keys, tuples, classes, enums, unions, `match`, and lambdas called
+where they are made. It helps to know where the edges are before you run
+into them.
 
 The edge you'll meet first is the unknown value. When the verifier doesn't
-model an operation, it treats the result as a value it knows nothing about,
-and a check that depends on that value is often reported as `AU5101` with a
-counterexample, not as `AU5104`. Here is the total from this chapter
-written with the built-in `sum`:
+model an operation, it treats the result as a value it knows nothing about.
+A check that could only fail because of that value is reported as `AU5104`,
+not as a failure. Here is the total from this chapter written with the
+built-in `sum`:
 
 ```aura
 def cart_total(prices: list[int64]) -> int64:
@@ -50092,59 +50068,51 @@ def main():
 
 ```console
 $ aura verify src/main.au
-error[AU5101]: cannot prove `ensures` clause `result >= 0`
+error[AU5104]: cannot check `ensures` clause `result >= 0`: it depends on a comprehension or built-in loop at line 5, which the verifier does not model
  --> src/main.au:4:13
   |
 4 |     ensures result >= 0
   |             ^
   = note: in `cart_total` (ensures check)
-  = note: counterexample: len(prices) = 540
-error[AU5101]: cannot prove integer result in range
+error[AU5104]: cannot check integer result in range: it depends on a comprehension or built-in loop at line 5, which the verifier does not model
  --> src/main.au:5:12
   |
 5 |     return sum(prices)
   |            ^
   = note: in `cart_total` (overflow check)
-  = note: counterexample: len(prices) = 541
 verified src/main.au: 2 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 0 failed, 2 not modeled, 0 undecided
 ```
 
 The sum of non-negative prices is not negative, and this function is
-correct. The verifier doesn't know what `sum` computes, so to it `result`
-could be anything. A counterexample that makes no sense, on a line that
-calls into the library, usually means this and not a bug. The cure is the
-loop from Listing 11-11, whose invariant the verifier can follow.
+correct. The verifier doesn't know what `sum` computes, and says so instead
+of guessing. The checks stay in the program as run-time checks. The cure is
+the loop from Listing 11-11, whose invariant the verifier can follow.
 
 These are the unknown values and unmodeled features to expect today:
 
-- The results of comprehensions, slices such as `xs[0:2]`, `sum(xs)`,
-  `xs.sort()`, `k in xs` on a list, f-strings, `text.split(...)` and most
-  other `str` methods, and most library calls. Of strings, the verifier
-  reads `len`, `+`, comparisons, `contains`, `starts_with`, and `ends_with`.
-- The inner lengths of nested lists, so `grid[r][c]` doesn't prove, and of
-  lists stored as dictionary values.
-- Indexes into a `Span[T]`.
-- The bit operations `&`, `|`, and `^`, and the `saturating_` and
-  `wrapping_` integer methods. `<<` is reported as `AU5104`.
-- Lambdas and local `def` functions. Their bodies are checked with captured
-  values unknown, and callers learn nothing about what they return.
+- What `sum` adds up to, and the elements a comprehension builds. The
+  length of a comprehension is known.
+- The order of a list sorted with `key=`, or of `str` or `float` elements.
+- The letters of `trim`, `replace`, `to_lower`, and `to_upper`, of which the
+  verifier knows only the length bounds, and most library calls.
+- Lists stored as dictionary values, and the class invariant of an object
+  stored in a dictionary.
+- Lambdas and local `def` functions that escape the function that makes
+  them. A local `def` can't have a contract.
   [Chapter 13](/book/ch13-01-closures) shows the alternative that does
   verify.
-- Generators. A generator function's `requires` is not assumed in its body,
-  and the values it yields carry no contract.
-- Class invariants inside `impl` methods, as we saw with the discounts.
+- The values a generator yields, which carry no contract.
 - The result of `control.recover`, and the contents of queues, mutexes, and
   atomics, which other tasks can change. Starting a task is modeled;
   [Chapter 15](/book/ch15-01-tasks-and-task-groups) shows it.
 - Tensor shapes.
 
-Two more things are about how the tool works. `aura verify` takes one file
-and follows that file's imports, so a project is verified through its entry
-file or one module at a time. And a `requires` that can never be true
-proves everything after it: a function that requires `a > b and b > a` has
-no valid inputs, so every check in it is proved, silently. If a function
-proves with suspiciously little effort, check that a call to it from `main`
-proves too.
+Two more things are about how the tool works. Given one file, `aura verify`
+verifies that file and uses the contracts of what it imports. Given a
+directory or no path, it verifies every module of the package. And a
+`requires` that can never be true, such as `a > b and b > a`, would prove
+everything after it, so `aura verify` reports it as `AU5120`.
 
 None of this weakens what a proof means. A check counts as proved only when
 the solver shows that no input breaks it, and an unproved check stays in the
@@ -72912,7 +72880,10 @@ results under `~/.cache/aura/verify` (or under `verify` in
 it relies on, the solver version, and the time limit are all unchanged.
 Verifying again after a small edit solves only what the edit touched.
 
-The command takes one file and follows its imports. Its options are:
+Given one file, the command verifies the functions that file defines and
+uses the contracts of what it imports. Given a directory, several files, or
+no path at all, it verifies every module of the package and ends with one
+line of totals. Its options are:
 
 - `--function name` verifies only the functions whose name contains `name`.
   Use it to work on one function of a large file.
@@ -72922,22 +72893,31 @@ The command takes one file and follows its imports. Its options are:
   the `AURA_SMT_SOLVER` environment variable if it is set, then `z3`, then
   `cvc5`.
 - `--no-cache` solves every check again and ignores the proof cache.
+- `--deny not-modeled`, `--deny undecided`, or `--deny all` makes a package
+  run fail on those outcomes too. A package run otherwise fails only when a
+  check failed. A run on one file fails unless every check is proved.
+- `--must-verify name` names a function whose checks must all be proved,
+  and reports `AU5122` when one is not. Give it once for each function.
 - `--format json` prints the report as JSON: one entry for each check with
   its kind, function, line, column, and status (`proved`, `failed`,
   `unknown`, or `unsupported`), followed by the diagnostics in the same form
   as `aura check --format json`.
 
-Four diagnostic codes belong to the verifier. `AU5101` means a check can
+Six diagnostic codes belong to the verifier. `AU5101` means a check can
 fail, or the verifier is missing a fact it needs. `AU5102` means the solver
 gave up. `AU5103` means no solver could be started. `AU5104` means the check
-depends on something the verifier does not model.
+depends on something the verifier does not model, and names that step and
+its line. `AU5120` means a function's `requires` clauses can never hold
+together. `AU5122` means a function named with `--must-verify` has a check
+that is not proved.
 [Appendix E](/book/appendix-05-common-diagnostics#proofs) shows each one
 and what to do about it.
 
 Two things about a proof are easy to get wrong. The first is that it is
 about the contracts as written: a function that proves is a function that
-keeps its `ensures` whenever its `requires` holds, and if the `requires`
-asks for something no caller can supply, the proof says very little. The
+keeps its `ensures` whenever its `requires` holds. A `requires` that no
+input can meet is reported as `AU5120`, but one that is merely stronger than
+any real caller can supply still makes the proof say very little. The
 second is that the verifier knows nothing about what most library calls
 return, including everything read from a file, a process, or a socket.
 Code that checks such a value before using it verifies; code that trusts it
@@ -73720,11 +73700,10 @@ Sometimes the check cannot fail and the verifier still reports it, because
 it lacks a fact. It proves each function from the contracts of the
 functions it calls, never from their bodies, and it proves a loop from its
 `invariant` clauses. So the fix is to state the fact where it becomes true:
-an `ensures` on the callee, or an `invariant` on the loop. A value that
-came from a library call the verifier does not model, such as `str.split`
-or anything read from a file, is unknown to it, and a check that depends on
-one is reported under this code too. Test the value in your own code before
-you use it, and the proof goes through.
+an `ensures` on the callee, or an `invariant` on the loop. A check that
+fails only because of a value the verifier does not model, such as anything
+read from a file, is reported as `AU5104` instead, naming that step. Test
+the value in your own code before you use it, and the proof goes through.
 
 ### `AU5102`: the solver gave up
 
@@ -73755,32 +73734,41 @@ solver too.
 ### `AU5104`: outside what the verifier models
 
 ```aura
-def flag(bit: int64) -> int64:
-    requires 0 <= bit and bit < 16
-    return 1 << bit
+def total(xs: list[int64]) -> int64:
+    requires all([x >= 0 for x in xs])
+    ensures result >= 0
+    return sum(xs)
 
 def main():
-    print(flag(3))
+    print(total([1, 2, 3]))
 ```
 
 ```console
-$ aura verify flags.au
-error[AU5104]: cannot check operation outside the verified subset: `Shl` is not modeled yet
- --> flags.au:3:12
+$ aura verify total.au
+error[AU5104]: cannot check `ensures` clause `result >= 0`: it depends on a comprehension or built-in loop at line 4, which the verifier does not model
+ --> total.au:3:13
   |
-3 |     return 1 << bit
+3 |     ensures result >= 0
+  |             ^
+  = note: in `total` (ensures check)
+error[AU5104]: cannot check integer result in range: it depends on a comprehension or built-in loop at line 4, which the verifier does not model
+ --> total.au:4:12
+  |
+4 |     return sum(xs)
   |            ^
-  = note: in `flag` (overflow check)
-verified flags.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+  = note: in `total` (overflow check)
+verified total.au: 1 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 0 failed, 2 not modeled, 0 undecided
 ```
 
-The check depends on an operation the verifier does not reason about, here
-a left shift. This is not a claim that the code is wrong. The check is
-neither proved nor refuted, it stays in the program as a run-time check,
-and `aura run flags.au` prints `8`. You can leave it, or rewrite the step
-with operations the verifier models, such as a multiplication for a shift.
+The checks depend on a step the verifier does not reason about, here what
+`sum` adds up to, and the message names it and its line. This is not a
+claim that the code is wrong. The checks are neither proved nor refuted,
+they stay in the program as run-time checks, and `aura run total.au` prints
+`6`. You can leave them, or write the step as a loop with an `invariant`,
+which the verifier does follow.
 The same code is reported for a contract clause the verifier cannot read,
-such as one that uses an `as` cast. The
+such as a call of a library function. The
 [Verification](/manual/verification) page of the Manual lists what is
 modeled.
 

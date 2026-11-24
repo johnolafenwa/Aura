@@ -35,6 +35,30 @@ in this file.
   fields.
 - `aura verify` proves the body of a generator function with its `requires`
   clauses known, and reports its checks under the generator's name.
+- `aura verify` models more of the language, in code and in contracts:
+  - lists: `in` and `contains` on `int`, `bool`, and `str` elements; slices
+    without a step, whose bounds are now a check; `sorted`, `sort`, and
+    `reverse`; the length of a comprehension; `min` and `max` of a
+    non-empty list; lists of lists, including writes inside a row;
+  - integers: `&`, `|`, `^`, `~`, `<<`, and `>>` on every width up to 64
+    bits, with a check that a shift count is in range and that `<<` loses no
+    bits; the `wrapping_` and `saturating_` methods; `**`; and `as`
+    conversions in contracts; `math.floor`, `ceil`, `trunc`, `sqrt`,
+    `isqrt`, `factorial`, and the `is_nan` family;
+  - text: `split`, `lines`, `find`, indexing and slicing (now checked),
+    `strip_prefix`, `strip_suffix`, `split_once`, f-strings, and `str(x)`,
+    with length bounds for `trim`, `replace`, and the case methods;
+  - lambdas and local `def` functions called where they are made, with the
+    values they captured, by value or by reference, and bound methods;
+  - class invariants of objects stored in fields, tuples, optional values,
+    `Result` and enum payloads, and lists; `match` as an expression and
+    every decidable arm pattern; calls on a union-typed value, whose
+    members' contracts now apply; `==` between unions and enum variants.
+- `aura verify` names an enum variant in a counterexample instead of its
+  index, and reports a recursive spec function that needs more than eight
+  levels as not modeled instead of failed.
+- `aura verify` no longer proves an assertion about a local that a lambda
+  changed through a view it captured.
 - `aura verify` with no path, a directory, or several files verifies every
   module of a package and prints each file's summary and one line of
   totals. Such a run fails only when a check failed, a file does not

@@ -38,10 +38,15 @@ Last updated: 2026-11-24
   generator bodies assume their `requires`, trait implementation methods
   assume class invariants, and a call keeps the fields its callee cannot
   write.
-- Next: stage 2 models comprehensions, slices, `sort`, `sum`, `str`
-  methods, bit operations and closures. Stage 3 adds package mode, a
-  "must verify" marker, `aura test --verify`, failure recovery, shared
-  state, tensor shapes and a solver cross-check.
+- Stage 1 merged in #321.
+- Stage 2, coverage: lists (membership, slices, sort, comprehension
+  lengths, min/max, lists of lists), integer bit operations, shifts and
+  `math`, `str` methods and f-strings, closures called where they are made,
+  class invariants inside other values, `match` expressions, union calls,
+  package mode with `--deny` and `--must-verify` (`AU5122`),
+  `aura test --verify`, and module-level code.
+- Next: failure recovery, shared state, tensor shapes, fewer solver
+  timeouts, a solver watchdog and a second-solver cross-check.
 
 ## Combined feature verification
 

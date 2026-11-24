@@ -621,37 +621,33 @@ A quantifier over a `str`, or over a list of other elements, is reported as
 
 ## What It Does Not Model
 
-The verifier treats each of these as a value it knows nothing about. A check
-that depends on one is reported as `AU5101`, and its counterexample may show
-a value the program cannot produce. State the fact the check needs as an
-`ensures` on a helper function, or as a `requires` on the function that
+The verifier treats each of these as a value it knows nothing about, or knows
+only part of. A check that fails only because of such a value is reported as
+`AU5104`, naming the step and its line, instead of as a failure with a
+counterexample the program cannot produce. State the fact the check needs as
+an `ensures` on a helper function, or as a `requires` on the function that
 relies on it.
 
 | Feature | What the verifier knows |
 | --- | --- |
-| Comprehensions, slices such as `xs[0:2]`, `sum`, `sorted`, `list.sort`, and `x in xs` on a list | Nothing about the result, including its length. |
-| Nested lists such as `grid[r][c]`, and a `dict` whose values are lists | The outer length and keys. Not the inner lengths or elements. |
-| `Span[T]` | An index into a span is not proved from `len(span)`. |
-| `&`, `\|`, `^`, `<<`, `>>`, and the `wrapping_` and `saturating_` methods | Nothing about the result. `<<` and `>>` report `AU5104`. |
-| Most `str` methods, such as `split`, `to_lower`, and `trim`, and f-strings | Nothing about the result. |
-| Lambdas and local `def` functions | Each body is verified with its captured values unknown. A caller learns nothing about the result. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
-| Generator functions | The body is verified without the generator's `requires`. Yielded values have no contract. |
-| Methods in an `impl` of a trait | They do not assume the class invariants. A `public` method of the class does. |
-| Fields after a call of a `mut self` method | Only what the method's `ensures` says, also for a field the method does not assign. |
+| Comprehensions and `sum` | The length of a comprehension that maps (`len(xs)`) or filters (at most `len(xs)`). Not its elements, and nothing about `sum` or a nested comprehension. |
+| `sorted` and `list.sort` with `key=`, or on `str` and `float` elements | The length and the elements, not their order. Plain `int` lists are known to be in order. |
+| Slices with a step, such as `xs[::2]` | Nothing about the result. Slices without a step are modeled, and their bounds are a check. |
+| A `dict` whose values are lists or objects | The keys and the length. Not the inner lists, and not the class invariant of a value. |
+| `&` between two unknown values, and any bit operation on `int128` or `uint128` | Its sign and bounds only. `&` with a literal, and `\|`, `^`, `~`, `<<`, `>>` on other widths are exact. |
+| `str` methods `trim`, `replace`, `to_lower`, `to_upper`, `count`, and the digits of an integer in an f-string | Bounds on the length only. `split`, `find`, indexing, slicing, `strip_prefix`, `strip_suffix`, and `split_once` are exact. |
+| Lambdas and local `def` functions that escape, or are called in a loop while they keep state | Each body is verified with its captured values unknown, and a caller learns nothing about the result. One called where it is made is followed into its body with the values it captured. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
+| Decorated functions | A caller learns nothing from the contract, and its `requires` is reported as `AU5104`. |
+| Generator functions | Yielded values have no contract. The body is verified with the generator's `requires` known. |
 | `control.recover` | The target's `requires` is proved at the call. Nothing is known about the `Result`. |
 | `sync` values, `Queue` items, and `mem` reads | Unknown each time they are read, since another task or a device may change them. |
-| `tensor` and `Array` values | Not modeled. An `Array` index and a shape mismatch are not checks of the proof, and stay runtime failures. |
+| `tensor` values | Not modeled. A shape mismatch stays a runtime failure. An `Array` index is a check of the proof. |
 | Library calls, such as `json`, `io`, `regex`, and `time` | Nothing about the result. |
+| Recursive spec functions | Unfolded eight levels deep. A check that needs more is reported as `AU5104`. |
 
-Two more limits apply to every proof:
-
-- A `requires` clause that no input can meet, such as
-  `requires x > 0 and x < 0`, makes every check in the function proved.
-  `aura verify` does not report it.
-- `aura verify` takes one file and verifies the functions that file defines.
-  At a call of an imported function it uses that function's contract, but it
-  does not verify the imported module's own functions. Run it on each module.
-  It has no package or workspace mode.
+A `requires` clause that no input can meet, such as
+`requires x > 0 and x < 0`, is reported as `AU5120`, since every check in
+the function would hold for no reason.
 
 ## Trust
 
