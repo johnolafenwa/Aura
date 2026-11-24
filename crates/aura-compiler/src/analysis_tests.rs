@@ -11710,6 +11710,12 @@ fn editor_preserves_active_outline_and_dimmed_ranges_after_a_type_error() {
     assert!(!analysis.diagnostics.is_empty());
     assert_eq!(analysis.inactive_lines.len(), 1);
     assert_eq!(analysis.inactive_lines[0], 5..7);
-    assert!(analysis.symbols.iter().any(|symbol| symbol.name == "visible"));
-    assert!(!analysis.symbols.iter().any(|symbol| symbol.name == "hidden"));
+    assert!(analysis
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "visible"));
+    assert!(!analysis
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "hidden"));
 }
