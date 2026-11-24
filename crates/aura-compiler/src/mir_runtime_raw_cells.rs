@@ -296,6 +296,8 @@ mod tests {
     #[test]
     fn typed_pointer_interpreter_runs_scalar_and_aggregate_operations() {
         for source in [
+            include_str!("../tests/fixtures/typed-pointers/pointer_field.au"),
+            include_str!("../tests/fixtures/typed-pointers/array_records.au"),
             include_str!("../tests/fixtures/typed-pointers/scalars.au"),
             include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
             include_str!("../tests/fixtures/typed-pointers/foreign.au"),
@@ -310,5 +312,55 @@ mod tests {
                 .expect("a valid allocation should preserve stored values");
             assert!(matches!(output.value, Value::Unit));
         }
+    }
+
+    #[test]
+    fn malformed_pointer_access_reports_shape_and_address_errors_before_writing() {
+        use crate::c_layout::{CField, CFieldKind};
+        let fixed_bool = CStruct {
+            name: "#fixed".into(),
+            fields: vec![CField {
+                name: "elements".into(),
+                kind: CFieldKind::Array(
+                    Box::new(CFieldKind::Scalar(crate::ffi::FfiScalar::Bool)),
+                    1,
+                ),
+            }],
+            union: false,
+            layout_controls: Default::default(),
+        };
+        let mut storage = 2_u128;
+        let word = Value::Int(IntegerValue::from_u64(
+            std::ptr::from_mut(&mut storage) as usize as u64,
+        ));
+        assert_eq!(
+            access(&word, Some(&Value::Bool(true)), &fixed_bool, false)
+                .unwrap_err()
+                .code,
+            "AU4005"
+        );
+        // The first byte isn't a C boolean. Unpacking the array must preserve
+        // the scalar decoder's diagnostic even though the outer value is valid.
+        assert_eq!(
+            unpack(&fixed_bool, &[2], "pointer.read").unwrap_err().code,
+            "AU4001"
+        );
+        assert_eq!(
+            access(&Value::Unit, None, &fixed_bool, false)
+                .unwrap_err()
+                .code,
+            "AU4032"
+        );
+        let wide = CStruct {
+            name: "#fixed.int128".into(),
+            ..fixed_bool
+        };
+        assert_eq!(
+            access(&word, Some(&Value::Bool(false)), &wide, true)
+                .unwrap_err()
+                .code,
+            "AU4032"
+        );
+        assert_eq!(storage, 2);
     }
 }

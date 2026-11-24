@@ -136,6 +136,25 @@ mod tests {
         ] {
             assert!(access(name, &args).unwrap().is_err(), "{name}");
         }
+        let too_wide = Value::Int(IntegerValue::from_literal(u128::MAX));
+        for (name, args) in [
+            ("mem::write_int16", vec![address.clone(), too_wide.clone()]),
+            (
+                "mem::write_float32",
+                vec![address.clone(), Value::Int(IntegerValue::from_i64(1))],
+            ),
+            (
+                "mem::__pointer_offset",
+                vec![
+                    address.clone(),
+                    too_wide,
+                    Value::Int(IntegerValue::from_u64(1)),
+                ],
+            ),
+        ] {
+            assert!(access(name, &args).unwrap().is_err(), "{name}");
+        }
+        assert_eq!(cell, 3);
         assert!(access("mem::noise_int32", std::slice::from_ref(&address)).is_none());
         let offset = access(
             "mem::__pointer_offset",

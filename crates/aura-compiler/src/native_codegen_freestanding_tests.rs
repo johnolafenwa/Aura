@@ -1106,6 +1106,41 @@ fn typed_pointer_objects_use_target_memory_operations() {
 }
 
 #[test]
+fn hosted_pointer_objects_preserve_wide_accesses_and_parameter_storage() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/typed-pointers/wide.au"),
+            &[
+                "aura_direct_pointer_wide_read",
+                "aura_direct_pointer_wide_write",
+            ][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/pointer_field.au"),
+            &[][..],
+        ),
+        (
+            include_str!("../tests/fixtures/typed-pointers/array_records.au"),
+            &[][..],
+        ),
+    ] {
+        let parsed = crate::parse_source(source).unwrap();
+        let program = crate::check_module_with_builtin_imports(parsed).unwrap();
+        let module = crate::mir::lower(&program);
+        let bytes = crate::native_codegen::emit_host_object(&module).unwrap();
+        let (_, _, imports) = symbols(&bytes);
+        for symbol in expected {
+            assert!(
+                imports
+                    .iter()
+                    .any(|name| name.trim_start_matches('_') == *symbol),
+                "{imports:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_pointer_cast_requires_ffi_without_a_mem_import() {
     let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
     let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
