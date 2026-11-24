@@ -1,0 +1,14 @@
+import mem
+
+export "C" def probe(index: int32) -> uint16:
+    mut a: fixed[uint16, 3] = [4, 5, 6]
+    item = mem.address_of(a[index])
+    item.write(19)
+    a[2] = 25
+    whole = mem.address_of(a[0]) as ptr[fixed[uint16, 3]]
+    snapshot = whole.volatile_read()
+    whole.write([snapshot[2], snapshot[0], snapshot[1]])
+    return a[0] + item.read()
+
+def main() -> None:
+    assert probe(1) == 29
