@@ -19,7 +19,12 @@ function uriToPath(uri, platform = process.platform) {
     return null;
   }
 
-  const pathname = decodeURIComponent(parsed.pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(parsed.pathname);
+  } catch (_error) {
+    return null;
+  }
   if (platform === "win32") {
     if (parsed.host) {
       const segments = pathname.split("/").filter(Boolean).join("\\");

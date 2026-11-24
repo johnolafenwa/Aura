@@ -180,6 +180,9 @@ class CompilerService {
       env: { AURA_OFFLINE: "1", ...process.env },
       stdio: ["pipe", "pipe", "pipe"]
     });
+    this.child.stdin.on("error", (error) => {
+      this.fail(error, true);
+    });
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
     this.child.stdout.on("data", (chunk) => this.handleStdout(chunk));
@@ -257,6 +260,10 @@ class CompilerService {
           response = JSON.parse(line);
         } catch (error) {
           this.fail(new Error(`invalid Aura compiler response: ${error.message}`), true);
+          return;
+        }
+        if (!response || typeof response !== "object" || Array.isArray(response)) {
+          this.fail(new Error("invalid Aura compiler response: expected JSON object"), true);
           return;
         }
         if (

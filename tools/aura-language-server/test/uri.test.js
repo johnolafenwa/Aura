@@ -25,6 +25,7 @@ test("uri helper preserves UNC and local file paths", () => {
   assert.equal(uriToPath(null), null);
   assert.equal(uriToPath("https://example.com/main.au"), null);
   assert.equal(uriToPath("not-a-file-uri"), null);
+  assert.equal(uriToPath("file:///tmp/%ZZ.au"), null);
 });
 
 test("canonical file URIs resolve links and keep other URIs", { skip: process.platform === "win32" }, () => {

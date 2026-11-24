@@ -1027,6 +1027,32 @@ test("persistent compiler service reports spawn and empty-stderr exit failures",
   exited.dispose();
 });
 
+test("persistent compiler service handles stdin EPIPE and non-object JSON responses", async () => {
+  const stdinFailure = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", "process.stdin.resume()"],
+    cwd: repoRoot
+  });
+  const pendingStdin = stdinFailure.request("analyze", {});
+  stdinFailure.child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+  await assert.rejects(pendingStdin, /EPIPE/);
+  assert.equal(stdinFailure.closed, true);
+  stdinFailure.dispose();
+
+  for (const payload of ["null\n", "42\n", "[]\n"]) {
+    const badShape = new CompilerService({
+      cmd: process.execPath,
+      args: ["-e", "process.stdin.resume()"],
+      cwd: repoRoot
+    });
+    const pending = badShape.request("analyze", {});
+    badShape.handleStdout(payload);
+    await assert.rejects(pending, /expected JSON object/);
+    assert.equal(badShape.closed, true);
+    badShape.dispose();
+  }
+});
+
 test("compiler bridge accepts non-file URIs when using the compiler subprocess helpers", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-memory-uri-"));
   const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
