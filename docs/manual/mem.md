@@ -2,8 +2,9 @@
 
 The `mem` module reads and writes integers at a raw address. It is for
 device registers, memory shared with C, and the lock-free cells a kernel or
-a driver needs. Each function compiles to one machine instruction, in
-hosted and [freestanding](/manual/freestanding) builds alike.
+a driver needs. The raw-address functions work in hosted and
+[freestanding](/manual/freestanding) builds. A freestanding target also
+provides the machine operations below.
 
 ```aura fragment
 import mem
@@ -63,6 +64,45 @@ for the atomic ones.
   type and does not model writes. A write to memory that an Aura value
   occupies is outside what a proof covers.
 
+## Ports And Processor Registers
+
+Select the target with `aura check --freestanding --target <name>` or
+`aura build --freestanding --target <name>`. The package needs
+`allow_ffi = true`. The processor enforces its privilege rules at run time.
+
+On x86-64, write one byte to a serial port's transmit register like this:
+
+```aura fragment
+import mem
+
+def put(byte: uint8) -> None:
+    mem.out_uint8(0x3f8, byte)
+```
+
+| x86-64 operation | Signature |
+| --- | --- |
+| Read an I/O port | `in_uintN(port: uint16) -> uintN`, for N = 8, 16 or 32 |
+| Write an I/O port | `out_uintN(port: uint16, value: uintN) -> None`, for N = 8, 16 or 32 |
+| Read a model-specific register | `read_msr(index: uint32) -> uint64` |
+| Write a model-specific register | `write_msr(index: uint32, value: uint64) -> None` |
+
+Named registers have a `read_<name>() -> uint64` function. The registers
+in the last column also have `write_<name>(value: uint64) -> None`.
+For example, use `mem.read_mhartid()` on RISC-V or
+`mem.write_vbar_el1(address)` on AArch64.
+
+| Target | Read only in Aura | Read and write |
+| --- | --- | --- |
+| x86-64 | | `cr0`, `cr2`, `cr3`, `cr4`, `cr8` |
+| AArch64 | `midr_el1`, `mpidr_el1`, `currentel`, `cntpct_el0`, `cntfrq_el0` | `sctlr_el1`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `mair_el1`, `vbar_el1`, `esr_el1`, `far_el1`, `elr_el1`, `spsr_el1`, `cntp_ctl_el0`, `cntp_cval_el0` |
+| RISC-V | `mhartid`, `misa`, `cycle`, `time` | `mstatus`, `mie`, `mip`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `medeleg`, `mideleg`, `sstatus`, `sie`, `sip`, `stvec`, `sscratch`, `sepc`, `scause`, `stval`, `satp` |
+
+All three targets provide `mem.enable_interrupts()`,
+`mem.disable_interrupts()` and `mem.halt()`, each returning `None`.
+The first two control x86 IF, AArch64's IRQ mask or RISC-V's machine-mode
+interrupt-enable bit. The last emits `hlt` on x86-64 or `wfi` on the other
+targets. Execution can resume after that instruction.
+
 ## A Spin Lock
 
 ```aura fragment
@@ -78,7 +118,7 @@ def release(lock: uint64) -> None:
 
 ## Hosted Programs
 
-The module works under `aura run` and in an ordinary `aura build`, with
+The raw-address API works under `aura run` and in an ordinary `aura build`, with
 the same results. An address there comes from C:
 
 ```aura fragment
@@ -100,5 +140,4 @@ def main() -> None:
   bits.
 - No atomic access to 8-bit and 16-bit cells.
 - One ordering, sequentially consistent.
-- No inline assembly and no port I/O instructions. On x86-64, reach I/O
-  ports through an `extern "C"` function written in assembly.
+- Port numbers are 16 bits. The largest single port transfer is 32 bits.
