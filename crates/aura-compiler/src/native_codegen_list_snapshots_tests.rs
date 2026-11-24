@@ -62,9 +62,42 @@ def scalars(xs: list[int64], ys: mut list[float64], n: int64) -> int64:
         i += 1
     return total
 
+def carried(xs: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+    for i in range(n):
+        xs[i] += total
+    return total
+
+def appended(xs: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+    xs.append(total)
+    for i in range(n):
+        total += xs[i]
+    return total
+
+def stored(xs: mut list[int64], ys: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+        ys[i] = total
+    xs[0] = total
+    ys[0] = total
+    for i in range(n):
+        total += xs[i] + ys[i]
+    return total
+
 def main():
     mut ps = [Point(x=1.0, y=2.0)]
     mut ys = [0.5, 0.25, 0.125]
+    mut zs = [1, 2, 3]
+    mut ws = [4, 5, 6]
+    print(carried(zs, 3))
+    print(appended(zs, 3))
+    print(stored(zs, ws, 3))
     print(scalars([1, 2, 3], ys, 2))
     print(reads(ps))
     print(loans(3))
@@ -157,6 +190,30 @@ fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
 }
 
 #[test]
+fn a_loop_after_another_on_the_list_takes_the_words_it_read() {
+    let found = regions("carried", true);
+    assert_eq!(found.len(), 2, "{found:?}");
+    let [first, second] = [0, 1].map(|later| {
+        let earlier = &found[1 - later];
+        found[later].carry.as_ref() == Some(&earlier.blocks)
+    });
+    // Only the loop entered second takes the other's words: the first is
+    // entered before the other reads them.
+    assert!(first != second, "{found:?}");
+    // A write the earlier loop did not check room for may share the
+    // storage, and an append moves it.
+    let carries = |name: &str, list: &str| {
+        regions(name, true)
+            .iter()
+            .filter(|region| region.list == list)
+            .any(|region| region.carry.is_some())
+    };
+    assert!(!carries("appended", "xs"));
+    assert!(!carries("stored", "xs"));
+    assert!(carries("stored", "ys"));
+}
+
+#[test]
 fn loops_that_read_views_once_compile_with_their_copies() {
     let module = lower_source_to_mir(SOURCE).expect("the source should lower");
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
@@ -174,6 +231,26 @@ fn loops_inside_and_across_each_other_compile_with_their_copies() {
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
         .expect("the loops should compile");
     super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+#[test]
+fn loops_after_other_loops_compile_taking_their_words() {
+    // Loops that take the words of loops before them, over lists of
+    // scalars and an Array, which reads its layout itself.
+    let source =
+        include_str!("../tests/fixtures/run-pass/sibling_loops_take_the_view_words_once.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+    let twice = array_function("twice");
+    let found = list_snapshot_regions(&twice, |_| true, |_| true);
+    assert!(
+        found.iter().any(|region| region.carry.is_some()),
+        "{found:?}"
+    );
+    let module = lower_source_to_mir(ARRAY_SOURCE).expect("the source should lower");
+    super::super::emit_host_object(&module).expect("the Array loops should compile");
 }
 
 const ARRAY_SOURCE: &str = r#"
@@ -207,9 +284,18 @@ def summed(values: Array[int64], n: int64) -> int64:
         sum += values[i] + values.sum()
     return sum
 
+def twice(values: Array[int64], n: int64) -> int64:
+    mut sum = 0
+    for i in range(n):
+        sum += values[i]
+    for i in range(n):
+        sum += values[i] * 2
+    return sum
+
 def main():
     mut grid = Array[float64].zeros([4, 4])
     smooth(grid.clone(), grid, 4)
+    print(twice(Array[int64].zeros([2]), 2))
     print(grid)
     print(total(Array[int32].zeros([3]), 3))
     print(mixed(Array[float32].zeros([2, 2, 2]), 2))

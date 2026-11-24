@@ -72,6 +72,9 @@ pub(super) struct ListSnapshotRegion {
     /// Set for the whole body of a method that keeps its receiver, `list`
     /// (see `method_region`), which is entered where the body begins.
     pub(super) method: bool,
+    /// The blocks of an earlier loop on the list whose view words still
+    /// hold at every entry of this one (see `carried_view`).
+    pub(super) carry: Option<HashSet<String>>,
 }
 
 pub(super) fn root(place: &str) -> &str {
@@ -382,6 +385,7 @@ pub(super) fn list_snapshot_regions(
             }
             clean.insert(block.label.as_str(), (writes, uses));
         }
+        let first = regions.len();
         for component in strongly_connected(&clean, &successors) {
             let cyclic = component.len() > 1
                 || component.iter().any(|label| {
@@ -420,10 +424,74 @@ pub(super) fn list_snapshot_regions(
                 writes,
                 temps: HashSet::new(),
                 method: false,
+                carry: None,
             });
+        }
+        // A loop entered only after another loop on the list, through
+        // blocks that keep the view, may take the words that loop read.
+        for later in first..regions.len() {
+            regions[later].carry = (first..regions.len())
+                .find(|earlier| {
+                    *earlier != later
+                        && carried_view(
+                            function,
+                            &regions[*earlier],
+                            &regions[later],
+                            &clean,
+                            &successors,
+                        )
+                })
+                .map(|earlier| regions[earlier].blocks.clone());
         }
     }
     regions
+}
+
+/// Whether the view words read where `earlier` is entered still hold at
+/// every entry of `later`: every path to one passes an entry of `earlier`
+/// and, after the last, only blocks that keep the view. A block outside
+/// `earlier` that may write the list keeps it only when `earlier` found
+/// the storage unshared, which it checks when it writes.
+fn carried_view(
+    function: &MirFunction,
+    earlier: &ListSnapshotRegion,
+    later: &ListSnapshotRegion,
+    clean: &HashMap<&str, (bool, bool)>,
+    successors: &HashMap<&str, Vec<&str>>,
+) -> bool {
+    let keeps = |label: &str| {
+        earlier.blocks.contains(label)
+            || clean
+                .get(label)
+                .is_some_and(|(writes, _)| !writes || earlier.writes)
+    };
+    // Whether the words hold where each block ends, lowered from the most
+    // hopeful guess until every edge agrees.
+    let mut holds = function
+        .blocks
+        .iter()
+        .map(|block| {
+            let label = block.label.as_str();
+            (label, label != function.entry && keeps(label))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (from, nexts) in successors {
+            for next in nexts {
+                let entered = earlier
+                    .entries
+                    .iter()
+                    .any(|(source, target)| source.as_str() == *from && target.as_str() == *next);
+                if holds[next] && !holds[from] && !entered {
+                    holds.insert(*next, false);
+                    changed = true;
+                }
+            }
+        }
+    }
+    later.entries.iter().all(|(from, _)| holds[from.as_str()])
 }
 
 /// What `field_list_snapshot_regions` asks about a function.
@@ -649,6 +717,7 @@ pub(super) fn field_list_snapshot_regions(
                 writes: false,
                 temps,
                 method: false,
+                carry: None,
             });
         }
     }
@@ -702,6 +771,7 @@ fn method_region(
         writes: false,
         temps: HashSet::new(),
         method: true,
+        carry: None,
     })
 }
 
@@ -1102,8 +1172,75 @@ impl FunctionCompiler<'_> {
             self.builder.switch_to_block(pad);
             self.builder.seal_block(pad);
             let mut oks = Vec::new();
-            for index in &entering {
-                oks.push((*index, self.emit_list_snapshot(*index)?));
+            let sources = entering
+                .iter()
+                .map(|index| self.carry_source(*index))
+                .collect::<Option<Vec<_>>>();
+            match sources {
+                // Loops entered after other loops on each of their lists,
+                // whose words still hold, take them while every one of
+                // those loops found its view qualified.
+                Some(sources) => {
+                    let mut all = None;
+                    for source in &sources {
+                        let ok = self.builder.use_var(self.list_snapshots[*source].ok);
+                        all = Some(match all {
+                            None => ok,
+                            Some(all) => self.builder.band(all, ok),
+                        });
+                    }
+                    let all = all.expect("a pad enters at least one loop");
+                    let carry_block = self.builder.create_block();
+                    let fresh_block = self.builder.create_block();
+                    let join_block = self.builder.create_block();
+                    for _ in 0..4 * entering.len() {
+                        self.builder.append_block_param(join_block, types::I64);
+                    }
+                    self.builder.brif(all, carry_block, &[], fresh_block, &[]);
+                    self.builder.switch_to_block(carry_block);
+                    self.builder.seal_block(carry_block);
+                    let mut words = Vec::new();
+                    for (index, source) in entering.iter().zip(&sources) {
+                        words.extend(self.emit_carried_snapshot(*index, *source)?);
+                    }
+                    self.builder.jump(join_block, &words);
+                    self.builder.switch_to_block(fresh_block);
+                    self.builder.seal_block(fresh_block);
+                    words.clear();
+                    for index in &entering {
+                        self.emit_list_snapshot(*index)?;
+                        let snapshot = &self.list_snapshots[*index];
+                        let vars = [
+                            snapshot.ok,
+                            snapshot.access,
+                            snapshot.len,
+                            snapshot.elements,
+                        ];
+                        words.extend(vars.map(|variable| self.builder.use_var(variable)));
+                    }
+                    self.builder.jump(join_block, &words);
+                    self.builder.switch_to_block(join_block);
+                    self.builder.seal_block(join_block);
+                    let params = self.builder.block_params(join_block).to_vec();
+                    for (index, params) in entering.iter().zip(params.chunks(4)) {
+                        let snapshot = &self.list_snapshots[*index];
+                        let vars = [
+                            snapshot.ok,
+                            snapshot.access,
+                            snapshot.len,
+                            snapshot.elements,
+                        ];
+                        for (variable, value) in vars.into_iter().zip(params) {
+                            self.builder.def_var(variable, *value);
+                        }
+                        oks.push((*index, (params[0], params[1])));
+                    }
+                }
+                None => {
+                    for index in &entering {
+                        oks.push((*index, self.emit_list_snapshot(*index)?));
+                    }
+                }
             }
             // A loop that reads several lists' views once runs its copy
             // while every view qualifies. The jump on is in the block the
@@ -1262,12 +1399,48 @@ impl FunctionCompiler<'_> {
         self.builder.use_var(self.list_snapshots[index].elements)
     }
 
+    /// The loop on the same list whose view words snapshot `index` takes
+    /// (see `carried_view`), as an index into `list_snapshots`.
+    fn carry_source(&self, index: usize) -> Option<usize> {
+        let snapshot = &self.list_snapshots[index];
+        let blocks = snapshot.region.carry.as_ref()?;
+        self.list_snapshots.iter().position(|other| {
+            other.region.list == snapshot.region.list
+                && other.region.blocks == *blocks
+                && other.array.is_none()
+        })
+    }
+
+    /// The flag and the view words of snapshot `index`'s list, which loop
+    /// `source` found qualified with the words they still are: the words
+    /// are read again with no checks of their own.
+    fn emit_carried_snapshot(
+        &mut self,
+        index: usize,
+        source: usize,
+    ) -> std::result::Result<[Val; 4], String> {
+        let snapshot = self.list_snapshots[index].clone();
+        let source = self.list_snapshots[source].clone();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let source_ok = self.builder.use_var(source.ok);
+        let handle = self.local_list_handle(&snapshot.region.list)?;
+        let access = self.builder.uload32(flags, handle, layout.access_offset);
+        let len = self
+            .builder
+            .load(types::I64, flags, handle, layout.len_offset);
+        let elements = self
+            .builder
+            .load(types::I64, flags, handle, layout.elements_offset);
+        let qualifies =
+            self.view_qualifies(&snapshot, handle, access, len, Some((&source, source_ok)))?;
+        let ok = self.builder.uextend(types::I64, qualifies);
+        Ok([ok, access, len, elements])
+    }
+
     /// Copies the view of snapshot `index`'s list into its variables, with
     /// whether the view qualifies (see the module documentation).
     fn emit_list_snapshot(&mut self, index: usize) -> std::result::Result<(Val, Val), String> {
-        use aura_runtime::native_runtime::{
-            DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
-        };
         let snapshot = self.list_snapshots[index].clone();
         if let Some(array) = &snapshot.array {
             return self.emit_array_snapshot(index, array);
@@ -1280,16 +1453,7 @@ impl FunctionCompiler<'_> {
                 self.builder.def_var(field_box, boxed);
                 boxed
             }
-            None => {
-                let vars = self.local_vars(&snapshot.region.list)?;
-                let [var] = vars.as_slice() else {
-                    return Err(format!(
-                        "direct backend read the view of `{}`, which is not one box",
-                        snapshot.region.list
-                    ));
-                };
-                self.builder.use_var(*var)
-            }
+            None => self.local_list_handle(&snapshot.region.list)?,
         };
         let read_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -1314,7 +1478,99 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        let mut qualifies = match snapshot.scalar_element() {
+        let qualifies = self.view_qualifies(&snapshot, handle, access, len, None)?;
+        let ok = self.builder.uextend(types::I64, qualifies);
+        self.builder.jump(join_block, &[ok, access, len, elements]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let params = self.builder.block_params(join_block).to_vec();
+        for (variable, value) in [
+            snapshot.ok,
+            snapshot.access,
+            snapshot.len,
+            snapshot.elements,
+        ]
+        .into_iter()
+        .zip(params.iter().copied())
+        {
+            self.builder.def_var(variable, value);
+        }
+        Ok((params[0], params[1]))
+    }
+
+    /// Whether the view words `access` and `len` of the list `handle`
+    /// let the loop of `snapshot` run its copy (see the module
+    /// documentation). `carried` is the loop the words come from, with
+    /// its flag, when they are that loop's.
+    fn view_qualifies(
+        &mut self,
+        snapshot: &ListSnapshot,
+        handle: Val,
+        access: Val,
+        len: Val,
+        carried: Option<(&ListSnapshot, Val)>,
+    ) -> std::result::Result<Val, String> {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let mut qualifies = match carried {
+            // The words are the ones that loop found in its own form.
+            Some((source, source_ok)) if source.scalar_element() == snapshot.scalar_element() => {
+                self.builder.icmp_imm(IntCC::NotEqual, source_ok, 0)
+            }
+            _ => self.view_form(snapshot, access),
+        };
+        if snapshot.region.writes {
+            let room = self.builder.uload32(flags, handle, layout.capacity_offset);
+            let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
+            qualifies = self.builder.band(qualifies, has_room);
+        }
+        // The other loop checked the same sink.
+        let sink = match carried {
+            Some((source, _)) if source.sink == snapshot.sink => None,
+            _ => snapshot.sink,
+        };
+        if let Some(slot) = sink {
+            // A caller that asked for each write to be handed back takes
+            // a reference to the list with it, so the storage is shared.
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            qualifies = self.builder.band(qualifies, direct);
+        }
+        if let Some(proof) = &snapshot.range {
+            for guard in &proof.guards {
+                use super::range_loops::{RangeBound, RangeGuard};
+                let holds = match guard {
+                    RangeGuard::AtLeast { place, least } => {
+                        let value = self.range_word(place)?;
+                        self.builder
+                            .icmp_imm(IntCC::SignedGreaterThanOrEqual, value, *least)
+                    }
+                    RangeGuard::Within { bound, distance } => {
+                        let bound = match bound {
+                            RangeBound::Place(place) => self.range_word(place)?,
+                            RangeBound::Int(value) => self.builder.iconst(types::I64, *value),
+                        };
+                        // A length is far below the range of `int64`, so
+                        // the difference is exact.
+                        let limit = self.builder.iadd_imm(len, -*distance);
+                        self.builder
+                            .icmp(IntCC::SignedLessThanOrEqual, bound, limit)
+                    }
+                };
+                qualifies = self.builder.band(qualifies, holds);
+            }
+        }
+        Ok(qualifies)
+    }
+
+    /// Whether the access code `access` names a form the loop of
+    /// `snapshot` reads its view once in.
+    fn view_form(&mut self, snapshot: &ListSnapshot, access: Val) -> Val {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
+        };
+        match snapshot.scalar_element() {
             // The loop's scalar accesses check for one access code, a
             // scalar form, and the copy runs for that one.
             Some(element) => {
@@ -1350,61 +1606,18 @@ impl FunctionCompiler<'_> {
                 let form = self.builder.bor(scalar, boxes);
                 self.builder.bor(form, typed)
             }
-        };
-        if snapshot.region.writes {
-            let room = self.builder.uload32(flags, handle, layout.capacity_offset);
-            let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
-            qualifies = self.builder.band(qualifies, has_room);
         }
-        if let Some(slot) = snapshot.sink {
-            // A caller that asked for each write to be handed back takes
-            // a reference to the list with it, so the storage is shared.
-            let sink = self.current_mutable_sink(slot);
-            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
-            qualifies = self.builder.band(qualifies, direct);
-        }
-        if let Some(proof) = &snapshot.range {
-            for guard in &proof.guards {
-                use super::range_loops::{RangeBound, RangeGuard};
-                let holds = match guard {
-                    RangeGuard::AtLeast { place, least } => {
-                        let value = self.range_word(place)?;
-                        self.builder
-                            .icmp_imm(IntCC::SignedGreaterThanOrEqual, value, *least)
-                    }
-                    RangeGuard::Within { bound, distance } => {
-                        let bound = match bound {
-                            RangeBound::Place(place) => self.range_word(place)?,
-                            RangeBound::Int(value) => self.builder.iconst(types::I64, *value),
-                        };
-                        // A length is far below the range of `int64`, so
-                        // the difference is exact.
-                        let limit = self.builder.iadd_imm(len, -*distance);
-                        self.builder
-                            .icmp(IntCC::SignedLessThanOrEqual, bound, limit)
-                    }
-                };
-                qualifies = self.builder.band(qualifies, holds);
-            }
-        }
-        let ok = self.builder.uextend(types::I64, qualifies);
-        self.builder.jump(join_block, &[ok, access, len, elements]);
+    }
 
-        self.builder.switch_to_block(join_block);
-        self.builder.seal_block(join_block);
-        let params = self.builder.block_params(join_block).to_vec();
-        for (variable, value) in [
-            snapshot.ok,
-            snapshot.access,
-            snapshot.len,
-            snapshot.elements,
-        ]
-        .into_iter()
-        .zip(params.iter().copied())
-        {
-            self.builder.def_var(variable, value);
-        }
-        Ok((params[0], params[1]))
+    /// The box of the local list `list`.
+    fn local_list_handle(&mut self, list: &str) -> std::result::Result<Val, String> {
+        let vars = self.local_vars(list)?;
+        let [var] = vars.as_slice() else {
+            return Err(format!(
+                "direct backend read the view of `{list}`, which is not one box"
+            ));
+        };
+        Ok(self.builder.use_var(*var))
     }
 
     /// The value of the `int64` local `place`, which a range guard reads.
