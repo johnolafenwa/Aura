@@ -219,3 +219,143 @@ fn evaluation_diagnostics_match_the_documented_source_spans_and_call_frames() {
     fixture!("compile_time_step_limit");
     fixture!("compile_time_memory_limit");
 }
+
+#[test]
+fn intermediate_arrays_are_bounded_before_allocating_their_target_shape() {
+    let source = r#"def from_array() -> int64:
+    mut numbers = Array[int64].zeros([2, 2])
+    numbers[1, 1] = 42
+    return numbers[1, 1]
+
+const answer = from_array()
+"#;
+    let program = check_source(source).unwrap();
+    assert!(
+        matches!(program.frozen_constants["<main>::answer"], FrozenValue::Int(n) if n.as_i128() == Some(42))
+    );
+    let error = check_source("const huge = Array[int64].zeros([2000000]).len()\n").unwrap_err();
+    assert_eq!(error.code, "AU3028");
+}
+
+#[test]
+fn growing_codec_results_and_repeated_member_calls_stop_at_the_allowance() {
+    let codec = "import bytes\nconst input = \"a\".repeat(3000000).to_bytes()\nconst huge = bytes.hex_encode(input)\n";
+    // A compact encoded result and its input count as separate allocations in one initializer.
+    let error = check_source(&codec.replace(
+        "bytes.hex_encode(input)",
+        "bytes.hex_encode(input).repeat(2)",
+    ))
+    .unwrap_err();
+    assert_eq!(error.code, "AU3028");
+    let error = check_source("const data = f()\ndef f() -> int64:\n    mut i: int64 = 0\n    while i < 20:\n        text = \"a\".repeat(1000000)\n        i += text.byte_len() // 1000000\n    return i\n").unwrap_err();
+    assert_eq!(error.code, "AU3028");
+}
+
+#[test]
+fn bounded_image_operations_run_on_the_portable_codec_path() {
+    let program = check_source(
+        r#"import image
+const pixel = image.Image.filled(2, 1, 3, 7).resize(3, 2).flip_horizontal().get(2, 1, 0)
+const image_file = image.encode_png(image.Image.filled(2, 1, 1, 7))
+"#,
+    )
+    .unwrap();
+    assert!(
+        matches!(program.frozen_constants["<main>::pixel"], FrozenValue::Int(n) if n.as_i128() == Some(7))
+    );
+    assert!(matches!(
+        program.frozen_constants["<main>::image_file"],
+        FrozenValue::Enum(..)
+    ));
+    let error = check_source("import image\nconst enormous = image.Image.filled(1, 1, 1, 7).resize(50000, 50000).width\n").unwrap_err();
+    assert_eq!(error.code, "AU3028");
+}
+
+#[test]
+fn formatting_a_nested_object_considers_only_its_possible_display_methods() {
+    let source = r#"class Label:
+    n: int64
+
+class Noisy:
+    n: int64
+
+impl Display for Label:
+    def display(self) -> str:
+        return f"n={self.n}"
+
+impl Display for Noisy:
+    def display(self) -> str:
+        print("effect")
+        return "noisy"
+
+class Bucket:
+    tags: list[Label]
+
+const title = f"{Bucket(tags=[Label(n=7)])}"
+dynamic = f"{[Noisy(n=1)]}"
+"#;
+    let program = check_source(source).unwrap();
+    assert!(
+        matches!(&program.frozen_constants["<main>::title"], FrozenValue::Str(text) if text.contains("n=7"))
+    );
+    assert!(!program.frozen_constants.contains_key("<main>::dynamic"));
+}
+
+#[test]
+fn source_collections_freeze_their_portable_storage_and_json_parses_on_the_evaluator() {
+    let source = r#"from collections import Deque
+import json
+
+def queue() -> Deque[int64]:
+    mut waiting = Deque[int64]()
+    waiting.push_back(8)
+    waiting.push_front(9)
+    return waiting
+
+const q = queue()
+const parsed = json.parse("[1, 2]")
+const invalid = json.parse("[1,]")
+
+def main():
+    print(q.len())
+"#;
+    let program = check_source(source).unwrap();
+    assert!(matches!(
+        &program.frozen_constants["<main>::q"],
+        FrozenValue::Class(..)
+    ));
+    assert!(
+        matches!(&program.frozen_constants["<main>::parsed"], FrozenValue::Enum(_,variant,_) if variant == "Ok")
+    );
+    assert!(
+        matches!(&program.frozen_constants["<main>::invalid"], FrozenValue::Enum(_,variant,_) if variant == "Err")
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "2\n");
+}
+
+#[test]
+fn regex_searches_can_use_local_patterns_without_freezing_a_handle() {
+    let source = r#"import regex
+
+def count() -> int64:
+    match regex.compile("xy+"):
+        case Result.Ok(pattern):
+            return pattern.count("xyy xy x")
+        case Result.Err(_):
+            return -1
+
+const n = count()
+handle = regex.compile("value")
+"#;
+    let program = check_source(source).unwrap();
+    assert!(
+        matches!(program.frozen_constants["<main>::n"], FrozenValue::Int(n) if n.as_i128() == Some(2))
+    );
+    assert!(!program.frozen_constants.contains_key("<main>::handle"));
+    assert_eq!(
+        check_source(&source.replace("handle =", "const handle ="))
+            .unwrap_err()
+            .code,
+        "AU3025"
+    );
+}

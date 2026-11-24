@@ -6,12 +6,17 @@ use crate::mir::{CleanupCallee, MethodDispatch};
 use crate::runtime_ops::{DictOp, ListOp, SetOp};
 
 pub(crate) fn evaluate_constants(module: MirModule) -> Result<BTreeMap<String, FrozenValue>> {
+    use aura_runtime::array_simd::{with_kernel_level, KernelLevel};
     // Recursive Aura calls use Rust stack frames. Give evaluation one stack size
     // on every platform and account for each active frame in its memory budget.
     let windows_paths = crate::current_build_config().os == "windows";
     thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
-        .spawn(move || evaluate_on_stack(module, windows_paths))
+        .spawn(move || {
+            with_kernel_level(KernelLevel::Baseline, || {
+                evaluate_on_stack(module, windows_paths)
+            })
+        })
         .map_err(|err| {
             Diagnostic::coded(
                 "AU3028",
@@ -36,55 +41,62 @@ fn evaluate_on_stack(
     runtime.safepoints_enabled = false;
     let mut result = BTreeMap::new();
     let module = Arc::clone(&runtime.module);
+    let mut unavailable = HashSet::new();
     for constant in &module.constants {
-        if constant.frozen.is_some() || !runtime.pure_initializer(&constant.initializer) {
+        if constant.frozen.is_some() {
+            continue;
+        }
+        if !runtime.pure_initializer(&constant.initializer, &unavailable) {
+            unavailable.insert(constant.key.clone());
             continue;
         }
         runtime.eval_budget = Some(Budget {
             windows_paths,
             ..Budget::default()
         });
-        let value = runtime
-            .read_module_constant(&constant.key, &constant.initializer)
-            .and_then(|value| {
-                if const_memory::value_bytes(&value, 0) > MEMORY_LIMIT {
-                    return Err(Budget::memory_error());
+        let value = aura_runtime::runtime_value::regex_host::with_local_patterns(|| {
+            runtime.read_module_constant(&constant.key, &constant.initializer)
+        })
+        .and_then(|value| {
+            if const_memory::value_bytes(&value, 0) > MEMORY_LIMIT {
+                return Err(Budget::memory_error());
+            }
+            Ok(value)
+        })
+        .map_err(|mut error| {
+            if !matches!(error.code.as_str(), "AU3027" | "AU3028") {
+                error.code = "AU3026".to_string();
+            }
+            let binding = constant.key.rsplit("::").next().unwrap_or(&constant.key);
+            error.message = format!(
+                "while evaluating module constant `{binding}`: {}",
+                error.message
+            );
+            for frame in &mut error.call_frames {
+                if let Some(key) = frame.function.strip_prefix("__aura_const_init::") {
+                    frame.function = format!("const {}", key.rsplit("::").next().unwrap_or(key));
                 }
-                Ok(value)
-            })
-            .map_err(|mut error| {
-                if !matches!(error.code.as_str(), "AU3027" | "AU3028") {
-                    error.code = "AU3026".to_string();
-                }
-                let binding = constant.key.rsplit("::").next().unwrap_or(&constant.key);
-                error.message = format!(
-                    "while evaluating module constant `{binding}`: {}",
-                    error.message
-                );
-                for frame in &mut error.call_frames {
-                    if let Some(key) = frame.function.strip_prefix("__aura_const_init::") {
-                        frame.function =
-                            format!("const {}", key.rsplit("::").next().unwrap_or(key));
-                    }
-                }
-                if error.span.is_none() {
-                    error.span = error
-                        .call_frames
-                        .first()
-                        .map(|frame| frame.span.start)
-                        .or_else(|| runtime.functions.get(&constant.initializer).map(|f| f.span));
-                }
-                error
-            })?;
+            }
+            if error.span.is_none() {
+                error.span = error
+                    .call_frames
+                    .first()
+                    .map(|frame| frame.span.start)
+                    .or_else(|| runtime.functions.get(&constant.initializer).map(|f| f.span));
+            }
+            error
+        })?;
         if let Some(frozen) = FrozenValue::freeze(&value) {
             result.insert(constant.key.clone(), frozen);
+        } else {
+            unavailable.insert(constant.key.clone());
         }
     }
     Ok(result)
 }
 
 impl MirRuntime {
-    fn pure_initializer(&self, initializer: &str) -> bool {
+    fn pure_initializer(&self, initializer: &str, unavailable: &HashSet<String>) -> bool {
         let mut pending = vec![initializer.to_string()];
         let mut visited = HashSet::new();
         while let Some(name) = pending.pop() {
@@ -132,6 +144,9 @@ impl MirRuntime {
                     Rvalue::Closure { function, .. } => {
                         self.queue_callee(&mut pending, function, None)
                     }
+                    Rvalue::ModuleConstant { key, .. } if unavailable.contains(key) => {
+                        return false
+                    }
                     Rvalue::ModuleConstant { initializer, .. } => pending.push(initializer.clone()),
                     Rvalue::Try {
                         from: Some(function),
@@ -155,9 +170,8 @@ impl MirRuntime {
                                 }
                                 _ => continue,
                             };
-                            if !ty.as_ref().is_some_and(|ty| matches!(ty, Type::Unit) || matches!(ty, Type::Named(name, _) if name == "str" || name == "Duration" || aura_core::layout::ScalarLayout::of_name(name).is_some())) {
-                                pending.extend(self.display_functions.values().cloned());
-                                break;
+                            if !self.queue_display(ty, &mut pending) {
+                                return false;
                             }
                         }
                     }
@@ -166,7 +180,7 @@ impl MirRuntime {
                             if let Some(op) = builtin_function_for_name(name, |name| {
                                 self.declares_user_function(name)
                             }) {
-                                if !pure_op(op) {
+                                if !pure_op(op, &function.module_name) {
                                     return false;
                                 }
                             } else {
@@ -174,7 +188,7 @@ impl MirRuntime {
                             }
                         }
                         CallTarget::Value(_) => {}
-                        CallTarget::Runtime { op, .. } if pure_op(*op) => {}
+                        CallTarget::Runtime { op, .. } if pure_op(*op, &function.module_name) => {}
                         CallTarget::Member {
                             dispatch: Some(dispatch),
                             ..
@@ -182,11 +196,70 @@ impl MirRuntime {
                         | CallTarget::TraitMember {
                             dispatch: Some(dispatch),
                             ..
-                        } if self.pure_dispatch(dispatch, args, &mut pending) => {}
+                        } if self.pure_dispatch(
+                            dispatch,
+                            args,
+                            &function.module_name,
+                            &mut pending,
+                        ) => {}
                         _ => return false,
                     },
                     _ => {}
                 }
+            }
+        }
+        true
+    }
+
+    /// Formatting a container walks its payload until a nominal Display
+    /// implementation takes over. Use the same field and variant types here.
+    fn queue_display(&self, ty: Option<Type>, callees: &mut Vec<String>) -> bool {
+        let mut types = Vec::from_iter(ty);
+        let mut expanded = HashSet::new();
+        if types.is_empty() {
+            callees.extend(self.display_functions.values().cloned());
+        }
+        while let Some(ty) = types.pop() {
+            match ty {
+                Type::Named(name, args) => {
+                    if let Some(display) = self.display_functions.get(&name) {
+                        callees.push(display.clone());
+                        continue;
+                    }
+                    // Rendering opaque regex wrappers would expose a local pattern index.
+                    if matches!(name.as_str(), "regex.Regex" | "regex.Captures") {
+                        return false;
+                    }
+                    types.extend(args.iter().cloned());
+                    if !expanded.insert(name.clone()) {
+                        continue;
+                    }
+                    if let Some(class) = self.classes.get(&name) {
+                        let substitutions = class.type_params.iter().cloned().zip(args).collect();
+                        types.extend(
+                            class
+                                .fields
+                                .iter()
+                                .map(|field| substitute_type(&field.ty, &substitutions)),
+                        );
+                    } else if let Some(en) = self.module.enums.iter().find(|en| en.name == name) {
+                        let substitutions = en.type_params.iter().cloned().zip(args).collect();
+                        types.extend(
+                            en.variants
+                                .iter()
+                                .flat_map(|item| &item.payloads)
+                                .map(|payload| substitute_type(payload, &substitutions)),
+                        );
+                    } else if name == "Unknown"
+                        || self.trait_impls.iter().any(|imp| imp.trait_name == name)
+                    {
+                        callees.extend(self.display_functions.values().cloned());
+                    }
+                }
+                Type::Tuple(items) => types.extend(items),
+                Type::Union(u) => types.extend(u.members),
+                Type::TypeParam(_) => callees.extend(self.display_functions.values().cloned()),
+                _ => {}
             }
         }
         true
@@ -218,6 +291,7 @@ impl MirRuntime {
         &self,
         dispatch: &MethodDispatch,
         args: &[MirArg],
+        module: &str,
         pending: &mut Vec<String>,
     ) -> bool {
         match dispatch {
@@ -226,10 +300,10 @@ impl MirRuntime {
                 self.queue_callee(pending, function, Some(args));
                 true
             }
-            MethodDispatch::Runtime(op) => pure_op(*op),
-            MethodDispatch::Union(arms) => {
-                arms.iter().all(|d| self.pure_dispatch(d, args, pending))
-            }
+            MethodDispatch::Runtime(op) => pure_op(*op, module),
+            MethodDispatch::Union(arms) => arms
+                .iter()
+                .all(|d| self.pure_dispatch(d, args, module, pending)),
             MethodDispatch::Candidates { candidates, .. } => {
                 for candidate in candidates {
                     self.queue_callee(pending, &candidate.function, Some(args));
@@ -241,7 +315,7 @@ impl MirRuntime {
 }
 
 /// Deny newly added runtime operations until their effects have been classified.
-fn pure_op(op: RuntimeOp) -> bool {
+fn pure_op(op: RuntimeOp, module: &str) -> bool {
     match op {
         RuntimeOp::Scalar(_)
         | RuntimeOp::Value(_)
@@ -250,9 +324,34 @@ fn pure_op(op: RuntimeOp) -> bool {
         | RuntimeOp::Dict(_)
         | RuntimeOp::Set(_)
         | RuntimeOp::Span(_) => true,
+        RuntimeOp::Array(_) => true,
+        RuntimeOp::Function(
+            FunctionOp::RegexIsMatch
+            | FunctionOp::RegexCount
+            | FunctionOp::RegexGroupIndex
+            | FunctionOp::RegexFind
+            | FunctionOp::RegexMatches
+            | FunctionOp::RegexFindAll
+            | FunctionOp::RegexCaptures
+            | FunctionOp::RegexSplit
+            | FunctionOp::RegexReplace
+            | FunctionOp::RegexReplaceAll,
+        ) => module == "regex",
+        RuntimeOp::Function(
+            FunctionOp::TimeFormat
+            | FunctionOp::TimeParseRfc3339
+            | FunctionOp::TimeParse
+            | FunctionOp::TimeFailed
+            | FunctionOp::TimeParsedSeconds
+            | FunctionOp::TimeParsedNanos
+            | FunctionOp::TimeParsedOffset,
+        ) => module == "time",
         RuntimeOp::Function(op) => matches!(
             op,
-            FunctionOp::Abs
+            FunctionOp::ArrayZeros
+                | FunctionOp::ArrayFull
+                | FunctionOp::ArrayFromList
+                | FunctionOp::Abs
                 | FunctionOp::Min
                 | FunctionOp::Max
                 | FunctionOp::Sqrt
@@ -274,13 +373,6 @@ fn pure_op(op: RuntimeOp) -> bool {
                 | FunctionOp::DictEmpty
                 | FunctionOp::SetEmpty
                 | FunctionOp::TimeRfc3339
-                | FunctionOp::TimeFormat
-                | FunctionOp::TimeParseRfc3339
-                | FunctionOp::TimeParse
-                | FunctionOp::TimeFailed
-                | FunctionOp::TimeParsedSeconds
-                | FunctionOp::TimeParsedNanos
-                | FunctionOp::TimeParsedOffset
                 | FunctionOp::TimeDurationSeconds
                 | FunctionOp::TimeDurationNanos
                 | FunctionOp::TimeDuration
@@ -290,15 +382,20 @@ fn pure_op(op: RuntimeOp) -> bool {
         RuntimeOp::Host(host)
             if matches!(
                 host.name(),
-                "str.to_bytes" | "str.from_bytes" | "regex::__aura_escape" | "time::__aura_error"
+                "str.to_bytes" | "str.from_bytes" | "regex::__aura_escape"
             ) =>
         {
             true
         }
+        RuntimeOp::Host(host) if host.name() == "time::__aura_error" => module == "time",
+        RuntimeOp::Host(host) if host.name().starts_with("regex::") => module == "regex",
+        RuntimeOp::Host(host) if host.name().starts_with("collections::") => {
+            module == "collections"
+        }
         RuntimeOp::Host(host) => matches!(
             host.name().split_once("::"),
             Some((
-                "bytes" | "text" | "math" | "json" | "toml" | "path" | "gzip" | "numbers",
+                "bytes" | "text" | "math" | "json" | "toml" | "path" | "gzip" | "numbers" | "image",
                 _
             ))
         ),
@@ -311,11 +408,17 @@ pub(super) struct Budget {
     windows_paths: bool,
     steps: usize,
     bytes: usize,
+    frame_bytes: usize,
+    reserved: usize,
 }
 
 impl Budget {
     pub(super) fn remaining(&self) -> usize {
-        MEMORY_LIMIT.saturating_sub(self.bytes)
+        MEMORY_LIMIT.saturating_sub(self.bytes.saturating_add(self.frame_bytes))
+    }
+
+    pub(super) fn output_allowance(&self) -> usize {
+        self.remaining().saturating_add(self.reserved)
     }
 
     pub(super) fn builtin_result(&mut self, value: &Value) -> Result<()> {
@@ -366,10 +469,10 @@ impl Budget {
 
     fn allocate(&mut self, bytes: usize) -> Result<()> {
         self.bytes = self.bytes.saturating_add(bytes);
-        self.check_memory(0)
+        self.check_memory(self.frame_bytes)
     }
 
-    fn memory_error() -> Diagnostic {
+    pub(super) fn memory_error() -> Diagnostic {
         Diagnostic::coded(
             "AU3028",
             "constant evaluation exceeds the memory limit of 8 MiB",
@@ -383,7 +486,14 @@ impl Budget {
         Ok(())
     }
 
-    pub(super) fn instruction(&mut self, instruction: &Instruction, env: &Env) -> Result<()> {
+    pub(super) fn instruction(
+        &mut self,
+        instruction: &Instruction,
+        env: &Env,
+        depth: usize,
+    ) -> Result<()> {
+        self.frame_bytes = depth.saturating_mul(128 * 1024);
+        self.reserved = 0;
         self.step()?;
         let (Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. }) =
             instruction
@@ -406,9 +516,9 @@ impl Budget {
                     .saturating_add(payload(&entry.value))
                     .saturating_add(16)
             }),
-            Rvalue::Construct { fields, .. } => fields
-                .iter()
-                .fold(0usize, |n, f| n.saturating_add(payload(&f.value))),
+            Rvalue::Construct { fields, .. } => fields.iter().fold(const_memory::WORD, |n, f| {
+                n.saturating_add(payload(&f.value))
+            }),
             Rvalue::EnumVariant { payloads, .. } => payloads
                 .iter()
                 .fold(8usize, |n, v| n.saturating_add(payload(v))),
@@ -422,33 +532,70 @@ impl Budget {
             {
                 payload(left).saturating_add(payload(right))
             }
-            Rvalue::Call {
-                callee: CallTarget::Runtime { op, receiver, .. },
-                args,
-                ..
-            } => match op {
-                RuntimeOp::Str(op) => receiver
-                    .as_ref()
-                    .map_or(0, |r| const_memory::text_output(*op, r, args, env)),
-                RuntimeOp::Function(
-                    FunctionOp::ListWithCapacity
-                    | FunctionOp::SetWithCapacity
-                    | FunctionOp::DictWithCapacity,
-                )
-                | RuntimeOp::List(ListOp::Reserve)
-                | RuntimeOp::Set(SetOp::Reserve)
-                | RuntimeOp::Dict(DictOp::Reserve) => {
-                    const_memory::count(args.first(), env).saturating_mul(16)
+            Rvalue::Call { callee, args, .. } => {
+                let (op, receiver) = match callee {
+                    CallTarget::Runtime { op, receiver, .. } => (*op, receiver.as_ref()),
+                    CallTarget::Member {
+                        dispatch: Some(MethodDispatch::Runtime(op)),
+                        object,
+                        ..
+                    }
+                    | CallTarget::TraitMember {
+                        dispatch: Some(MethodDispatch::Runtime(op)),
+                        object,
+                        ..
+                    } => (*op, Some(object)),
+                    _ => return Ok(()),
+                };
+                match op {
+                    RuntimeOp::Str(op) => {
+                        receiver.map_or(0, |r| const_memory::text_output(op, r, args, env))
+                    }
+                    RuntimeOp::Function(
+                        FunctionOp::ListWithCapacity
+                        | FunctionOp::SetWithCapacity
+                        | FunctionOp::DictWithCapacity,
+                    )
+                    | RuntimeOp::List(ListOp::Reserve)
+                    | RuntimeOp::Set(SetOp::Reserve)
+                    | RuntimeOp::Dict(DictOp::Reserve) => {
+                        const_memory::count(args.first(), env).saturating_mul(16)
+                    }
+                    RuntimeOp::Value(_) => receiver.map_or(0, payload),
+                    RuntimeOp::List(
+                        ListOp::Slice
+                        | ListOp::SliceStep
+                        | ListOp::Sort
+                        | ListOp::SortByKeys
+                        | ListOp::Permute,
+                    )
+                    | RuntimeOp::Dict(DictOp::Keys | DictOp::Values | DictOp::Items) => {
+                        receiver.map_or(0, payload)
+                    }
+                    RuntimeOp::Set(
+                        SetOp::Union
+                        | SetOp::SymmetricDifference
+                        | SetOp::Difference
+                        | SetOp::Intersection,
+                    ) => receiver
+                        .map_or(0, payload)
+                        .saturating_add(args.first().map_or(0, |a| payload(&a.value))),
+                    RuntimeOp::Dict(DictOp::Update)
+                    | RuntimeOp::Set(SetOp::Update)
+                    | RuntimeOp::List(ListOp::Extend) => {
+                        args.first().map_or(0, |a| payload(&a.value))
+                    }
+                    RuntimeOp::List(ListOp::Push | ListOp::PushScalar(_) | ListOp::Insert)
+                    | RuntimeOp::Dict(DictOp::Set | DictOp::SetIndex)
+                    | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64) => args
+                        .iter()
+                        .fold(16usize, |n, a| n.saturating_add(payload(&a.value))),
+                    _ => 0,
                 }
-                RuntimeOp::Value(_) => receiver.as_ref().map_or(0, payload),
-                RuntimeOp::List(ListOp::Extend) => args.first().map_or(0, |a| payload(&a.value)),
-                RuntimeOp::List(ListOp::Push | ListOp::PushScalar(_) | ListOp::Insert)
-                | RuntimeOp::Dict(DictOp::Set | DictOp::SetIndex)
-                | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64) => 16,
-                _ => 0,
-            },
+            }
             _ => 0,
         };
+        self.reserved = bytes;
         self.allocate(bytes)
     }
 }

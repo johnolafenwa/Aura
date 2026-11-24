@@ -2409,6 +2409,12 @@ fn evaluate_json_mir_host_call(
                 Ok(bound) => bound,
                 Err(error) => return Some(Err(error)),
             };
+            if aura_runtime::builtin_limit::active() {
+                return Some(
+                    borrow_mir_string(&bound[0].value, env, name)
+                        .and_then(aura_runtime::runtime_value::json_parse_on_caller),
+                );
+            }
             let prepared = prepare_json_codec_source(|| {
                 borrow_mir_string(&bound[0].value, env, name).and_then(clone_json_codec_source)
             });
@@ -4002,7 +4008,7 @@ impl MirRuntime {
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
         if let Some(budget) = &mut self.eval_budget {
-            budget.instruction(instruction, env)?;
+            budget.instruction(instruction, env, self.call_depth)?;
         }
         match instruction {
             // The interpreter's values own themselves, so a retain has
@@ -4688,6 +4694,20 @@ impl MirRuntime {
         env: &mut Env,
         expected_type: Option<&Type>,
     ) -> Result<RvalueOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            return aura_runtime::builtin_limit::with_allowance(budget.output_allowance(), || {
+                self.evaluate_rvalue_body(value, env, expected_type)
+            });
+        }
+        self.evaluate_rvalue_body(value, env, expected_type)
+    }
+
+    fn evaluate_rvalue_body(
+        &mut self,
+        value: &Rvalue,
+        env: &mut Env,
+        expected_type: Option<&Type>,
+    ) -> Result<RvalueOutcome> {
         match value {
             Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => Ok(
                 RvalueOutcome::Value(self.evaluate_owned_operand(operand, env)?),
@@ -5269,7 +5289,17 @@ impl MirRuntime {
         expected_return_type: Option<&Type>,
     ) -> Result<Value> {
         if let Some(budget) = &self.eval_budget {
-            let value = aura_runtime::builtin_limit::with_allowance(budget.remaining(), || {
+            // The source wrappers use lists for their portable fallback. Choosing
+            // it keeps their normal class fields usable on the target without
+            // transporting opaque runtime collection storage.
+            if name == "collections::__aura_supported" {
+                return Ok(Value::Bool(false));
+            }
+            let available = budget.output_allowance();
+            if const_memory::host_output_bound(name, args, env) > available {
+                return Err(const_eval::Budget::memory_error());
+            }
+            let value = aura_runtime::builtin_limit::with_allowance(available, || {
                 self.evaluate_named_builtin_body(name, args, env, expected_return_type)
             })?;
             self.eval_budget.as_mut().unwrap().builtin_result(&value)?;
