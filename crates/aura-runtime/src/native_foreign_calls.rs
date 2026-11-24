@@ -879,6 +879,47 @@ fn c_value_failure(symbol: &str, error: CValueError) -> ! {
     }
 }
 
+/// # Safety
+///
+/// The descriptor names one fixed array field and the slot holds its bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_box(descriptor: *const u8, length: usize, slot: *const u8) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts(slot, kind.size());
+        match c_values::unpack_kind(kind, bytes) {
+            Ok(value) => boxed_value(value),
+            Err(error) => c_value_failure("fixed", error),
+        }
+    })
+}
+
+/// # Safety
+///
+/// The descriptor names one fixed array field, value is live, and slot has
+/// room for the full array.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_fixed_unbox(value: *mut OpaqueValue, descriptor: *const u8, length: usize, slot: *mut u8) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, length);
+        let kind = &layout.fields[0].kind;
+        let bytes = slice::from_raw_parts_mut(slot, kind.size());
+        if let Err(error) = with_value(value, |value| c_values::pack_kind(value, kind, "fixed", bytes)) {
+            c_value_failure("fixed", error)
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_fixed_bounds(index: i64, length: i64, line: i64, column: i64) {
+    task_runtime_boundary(|| {
+        let message = format!("fixed array index `{index}` is out of bounds for length `{length}`");
+        let span = aura_core::diag::Span::new(line as usize, column as usize);
+        runtime_diagnostic_error(Diagnostic::coded_at("AU4031", span, message));
+    })
+}
+
 /// Writes the class instance `value` at `slot` in the C layout that
 /// `descriptor` describes. Generated code calls this for a class with an
 /// array field or a union, whose value is not one word per scalar.

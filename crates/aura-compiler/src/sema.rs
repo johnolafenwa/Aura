@@ -18,6 +18,7 @@ use callables::{
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
+pub(crate) mod fixed_arrays;
 mod generators;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod iterator_loops;
@@ -605,6 +606,9 @@ fn ffi_field_kind(
         let element = ffi_field_kind(element, inner, classes)?;
         return Some(CFieldKind::Array(Box::new(element), *length));
     }
+    if let Some((element, length)) = ty.as_fixed_array() {
+        return Some(CFieldKind::Array(Box::new(ffi_field_kind(element, &[], classes)?), length));
+    }
     match ffi_scalar(ty) {
         Some(scalar) => Some(CFieldKind::Scalar(scalar)),
         None => Some(CFieldKind::Struct(ffi_struct_layout(ty, classes)?)),
@@ -650,6 +654,9 @@ pub(crate) fn validate_ffi_struct_fields(
             if let Type::Named(_, args) = element {
                 element = args.first().unwrap_or(element);
             }
+        }
+        while let Some((inner, _)) = element.as_fixed_array() {
+            element = inner;
         }
         if ffi_scalar_type(element) || ffi_struct(element, classes).is_some() {
             continue;
@@ -5602,6 +5609,9 @@ impl<'a> FunctionChecker<'a> {
                     }
                     let (binding_ty, binding_passing, binding_mutable_place) =
                         match (&iterable_ty, for_stmt.borrow_mode) {
+                        (ty, None) if ty.as_fixed_array().is_some() => {
+                            (ty.as_fixed_array().unwrap().0.clone(), ReceiverKind::Borrow, false)
+                        }
                         (Type::Named(name, _), _) if name == "Range" => {
                             (Type::named("int64"), ReceiverKind::Value, false)
                         }
@@ -6116,7 +6126,10 @@ impl<'a> FunctionChecker<'a> {
             // `values[1:3] = ...` assigns an Array of the target's type, or
             // one element that fills the selection.
             let mut selection_element = None;
-            let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
+            let target_ty = if let Some((element, _)) = object_ty.as_fixed_array() {
+                self.check_vec_index_type(index, index.span, locals)?;
+                element.clone()
+            } else if let Some(target_ty) = array_element_type(&object_ty).cloned() {
                 if self.check_array_index_type(index, locals)? {
                     selection_element = Some(target_ty);
                     object_ty.clone()
@@ -6985,6 +6998,9 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         self.reject_owned_view_value(expr, locals, "an owned aggregate")?;
+        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+            return Ok(array);
+        }
         match &expr.kind {
             ExprKind::Group(inner) => self.type_expr_consuming_result(inner, locals, expected),
             ExprKind::Cast { expr: inner, .. } => {
@@ -8524,6 +8540,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+            return Ok(array);
+        }
         if let Some(Type::Union(union)) = expected {
             if !matches!(
                 expr.kind,
@@ -10261,7 +10280,7 @@ impl<'a> FunctionChecker<'a> {
                     // an Array that shares the source's elements.
                     return Ok(if selects { object_ty } else { element_ty });
                 }
-                if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
+                if let Some(element_ty) = vec_element_type(&object_ty).or_else(|| object_ty.as_fixed_array().map(|(element, _)| element)).cloned() {
                     self.check_vec_index_type(index, index.span, locals)?;
                     let retained_base = self
                         .retained_place_access(
@@ -12754,7 +12773,7 @@ impl<'a> FunctionChecker<'a> {
                                 format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
                             ));
                         };
-                        if BuiltinMember::resolve(receiver_name, "len").is_none() {
+                        if value_ty.as_fixed_array().is_none() && BuiltinMember::resolve(receiver_name, "len").is_none() {
                             return Err(Diagnostic::coded_at(
                                 "AU2002",
                                 value_arg.span,

@@ -674,6 +674,13 @@ pub(super) fn lower_type_with_self(
         name => name,
     };
 
+    if type_name == "fixed" {
+        let (element, count) = super::fixed_arrays::type_parts(type_args, type_ref.span)?;
+        let element = lower_type_with_self(element, type_names, type_arities, canonical_type_names, type_params, self_type)?;
+        reject_nested_span_type(&element, type_ref.span)?;
+        return Ok(Type::Named(name.clone(), vec![element, Type::named(&count.to_string())]));
+    }
+
     if type_name == "Self" {
         if !type_args.is_empty() {
             return Err(Diagnostic::at(

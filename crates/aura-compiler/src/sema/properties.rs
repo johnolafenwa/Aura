@@ -604,6 +604,9 @@ pub(super) fn type_is_copy_in_context_inner(
     module_registry: Option<&BTreeMap<String, ModuleNamespace>>,
     visiting: &mut BTreeSet<String>,
 ) -> bool {
+    if let Some((element, _)) = ty.as_fixed_array() {
+        return type_is_copy_in_context_inner(element, classes, enums, imported_modules, module_registry, visiting);
+    }
     match ty {
         // A union is Copy exactly when every member is Copy (ADR-0052 A6):
         // its storage is a tag plus one member payload.

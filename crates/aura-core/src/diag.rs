@@ -275,6 +275,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2081",
+        band: "names/types",
+        title: "invalid fixed array type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2082",
+        band: "names/types",
+        title: "invalid fixed array initializer",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -340,6 +350,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3031",
+        band: "ownership",
+        title: "fixed array would duplicate a non-copy element",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -388,6 +403,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4031",
+        band: "runtime",
+        title: "fixed array index out of bounds",
     },
     DiagnosticCodeInfo {
         code: "AU5001",
