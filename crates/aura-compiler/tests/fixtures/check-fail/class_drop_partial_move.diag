@@ -1,5 +1,5 @@
 error[AU3020]: cannot move a field out of `Ticket` because it declares `__drop__`
- --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_partial_move.au:8:12
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_partial_move.au:8:14
   |
 8 |     return t.label
-  |            ^
+  |              ^

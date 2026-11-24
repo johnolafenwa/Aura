@@ -1908,6 +1908,7 @@ impl<'a> Exec<'a> {
                 };
             }
             Instruction::Safepoint
+            | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
             | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Eval { .. }

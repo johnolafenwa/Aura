@@ -850,6 +850,12 @@ pub const NATIVE_LOOP_SAFEPOINT_INTERVAL: u64 = 4_096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instruction {
+    /// An initialized class now owns its destructor. Its construction has
+    /// finished, including its initializer and invariant checks.
+    ArmDrop { place: String, function: String },
+    /// Last lexical use of a source owner. A moved owner is already empty.
+    EndOwner { place: String },
+
     /// A compiler-inserted cooperative scheduling check. Loop lowering places
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
@@ -8476,6 +8482,14 @@ fn validate_loan_instruction(
         }
     }
     match instruction {
+        Instruction::EndOwner { place } => validate_released_root(function, place, known_roots, state)?,
+        Instruction::ArmDrop { place, function: hook } => {
+            let ty = context.place_type(function, place)?;
+            if !matches!(ty, Some(Type::Named(ref name, _)) if context.classes.get(name.as_str()).is_some_and(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK && method.function_name == *hook && method.receiver == Some(MirReceiverKind::BorrowMut)))) {
+                return Err(format!("invalid drop hook `{hook}` for `{place}`"));
+            }
+            validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+        }
         Instruction::Retain { place } => {
             let root = place.split('.').next().unwrap_or_default();
             if !known_roots.contains(root) && !state.loans.contains_key(root) {
@@ -10467,7 +10481,7 @@ pub(crate) fn instruction_place_mentions<'a>(
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. } => {}
-        Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
+        Instruction::ArmDrop { place, .. } | Instruction::EndOwner { place } | Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             mentions.extend([place.as_str(), temp])
         }
@@ -11863,6 +11877,9 @@ fn lower_function_or_initializer(
         if initializer.is_none() && receiver != Some(ReceiverKind::Value) {
             lowerer.non_owning_roots.insert("self".to_string());
         }
+        if receiver == Some(ReceiverKind::Value) {
+            lowerer.current_binding_block().declared.push("self".to_string());
+        }
     }
     for ((param, ty), passing) in function
         .params
@@ -11875,6 +11892,8 @@ fn lower_function_or_initializer(
             .insert(param.name.clone(), spans::span_type_as_list(ty));
         if *passing != ReceiverKind::Value {
             lowerer.non_owning_roots.insert(param.name.clone());
+        } else {
+            lowerer.current_binding_block().declared.push(param.name.clone());
         }
     }
     for param in &span_params {
@@ -12350,6 +12369,9 @@ struct ReturnedViewCallee {
     trait_name: Option<String>,
 }
 
+#[path = "mir_class_drop.rs"]
+mod class_drop;
+
 struct Lowerer<'a> {
     program: &'a Program,
     function_name: &'a str,
@@ -12539,6 +12561,7 @@ struct MatchWritebackState {
 }
 
 struct LoopLabels {
+    owner_depth: usize,
     break_label: String,
     continue_label: String,
     cleanup_depth: usize,
@@ -14138,6 +14161,7 @@ impl<'a> Lowerer<'a> {
 
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
         if self.blocks[self.current_block].terminator.is_none() {
+            self.end_owners_from(0);
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
         }
@@ -14318,6 +14342,9 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::EndLoan { loan });
                 }
             }
+        }
+        if !self.current_terminated() {
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.loan_scopes.pop();
         self.end_binding_block();
@@ -14917,7 +14944,7 @@ impl<'a> Lowerer<'a> {
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
-                    if !self.with_stack.is_empty() {
+                    if !self.with_stack.is_empty() || self.has_live_drop_owners() {
                         let temp = self.new_temp();
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
@@ -14926,6 +14953,7 @@ impl<'a> Lowerer<'a> {
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
                     self.emit_cleanup_range(0, true, 0);
+                    self.end_owners_from(0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -14956,10 +14984,12 @@ impl<'a> Lowerer<'a> {
                 let loop_labels = self.loop_stack.last().expect("checked loop context");
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let loan_depth = loop_labels.loan_depth;
-                let continue_label = loop_labels.continue_label.clone();
+                let owner_depth = loop_labels.owner_depth;
+        let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
                 self.emit_cleanup_range(cleanup_depth, true, loan_depth);
-                self.terminate(Terminator::Goto(continue_label));
+                self.end_owners_from(owner_depth);
+        self.terminate(Terminator::Goto(continue_label));
                 false
             }
         }
@@ -14972,9 +15002,11 @@ impl<'a> Lowerer<'a> {
         let loop_labels = self.loop_stack.last().expect("checked loop context");
         let cleanup_depth = loop_labels.cleanup_depth;
         let loan_depth = loop_labels.loan_depth;
+        let owner_depth = loop_labels.owner_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
         self.emit_cleanup_range(cleanup_depth, true, loan_depth);
+        self.end_owners_from(owner_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -15041,6 +15073,7 @@ impl<'a> Lowerer<'a> {
             self.emit_class_invariant_check("self", class);
         }
         let value = self.move_place_for_type(return_place, &return_type);
+        self.end_owners_from(0);
         self.terminate(Terminator::Return(value));
     }
 
@@ -19735,6 +19768,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -20450,6 +20484,7 @@ impl<'a> Lowerer<'a> {
 
         let safepoint_block = self.new_block("for_safepoint");
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -20847,6 +20882,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = self.loan_scopes.len();
         self.loan_scopes.push(Vec::new());
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(continue_block),
             cleanup_depth: self.with_stack.len(),
@@ -20944,6 +20980,7 @@ impl<'a> Lowerer<'a> {
         self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -26382,6 +26419,7 @@ impl<'a> Lowerer<'a> {
                     },
                 });
                 self.emit_class_invariant_check(&temp, &class);
+                self.arm_class_drop(&temp, &class);
             }
             ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
@@ -26905,6 +26943,7 @@ impl<'a> Lowerer<'a> {
                                 },
                             });
                             self.emit_class_invariant_check(&temp, &class);
+                self.arm_class_drop(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -28332,6 +28371,7 @@ impl<'a> Lowerer<'a> {
             },
         });
         self.emit_class_invariant_check(target, class);
+        self.arm_class_drop(target, class);
     }
 
     /// Calls the class's hidden invariant method on `object`, when the class

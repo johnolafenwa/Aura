@@ -291,6 +291,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             },
             Instruction::Safepoint
             | Instruction::SourceLocation { .. }
+            | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
             | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Release { .. }
@@ -349,7 +350,8 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
-                | Instruction::SourceName { .. }
+                | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
+            | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
@@ -815,7 +817,11 @@ fn validate_runtime_module_complexity_with_limits(
     Ok(())
 }
 
+#[path = "mir_runtime_drop.rs"]
+mod class_drop;
+
 struct MirRuntime {
+    has_owner_hooks: bool,
     module: Arc<MirModule>,
     /// Explicit-tag layout plans keyed by canonical union identity
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
@@ -934,6 +940,7 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
 
 #[derive(Default)]
 struct Env {
+    owner_order: Vec<String>,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
@@ -2689,6 +2696,7 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
+            has_owner_hooks: module.classes.iter().any(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK)),
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
@@ -3664,6 +3672,9 @@ impl MirRuntime {
             }
 
             for (param, argument) in function.params.iter().zip(bound_args) {
+                if self.has_owner_hooks && param.passing == MirReceiverKind::Value {
+                    env.owner_order.push(param.name.clone());
+                }
                 let ty = substitute_type(&param.ty, &substitutions);
                 let value = self.coerce_value_to_type(argument.value, &ty, None)?;
                 env.define_typed(&param.name, ty, value);
@@ -3745,6 +3756,12 @@ impl MirRuntime {
                 }
                 other => other,
             };
+            let value = if self.has_owner_hooks {
+                match (value, self.drop_frame_owners(&mut env)) {
+                    (CallValueOutcome::Completed(Ok(_)), Err(error)) => CallValueOutcome::Completed(Err(error)),
+                    (outcome, _) => outcome,
+                }
+            } else { value };
             Ok(CallOutcome {
                 value,
                 updated_receiver,
@@ -3890,6 +3907,9 @@ impl MirRuntime {
                     }
                     Err(payload) => panic::resume_unwind(payload),
                 };
+                let instruction_result = if self.has_owner_hooks {
+                    instruction_result.and_then(|result| self.drain_owner_hooks().map(|()| result))
+                } else { instruction_result };
                 match instruction_result {
                     Ok(Some(value)) => {
                         self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new())?;
@@ -3979,9 +3999,24 @@ impl MirRuntime {
             // nothing to do; releasing a sole-owned generator closes it at
             // the exact scope boundary so its `with` exits run in order and
             // any trap reaches the enclosing frame.
+            Instruction::ArmDrop { place, function } => {
+                let Value::Instance(value) = env.place_mut(place)? else {
+                    return Err(Diagnostic::new("drop hook receiver must be a class"));
+                };
+                value.arm_drop(aura_runtime::runtime_value::class_drop::DropMethod::Interpreted(function.clone()));
+                Ok(None)
+            }
+            Instruction::EndOwner { place } => {
+                env.values.remove(place);
+                Ok(None)
+            }
             Instruction::Retain { .. } => Ok(None),
             Instruction::Release { place } => {
                 let on_cleanup_stack = cleanup_stack.iter().any(|(active, _)| active == place);
+                if self.has_owner_hooks && !on_cleanup_stack && env.values.get(place).is_some_and(class_drop::holds_owner) {
+                    env.values.remove(place);
+                    return Ok(None);
+                }
                 if !on_cleanup_stack
                     && !env.loans.contains_key(place)
                     && env.values.get(place).is_some_and(owns_generator)
@@ -4134,6 +4169,10 @@ impl MirRuntime {
                 Ok(None)
             }
             Instruction::Assign { target, value } => {
+                if self.has_owner_hooks && !target.starts_with('%') && !target.contains('.') && !env.values.contains_key(target) {
+                    env.owner_order.retain(|previous| previous != target);
+                    env.owner_order.push(target.clone());
+                }
                 let target_ty = self.resolve_place_type(target, env);
                 match self.evaluate_rvalue_for_target(value, env, target_ty.as_ref())? {
                     RvalueOutcome::Value(evaluated) => {
@@ -5918,7 +5957,10 @@ impl MirRuntime {
                 let receiver_static_ty = self
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
-                let receiver = self.evaluate_owned_operand(object, env)?;
+                let mut receiver = self.evaluate_owned_operand(object, env)?;
+                if self.has_owner_hooks && matches!(op, RuntimeOp::Value(crate::runtime_ops::ValueOp::Copy | crate::runtime_ops::ValueOp::Clone)) && class_drop::holds_owner(&receiver) {
+                    aura_runtime::runtime_value::class_drop::renew_owners(&mut receiver);
+                }
                 self.evaluate_receiver_method(
                     receiver,
                     receiver_static_ty,
@@ -6855,6 +6897,7 @@ impl MirRuntime {
     /// its indices, output and program-wide constant states.
     fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
+            has_owner_hooks: self.has_owner_hooks,
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
             safepoints_enabled: self.safepoints_enabled,
@@ -12170,7 +12213,7 @@ impl MirRuntime {
                     }
                     // A recovered snapshot contains only text, integers and a
                     // list of text. Mutation first converts it to an ordinary map.
-                    crate::runtime_value::InstanceFields::Recovered(_) => {}
+                    crate::runtime_value::InstanceFields::Hooked(_) | crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(_) => {
                         for (_, field) in instance.fields.iter() {
                             if let Value::Generator(generator) = field.as_ref() {

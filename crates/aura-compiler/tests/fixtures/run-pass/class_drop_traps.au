@@ -1,0 +1,29 @@
+import control
+
+class Resource:
+    label: str
+    fails: bool
+
+    def __drop__(mut self):
+        print("drop " + self.label)
+        assert not self.fails, self.label
+
+def leaving(fails: bool):
+    outer = Resource("outer", false)
+    inner = Resource("inner", true)
+    if fails:
+        assert false, "body"
+
+def returned() -> Resource:
+    r = Resource("returned", false)
+    return r
+
+def main():
+    for fails in [true, false]:
+        match control.recover(leaving, fails):
+            case Err(trap):
+                print("caught " + trap.message)
+            case _:
+                print("missing trap")
+    x = returned()
+    print("returned to caller")

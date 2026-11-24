@@ -1,4 +1,6 @@
 mod capabilities;
+mod drop_hooks;
+pub(crate) use drop_hooks::DROP_HOOK;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
 mod callables;
@@ -292,6 +294,11 @@ fn reject_initializer_member(expr: &Expr) -> Result<()> {
         _ => None,
     };
     match member {
+        Some((field, span)) if field == DROP_HOOK => Err(Diagnostic::coded_at(
+            "AU2066",
+            span,
+            "`__drop__` runs automatically when an owner releases the value",
+        )),
         Some((field, span)) if field == INITIALIZER_NAME => Err(Diagnostic::coded_at(
             "AU2005",
             span,

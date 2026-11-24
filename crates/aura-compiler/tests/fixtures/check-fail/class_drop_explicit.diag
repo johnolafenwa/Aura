@@ -1,5 +1,5 @@
 error[AU2066]: `__drop__` runs automatically when an owner releases the value
- --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_explicit.au:9:5
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_explicit.au:9:7
   |
 9 |     t.__drop__()
-  |     ^
+  |       ^
