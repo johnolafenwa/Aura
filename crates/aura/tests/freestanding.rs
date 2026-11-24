@@ -751,3 +751,62 @@ fn target_selects_declarations_before_checking_and_building() {
     assert!(diagnostic.contains("unavailable_elsewhere"), "{diagnostic}");
     assert!(diagnostic.contains("x86_64"), "{diagnostic}");
 }
+
+#[test]
+fn linked_frozen_collections_use_aura_indexing_and_lookup_rules() {
+    let Some(compiler) = c_compiler() else { return };
+    let workspace = Workspace::new();
+    workspace.write(
+        "table.au",
+        r#"
+class Dimensions:
+    height: int64
+    width: int64
+
+ROWS = [[11, 13], [21, 23]]
+CODES = {10: 2, 40: 5}
+IDS = {10, 40}
+SHAPE = Dimensions(height=2, width=3)
+PAIR = (7, 9)
+TEXT = "λx"
+BYTES = b"ABC"
+NAMES = {"a": 2, "λx": 5}
+
+export "C" def total(i: int64, key: int64) -> int64:
+    mut total = ROWS[i][-1] + ROWS.len() + SHAPE.height + PAIR[1] + TEXT.byte_len() + TEXT.len() + NAMES["λx"]
+    if key in IDS and key in CODES:
+        total += CODES[key]
+    return total + (BYTES[-1] as int64)
+"#,
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "table.o", "table.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    workspace.write(
+        "harness.c",
+        r#"
+#include <stdint.h>
+#include <stdlib.h>
+int64_t total(int64_t i, int64_t key);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) {
+    exit(code);
+}
+int main(int argc, char **argv) {
+    if (argc > 1) { total(-3, 10); return 1; }
+    return (total(-1, 40) == 118 && total(0, 30) == 103) ? 0 : 1;
+}
+"#,
+    );
+    let path = workspace.path.join("lookup");
+    let link = Command::new(compiler)
+        .current_dir(&workspace.path)
+        .args(["harness.c", "table.o", "-o"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "{}", stderr(&link));
+    assert_eq!(Command::new(&path).status().unwrap().code(), Some(0));
+    assert_eq!(
+        Command::new(&path).arg("trap").status().unwrap().code(),
+        Some(3)
+    );
+}

@@ -6851,6 +6851,9 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             Rvalue::ModuleConstant { key, initializer } => {
+                if self.freestanding.is_some() && initializer.is_empty() {
+                    return self.frozen_table_address(key);
+                }
                 if let Some(constant) = self.module_constants.iter().find(|entry| entry.key == *key) {
                     if let Some(value) = &constant.frozen {
                         return self.read_frozen_constant(constant, value, target);
@@ -9116,6 +9119,12 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
+            CallTarget::Name(name)
+                if self.freestanding.is_some()
+                    && freestanding::frozen_tables::is_projection(name) =>
+            {
+                self.frozen_table_projection(name, args, type_args, target)
+            }
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
             CallTarget::Extern(call) => self.compile_extern_call(call, args, target),

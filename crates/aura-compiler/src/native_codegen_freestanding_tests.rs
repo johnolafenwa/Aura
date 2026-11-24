@@ -281,6 +281,7 @@ fn hosted_constructs_in_helpers_are_reported() {
         (
             r#"
 def seed() -> int64:
+    print("loading")
     return 41
 START: int64 = seed() + 1
 export "C" def get() -> int64:
@@ -868,4 +869,34 @@ fn an_emitter_fault_is_not_a_subset_report() {
         refusal.message,
         "`f` does x, which a freestanding build cannot compile"
     );
+}
+
+#[test]
+fn frozen_tables_are_read_only_objects_for_each_freestanding_target() {
+    let source = r#"
+def squares() -> list[int64]:
+    return [17 * 17, 23 * 23, 31 * 31]
+TABLE = squares()
+export "C" def lookup(index: int64) -> int64:
+    return TABLE[index]
+"#;
+    let words = [289_i64, 529, 961]
+        .into_iter()
+        .flat_map(i64::to_le_bytes)
+        .collect::<Vec<_>>();
+    for target in TARGETS {
+        let bytes = object(source, target);
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        assert!(file.sections().any(|section| {
+            section.kind() == object::SectionKind::ReadOnlyData
+                && section
+                    .data()
+                    .unwrap()
+                    .windows(words.len())
+                    .any(|window| window == words)
+        }));
+        let (globals, _, undefined) = symbols(&bytes);
+        assert_eq!(globals, ["lookup"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
 }
