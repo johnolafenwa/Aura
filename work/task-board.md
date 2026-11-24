@@ -27,6 +27,22 @@ Last updated: 2026-11-24
   keep the set union test out of the plain dictionary lookup, and renew
   the extension publishing token before 2026-12-01.
 
+## Verification gaps (in progress)
+
+- Target: John's 2026-11-24 request to close the gaps a survey of
+  `aura verify` found on 0.17.0. Notes are in
+  `2026-11-24-verification-gaps.md`.
+- Stage 1, wrong answers: a check that reads an unmodeled result is
+  reported as not modeled instead of failed, a contract that can never
+  hold is `AU5120`, `Span`, view and `Array` indexes are checked,
+  generator bodies assume their `requires`, trait implementation methods
+  assume class invariants, and a call keeps the fields its callee cannot
+  write.
+- Next: stage 2 models comprehensions, slices, `sort`, `sum`, `str`
+  methods, bit operations and closures. Stage 3 adds package mode, a
+  "must verify" marker, `aura test --verify`, failure recovery, shared
+  state, tensor shapes and a solver cross-check.
+
 ## Combined feature verification
 
 The Linux x86-64 package for `1a5c2eb0` passed 1,123 documentation examples

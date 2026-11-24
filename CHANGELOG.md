@@ -7,6 +7,35 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` no longer reports a made-up counterexample for a check that
+  reads the result of a step it does not model, such as `split`, an
+  f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
+  Such a check is reported as not modeled (`AU5104`), and the message names
+  the step and its line. A real failure beside such a step is still a
+  failure.
+- `aura verify` reports `AU5120` for a function whose `requires` clauses and
+  class invariants can never hold together, and does not count it as
+  proved.
+- `aura verify` prints how many open checks failed, are not modeled, or are
+  undecided, and the JSON report carries `failed`, `not_modeled` and
+  `undecided` counts.
+- `aura verify` reasons about `Span[T]` and list views like lists: `len`,
+  indexes, and elements, in code and in contracts. A write through a `mut`
+  span or view now reaches the viewed list in the proof; before, an
+  assertion about the list after such a call could be proved wrongly.
+- `aura verify` checks every `Array[T]` element read and write: the rank
+  and each coordinate. Before, an `Array` index created no check at all.
+- `aura verify` assumes a class's invariants in the methods of its
+  `impl Trait for Class:` blocks, proves them again when a `mut self` one
+  returns, and proves them wherever such a method is called or an object
+  becomes a trait object.
+- `aura verify` keeps what a call cannot change: after a call, a `mut`
+  argument keeps the value of every field the callee never writes, so two
+  `push` calls in a row prove without an `ensures` for the untouched
+  fields.
+- `aura verify` proves the body of a generator function with its `requires`
+  clauses known, and reports its checks under the generator's name.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.
