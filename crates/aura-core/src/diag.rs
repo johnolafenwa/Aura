@@ -340,6 +340,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3025",
+        band: "ownership",
+        title: "required compile-time evaluation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3026",
+        band: "ownership",
+        title: "compile-time evaluation trap",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3027",
+        band: "ownership",
+        title: "compile-time evaluation step limit",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3028",
+        band: "ownership",
+        title: "compile-time evaluation memory limit",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
