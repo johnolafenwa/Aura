@@ -168,7 +168,9 @@ fn a_full_list_of_records_grows_from_what_generated_code_left() {
         unsafe {
             let elements = word(list, view.elements_offset) as *mut u64;
             std::ptr::copy_nonoverlapping(words.as_ptr(), elements.add(len * stride), stride);
-            *(list as *mut u8).add(view.len_offset as usize).cast::<usize>() = len + 1;
+            *(list as *mut u8)
+                .add(view.len_offset as usize)
+                .cast::<usize>() = len + 1;
         }
     };
     let ids = |list: *mut OpaqueValue| {
@@ -198,7 +200,11 @@ fn a_full_list_of_records_grows_from_what_generated_code_left() {
     push(list, 5);
     push_in_place(list, 6);
     // Two records popped in place are dropped before the next is added.
-    unsafe { *(list as *mut u8).add(view.len_offset as usize).cast::<usize>() = 5 };
+    unsafe {
+        *(list as *mut u8)
+            .add(view.len_offset as usize)
+            .cast::<usize>() = 5
+    };
     push(list, 7);
     assert_eq!(ids(list), records(&[0, 1, 2, 3, 4, 7]));
     // A list that shares its storage takes the general path, which copies.
