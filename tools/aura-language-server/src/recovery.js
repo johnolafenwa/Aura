@@ -85,7 +85,7 @@ function declarationForLine(line, lineNumber) {
     },
     {
       pattern:
-        /^(\s*(?:public\s+)?extern\s+"C"\s+(?:packed\s+)?(?:align\s*\(\s*\d+\s*\)\s+)?class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+(?:(?:packed|align\s*\(\s*[0-9][\w]*\s*\))\s+){0,2}class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" class'
     },
