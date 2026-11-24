@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 37);
+    assert_eq!(namespace.all_functions.len(), 66);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
