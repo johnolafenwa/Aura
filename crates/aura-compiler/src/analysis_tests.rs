@@ -11823,14 +11823,23 @@ fn systems_data_editor_shows_declared_c_layout_in_field_order() {
         "    grid: array[array[int16, 3], 2]",
         "def first(s: Sample) -> uint32:",
         "    return s.whole",
-    ].join("\n");
+    ]
+    .join("\n");
     let temp = TempDir::new("systems-data-editor-layout");
     let file = temp.path().join("src/main.au");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(temp.path().join("Aura.toml"), "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n").unwrap();
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
     fs::write(&file, &source).unwrap();
     let analysis = analyze_path_source(&file, &source);
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
     let sample = occurrence_at(&analysis, 4, 13);
     assert!(sample.hover.contains("extern \"C\" packed align(8) class Sample:\n    whole: uint32\n    flags: uint8 bits(3)\n    grid: array[array[int16, 3], 2]"), "{}", sample.hover);
 }

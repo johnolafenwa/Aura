@@ -80,3 +80,41 @@ impl AnalysisBuilder<'_> {
         true
     }
 }
+
+pub(super) fn layout_hover(class: &crate::ast::ClassDecl) -> String {
+    use std::fmt::Write;
+
+    let layout = &class.layout_controls;
+    let mut signature = String::from("```aura\nextern \"C\"");
+    if layout.packed {
+        signature.push_str(" packed");
+    }
+    if let Some(alignment) = layout.alignment {
+        write!(signature, " align({alignment})").unwrap();
+    }
+    write!(signature, " class {}:", class.name).unwrap();
+    for field in &class.fields {
+        let ty = lower_type_ref(&field.ty);
+        let display = match class.c_arrays.get(&field.name) {
+            Some(dimensions) => {
+                // Source array fields are represented as one list per dimension.
+                let element = dimensions
+                    .iter()
+                    .fold(&ty, |inner, _| &inner.type_arguments()[0]);
+                dimensions
+                    .iter()
+                    .rev()
+                    .fold(element.to_string(), |inner, length| {
+                        format!("array[{inner}, {length}]")
+                    })
+            }
+            None => ty.to_string(),
+        };
+        write!(signature, "\n    {}: {}", field.name, display).unwrap();
+        if let Some(width) = layout.bit_widths.get(&field.name) {
+            write!(signature, " bits({width})").unwrap();
+        }
+    }
+    signature.push_str("\n```");
+    with_doc(signature, class.doc.as_ref())
+}

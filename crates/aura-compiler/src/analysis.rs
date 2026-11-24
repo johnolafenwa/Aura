@@ -7526,6 +7526,9 @@ fn format_alias_detail(alias: &AliasInfo) -> String {
 }
 
 fn format_class_hover(class_info: &ClassInfo) -> String {
+    if !class_info.decl.layout_controls.is_default() {
+        return systems_data::layout_hover(&class_info.decl);
+    }
     if let Some(constructor) = class_info.builtin_constructor() {
         return match constructor {
             BuiltinClassConstructor::RandomRng => format!(
