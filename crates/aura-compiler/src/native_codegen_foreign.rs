@@ -595,13 +595,21 @@ enum ForeignWriteback {
     Structs(&'static CStruct, Val, ValueRef),
 }
 
+/// The convention foreign calls follow for `arch` on `os`.
+fn foreign_abi_for(arch: &str, os: &str) -> std::result::Result<CAbi, String> {
+    CAbi::of_target(arch, os)
+        .ok_or_else(|| format!("direct backend cannot pass a C struct by value on `{arch}-{os}`"))
+}
+
 /// The convention foreign calls follow on the machine being built for.
 fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<CAbi, String> {
-    let arch =
-        freestanding.map_or_else(crate::native_backend::target_arch, FreestandingTarget::arch);
-    CAbi::of_arch(arch).ok_or(format!(
-        "direct backend cannot pass a C struct by value on `{arch}`"
-    ))
+    match freestanding {
+        Some(target) => foreign_abi_for(target.arch(), "none"),
+        None => foreign_abi_for(
+            crate::native_backend::target_arch(),
+            crate::native_backend::target_os(),
+        ),
+    }
 }
 
 /// The size of the stack slot that holds one `layout` struct.
@@ -661,7 +669,7 @@ impl ForeignArguments {
                 },
                 // AArch64 has a register of its own for a result's address.
                 (Some((_, Indirect::Result { .. })), _) => {
-                    general += usize::from(abi == CAbi::SysV64);
+                    general += usize::from(matches!(abi, CAbi::SysV64 | CAbi::Win64));
                 }
                 (None, ScalarType::F32 | ScalarType::F64) => float += 1,
                 (None, _) => general += 1,
@@ -1906,5 +1914,99 @@ impl FunctionCompiler<'_> {
             &[type_ptr, type_len, tag, payload],
         );
         Ok(self.owned_opaque_result(injected.results, union_type.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::c_layout::{CField, CFieldKind};
+    use crate::ffi::FfiScalar;
+    use crate::native_backend::HostedTarget;
+
+    fn struct_of(scalars: &[FfiScalar]) -> CStruct {
+        CStruct {
+            name: "S".to_string(),
+            fields: scalars
+                .iter()
+                .enumerate()
+                .map(|(i, scalar)| CField {
+                    name: format!("f{i}"),
+                    kind: CFieldKind::Scalar(*scalar),
+                })
+                .collect(),
+            union: false,
+        }
+    }
+
+    #[test]
+    fn foreign_abi_selects_win64_for_windows_x86_64() {
+        assert_eq!(foreign_abi_for("x86_64", "windows"), Ok(CAbi::Win64));
+        assert!(foreign_abi_for("aarch64", "windows").is_err());
+        assert_eq!(foreign_abi_for("x86_64", "linux"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("x86_64", "macos"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("x86_64", "none"), Ok(CAbi::SysV64));
+        assert_eq!(foreign_abi_for("aarch64", "linux"), Ok(CAbi::Aapcs64));
+        assert_eq!(foreign_abi_for("aarch64", "macos"), Ok(CAbi::Aapcs64));
+        assert_eq!(foreign_abi_for("aarch64", "none"), Ok(CAbi::Aapcs64));
+        assert!(foreign_abi_for("riscv64", "none").is_err());
+        assert_eq!(
+            foreign_abi(Some(FreestandingTarget::X86_64)),
+            Ok(CAbi::SysV64)
+        );
+        assert_eq!(
+            foreign_abi(Some(FreestandingTarget::Aarch64)),
+            Ok(CAbi::Aapcs64)
+        );
+        assert!(foreign_abi(Some(FreestandingTarget::Riscv64)).is_err());
+        for target in HostedTarget::ALL {
+            assert_eq!(target.os(), "linux");
+        }
+    }
+
+    #[test]
+    fn registers_used_accounts_for_sret_on_win64() {
+        let mut args = ForeignArguments {
+            signature: Signature::new(CallConv::C),
+            values: Vec::new(),
+        };
+        let dummy = Val(0);
+        args.push_word(dummy);
+        args.mark_last(Indirect::Result { size: 16 });
+        assert_eq!(args.registers_used(CAbi::Win64), (1, 0));
+        assert_eq!(args.registers_used(CAbi::SysV64), (1, 0));
+        assert_eq!(args.registers_used(CAbi::Aapcs64), (0, 0));
+    }
+
+    #[test]
+    fn win64_struct_piece_types_and_indirect_passing() {
+        let abi = foreign_abi_for("x86_64", "windows").expect("win64 abi");
+
+        // 4-byte and 8-byte float structs travel in integer registers on Win64.
+        for layout in [
+            struct_of(&[FfiScalar::F32]),
+            struct_of(&[FfiScalar::F32, FfiScalar::F32]),
+            struct_of(&[FfiScalar::F64]),
+        ] {
+            let CPassing::Registers(pieces) = layout.passing(abi) else {
+                panic!(
+                    "expected register passing for {}-byte struct",
+                    layout.size()
+                );
+            };
+            assert_eq!(pieces.len(), 1);
+            assert_eq!(piece_type(pieces[0]), (0, types::I64));
+        }
+
+        // 3-, 6-, 12-, and 16-byte structs travel by address / sret on Win64.
+        for layout in [
+            struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]),
+            struct_of(&[FfiScalar::U16, FfiScalar::U16, FfiScalar::U16]),
+            struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]),
+            struct_of(&[FfiScalar::I64, FfiScalar::I64]),
+        ] {
+            assert_eq!(layout.passing(abi), CPassing::Memory);
+            assert_eq!(layout.argument(abi, 0, 0), Ok(CArgument::Address));
+        }
     }
 }
