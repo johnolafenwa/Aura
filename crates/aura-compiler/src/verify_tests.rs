@@ -4152,3 +4152,10 @@ fn delegated_contract_is_proved_at_the_field_call_and_at_callers() {
         }));
     }
 }
+
+#[test]
+fn class_drop_postcondition_holds_for_every_initialized_owner() {
+    assert_proved(include_str!(
+        "../tests/fixtures/check-pass/class_drop_postcondition.au"
+    ));
+}
