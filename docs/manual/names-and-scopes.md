@@ -26,7 +26,7 @@ One `.au` file defines one module scope. These kinds of name share its top-level
 - functions
 - extern functions and extern opaque handle types
 - traits
-- module constants
+- module constants and freestanding mutable bindings
 - imported names
 - imported module aliases
 
@@ -57,7 +57,23 @@ Constants become available in declaration order. An initializer may read an earl
 
 **Reads.** Reading a Copy-typed constant produces an ordinary copy. Reading a non-Copy constant gives shared access to the one value stored by its defining module. That read cannot move the value into owned storage, pass it to an `own` parameter, or request mutable access. When you need independent owned data, use an explicit supported `.clone()` or a constructor.
 
-**Immutability.** Module storage is immutable. Module-level `mut`, reassignment, compound assignment, and mutable access are `AU3003` errors. Keep stateful application data in a local value owned by `main` or another explicit owner.
+**Immutability.** Reassigning an immutable module binding is `AU3003`. A hosted module can share a `sync.AtomicInt` or `sync.Mutex` through an immutable binding. A hosted `mut` module declaration is `AU3030`.
+
+## Freestanding Module State
+
+Declare a mutable binding at module scope to preserve a value across exported calls.
+
+```aura fragment
+mut ticks: uint64 = 0
+
+export "C" def tick() -> uint64:
+    ticks += 1
+    return ticks
+```
+
+A `public mut` binding exposes the same storage to importers. Each read snapshots the value. Take a local copy before forming a view. Freestanding callers coordinate access across cores and interrupts. A hosted script can still declare a `mut` local in its entry statements.
+
+Scalar literals and structural class constructors can initialize storage without startup code. A call to a user-defined initializer requires a computed value and produces `AU2080`.
 
 **Script locals.** An entry script's top-level locals live apart from module storage. [Top-Level Statement Scope](#top-level-statement-scope) covers them.
 
@@ -331,7 +347,8 @@ Comprehension clause scopes enter one at a time. A target is established only af
 | `AU2999` | A duplicate, reserved, private, ambiguous, or otherwise invalid name or scope declaration that has no narrower code. |
 | `AU3001` | A read of a moved place, or an attempted move out of non-Copy module storage. |
 | `AU3002` | A borrow conflict. |
-| `AU3003` | An immutable place, or a request for mutable module storage. |
+| `AU3003` | An immutable place. |
+| `AU3030` | A hosted mutable module binding or a safe view of freestanding module state. |
 | `AU3004` | An invalid ownership mode. |
 | `AU4001` | Runtime re-entry into module initialization. |
 

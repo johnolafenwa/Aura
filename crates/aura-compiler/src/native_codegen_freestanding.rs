@@ -658,6 +658,13 @@ fn keep_reached_functions(module: &mut MirModule) {
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
             Instruction::Assign {
+                value:
+                    Rvalue::ModuleLoad { key }
+                    | Rvalue::ModuleAddress { key }
+                    | Rvalue::ModuleStore { key, .. },
+                ..
+            } => Some(key.clone()),
+            Instruction::Assign {
                 value: Rvalue::ModuleConstant { key, .. },
                 ..
             } => Some(key.clone()),
@@ -877,6 +884,7 @@ fn check_function(
                 Rvalue::Call { callee, args, .. } => {
                     check_call(callee, args, classes, functions)
                 }
+                Rvalue::ModuleLoad {..} | Rvalue::ModuleAddress {..} | Rvalue::ModuleStore {..} => None,
                 Rvalue::ModuleConstant { key, .. } => Some((
                     format!("reads the module constant `{key}`"),
                     "a freestanding program has no startup code to compute a constant: write the value where it is used, or return it from a function",

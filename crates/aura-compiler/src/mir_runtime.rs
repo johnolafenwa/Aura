@@ -465,6 +465,8 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::ModuleStore { value, .. } => operand_is_process_run_function(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
         Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
@@ -2807,6 +2809,17 @@ impl MirRuntime {
     }
 
     fn initialize_module_constants(&mut self) -> Result<()> {
+        if self
+            .module
+            .constants
+            .iter()
+            .any(|cell| cell.state.is_some())
+        {
+            return Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            ));
+        }
         for constant in self.module.constants.clone() {
             let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
         }
@@ -4703,6 +4716,12 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::ModuleStore { .. }
+            | Rvalue::ModuleLoad { .. }
+            | Rvalue::ModuleAddress { .. } => Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            )),
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),

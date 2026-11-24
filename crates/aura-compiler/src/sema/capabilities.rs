@@ -841,6 +841,9 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
             ExprKind::Member { object, field } => {
+                if self.imported_state(object, field).is_some() {
+                    return Ok(true);
+                }
                 self.resolve_member_target_type(object, field, expr.span, locals)?;
                 self.is_mutable_place(object, locals)
             }
@@ -923,6 +926,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_state_loan(object, locals)?;
         self.reject_property_place(object, "mutated", locals)?;
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_mutation_allowed(&place, span, locals)?;

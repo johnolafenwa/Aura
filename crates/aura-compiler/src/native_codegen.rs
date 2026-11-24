@@ -6846,6 +6846,9 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
+            Rvalue::ModuleLoad { key } => self.load_state(key),
+            Rvalue::ModuleStore { key, value } => self.store_state(key, value),
+            Rvalue::ModuleAddress { key } => self.address_of_state(key),
             Rvalue::ModuleConstant { key, initializer } => {
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
@@ -20845,6 +20848,8 @@ fn validate_rvalue(
         | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
+        Rvalue::ModuleStore { value, .. } => validate_operand(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -22375,6 +22380,8 @@ mod list_snapshots;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_module_state.rs"]
+mod module_state;
 #[path = "native_codegen_range_loops.rs"]
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]

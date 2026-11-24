@@ -66,6 +66,11 @@ mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
+mod module_state;
+#[cfg(test)]
+mod module_state_tests;
+pub use module_state::StateImage;
+pub(crate) use program::check_with_profile;
 mod program;
 mod tensor_derive;
 #[cfg(test)]
@@ -3564,6 +3569,13 @@ impl<'a> FunctionChecker<'a> {
             let Some(binding) = locals.get_mut(&path.root) else {
                 continue;
             };
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module state `"))
+            {
+                continue;
+            }
             binding.stale_narrowing.remove(&path.projections);
             binding.narrowed.insert(
                 path.projections.clone(),
@@ -4978,6 +4990,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_state_loan(view_source, locals)?;
                     self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
@@ -6349,7 +6362,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
-            if !self.is_mutable_place(object, locals)? {
+            if self.imported_state(object, field).is_none()
+                && !self.is_mutable_place(object, locals)?
+            {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
                 }
@@ -17952,6 +17967,9 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
+        if let Some(cell) = self.imported_state(object, field) {
+            return Ok(cell.ty.clone());
+        }
         let object_ty = self.type_of_member_object_expr(object, locals)?;
         self.resolve_member_type(&object_ty, field, span)
     }
