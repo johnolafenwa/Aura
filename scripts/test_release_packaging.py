@@ -1526,6 +1526,10 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
             )
             self.assertNotEqual(symlink_run.returncode, 0)
 
+    def test_install_llvm_enforces_https_tls12(self) -> None:
+        script = (REPO_ROOT / "scripts/install-llvm.sh").read_text(encoding="utf-8")
+        self.assertIn("--proto '=https' --tlsv1.2", script)
+
 
 if __name__ == "__main__":
     unittest.main()
