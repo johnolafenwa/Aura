@@ -139,6 +139,16 @@
     "plan_step": "scalar dict index",
     "measures": "`table[key]` on a `dict[str, int64]` of 1,000 keys, added to a total"
   },
+  "str_param_call": {
+    "count": 100000,
+    "plan_step": "str words",
+    "measures": "one call of a function that only reads its `str` parameter, with an element of a `list[str]`"
+  },
+  "str_literal_compare": {
+    "count": 100000,
+    "plan_step": "str words",
+    "measures": "a `str` viewed from a `list[str]` compared with up to three literals"
+  },
   "result_call": {
     "count": 100000,
     "plan_step": "result words",

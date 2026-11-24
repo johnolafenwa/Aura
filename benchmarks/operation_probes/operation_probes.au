@@ -476,6 +476,38 @@ def result_call(n: int64, run: bool) -> int64:
     return total
 
 
+def word_code(word: str) -> int64:
+    if word == "north":
+        return 1
+    if word == "coastal":
+        return 2
+    return word.byte_len()
+
+
+def str_param_call(n: int64, run: bool) -> int64:
+    words = ["north", "south", "east", "west", "central", "coastal", "inland", "upland"]
+    mut total = 0
+    if run:
+        for i in range(n):
+            total += word_code(words[i % 8])
+    return total
+
+
+def str_literal_compare(n: int64, run: bool) -> int64:
+    words = ["north", "south", "east", "west", "central", "coastal", "inland", "upland"]
+    mut total = 0
+    if run:
+        for i in range(n):
+            view word = words[i % 8]
+            if word == "north":
+                total += 1
+            elif word == "coastal":
+                total += 2
+            elif word != "east":
+                total += 3
+    return total
+
+
 def record_swap(n: int64, run: bool) -> int64:
     mut records = list[Keyed]()
     for i in range(n):
@@ -556,6 +588,10 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return dict_index_str(n, run)
     elif operation == "result_call":
         return result_call(n, run)
+    elif operation == "str_param_call":
+        return str_param_call(n, run)
+    elif operation == "str_literal_compare":
+        return str_literal_compare(n, run)
     elif operation == "record_swap":
         return record_swap(n, run)
     elif operation == "field_list_push":
