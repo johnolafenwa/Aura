@@ -1951,9 +1951,16 @@ fn ordered_subword_operations_keep_their_llvm_order_and_width() {
 #[test]
 fn fixed_array_arguments_use_the_callers_address() {
     let mut module = module();
-    let inline = ScalarType::Inline {bytes: 12, align: 4};
-    let inspect = define(&mut module, "inspect", Linkage::Local,
-        &signature(CallConv::Aura, &[inline], &[types::I64]), move |builder| {
+    let inline = ScalarType::Inline {
+        bytes: 12,
+        align: 4,
+    };
+    let inspect = define(
+        &mut module,
+        "inspect",
+        Linkage::Local,
+        &signature(CallConv::Aura, &[inline], &[types::I64]),
+        move |builder| {
             let entry = builder.create_block();
             builder.append_block_params_for_function_params(entry);
             builder.switch_to_block(entry);
@@ -1964,9 +1971,14 @@ fn fixed_array_arguments_use_the_callers_address() {
             builder.bind_array_parameter(var, 0);
             let address = builder.var_addr(var);
             builder.return_(&[address]);
-        });
-    define(&mut module, "caller", Linkage::Export,
-        &signature(CallConv::C, &[], &[types::I64]), move |builder| {
+        },
+    );
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &signature(CallConv::C, &[], &[types::I64]),
+        move |builder| {
             let entry = builder.create_block();
             builder.switch_to_block(entry);
             let var = Var(0);
@@ -1975,11 +1987,12 @@ fn fixed_array_arguments_use_the_callers_address() {
             builder.def_var(var, zero);
             let address = builder.var_addr(var);
             let value = builder.use_var(var);
-            builder.borrow_array_argument(value, address);
+            let value = builder.borrow_array_argument(value, address);
             let function = builder.import_function(inspect);
             let got = builder.call(function, &[value]).results[0];
             builder.return_(&[got]);
-        });
+        },
+    );
     let text = ir(&module);
     assert!(text.contains("@inspect(ptr %0)"), "{text}");
     assert!(text.contains("ptrtoint ptr %0 to i64"), "{text}");

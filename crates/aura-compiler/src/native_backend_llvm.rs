@@ -823,6 +823,7 @@ enum Op {
     Load(LoadKind, MemFlags, Val, i32),
     Store(MemFlags, Val, Val, i32),
     Memory(MemoryAccess, ScalarType, Vec<Val>),
+    ArrayBorrow(Val, Val),
     VarAddr(Var),
     StackAddr(Slot, i32),
     FuncAddr(FuncRef),
@@ -960,6 +961,7 @@ struct FunctionIr {
     blocks: Vec<BlockIr>,
     layout: Vec<u32>,
     insts: Vec<InstIr>,
+    borrowed_arrays: BTreeMap<u32, usize>,
     addressable: HashSet<u32>,
     vars: BTreeMap<u32, ScalarType>,
     slots: Vec<(u32, u8)>,
@@ -1002,6 +1004,7 @@ fn op_operands(op: &Op) -> Vec<Val> {
         | Op::SymbolValue(_)
         | Op::UseVar(_)
         | Op::Trap => Vec::new(),
+        Op::ArrayBorrow(value, address) => vec![*value, *address],
         Op::Copy(value)
         | Op::Unary(_, value)
         | Op::BinaryImm(_, value, _)
@@ -1064,6 +1067,7 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
             Op::Store(*flags, value(*stored), value(*address), *offset)
         }
         Op::Memory(access, width, operands) => Op::Memory(*access, *width, values(operands)),
+        Op::ArrayBorrow(v, addr) => Op::ArrayBorrow(value(*v), value(*addr)),
         Op::VarAddr(var) => Op::VarAddr(*var),
         Op::StackAddr(slot, offset) => Op::StackAddr(*slot, *offset),
         Op::FuncAddr(function) => Op::FuncAddr(*function),
@@ -1096,6 +1100,7 @@ impl FunctionIr {
             blocks: Vec::new(),
             layout: Vec::new(),
             insts: Vec::new(),
+            borrowed_arrays: BTreeMap::new(),
             addressable: HashSet::new(),
             vars: BTreeMap::new(),
             slots: Vec::new(),
@@ -1538,6 +1543,14 @@ impl FunctionBackend for LlvmFunction<'_> {
             self.append_block_param(block, ty);
         }
         self.ir.params_block = Some(block.0);
+    }
+
+    fn borrow_array_argument(&mut self, v: Val, addr: Val) -> Val {
+        self.ir.push_value(Op::ArrayBorrow(v, addr), self.ir.ty(v))
+    }
+
+    fn bind_array_parameter(&mut self, var: Var, index: usize) {
+        self.ir.borrowed_arrays.insert(var.0, index);
     }
 
     fn var_addr(&mut self, var: Var) -> Val {
@@ -2021,6 +2034,9 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .map(|(index, ty)| {
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
+            if matches!(ty, ScalarType::Inline { .. }) {
+                return context.ptr_type(AddressSpace::default()).into();
+            }
             match signature.indirects.iter().find(|(at, _)| *at == index) {
                 Some((_, Indirect::Aggregate { element, count })) => {
                     basic_type(context, *element).array_type(*count).into()
@@ -2794,6 +2810,15 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         self.set_location(None);
         for (var, ty) in &self.ir.vars {
             let llvm_ty = basic_type(context, *ty);
+            if let Some(index) = self.ir.borrowed_arrays.get(var) {
+                let pointer = self
+                    .function
+                    .get_nth_param(*index as u32)
+                    .unwrap()
+                    .into_pointer_value();
+                self.vars.insert(*var, (pointer, llvm_ty));
+                continue;
+            }
             let slot = built(self.builder.build_alloca(llvm_ty, &format!("var{var}")))?;
             built(self.builder.build_store(slot, llvm_ty.const_zero()))?;
             self.vars.insert(*var, (slot, llvm_ty));
@@ -2829,6 +2854,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     return Err("the function parameters are not the entry block's".to_string());
                 }
                 let params = self.function.get_params();
+                let params = self.load_array_parameters(params)?;
                 if self.ir.params_block.is_some() {
                     let phis = &self.phis[first];
                     if phis.len() != params.len() {
@@ -2879,6 +2905,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn args(&self, values: &[Val]) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, String> {
+        if values
+            .iter()
+            .any(|v| matches!(self.ir.ty(*v), ScalarType::Inline { .. }))
+        {
+            return self.array_arguments(values);
+        }
         Ok(self
             .values(values)?
             .into_iter()
@@ -3212,6 +3244,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     basic_type(context, self.result_type(inst)).const_zero(),
                 );
             }
+            Op::ArrayBorrow(value, _) => {
+                self.define(inst, self.value(*value)?);
+            }
             Op::VarAddr(var) => {
                 let (slot, _) = self.vars[&var.0];
                 let address = self.pointer_to_int(slot)?;
@@ -3482,6 +3517,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 self.define(inst, value);
             }
             Op::DefVar(var, value) => {
+                if self.is_initial_array_binding(*var, *value) {
+                    return Ok(());
+                }
                 let (slot, _) = self
                     .vars
                     .get(&var.0)
@@ -3832,3 +3870,6 @@ fn link_wide_integer_helpers<'ctx>(
         .set_linkage(LlvmLinkage::Internal);
     Ok(())
 }
+
+#[path = "native_llvm_fixed_arrays.rs"]
+mod fixed_arrays;

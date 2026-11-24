@@ -34227,8 +34227,30 @@ fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
         "fixed[str, 2]",
         "fixed[Message, 2]",
     ] {
-        let source = format!("class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n");
+        let source = format!(
+            "class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n"
+        );
         let error = crate::check_source(&source).expect_err(ty);
         assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
+}
+
+#[test]
+fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_length_zero.au"),
+            "AU2081",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_element_type.au"),
+            "AU2082",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_noncopy_repeat.au"),
+            "AU3031",
+        ),
+    ] {
+        assert_eq!(crate::check_source(source).unwrap_err().code, code);
     }
 }

@@ -18339,3 +18339,16 @@ def main():
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
+
+#[test]
+fn fixed_array_native_storage_covers_nested_and_wide_lanes() {
+    for source in [
+        include_str!("../tests/fixtures/run-pass/fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/nested_fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/wide_fixed_arrays.au"),
+    ] {
+        let module = lower_source_to_mir(source).unwrap();
+        let object = emit_unoptimized_object(&module).unwrap();
+        assert!(!object.is_empty());
+    }
+}

@@ -8545,8 +8545,21 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
-        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
-            return Ok(array);
+        if expected.and_then(Type::as_fixed_array).is_some()
+            && fixed_arrays::initializer(expr).is_some()
+        {
+            if Self::result_consumption_needs_replay(expr) {
+                self.expr_result_entries.borrow_mut().insert(
+                    expr as *const Expr as usize,
+                    ExprResultEntry {
+                        locals: locals.clone(),
+                        expected: expected.cloned(),
+                    },
+                );
+            }
+            if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+                return Ok(array);
+            }
         }
         if let Some(Type::Union(union)) = expected {
             if !matches!(

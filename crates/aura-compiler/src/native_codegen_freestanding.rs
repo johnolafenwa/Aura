@@ -846,6 +846,18 @@ fn check_function(
                     report(span, "uses a `with` block".to_string(), "");
                     continue;
                 }
+                Instruction::IndexInRange { list, .. }
+                    if function
+                        .local_types
+                        .iter()
+                        .any(|v| v.name == *list && v.ty.as_fixed_array().is_some())
+                        || function
+                            .params
+                            .iter()
+                            .any(|v| v.name == *list && v.ty.as_fixed_array().is_some()) =>
+                {
+                    continue
+                }
                 Instruction::IndexInRange { .. }
                 | Instruction::BeginElementLoan { .. }
                 | Instruction::ReborrowElement { .. } => {

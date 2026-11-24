@@ -4216,9 +4216,17 @@ def dynamic(a: fixed[uint16, 4], i: int64) -> uint16:
     }
     let program = crate::check_source(source).unwrap();
     let (module, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
-        verify_module(&program, module, &Options { prove_sites: true, ..Options::default() })
-            .map(|report| report.proved_sites)
-    }).unwrap();
+        verify_module(
+            &program,
+            module,
+            &Options {
+                prove_sites: true,
+                ..Options::default()
+            },
+        )
+        .map(|report| report.proved_sites)
+    })
+    .unwrap();
     assert_eq!(removed.bounds, 2);
     let accesses = unchecked_accesses(&module);
     assert_eq!(accesses["checked"], 2);

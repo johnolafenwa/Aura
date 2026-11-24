@@ -41,8 +41,22 @@ pub(super) fn direct_layout(
     }))
 }
 
+/// Hosted wide numbers travel as runtime integers. Their fixed storage uses
+/// the same low and high words as the freestanding calling convention.
+fn hosted_wide(ty: &DirectType) -> Option<&str> {
+    match ty {
+        DirectType::Opaque(Type::Named(name, args))
+            if args.is_empty() && matches!(name.as_str(), "int128" | "uint128") =>
+        {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
 fn storage(ty: &DirectType) -> Option<(u32, u8)> {
     match ty {
+        _ if hosted_wide(ty).is_some() => Some((16, 8)),
         DirectType::Scalar(k) => {
             let size = match k {
                 ScalarKind::Int8 | ScalarKind::Uint8 | ScalarKind::Bool => 1,
@@ -72,9 +86,25 @@ fn storage(ty: &DirectType) -> Option<(u32, u8)> {
 
 impl FixedArrayLayout {
     fn descriptor(&self) -> Result<Vec<u8>, String> {
+        Self::field_descriptor(&self.element, Some(self.count))
+    }
+
+    fn field_descriptor(element: &DirectType, count: Option<u32>) -> Result<Vec<u8>, String> {
         use crate::c_layout::{CField, CFieldKind, CStruct};
         use crate::ffi::FfiScalar;
         fn kind(ty: &DirectType) -> CFieldKind {
+            if let Some(name) = hosted_wide(ty) {
+                return CFieldKind::Struct(CStruct {
+                    name: format!("#fixed.{name}"),
+                    union: false,
+                    fields: ["low", "high"]
+                        .map(|word| CField {
+                            name: word.to_owned(),
+                            kind: CFieldKind::Scalar(FfiScalar::U64),
+                        })
+                        .to_vec(),
+                });
+            }
             match ty {
                 DirectType::Fixed(layout) => {
                     CFieldKind::Array(Box::new(kind(&layout.element)), layout.count as usize)
@@ -113,7 +143,10 @@ impl FixedArrayLayout {
             union: false,
             fields: vec![CField {
                 name: "elements".to_owned(),
-                kind: CFieldKind::Array(Box::new(kind(&self.element)), self.count as usize),
+                kind: match count {
+                    Some(n) => CFieldKind::Array(Box::new(kind(element)), n as usize),
+                    None => kind(element),
+                },
             }],
         };
         serde_json::to_vec(&layout).map_err(|error| error.to_string())
@@ -162,6 +195,29 @@ impl FixedArrayLayout {
 }
 
 impl FunctionCompiler<'_> {
+    pub(super) fn fixed_argument_reference(
+        &mut self,
+        mut value: ValueRef,
+        arg: &MirArg,
+        passing: Option<&MirReceiverKind>,
+    ) -> ValueRef {
+        if matches!(value.ty, DirectType::Fixed(_))
+            && matches!(
+                passing,
+                Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut)
+            )
+        {
+            let place = arg.writeback_place.as_deref().or_else(|| match &arg.value {
+                Operand::Place(place) => Some(place.as_str()),
+                _ => None,
+            });
+            if let Some((address, _)) = place.and_then(|place| self.fixed_local_address(place)) {
+                value.values[0] = self.builder.borrow_array_argument(value.values[0], address);
+            }
+        }
+        value
+    }
+
     pub(super) fn fixed_convert(
         &mut self,
         layout: &FixedArrayLayout,
@@ -208,6 +264,29 @@ impl FunctionCompiler<'_> {
         src: Option<&[Val]>,
     ) -> Result<(), String> {
         let flags = MemFlags::trusted();
+        if hosted_wide(ty).is_some() {
+            let descriptor = FixedArrayLayout::field_descriptor(ty, None)?;
+            let (text, len) = self.string_constant(&descriptor)?;
+            let at = self.builder.iadd_imm(address, i64::from(offset));
+            let word = if let Some(values) = src {
+                let word = values[dest.len()];
+                self.builder
+                    .call(self.runtime[RuntimeFn::FixedUnbox], &[word, text, len, at]);
+                word
+            } else {
+                let word = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FixedBox], &[text, len, at])
+                    .results[0];
+                self.mark_temporary_opaque_owned(&ValueRef {
+                    ty: ty.clone(),
+                    values: vec![word],
+                });
+                word
+            };
+            dest.push(word);
+            return Ok(());
+        }
         if let DirectType::PlainClass(class) = ty {
             let mut at = offset;
             for field in &class.fields {
@@ -322,6 +401,53 @@ impl FunctionCompiler<'_> {
         self.builder.iadd(base, offset)
     }
 
+    /// A write back to its own addressable array changes only the selected
+    /// element. Mutable-parameter sinks and cleanup registrations still
+    /// observe this mutation exactly as they observe a whole-root store.
+    pub(super) fn store_fixed_element_in_place(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<bool, String> {
+        use crate::mir::fixed_arrays::{WRITE, WRITE_PROVED};
+        let Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee: CallTarget::Name(op),
+                    args,
+                    type_args,
+                },
+        } = instruction
+        else {
+            return Ok(false);
+        };
+        if !matches!(op.as_str(), WRITE | WRITE_PROVED)
+            || args.len() != 5
+            || !matches!(&args[0].value, Operand::Place(source) if source == target)
+        {
+            return Ok(false);
+        }
+        let Some((base, layout)) = self.fixed_local_address(target) else {
+            return Ok(false);
+        };
+        if Some(&layout.ty) != type_args.get("array") {
+            return Err("MIR fixed array write has the wrong array type".to_owned());
+        }
+        let ix = self.load_operand(&args[1].value)?.values[0];
+        let address = if op == WRITE_PROVED {
+            self.fixed_offset(&layout, base, ix)
+        } else {
+            let line = self.load_operand(&args[2].value)?.values[0];
+            let column = self.load_operand(&args[3].value)?.values[0];
+            self.fixed_element_address(&layout, base, ix, line, column)
+        };
+        let value = self.load_operand_for_target(&args[4].value, &layout.element)?;
+        self.fixed_store_element(&layout, address, &value)?;
+        self.publish_mutable_root_write_through(target.split('.').next().unwrap())?;
+        self.refresh_cleanup_registrations_for_mutation(target)?;
+        Ok(true)
+    }
+
     pub(super) fn compile_fixed(
         &mut self,
         op: &str,
@@ -329,6 +455,8 @@ impl FunctionCompiler<'_> {
         types: &BTreeMap<String, Type>,
     ) -> Result<ValueRef, String> {
         use crate::mir::fixed_arrays::{LITERAL, READ, REPEAT, WRITE};
+        let proved = crate::mir::fixed_arrays::checked_form(op) != op;
+        let op = crate::mir::fixed_arrays::checked_form(op);
         let ty = types.get("array").ok_or("missing fixed array type")?;
         let Some(DirectType::Fixed(layout)) = direct_type(ty, &self.classes) else {
             return Err(format!("cannot lay out `{ty}` inline"));
@@ -390,7 +518,11 @@ impl FunctionCompiler<'_> {
                 let ix = self.load_operand(&args[1].value)?.values[0];
                 let line = self.load_operand(&args[2].value)?.values[0];
                 let column = self.load_operand(&args[3].value)?.values[0];
-                let at = self.fixed_element_address(&layout, source, ix, line, column);
+                let at = if proved {
+                    self.fixed_offset(&layout, source, ix)
+                } else {
+                    self.fixed_element_address(&layout, source, ix, line, column)
+                };
                 if op == READ {
                     let mut values = Vec::new();
                     self.fixed_parts(&layout.element, at, 0, &mut values, None)?;

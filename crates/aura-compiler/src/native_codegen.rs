@@ -1715,6 +1715,13 @@ impl<'a> NativeCodegen<'a> {
                 ty,
                 Some(&entry_values[entry_index..end]),
             );
+            if matches!(
+                param.passing,
+                MirReceiverKind::Borrow | MirReceiverKind::BorrowMut
+            ) && param.ty.as_fixed_array().is_some()
+            {
+                builder.bind_array_parameter(variables[&param.name][0], entry_index);
+            }
             entry_index = end;
         }
 
@@ -5660,6 +5667,9 @@ impl<'a> FunctionCompiler<'a> {
         instruction_index: usize,
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
+        if self.store_fixed_element_in_place(instruction)? {
+            return Ok(());
+        }
         if let Instruction::Assign { target, .. } = instruction {
             // A part of a `json.Value` literal that is built as a tape
             // emits nothing, and the literal's root builds the tape.
@@ -10098,6 +10108,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
             let coerced = self.coerce_value(semantic_coerced, abi_expected)?;
+            let coerced = self.fixed_argument_reference(coerced, argument, kept.get(index));
             if let Some(place) = &argument.writeback_place {
                 writeback_tagged.push(
                     type_args.is_empty()
