@@ -107,6 +107,7 @@ fn item_name_matches_decl_name() {
         methods: vec![dummy_function("show")],
         span: Span::new(1, 1),
         derived: false,
+        delegation: None,
         assoc_types: Vec::new(),
     });
 

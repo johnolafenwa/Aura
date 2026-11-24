@@ -65,6 +65,7 @@ pub(crate) use contracts::RESULT_NAME as CONTRACT_RESULT_NAME;
 mod decorators;
 mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
+pub(crate) mod delegation;
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
@@ -11721,6 +11722,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(ty) = self.check_delegated_call(callee, args, span, locals, expected)? {
+            return Ok(ty);
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {

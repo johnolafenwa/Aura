@@ -785,6 +785,9 @@ pub fn assoc_type_param_name(name: &str) -> String {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ImplDecl {
+    /// The field named by a `by field` clause, at the identifier's position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<(String, Span)>,
     pub type_params: Vec<String>,
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub trait_name: String,

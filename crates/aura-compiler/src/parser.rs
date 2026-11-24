@@ -1508,8 +1508,10 @@ impl Parser {
     fn parse_field(&mut self) -> Result<FieldDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         let span = self.current_span();
+        self.reject_view_field()?;
         let name = self.expect_identifier()?;
         self.expect_simple(TokenKind::Colon)?;
+        self.reject_view_field()?;
         let ty = self.parse_type()?;
         let default = if self.eat_simple(&TokenKind::Equal).is_some() {
             Some(self.parse_expr()?)
@@ -1526,6 +1528,22 @@ impl Parser {
             span,
             doc: None,
         })
+    }
+
+    fn reject_view_field(&self) -> Result<()> {
+        if matches!(self.peek_kind(0), Some(TokenKind::Identifier(word)) if word == "view")
+            && matches!(
+                self.peek_kind(1),
+                Some(TokenKind::Identifier(_)) | Some(TokenKind::KwMut)
+            )
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2063",
+                self.current_span(),
+                "a class cannot store a view field",
+            ));
+        }
+        Ok(())
     }
 
     /// Parses a group of `@expression` lines and the function or method
@@ -1786,6 +1804,13 @@ impl Parser {
         }
         self.expect_keyword(TokenKind::KwFor)?;
         let for_type = self.parse_type()?;
+        let delegation = if matches!(self.peek_kind(0), Some(TokenKind::Identifier(name)) if name == "by")
+        {
+            self.bump();
+            Some(self.expect_identifier_with_span()?)
+        } else {
+            None
+        };
         if self.eat_simple(&TokenKind::Colon).is_none() {
             // `impl Trait for Type` with no body asks for derived methods.
             self.expect_statement_terminator()?;
@@ -1797,7 +1822,8 @@ impl Parser {
                 for_type,
                 methods: Vec::new(),
                 span,
-                derived: true,
+                derived: delegation.is_none(),
+                delegation,
                 assoc_types: Vec::new(),
             });
         }
@@ -1818,6 +1844,7 @@ impl Parser {
             methods,
             span,
             derived: false,
+            delegation,
             assoc_types,
         })
     }
