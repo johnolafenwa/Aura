@@ -10,6 +10,10 @@ in this file.
 - Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
 - The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
 - The editor dims inactive suites and provides navigation for identifiable declarations in them.
+- Forward a trait and its supertraits to an owned field with `impl Trait for Class by field`. A suite can override individual methods.
+- Pair a computed getter with `@name.setter` to accept assignment and compound assignment on a mutable receiver.
+- Define `__drop__(mut self)` to run cleanup when ownership ends, including collection release and trap recovery.
+- Apply callable decorators to instance and associated methods. Instance methods pass their receiver as the first argument.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

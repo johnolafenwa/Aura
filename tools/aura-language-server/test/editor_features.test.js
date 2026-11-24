@@ -292,3 +292,8 @@ test("workspace search returns module const declarations as LSP constants", () =
     start: { line: 0, character: 13 }, end: { line: 0, character: 18 }
   });
 });
+
+test("semantic tokens use the method signature below decorator lines", () => {
+  const analysis = { occurrences: [occurrence(0, 4, 8, "@traced\n@tag(1)\nmethod call(self) -> int64", null)] };
+  assert.deepEqual(semanticTokens(analysis, "obj.call()").data, [0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("method"), 0]);
+});

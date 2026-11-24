@@ -1,0 +1,24 @@
+trait Slot:
+    def peek(self) -> view int64 from self
+    def write(mut self) -> view mut int64 from self
+
+class Storage:
+    value: int64
+
+impl Slot for Storage:
+    def peek(self) -> view int64 from self:
+        return view self.value
+    def write(mut self) -> view mut int64 from self:
+        return view mut self.value
+
+class Buffer:
+    storage: Storage
+
+impl Slot for Buffer by storage
+
+def main():
+    mut buffer = Buffer(storage=Storage(value=3))
+    view mut current = buffer.write()
+    current += 4
+    view shared = buffer.peek()
+    print(shared)

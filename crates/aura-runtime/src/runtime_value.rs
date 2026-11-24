@@ -67,6 +67,8 @@ use crate::runtime_reactor::{
 };
 use aura_core::types::Type;
 
+#[path = "class_drop.rs"]
+pub mod class_drop;
 #[path = "generator.rs"]
 mod generator;
 #[path = "host_builtins.rs"]
@@ -1112,6 +1114,7 @@ pub use crate::native_runtime::TypedFields;
 /// inline, and [`Self::iter`] visits the fields in name order.
 #[derive(Clone)]
 pub enum InstanceFields {
+    Hooked(class_drop::HookFields),
     Map(BTreeMap<String, Value>),
     Typed(TypedFields),
     /// Recovered failure details are formatted when Aura first reads a field.
@@ -1196,6 +1199,7 @@ impl DoubleEndedIterator for InstanceFieldIter<'_> {
 impl InstanceFields {
     pub fn typed(&self) -> Option<&TypedFields> {
         match self {
+            Self::Hooked(fields) => fields.fields.typed(),
             Self::Typed(typed) => Some(typed),
             Self::Map(_) | Self::Recovered(_) => None,
         }
@@ -1206,6 +1210,7 @@ impl InstanceFields {
     /// instances this way.
     pub fn map(&self) -> &BTreeMap<String, Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.map(),
             Self::Map(fields) => fields,
             Self::Recovered(details) => details.map(),
             Self::Typed(typed) => panic!(
@@ -1227,6 +1232,7 @@ impl InstanceFields {
             *self = Self::Map(typed.into_map());
         }
         match self {
+            Self::Hooked(fields) => fields.fields.map_mut(),
             Self::Map(fields) => fields,
             Self::Typed(_) | Self::Recovered(_) => unreachable!("the layout was turned into a map"),
         }
@@ -1234,6 +1240,7 @@ impl InstanceFields {
 
     pub fn len(&self) -> usize {
         match self {
+            Self::Hooked(fields) => fields.fields.len(),
             Self::Map(fields) => fields.len(),
             Self::Recovered(details) => details.map().len(),
             Self::Typed(typed) => typed.len(),
@@ -1246,6 +1253,7 @@ impl InstanceFields {
 
     pub fn contains_key(&self, name: &str) -> bool {
         match self {
+            Self::Hooked(fields) => fields.fields.contains_key(name),
             Self::Map(fields) => fields.contains_key(name),
             Self::Recovered(details) => details.map().contains_key(name),
             Self::Typed(typed) => typed.contains_key(name),
@@ -1254,6 +1262,7 @@ impl InstanceFields {
 
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         match self {
+            Self::Hooked(fields) => fields.fields.get(name),
             Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
             Self::Recovered(details) => details.map().get(name).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(name),
@@ -1262,6 +1271,7 @@ impl InstanceFields {
 
     pub fn iter(&self) -> InstanceFieldIter<'_> {
         match self {
+            Self::Hooked(fields) => fields.fields.iter(),
             Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
             Self::Recovered(details) => InstanceFieldIter::Map(details.map().iter()),
             Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
@@ -1271,6 +1281,7 @@ impl InstanceFields {
     /// The names of the fields that are not moved out, in name order.
     pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
         match self {
+            Self::Hooked(fields) => fields.fields.keys(),
             Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
             Self::Recovered(details) => Box::new(details.map().keys().map(String::as_str)),
             Self::Typed(typed) => Box::new(typed.keys()),
@@ -1285,6 +1296,7 @@ impl InstanceFields {
     /// class has no field for, and a value that does not fit the field.
     pub fn insert(&mut self, name: &str, value: Value) -> std::result::Result<(), String> {
         match self {
+            Self::Hooked(fields) => fields.fields.insert(name, value),
             Self::Map(fields) => {
                 match fields.get_mut(name) {
                     Some(slot) => *slot = value,
@@ -1304,6 +1316,7 @@ impl InstanceFields {
 
     pub fn remove(&mut self, name: &str) -> Option<Value> {
         match self {
+            Self::Hooked(fields) => fields.fields.remove(name),
             Self::Map(fields) => fields.remove(name),
             Self::Typed(typed) => typed.remove(name),
             Self::Recovered(_) => self.map_mut().remove(name),
@@ -4660,7 +4673,7 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
             | Value::String(_)
             | Value::Duration(_)
             | Value::Instance(InstanceValue {
-                fields: InstanceFields::Recovered(_),
+                fields: InstanceFields::Recovered(_) | InstanceFields::Hooked(_),
                 ..
             })
     )
@@ -4997,7 +5010,10 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Instance(instance)
-                    if matches!(instance.fields, InstanceFields::Recovered(_)) =>
+                    if matches!(
+                        instance.fields,
+                        InstanceFields::Recovered(_) | InstanceFields::Hooked(_)
+                    ) =>
                 {
                     Some(Value::Instance(instance.clone()))
                 }

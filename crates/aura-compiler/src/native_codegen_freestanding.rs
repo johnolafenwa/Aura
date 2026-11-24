@@ -841,6 +841,10 @@ fn check_function(
                 | Instruction::ReturnLoan { .. } => continue,
                 Instruction::WriteLoan { value, .. } => value,
                 Instruction::Assign { value, .. } => value,
+                Instruction::ArmDrop { .. } | Instruction::EndOwner { .. } => {
+                    report(span, "uses a class destructor".to_string(), "");
+                    continue;
+                }
                 Instruction::Eval { .. } => continue,
                 Instruction::PushCleanup { .. } | Instruction::PopCleanup { .. } => {
                     report(span, "uses a `with` block".to_string(), "");

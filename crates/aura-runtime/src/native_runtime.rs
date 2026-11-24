@@ -1186,6 +1186,7 @@ fn discard_current_direct_task_runtime_state() {
 
 fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
     let owned_values = state.owned_values_mut().take_all();
+    let abandoned_owners = !owned_values.is_empty();
     drop(state);
     // The task is gone, so a generator it still owns cannot resume: the
     // same release covers the values its suspended body holds.
@@ -1198,6 +1199,9 @@ fn release_direct_task_runtime_state(mut state: Box<DirectTaskRuntimeState>) {
             }
         }
     });
+    if abandoned_owners {
+        class_drop::finish_retiring_owners();
+    }
 }
 
 fn next_direct_cleanup_id(state: &mut DirectTaskRuntimeState) -> i64 {
@@ -1960,6 +1964,13 @@ unsafe fn direct_task_arg_hands_over(ptr: *mut OpaqueValue) -> bool {
 #[cfg(coverage)]
 #[doc(hidden)]
 pub static DIRECT_VALUE_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[path = "native_class_drop.rs"]
+mod class_drop;
+pub use class_drop::{
+    aura_direct_arm_class_drop, aura_direct_copy_class_owners, aura_direct_drain_class_drops,
+    aura_direct_stamp_owner,
+};
 
 type NativeThunk = unsafe extern "C-unwind" fn(*const i64, usize) -> *mut OpaqueValue;
 const DIRECT_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
@@ -22801,6 +22812,7 @@ fn stop_exit_at_recovered_call() {
         };
         // The function's exits ran before it recorded the exit. Its state
         // goes as a failed task's does.
+        class_drop::drop_abandoned_owners();
         if let Some(state) = leave_recovered_call() {
             recycle_recovered_state(state);
         }

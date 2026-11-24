@@ -35,6 +35,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Types, Classes, And Returns
 
+- Classes compose traits through owned fields. A view cannot supply a delegated implementation.
+- A getter without a setter is read-only. A property result cannot provide a mutable place or a view.
+- Copy classes cannot define destructor hooks. Moving an owned field out of a class with a hook is rejected.
+- Decorated methods require a concrete callable signature. Generic methods, methods of generic classes, and initializers cannot be decorated.
+
 - Direct recursive fields require `indirect`.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions. Compute the value before construction, or set the field in `__init__`.

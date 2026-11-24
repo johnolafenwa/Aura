@@ -82,6 +82,8 @@ pub(super) struct PlainRecords {
     pub(super) enums: HashMap<String, Option<super::enums::EnumRecord>>,
     /// The module's Copy classes, whose instances keep every field inline.
     pub(super) copy_classes: HashSet<String>,
+    pub(super) hooked_classes: HashSet<String>,
+    pub(super) owner_types: HashSet<String>,
     /// The plain records made so far, which number their access codes.
     plain_count: u32,
     /// Each cell with its type's descriptor and access code, in the order
@@ -139,6 +141,18 @@ impl PlainRecords {
             by_class: HashMap::new(),
             classes: HashMap::new(),
             enums: HashMap::new(),
+            owner_types: super::class_drop::owner_types(module),
+            hooked_classes: module
+                .classes
+                .iter()
+                .filter(|class| {
+                    class
+                        .methods
+                        .iter()
+                        .any(|m| m.name == crate::sema::DROP_HOOK)
+                })
+                .map(|c| c.name.clone())
+                .collect(),
             copy_classes: module
                 .classes
                 .iter()

@@ -141,6 +141,10 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
+130. [ADR-0130 Delegate a trait to a field](0130-delegated-trait-implementations.md)
+131. [ADR-0131 A property setter is a mutable method](0131-property-setters.md)
+132. [ADR-0132 An owner runs its class drop hook](0132-class-drop-hooks.md)
+133. [ADR-0133 Method decorators](0133-method-decorators.md)
 135. [ADR-0135 Target Configuration](0135-build-configuration.md)
 136. [ADR-0136 Constant Evaluation](0136-constant-evaluation.md)
 137. [ADR-0137 Frozen Module Data](0137-frozen-module-data.md)

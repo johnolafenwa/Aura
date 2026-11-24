@@ -3574,11 +3574,15 @@ A getter must have this exact shape:
 - It returns an owned value other than `None`. A view result is rejected.
 - Its name does not collide with a field of the class.
 
-`@property` is the only marker a class body accepts. It stands alone on the line before `def`, and it takes no arguments. Any other `@` line in a class body is `AU2005`. Decorators on module-level functions are described in [Decorators](/manual/functions#decorators).
+Give a property a setter with `@name.setter` on a method of the same name. The setter takes `mut self` and one positional value parameter of the getter's result type. It returns `None`. Both accessors belong to the same class and can appear in either order.
 
-A property is read-only. The checker rejects each of these with `AU2045`:
+<<< ../../examples/classes/property_setter.au{aura}
 
-- assignment and compound assignment, such as `reply.total_tokens = 3`
+Assignment calls the setter on a mutable place. Compound assignment evaluates the receiver and its indices once, reads the getter, evaluates the right operand, applies the operator, and calls the setter. Getter and setter visibility follow the declarations.
+
+The checker reports `AU2045` for these uses:
+
+- assignment or compound assignment to a getter without a setter
 - assignment through the result, such as `shape.origin.x = 4`
 - a `mut` argument, a `mut self` method call, or a `match mut` scrutinee
 - a `view` or `view mut` of the property
@@ -3597,7 +3601,7 @@ def main():
     reply.doubled = 4
 ```
 
-To change the value, bind it to a local first. The local is an independent copy.
+To change a getter result independently of the receiver, bind the result to a mutable local.
 
 A getter's docstring documents the property. Hover on a read shows the property's type and then the docstring. See [Docstrings And API Docs](/manual/docstrings).
 
@@ -3714,9 +3718,19 @@ with session = Session(name="db"):
 
 `with` consumes the item expression into a fresh mutable managed binding. The binding cannot be moved out while its exit is registered. The exit runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. [Statements](/manual/statements#with-and-context-managers) defines entry views, multi-item headers, and exits that return `Result`.
 
+## Destructor Hooks
+
+A non-Copy class can define `def __drop__(mut self):`. Aura calls the hook while the fields are still available, then releases them. It runs when an owner leaves scope, when assignment replaces the value, or when an enclosing class or collection releases it. Removing and returning a collection element transfers ownership to the result. Ignoring that result releases it.
+
+<<< ../../examples/classes/drop_hook.au{aura}
+
+A whole-value move transfers the hook to the new owner. A method cannot move an owned field out of an instance with a hook because the hook must see initialized fields. The hook takes no ordinary parameters, type parameters, or preconditions. Its result is `None`. Programs cannot call the hook explicitly.
+
+Locals in one scope are released in reverse declaration order. If a hook traps, the remaining owners still run their cleanup. The first trap is the one that reaches `control.recover`, including when the original failure happened in the body. A class with a hook crosses task boundaries under the ordinary `Transfer` rules. Values a task still owns at exit run their hooks there. A value returned or sent to another task carries its cleanup obligation with it.
+
 ## Grammar
 
-[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, `@property` methods, and `pass`. An initializer is a method named `__init__`. Aura has no separate grammar for constructors, inheritance, or destructors.
+[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, decorator lines, and `pass`. Initializers and destructor hooks use the method grammar. See [Method Decorators](/manual/functions#method-decorators).
 
 ## Typing Rules
 
@@ -3753,12 +3767,16 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2001` | Unresolved class, field type, method, or member. |
 | `AU2002` | Field, default, or constructor type mismatch. Generic arity or bound failure. A non-copy field in a `copy class`. |
 | `AU2004` | Constructor or method argument-binding failure. |
-| `AU2005` | `__init__` called as a method or used as a value, or a class-body `@` line other than a bare `@property`. |
+| `AU2005` | `__init__` called as a method or used as a value. |
 | `AU2016` | Invalid `__init__` declaration: a receiver other than bare `self`, its own type parameters, a result other than `None`, `return value`, or a trait member named `__init__`. |
 | `AU2017` | A `with` item whose class has no valid `__exit__` or `close`, or whose `__enter__` has the wrong shape. |
 | `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
 | `AU2044` | An invalid property declaration. |
-| `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
+| `AU2045` | Writing a getter without a setter, or using a property as a mutable argument, view, or callable. |
+| `AU2064` | Invalid setter name, declaration, or pairing with a getter. |
+| `AU2065` | Invalid destructor hook declaration. |
+| `AU2066` | Explicit reference to a destructor hook. |
+| `AU3020` | A partial move from an owner with a destructor hook. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
 | `AU3002` | Overlapping receiver and argument borrows, or moving a field through shared access. |
@@ -3821,7 +3839,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.17 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
+- Aura classes have no inheritance or overloads. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -3842,12 +3860,13 @@ Implemented:
 - context manager classes, including generic ones
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
-- read-only `@property` getters
+- computed property getters and setters
+- destructor hooks, method decorators, and field delegation
 - custom rendering through the prelude `Display` trait
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, property setters, and destructor hooks. Do not infer them from accepted class syntax.
+For behavior shared by several classes, see [Delegating To A Field](/manual/generics-and-traits#delegating-to-a-field).
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 
@@ -8503,6 +8522,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Types, Classes, And Returns
 
+- Classes compose traits through owned fields. A view cannot supply a delegated implementation.
+- A getter without a setter is read-only. A property result cannot provide a mutable place or a view.
+- Copy classes cannot define destructor hooks. Moving an owned field out of a class with a hook is rejected.
+- Decorated methods require a concrete callable signature. Generic methods, methods of generic classes, and initializers cannot be decorated.
+
 - Direct recursive fields require `indirect`.
 - Empty list, dictionary, and set literals need an expected collection type.
 - Class field defaults cannot call user-defined functions. Compute the value before construction, or set the field in `__init__`.
@@ -8882,7 +8906,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator inside a function body, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -8901,13 +8925,20 @@ String and format-specification diagnostics are described under
 | `AU2042` | invalid docstring or documentation limit | A triple-quoted string in a class, enum, trait, or `impl` body outside a documentation position, or documentation over a size limit. | Move the string to the first slot or directly after a field, or shorten the documentation. |
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
-| `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
+| `AU2045` | invalid property use | Assignment or compound assignment to a getter without a setter, or using a property as a `mut` argument or receiver, `match mut` scrutinee, view, or callable. | Read the property without parentheses, or bind it to a local and change the local. |
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec` and `tensor.Module`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
-| `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
+| `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, on an initializer or a method of a generic class, or a decorator group without a function or class method definition. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2060` | unknown delegation field | The name after `by` does not name a field of the class. | Name the stored field that supplies the trait. |
+| `AU2061` | unsatisfied delegation trait | The field type does not implement the requested trait specialization. | Implement that trait on the field type, or add the required generic bound. |
+| `AU2062` | duplicate trait delegation | Two declarations delegate the same trait specialization for one class. | Keep one delegation and put the overrides in its suite. |
+| `AU2063` | delegation to a view field | A view cannot supply the owned field required by a delegation. | Store the concrete owner in the class. |
+| `AU2064` | invalid property setter | A setter is duplicated, lacks a matching getter, or has the wrong name, receiver, parameter, or result. | Pair it with the same-name getter and write `def name(mut self, value: T):` for a getter returning `T`. |
+| `AU2065` | invalid drop hook declaration | The hook is on a Copy class or has an invalid signature or precondition. | Use `def __drop__(mut self):` in an ordinary class. |
+| `AU2066` | explicit drop hook reference | A program calls or binds the automatic hook. | Let the owner release it, or put an explicit operation in another method. |
 | `AU2070` | invalid build configuration | A cfg name is invalid, an option is incomplete, or a manifest value has an unsupported type. | Use an identifier and a string or boolean manifest value. |
 | `AU2071` | invalid compile-time condition | A declaration guard depends on a runtime value or its result is not boolean. | Write a boolean condition over build properties or marked constants. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
@@ -9131,6 +9162,7 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
 | `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 | `AU3012` | definite initialization | Inside `__init__`, a read of a field before it is set, an assignment to a field set on only some paths, or a use, escape, or return of `self` before every field is set. | Set the field on every path first, or move the use after the last field assignment. |
+| `AU3020` | partial move from a class with a drop hook | A move would leave the hook with an uninitialized field. | Move the complete owner or borrow the field. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -14896,7 +14928,7 @@ A stored `TaskCallable[...]` value is also a valid target. It moves into the sta
 
 ## Decorators
 
-A decorator line above a module-level function replaces the function with the result of calling the decorator on it. Write `@` and one expression on each line above `def`.
+A decorator line above a function or class method replaces its callable with the result of applying the decorator. Write `@` and one expression on each line above `def`.
 
 ```aura
 type Step = Callable[def(n: int64) -> int64]
@@ -14990,6 +15022,14 @@ A decorator factory may be generic too. Its own arguments, such as the attempt c
 
 A retry calls the wrapped function again with the same argument, so it needs a shared or Copy parameter. A function that takes `own` arguments fails at the decorator with `AU2002`. Its help points to an explicit loop that builds a new argument for each attempt.
 
+### Method Decorators
+
+An instance method supplies its receiver as the first parameter of the callable. Use `self: Counter`, `self: mut Counter`, or `self: own Counter` to match the method's receiver. An associated method supplies its declared parameters only.
+
+<<< ../../examples/classes/method_decorators.au{aura}
+
+Here the decorator runs once when the module initializes. Every call to `counter.score()` uses the resulting callable. Binding `counter.score` to a local or calling the method recursively uses that same callable. Visibility and receiver access rules apply at the member use.
+
 ### Restrictions
 
 The checker rejects these with `AU2047`:
@@ -14998,13 +15038,14 @@ The checker rejects these with `AU2047`:
 - a decorated `main`
 - a parameter with a default, because a closure has no parameter defaults
 - a decorated function that returns a view
-- a decorator line that is not followed by a module-level `def`
+- a decorator group without a function or class method definition
+- a decorated initializer or a decorated method of a generic class
 
-A decorator inside a function body, or in a class body other than `@property`, reports `AU2005`. Decorators on classes, enums, and methods are not implemented.
+A decorator inside a function body reports `AU2005`. Classes and enums cannot themselves take decorators. The class markers `@property` and `@name.setter` declare computed properties. [Properties](/manual/classes#properties)
 
 ### Tooling
 
-Hover on a decorated function shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
+Hover on a decorated function or method shows its decorator lines above the signature. `aura doc` lists it as a function, with its decorators and docstring. `aura fmt` keeps decorator lines directly above their definition.
 
 ## Contracts
 
@@ -15507,9 +15548,19 @@ def build[T: shapes.Make](seed: int64) -> T:
 
 The qualified name and a `from shapes import Make` name the same trait. A module alias works too, as in `impl sh.Make for Gadget` after `import shapes as sh`.
 
-An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` and `tensor.Module` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs) and [Modules](/manual/tensors#modules).
+An implementation with neither a body nor a `by` field, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` and `tensor.Module` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs) and [Modules](/manual/tensors#modules).
 
 Aura 0.17 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+
+### Delegating To A Field
+
+Write `impl Named for Car by engine` when the owned field `Car.engine` already implements `Named`. The declaration makes a `Car` usable as a `Named` in a concrete call, a generic bound, or a `dyn Named` object.
+
+<<< ../../examples/traits/delegation.au{aura}
+
+An optional suite after `by engine:` can implement individual methods. Other methods call the field's selected implementation, including its overrides of trait defaults. A shared receiver borrows the field, `mut self` updates it in place, and `own self` consumes it. Parameter modes and trait contracts carry through the call. Verification checks the forwarding body against the same contract as a written method.
+
+Delegation also supplies the required supertraits and takes associated types from the field implementation. An existing coherent parent implementation supplies its own methods. For a generic class, state the field's required bound, as in `impl[T: Named] Named for Car[T] by engine`. A qualified import can name the trait. If a method promises to return the outer `Self` and the field implementation returns the field type, supply an override that constructs the outer value.
 
 ### Trait Methods On Unions
 
@@ -15876,7 +15927,7 @@ trait Labelled: Named:
 
 The second colon ends the header. Separate multiple supertraits with commas.
 
-`impl Labelled for User` is valid only when `User` also satisfies `Named` through an applicable implementation. Implementing the child trait does not create the parent implementation. A child bound makes the supertrait methods available, and default child methods can call them.
+`impl Labelled for User` is valid only when `User` also satisfies `Named` through an applicable implementation. An ordinary implementation of the child trait requires a separate parent implementation. A delegated implementation can forward the parent to its field. A child bound makes the supertrait methods available, and default child methods can call them.
 
 Supertrait types must name known traits with exact arity. Bound and dispatch checking closes the requirements transitively.
 
@@ -16617,6 +16668,7 @@ Several words are contextual:
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
 | `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
 | `export` | At module level, `export` followed by a string starts an exported function declaration. Elsewhere it is an ordinary identifier. |
+| `by` | After an implementation target, introduces the field supplying the trait. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -16750,8 +16802,7 @@ comma.
 -> @
 ```
 
-`@` begins a decorator line above a module-level function, or the
-`@property` marker of a class method.
+`@` begins a decorator line above a module function or class method. Class methods also use `@property` and `@name.setter` as accessor markers.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -17046,7 +17097,9 @@ class-member
     | "pass", NEWLINE
     | [ "public" ], field-declaration
     | [ "public" ], method-declaration
-    | "@", "property", NEWLINE, [ "public" ], method-declaration ;
+    | "@", "property", NEWLINE, [ "public" ], method-declaration
+    | "@", identifier, ".", "setter", NEWLINE, [ "public" ], method-declaration
+    | decorator, { decorator }, [ "public" ], method-declaration ;
 
 field-declaration
     = identifier, ":", type,
@@ -17059,7 +17112,7 @@ start on the line directly after the field. A class body whose only entry is a
 docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
-`property` after `@` is the only accepted marker name in a class body.
+The property markers take no arguments and each occupies a line of its own.
 A method named `__init__` is the class's initializer. It uses the ordinary
 method grammar. Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
@@ -17149,10 +17202,7 @@ interpreted as an ordinary parameter. Use one of the receiver forms above.
 Call sites pass the value directly. They never prefix an argument with a
 capability.
 
-A `decorator` line starts at column 0 and holds one expression. Comment lines
-and blank lines may sit between decorator lines and the definition. Any other
-line ends the group and reports `AU2047`. Only a module-level function takes
-decorators. [Decorators](/manual/functions#decorators) gives the meaning.
+A `decorator` line is indented to match the function or method definition it precedes. It holds one expression. Comment lines and blank lines may sit between decorator lines and the definition. [Decorators](/manual/functions#decorators) gives the meaning.
 
 Bare means shared access for every type, including declaration-known copy
 types. An ordinary return type annotation is an owned return. A view
@@ -17190,7 +17240,7 @@ docstring-suite = INDENT, docstring, DEDENT ;
 impl-declaration
     = "impl", [ bounded-type-parameters ],
       identifier-path, [ "[", type-list, "]" ],
-      "for", type,
+      "for", type, [ "by", identifier ],
       ( NEWLINE
       | ":", NEWLINE, INDENT, impl-member, { impl-member }, DEDENT ) ;
 
@@ -17199,8 +17249,7 @@ impl-member
     | method-declaration ;
 ```
 
-An implementation without `:` and a suite asks the compiler to derive its
-methods. Only `json.Codec` can be derived.
+An implementation with `by` forwards missing methods to the named field. An implementation with neither `by` nor a suite asks the compiler to derive its methods. The derivable traits are `json.Codec` and `tensor.Module`.
 
 Trait-declaration type parameters use the plain form. Bounds on them are
 expressed through supertraits or method constraints, not inline in the trait
@@ -17821,8 +17870,8 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, attributes, and decorators on classes, enums,
-  methods, or local functions
+- class inheritance
+- local item declarations, attributes, and decorators on classes, enums, or local functions
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations
@@ -36911,9 +36960,7 @@ $ aura run src/main.au
 gives back a fresh value. A property getter must take bare `self` and no
 other parameters, since reading a property shouldn't change anything.
 
-A property is read-only. Python lets you add a setter with
-`@pages_left.setter`. Aura has no setters, and assigning to a property is an
-error:
+So far `pages_left` has only a getter. If we try to set it, the checker tells us where the write would go:
 
 ```aura check-fail:AU2045
 class Book:
@@ -36940,11 +36987,15 @@ error[AU2045]: property `pages_left` is read-only and cannot be assigned
   = help: a property computes a fresh value on each read; bind it to a local to change the copy
 ```
 
-The reasoning is the same as for receivers. Assignment to a field is visibly
-a change to the instance, and the compiler checks that the instance is
-mutable. A setter would hide an arbitrary method call behind something that
-looks like a field write. If changing a value takes logic, write a `mut self`
-method with a name that says what it does, such as `read`.
+We can let a reader set how many pages remain. Add this method inside `Book`:
+
+```aura fragment
+@pages_left.setter
+def pages_left(mut self, value: int64):
+    self.pages_read = self.pages - value
+```
+
+Now `dune.pages_left = 0` records that we've read all 412 pages. Aura calls the setter on the mutable book. Writing `dune.pages_left += 1` reads the getter once, adds one, and passes the result to the setter. We could validate the requested number in the same method.
 
 ## Invariants: what is always true of a book
 
@@ -37221,11 +37272,11 @@ fresh for every instance, compute fields in `__init__`, and add associated
 functions for other ways of building one. Methods put a type's behavior next
 to its data, and their receivers say what each one does to the instance:
 `self` reads, `mut self` changes, and `own self` consumes. Properties give
-read-only computed values, `impl Display` controls printing, and composition
-and traits take the place of inheritance. An `invariant` line states what is
-true of every instance, Aura checks it at construction and around each
-public method that changes the instance, and `aura verify` proves that the
-methods keep it.
+computed reads and optional writes. Implementing `Display` controls printing,
+and composition and traits take the place of inheritance. An `invariant` line
+states what is true of every instance. Aura checks it at construction and
+around each public method that changes the instance. Use `aura verify` to prove
+that the methods preserve it.
 
 Every field of a class is present at once: a book always has a title, a page
 count, and a position. Plenty of data isn't like that. A command is either
@@ -46051,6 +46102,14 @@ well. Implementing `Priced` doesn't implement `Named` for you, though. If we
 delete the `impl Named for Book` block, the compiler reports `impl of `Priced`
 for `Book` requires supertrait `Named``.
 
+### Using a field's implementation
+
+Suppose a car gets its displayed name from its engine. If both types should satisfy `Named`, a forwarding declaration lets us write the naming logic once.
+
+<<< ../../examples/traits/delegation.au{aura}
+
+The last line prints `electric`. A function taking a `T: Named` can call `name()` on the car without knowing which field supplies it. If the car needs its own spelling later, we can add a colon and implement `name` in the delegation suite.
+
 ## Contracts on trait methods
 
 A signature says what a method takes and returns. It can't say that a price
@@ -53265,8 +53324,9 @@ The help line gives the reason. What replaces a decorated function is a
 closure, and closures have no default values for their parameters, so a
 caller who left out `sep` would have nothing to fall back on. The same check,
 `AU2047`, rejects decorating `main`, a generic function, or a function that
-returns a view. Decorators also apply only to module-level functions, not to
-methods, classes, or functions inside other functions.
+returns a view. We can decorate a class method with the same syntax. For an instance method, the first parameter of the callable is the receiver. This example wraps a shared read and prints `42`:
+
+<<< ../../examples/classes/method_decorators.au{aura}
 
 Python programmers sometimes use a decorator to register a function in a
 global table as a side effect. That doesn't carry over, because Aura modules
@@ -54157,10 +54217,7 @@ with ``cannot move managed `with` resource `file` ``. We'll come back to that
 error in [Chapter 15](/book/ch15-00-concurrency), where it is the rule that keeps
 tasks from outliving their group.
 
-The third is that `with` is how your own code gets to run at cleanup. Aura
-classes have no destructor. A class can define `__exit__`, but only a `with`
-block calls it. Watch what happens to the same `Section` with and without
-`with`:
+The third is that a `with` block calls the class's `__exit__` when we leave the block. A class can also define `__drop__(mut self)` to release what an instance owns wherever we store it. Our `Section` only defines the context manager methods. Watch what happens with and without `with`:
 
 ```aura
 class Section:

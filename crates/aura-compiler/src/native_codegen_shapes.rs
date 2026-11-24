@@ -251,6 +251,8 @@ pub(super) fn shaped_locals(
                 | Instruction::EndLoan { .. }
                 | Instruction::Eval { .. }
                 | Instruction::PushCleanup { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::PopCleanup { .. } => {}
             }
         }

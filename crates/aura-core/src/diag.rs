@@ -275,6 +275,41 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2060",
+        band: "names/types",
+        title: "unknown delegation field",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2061",
+        band: "names/types",
+        title: "unsatisfied delegation trait",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2062",
+        band: "names/types",
+        title: "duplicate trait delegation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2063",
+        band: "names/types",
+        title: "delegation to a view field",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2064",
+        band: "names/types",
+        title: "invalid property setter",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2065",
+        band: "names/types",
+        title: "invalid drop hook declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2066",
+        band: "names/types",
+        title: "explicit drop hook reference",
+    },
+    DiagnosticCodeInfo {
         code: "AU2070",
         band: "names/types",
         title: "invalid build configuration",
@@ -348,6 +383,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU3012",
         band: "ownership",
         title: "definite initialization",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3020",
+        band: "ownership",
+        title: "partial move from a class with a drop hook",
     },
     DiagnosticCodeInfo {
         code: "AU3025",

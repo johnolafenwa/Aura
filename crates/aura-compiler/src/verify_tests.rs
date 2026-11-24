@@ -4130,3 +4130,32 @@ def main():
         );
     }
 }
+
+#[test]
+fn delegated_contract_is_proved_at_the_field_call_and_at_callers() {
+    let source = include_str!("../tests/fixtures/run-pass/delegated_contract.au");
+    assert_proved(source);
+
+    let invalid = source.replace("car.echo(2)", "car.echo(-2)");
+    if let Some(report) = verify(&invalid) {
+        assert!(report.obligations.iter().any(|obligation| {
+            obligation.kind == ObligationKind::Requires
+                && matches!(obligation.status, Status::Failed { .. })
+        }));
+    }
+
+    let invalid = source.replace("return n\n", "return 0\n");
+    if let Some(report) = verify(&invalid) {
+        assert!(report.obligations.iter().any(|obligation| {
+            obligation.kind == ObligationKind::Ensures
+                && matches!(obligation.status, Status::Failed { .. })
+        }));
+    }
+}
+
+#[test]
+fn class_drop_postcondition_holds_for_every_initialized_owner() {
+    assert_proved(include_str!(
+        "../tests/fixtures/check-pass/class_drop_postcondition.au"
+    ));
+}

@@ -1,0 +1,49 @@
+type Read = Callable[def(self: Counter, *, n: int64) -> int64]
+type Bump = Callable[def(self: mut Counter) -> int64]
+type Finish = Callable[def(self: own Counter) -> int64]
+type Start = Callable[def(n: int64) -> int64]
+
+def double(f: own Read) -> Read:
+    print("decorate read")
+    return Read(lambda [own f] self, *, n: f(self, n=n) * 2)
+
+def bump_once(f: own Bump) -> Bump:
+    print("decorate bump")
+    return Bump(lambda [own f] mut self: f(self) + 10)
+
+def finish_once(f: own Finish) -> Finish:
+    print("decorate finish")
+    return Finish(lambda [own f] own self: f(self) + 100)
+
+def triple(f: own Start) -> Start:
+    print("decorate start")
+    return Start(lambda [own f] n: f(n) * 3)
+
+class Counter:
+    value: int64
+
+    @double
+    def read(self, *, n: int64) -> int64:
+        if n > 0:
+            return self.read(n=n-1)
+        return self.value
+
+    @bump_once
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+    @finish_once
+    def finish(own self) -> int64:
+        return self.value
+
+    @triple
+    def start(n: int64) -> int64:
+        return n + 1
+
+def main():
+    mut counter = Counter(value=Counter.start(1))
+    print(counter.bump())
+    read = Counter(value=counter.value).read
+    print(read(n=1))
+    print(counter.finish())

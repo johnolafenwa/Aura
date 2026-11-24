@@ -82,6 +82,9 @@ executable size.
 | `initializers.au` | `__init__` with computed and validated fields, a field default, and a method call after every field is set | `buf: 2 slots`, `buf: 0 slots`, `buf: 3 slots`, `[0, 0]`, `0`, `[7, 7, 7]` |
 | `factories.au` | A named factory returning `Result[Port, str]` that calls the initializer only on success | `port-80`, `port 70000 is out of range` |
 | `properties.au` | Read-only `@property` getters read without parentheses, including a non-Copy result that the caller owns | `15`, `30 doubled`, `[HI, THERE, !]`, `[hi, there]` |
+| `property_setter.au` | Keep a score nonnegative on direct and compound writes | `7`, `0` |
+| `method_decorators.au` | Wrap a method that reads a counter | `42` |
+| `drop_hook.au` | Follow an owner moved into a function and one released at scope exit | `visiting gallery`, `closed gallery`, `leaving lobby`, `closed lobby` |
 
 ### `agents/`
 
@@ -201,6 +204,7 @@ seven real loopback requests.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `greeter.au` | Trait declarations, `impl Trait for Type`, and bounded generic calls | `hello aura`, `hello aura` |
+| `delegation.au` | Forward a car's name to its engine | `electric` |
 | `generic_dispatch_multiple_types.au` | Bounded generic trait dispatch across several concrete implementors | `dog`, `cat` |
 | `generic_trait_bounds.au` | Generic trait bounds such as `T: Mapper[int32]` with an owned mapper input | `20` |
 | `multiple_bounds.au` | Bounded generic calls with `T: A + B` | `9` |

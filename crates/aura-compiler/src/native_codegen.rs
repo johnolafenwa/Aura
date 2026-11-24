@@ -1306,6 +1306,15 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
+            if function.receiver == Some(MirReceiverKind::BorrowMut)
+                && self.module.classes.iter().any(|c| {
+                    c.methods.iter().any(|m| {
+                        m.name == crate::sema::DROP_HOOK && m.function_name == function.name
+                    })
+                })
+            {
+                self.define_drop_thunk(function)?;
+            }
             if function.receiver.is_none() {
                 self.define_function_thunk(function)?;
                 self.define_function_default_binder(function)?;
@@ -2499,6 +2508,12 @@ impl<'a> NativeCodegen<'a> {
         })
         .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
+            class_owners: class_drop::Owners::prepare(
+                function,
+                &self.plain_records.owner_types,
+                builder,
+                &mut variable_index,
+            ),
             builder,
             blocks,
             variables,
@@ -2652,6 +2667,14 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        for param in &function.params {
+            if param.passing == MirReceiverKind::Value {
+                compiler.stamp_lexical_owner(&param.name)?;
+            }
+        }
+        if function.receiver == Some(MirReceiverKind::Value) {
+            compiler.stamp_lexical_owner("self")?;
+        }
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
@@ -3907,7 +3930,11 @@ fn direct_reverse_postorder(
     Ok(postorder)
 }
 
+#[path = "native_codegen_class_drop.rs"]
+mod class_drop;
+
 struct FunctionCompiler<'a> {
+    class_owners: class_drop::Owners,
     builder: &'a mut dyn FunctionBackend,
     /// The machine of a freestanding object, whose checks call the trap
     /// hook in place of the runtime.
@@ -5135,6 +5162,7 @@ impl<'a> FunctionCompiler<'a> {
             let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
             self.str_append_root = None;
             compiled?;
+            self.after_owner_instruction(instruction)?;
         }
         // No range proof names the terminator.
         self.current_snapshot_instruction = usize::MAX;
@@ -5771,6 +5799,8 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::SourceLocation { line, column } => {
                 self.builder.set_source_location(*line, *column);
             }
+            Instruction::ArmDrop { place, function } => self.arm_drop_hook(place, function)?,
+            Instruction::EndOwner { .. } => {}
             Instruction::SourceName { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -17338,6 +17368,20 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_opaque_owned(&object);
             return Ok(self.owned_opaque_result(object.values, result_ty));
         }
+        if matches!(op, ValueOp::Clone | ValueOp::Copy)
+            && !self.plain_records.owner_types.is_empty()
+            && class_drop::can_hold_owner(&receiver_ty, &self.plain_records.owner_types)
+        {
+            let id = declare_runtime_function(
+                self.builder.module(),
+                "aura_direct_copy_class_owners",
+                &[types::I64],
+                Some(types::I64),
+            )?;
+            let copy = self.builder.import_function(id);
+            let result = self.builder.call(copy, &[object.values[0]]);
+            return Ok(self.owned_opaque_result(result.results, result_ty));
+        }
         let results = self.runtime_call_results(
             self.runtime[runtime_op.runtime_call().function],
             &[object.values[0]],
@@ -18774,7 +18818,15 @@ impl<'a> FunctionCompiler<'a> {
         // receiver, such as a shared instance, an enum, or a scalar, takes
         // the tests by type name below.
         let mut codes = Vec::new();
+        let needs_owner = candidates
+            .iter()
+            .any(|candidate| candidate.owner_type.is_some());
         for (index, candidate) in candidates.iter().enumerate() {
+            // A less specific unguarded candidate must not bypass a more
+            // specific one when the receiver type selects both.
+            if needs_owner {
+                break;
+            }
             let Type::Named(name, args) = &candidate.ty else {
                 continue;
             };
@@ -18803,6 +18855,15 @@ impl<'a> FunctionCompiler<'a> {
         for (candidate, then_block) in candidates.iter().zip(&then_blocks) {
             self.layout_scratch = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
+            let matched = if let Some(owner_ty) = &candidate.owner_type {
+                let owner = self.load_place("self")?;
+                let owner = self.ensure_opaque(owner)?;
+                let owner_matches = self.value_matches_runtime_type(owner.values[0], owner_ty)?;
+                self.release_temporary_owned_since(&caller_owned);
+                self.builder.band(matched, owner_matches)
+            } else {
+                matched
+            };
             let else_block = self.builder.create_block();
             self.builder
                 .brif(matched, *then_block, &[], else_block, &[]);
@@ -20803,6 +20864,8 @@ fn validate_function_in_reachable(
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::SourceName { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -21374,6 +21437,13 @@ fn direct_type_inner(
         }
         Type::Named(name, args) if args.is_empty() => {
             if let Some(class) = classes.get(name) {
+                if class
+                    .methods
+                    .iter()
+                    .any(|method| method.name == crate::sema::DROP_HOOK)
+                {
+                    return Some(DirectType::Opaque(ty.clone()));
+                }
                 if !visiting.insert(name.clone()) {
                     return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                 }
