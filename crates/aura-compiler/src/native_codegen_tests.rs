@@ -17120,6 +17120,35 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_sanitizes_all_flag_lists_before_trapping() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def writes_two(first: mut ptr[bool], second: mut ptr[bool]) -> None
+
+def main() -> int32:
+    mut a: list[bool] = [false]
+    mut b: list[bool] = [false]
+    writes_two(a, b)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("multi-flag-list call should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "writes_two",
+        "aura_direct_ffi_sanitize_flags",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"

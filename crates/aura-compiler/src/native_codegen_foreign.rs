@@ -1025,12 +1025,25 @@ impl FunctionCompiler<'_> {
             self.release_foreign_allocation(copy, RuntimeFn::ReleaseValue);
         }
         // A C function can leave any byte in a `bool` it writes through.
-        for list in flag_lists {
+        // When multiple `mut ptr[bool]` parameters cross the call, sanitize
+        // every list before trapping so recovery cannot observe raw bytes.
+        if flag_lists.len() == 1 {
             let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
             self.builder.call(
                 self.runtime[RuntimeFn::FfiCheckFlags],
-                &[list, symbol_ptr, symbol_len],
+                &[flag_lists[0], symbol_ptr, symbol_len],
             );
+        } else if flag_lists.len() > 1 {
+            let mut first_bad = self.builder.iconst(types::I64, 0);
+            for list in flag_lists {
+                let bad = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FfiSanitizeFlags], &[list])
+                    .results[0];
+                let none_yet = self.builder.icmp_imm(IntCC::Equal, first_bad, 0);
+                first_bad = self.builder.select(none_yet, bad, first_bad);
+            }
+            self.trap_on_bad_bool(first_bad, &call.symbol)?;
         }
         for (place, expected, writeback) in writebacks {
             let flags = MemFlags::trusted();

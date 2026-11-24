@@ -285,7 +285,7 @@ pub fn evaluate_regex_builtin(
                 groups.reserve(captures.len());
                 matched.reserve(captures.len());
                 for group in captures.iter() {
-                    matched.push(group.is_some());
+                    matched.push(crate::list_elements::BoolByte::from_bool(group.is_some()));
                     groups.push(Value::string(group.map_or("", |group| group.as_str())));
                 }
             }

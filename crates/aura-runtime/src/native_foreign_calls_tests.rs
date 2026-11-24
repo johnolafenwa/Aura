@@ -670,6 +670,35 @@ fn a_flag_list_with_a_byte_that_is_not_a_bool_ends_the_task() {
 }
 
 #[test]
+fn sanitize_flags_normalizes_all_non_canonical_bytes_before_reporting() {
+    use super::aura_direct_ffi_sanitize_flags;
+    unsafe {
+        let first = list_value(scalar_flags(&[false, false]));
+        let second = list_value(scalar_flags(&[false, false]));
+        let mut first_view = empty_view();
+        let mut second_view = empty_view();
+        aura_direct_ffi_elements_mut(first, BOOL, &mut first_view);
+        aura_direct_ffi_elements_mut(second, BOOL, &mut second_view);
+        first_view.pointer.cast_mut().add(0).write(2);
+        second_view.pointer.cast_mut().add(1).write(255);
+
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 2);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 255);
+        // Subsequent checks see canonical 0/1 bytes in both lists.
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 0);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 0);
+        assert_eq!(with_value(first, |v| v.render()), "[true, false]");
+        assert_eq!(with_value(second, |v| v.render()), "[false, true]");
+
+        let text = string_value("x");
+        assert_eq!(aura_direct_ffi_sanitize_flags(text), 0);
+        aura_direct_release_value(text);
+        aura_direct_release_value(first);
+        aura_direct_release_value(second);
+    }
+}
+
+#[test]
 fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
     unsafe extern "C-unwind" fn doubles(frame: *mut u64) {

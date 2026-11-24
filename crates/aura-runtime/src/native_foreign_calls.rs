@@ -640,6 +640,26 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bad_bool(
     })
 }
 
+/// Sanitizes any non-canonical byte (`> 1`) left in the `list[bool]` `value`
+/// to `1` (`true`). Returns the first offending byte (`2..=255`), or `0`
+/// when every element was canonical (`0` or `1`) or `value` is not a bool list.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_sanitize_flags(value: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| unsafe {
+        let bad = value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                return None;
+            };
+            vector.elements.sanitize_bool_bytes()
+        });
+        bad.map_or(0, i64::from)
+    })
+}
+
 /// Ends the task with `AU4001` when the foreign function `symbol` left a
 /// byte that is neither 0 nor 1 in the `list[bool]` `value` it wrote
 /// through a `mut ptr[bool]`. The byte becomes `true` first, so the list
@@ -660,16 +680,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
             let Value::Vec(vector) = value else {
                 return None;
             };
-            let length = vector.elements.len();
-            let flags = vector.elements.scalars_mut(ListForm::Bool)?;
-            // SAFETY: a `bool` list keeps one byte per element, and the
-            // bytes are read and written as bytes.
-            let bytes = std::slice::from_raw_parts_mut(flags, length);
-            let bad = bytes.iter().copied().find(|byte| *byte > 1);
-            for byte in bytes.iter_mut().filter(|byte| **byte > 1) {
-                *byte = 1;
-            }
-            bad
+            vector.elements.sanitize_bool_bytes()
         });
         if let Some(byte) = bad {
             foreign_call_failure(

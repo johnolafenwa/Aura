@@ -9367,7 +9367,9 @@ fn push_scalar_bits(elements: &mut ListElements, kind: DirectScalarKind, bits: i
     match (elements, kind) {
         (ListElements::Int64(values), K::Int64) => values.push(bits),
         (ListElements::Float64(values), K::Float64) => values.push(f64::from_bits(bits as u64)),
-        (ListElements::Bool(values), K::Bool) => values.push(bits != 0),
+        (ListElements::Bool(values), K::Bool) => {
+            values.push(crate::list_elements::BoolByte::from_bool(bits != 0))
+        }
         (ListElements::Int8(values), K::Int8) => values.push(bits as i8),
         (ListElements::Int16(values), K::Int16) => values.push(bits as i16),
         (ListElements::Int32(values), K::Int32) => values.push(bits as i32),
