@@ -4130,3 +4130,21 @@ def main():
         );
     }
 }
+
+#[test]
+fn fixed_arrays_have_constant_lengths_and_zero_based_bounds() {
+    let source = r#"
+def pick(i: int64) -> uint8:
+    requires 0 <= i and i < 3
+    row: fixed[uint8, 3] = [4] * 3
+    assert len(row) == 3
+    assert row[i] == 4
+    return row[i]
+
+def bad() -> uint8:
+    row: fixed[uint8, 2] = [1, 2]
+    return row[-1]
+"#;
+    let Some(report) = verify(source) else { return };
+    assert_eq!(open_checks(&report), ["11 index in range failed"]);
+}
