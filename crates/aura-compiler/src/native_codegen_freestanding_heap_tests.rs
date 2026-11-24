@@ -237,6 +237,8 @@ def main() -> None:
         .symbols()
         .filter(|symbol| symbol.is_undefined())
         .filter_map(|symbol| symbol.name().ok())
+        // A Mach-O object spells each C symbol with a leading underscore.
+        .map(|name| name.strip_prefix('_').unwrap_or(name))
         .collect::<Vec<_>>();
     assert!(undefined.contains(&"aura_host_mem_alloc"), "{undefined:?}");
     assert!(!undefined.contains(&"aura_alloc"), "{undefined:?}");
