@@ -259,6 +259,14 @@ impl FunctionCompiler<'_> {
     /// The address of a local array or a fixed field flattened into a local's variables.
     /// The caller must resolve a view or module cell before using this local-only lookup.
     pub(super) fn fixed_local_address(&mut self, place: &str) -> Option<(Val, FixedArrayLayout)> {
+        if let Some((layout, slot)) = self.raw_cells.get(place) {
+            if layout.name == "#fixed" {
+                let address = *slot;
+                if let DirectType::Fixed(fixed) = self.type_of_place(place).ok()? {
+                    return Some((address, fixed));
+                }
+            }
+        }
         let mut path = place.split('.');
         let root = path.next()?;
         if self.view_places.contains_key(root) {
