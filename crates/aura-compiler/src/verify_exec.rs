@@ -87,7 +87,7 @@ pub(super) fn lit(value: i128) -> String {
 
 /// The SMT sort of a list's element store, when its elements are scalars
 /// the encoding models.
-fn element_sort(element: &Type) -> Option<&'static str> {
+pub(super) fn element_sort(element: &Type) -> Option<&'static str> {
     if let Some(float) = FloatTy::of(element) {
         Some(float.sort())
     } else if IntTy::of(element).is_some() {
@@ -354,6 +354,10 @@ pub(super) enum Store {
     /// The elements of a reversed list, read from the store it had:
     /// position `i` is that store's position `last - i`.
     Reversed(Box<Store>, String),
+    /// Elements that are lists: an `(Array Int Int)` of their lengths,
+    /// and an `(Array Int (Array Int S))` of their own scalar elements
+    /// when the encoding models those.
+    Lists(String, Option<(String, &'static str)>),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -1878,7 +1882,13 @@ impl<'a> Exec<'a> {
         State { pc, env, loans }
     }
 
-    fn merge_terms(&mut self, sort: &str, pcs: &[String], terms: &[&str], hint: &str) -> String {
+    pub(super) fn merge_terms(
+        &mut self,
+        sort: &str,
+        pcs: &[String],
+        terms: &[&str],
+        hint: &str,
+    ) -> String {
         if terms.iter().all(|term| *term == terms[0]) {
             return terms[0].to_string();
         }
@@ -2457,6 +2467,9 @@ impl<'a> Exec<'a> {
             let array = self.fresh_const(&format!("(Array Int {sort})"), hint);
             return Some(Store::Leaf(array, sort));
         }
+        if let Some(lists) = self.fresh_lists_store(elem, hint) {
+            return Some(lists);
+        }
         if depth > MAX_DEPTH {
             return None;
         }
@@ -2494,6 +2507,7 @@ impl<'a> Exec<'a> {
             Store::Reversed(base, last) => {
                 self.store_select(base, elem, &format!("(- {last} {index})"))
             }
+            Store::Lists(lens, rows) => super::collections::row(lens, rows, elem, index),
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -2556,6 +2570,7 @@ impl<'a> Exec<'a> {
                 let copy = self.copied_store(store);
                 self.store_put(&copy, index, value)
             }
+            (Store::Lists(..), _) => self.put_row(store, index, value),
             _ => None,
         }
     }
@@ -2576,6 +2591,9 @@ impl<'a> Exec<'a> {
     }
 
     fn merge_stores(&mut self, pcs: &[String], stores: &[&Store], hint: &str) -> Option<Store> {
+        if let Some(Store::Lists(..)) = stores.first() {
+            return self.merge_rows(pcs, stores, hint);
+        }
         let Store::Items(first) = stores.first()? else {
             // Leaves merge as arrays. A span's store is never merged: it
             // exists only while a contract is read.
@@ -2634,6 +2652,7 @@ impl<'a> Exec<'a> {
                     })
                     .collect(),
             ),
+            row @ Val::List { .. } => self.named_row(row, hint),
             other => other,
         }
     }

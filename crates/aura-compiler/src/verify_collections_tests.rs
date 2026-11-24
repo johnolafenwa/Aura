@@ -880,3 +880,188 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn a_list_of_lists_knows_each_row_s_length_and_elements() {
+    assert_proved(
+        r#"
+def cell(grid: list[list[int64]], r: int64, c: int64) -> int64:
+    requires 0 <= r and r < len(grid)
+    requires forall(row in grid, len(row) > c) and c >= 0
+    ensures result == grid[r][c]
+    return grid[r][c]
+
+def by_index(grid: list[list[int64]], r: int64, c: int64) -> int64:
+    requires 0 <= r and r < len(grid)
+    requires forall(i in range(len(grid)), len(grid[i]) > c) and c >= 0
+    return grid[r][c]
+
+def width(grid: list[list[int64]]) -> int64:
+    requires len(grid) > 0
+    ensures result == len(grid[0])
+    ensures result >= 0
+    row = grid[0]
+    return len(row)
+
+def total(grid: list[list[int64]]) -> int64:
+    requires forall(row in grid, len(row) == 2)
+    requires forall(row in grid, forall(x in row, 0 <= x and x < 10))
+    mut count = 0
+    for row in grid:
+        invariant 0 <= count
+        if row[0] + row[1] > 5:
+            count = 1
+    return count
+
+def build() -> int64:
+    ensures result == 4
+    grid = [[1, 2], [3, 4]]
+    assert len(grid) == 2 and len(grid[1]) == 2
+    return grid[1][1]
+
+def grow(grid: mut list[list[int64]]):
+    ensures len(grid) == len(old(grid)) + 1
+    ensures len(grid[len(grid) - 1]) == 3
+    ensures grid[len(grid) - 1][2] == 9
+    grid.append([7, 8, 9])
+
+def pick(grid: list[list[int64]], flag: bool) -> int64:
+    requires len(grid) > 1
+    requires len(grid[0]) > 0 and len(grid[1]) > 0
+    mut rows = grid[:]
+    if flag:
+        rows[0] = [5]
+    assert len(rows[0]) > 0
+    return rows[0][0]
+
+def tail(grid: list[list[int64]]) -> int64:
+    requires len(grid) > 2 and len(grid[2]) > 0
+    ensures result == grid[2][0]
+    rest = grid[1:]
+    mut back = grid[:]
+    back.reverse()
+    assert len(back[len(grid) - 3]) > 0
+    return rest[1][0]
+
+def names(table: list[list[str]]) -> int64:
+    requires len(table) > 0 and len(table[0]) > 0
+    ensures result == len(table[0][0])
+    return len(table[0][0])
+
+def main():
+    grid = [[1, 2], [3, 4], [5, 6]]
+    print(cell(grid, 1, 1))
+    print(by_index(grid, 1, 1))
+    print(width(grid))
+    print(total(grid))
+    print(build())
+    mut more = [[1, 2], [3, 4]]
+    grow(more)
+    print(pick(grid, true))
+    print(tail(grid))
+    print(names([["a"]]))
+"#,
+    );
+}
+
+#[test]
+fn a_wrong_claim_about_a_list_of_lists_still_fails() {
+    assert_open(
+        r#"
+def cell(grid: list[list[int64]], r: int64, c: int64) -> int64:
+    requires 0 <= r and r < len(grid)
+    requires c >= 0
+    return grid[r][c]
+
+def other_row(grid: list[list[int64]], c: int64) -> int64:
+    requires len(grid) > 1
+    requires 0 <= c and c < len(grid[0])
+    return grid[1][c]
+
+def same(grid: list[list[int64]]) -> bool:
+    requires len(grid) > 1 and len(grid[0]) > 0 and len(grid[1]) > 0
+    ensures result
+    return grid[0][0] == grid[1][0]
+
+def build() -> int64:
+    ensures result == 3
+    grid = [[1, 2], [3, 4]]
+    return grid[1][1]
+
+def past_the_row() -> int64:
+    grid = [[1, 2], [3]]
+    return grid[1][1]
+
+def main():
+    print(build())
+"#,
+        &[
+            "5 index in range failed",
+            "10 index in range failed",
+            "14 ensures failed",
+            "18 ensures failed",
+            "24 index in range failed",
+        ],
+    );
+}
+
+#[test]
+fn lists_of_lists_agree_with_their_model_at_run_time() {
+    assert_runs(
+        r#"
+def main():
+    mut grid = [[1, 2], [3], [4, 5, 6]]
+    assert len(grid) == 3 and len(grid[0]) == 2 and len(grid[1]) == 1
+    grid[2][1] = 9
+    assert grid[2][1] == 9 and grid[2][0] == 4 and grid[0][1] == 2
+    grid.append([7])
+    assert len(grid) == 4 and grid[3][0] == 7
+    rest = grid[1:]
+    assert len(rest) == 3 and len(rest[1]) == 3 and rest[1][1] == 9
+    mut back = grid[:]
+    back.reverse()
+    assert back[0][0] == 7 and len(back[3]) == 2
+    back[0] = [0, 0]
+    assert len(grid[3]) == 1 and len(back[0]) == 2
+"#,
+    );
+}
+
+#[test]
+fn a_write_inside_a_row_keeps_the_rows_and_loses_their_elements() {
+    // A write through a borrow of a row is not followed: the outer list
+    // keeps its length, and what its rows hold is unknown after it.
+    assert_open(
+        r#"
+def set_cell(grid: mut list[list[int64]], r: int64, c: int64):
+    requires 0 <= r and r < len(grid)
+    requires 0 <= c and c < len(grid[r])
+    ensures len(grid) == len(old(grid))
+    ensures grid[r][c] == 7
+    grid[r][c] = 7
+
+def main():
+    mut cells = [[1, 2], [3, 4]]
+    set_cell(cells, 1, 1)
+"#,
+        &[
+            "6 ensures unsupported",
+            "6 index in range unsupported",
+            "7 index in range failed",
+        ],
+    );
+}
+
+#[test]
+fn membership_in_a_short_literal_list_is_decided() {
+    assert_proved(
+        r#"
+def main():
+    xs = [4, 5, 6]
+    assert 5 in xs
+    assert 7 not in xs
+    empty: list[int64] = []
+    assert 1 not in empty
+"#,
+    );
+}

@@ -7,12 +7,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::exec::{loan_roots, root_of, terminator_targets, Exec, Goal, IntTy, State, Store, Val};
+use super::exec::{
+    element_sort, loan_roots, root_of, structural_eq, terminator_targets, Exec, Goal, IntTy, State,
+    Store, Val,
+};
 use super::ObligationKind;
 use crate::ast::BinaryOp;
 use crate::diag::Span;
 use crate::mir::{BasicBlock, CallTarget, Instruction, MirArg, Operand, Rvalue, Terminator};
 use crate::runtime_ops::{ListOp, RuntimeOp};
+use crate::sema::Type;
 
 /// The fewest and the most times something happens on a path.
 type Count = (u64, u64);
@@ -37,6 +41,31 @@ fn leaf_selects(store: &Store, index: &str) -> Vec<String> {
             .collect(),
         Store::Shifted(base, start) => leaf_selects(base, &format!("(+ {index} {start})")),
         Store::Reversed(base, last) => leaf_selects(base, &format!("(- {last} {index})")),
+        Store::Lists(lens, rows) => std::iter::once(lens)
+            .chain(rows.as_ref().map(|(rows, _)| rows))
+            .map(|array| format!("(select {array} {index})"))
+            .collect(),
+    }
+}
+
+/// The list a store of lists holds at `index`: its length, and its own
+/// elements as the array the store keeps for it.
+pub(super) fn row(
+    lens: &str,
+    rows: &Option<(String, &'static str)>,
+    elem: &Type,
+    index: &str,
+) -> Val {
+    let inner = match elem {
+        Type::Named(_, args) if args.len() == 1 => args[0].clone(),
+        _ => Type::Unit,
+    };
+    Val::List {
+        len: format!("(select {lens} {index})"),
+        data: rows
+            .as_ref()
+            .map(|(rows, sort)| Store::Leaf(format!("(select {rows} {index})"), sort)),
+        elem: inner,
     }
 }
 
@@ -44,7 +73,7 @@ fn leaf_selects(store: &Store, index: &str) -> Vec<String> {
 fn scalar_sort(store: &Store) -> Option<&'static str> {
     match store {
         Store::Leaf(_, sort) => Some(sort),
-        Store::Items(_) => None,
+        Store::Items(_) | Store::Lists(..) => None,
         Store::Shifted(base, _) | Store::Reversed(base, _) => scalar_sort(base),
     }
 }
@@ -61,7 +90,7 @@ fn same_leaf(store: &Store, index: &str) -> String {
 fn leaf_range(store: &Store, low: String, high: String) -> Option<(String, String, String)> {
     match store {
         Store::Leaf(array, _) => Some((array.clone(), low, high)),
-        Store::Items(_) => None,
+        Store::Items(_) | Store::Lists(..) => None,
         Store::Shifted(base, start) => leaf_range(
             base,
             format!("(+ {low} {start})"),
@@ -253,7 +282,107 @@ impl Exec<'_> {
                     .collect(),
             ),
             Store::Shifted(base, _) | Store::Reversed(base, _) => self.fresh_like(base, hint),
+            Store::Lists(_, rows) => {
+                let lens = self.fresh_const("(Array Int Int)", hint);
+                let rows = rows
+                    .as_ref()
+                    .map(|(_, sort)| (self.fresh_rows(sort, hint), *sort));
+                Store::Lists(lens, rows)
+            }
         }
+    }
+
+    // ----- Lists of lists ---------------------------------------------------
+
+    fn fresh_rows(&mut self, sort: &str, hint: &str) -> String {
+        self.fresh_const(&format!("(Array Int (Array Int {sort}))"), hint)
+    }
+
+    /// A fresh store for elements of type `elem` when they are lists: the
+    /// length of each, and its elements when they are scalars.
+    pub(super) fn fresh_lists_store(&mut self, elem: &Type, hint: &str) -> Option<Store> {
+        let Type::Named(name, args) = elem else {
+            return None;
+        };
+        if name != "list" || args.len() != 1 {
+            return None;
+        }
+        let lens = self.fresh_const("(Array Int Int)", &format!("{hint}_lens"));
+        let rows = element_sort(&args[0]).map(|sort| (self.fresh_rows(sort, hint), sort));
+        Some(Store::Lists(lens, rows))
+    }
+
+    /// A list read from a store of lists, with its length named: no list
+    /// is longer than `int64` can count.
+    pub(super) fn named_row(&mut self, row: Val, hint: &str) -> Val {
+        let Val::List { len, data, elem } = row else {
+            return row;
+        };
+        let len = self.define("Int", &format!("{hint}_len"), len);
+        self.fact(format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
+        Val::List { len, data, elem }
+    }
+
+    /// The store of lists `store` with the list `value` at `index`.
+    pub(super) fn put_row(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
+        let (Store::Lists(lens, rows), Val::List { len, data, .. }) = (store, value) else {
+            return None;
+        };
+        let lens = self.define(
+            "(Array Int Int)",
+            "lens",
+            format!("(store {lens} {index} {len})"),
+        );
+        let rows = rows.as_ref().map(|(rows, sort)| {
+            // The elements of the list, as one array. A list whose
+            // elements the encoding lost has some array of them.
+            let plain = match data {
+                Some(data @ (Store::Shifted(..) | Store::Reversed(..))) => {
+                    Some(self.copied_store(data))
+                }
+                other => other.clone(),
+            };
+            let own = match plain {
+                Some(Store::Leaf(array, _)) => array,
+                _ => self.fresh_const(&format!("(Array Int {sort})"), "row"),
+            };
+            let rows = self.define(
+                &format!("(Array Int (Array Int {sort}))"),
+                "rows",
+                format!("(store {rows} {index} {own})"),
+            );
+            (rows, *sort)
+        });
+        Some(Store::Lists(lens, rows))
+    }
+
+    /// The store of lists each of `stores` is on the path its condition
+    /// in `pcs` describes.
+    pub(super) fn merge_rows(
+        &mut self,
+        pcs: &[String],
+        stores: &[&Store],
+        hint: &str,
+    ) -> Option<Store> {
+        let mut all_lens = Vec::new();
+        let mut all_rows = Vec::new();
+        for store in stores {
+            let Store::Lists(lens, rows) = store else {
+                return None;
+            };
+            all_lens.push(lens.as_str());
+            all_rows.extend(rows.as_ref());
+        }
+        let lens = self.merge_terms("(Array Int Int)", pcs, &all_lens, &format!("{hint}_lens"));
+        let rows = match all_rows.first() {
+            Some((_, sort)) if all_rows.len() == stores.len() => {
+                let terms: Vec<&str> = all_rows.iter().map(|(rows, _)| rows.as_str()).collect();
+                let sort_text = format!("(Array Int (Array Int {sort}))");
+                Some((self.merge_terms(&sort_text, pcs, &terms, hint), *sort))
+            }
+            _ => None,
+        };
+        Some(Store::Lists(lens, rows))
     }
 
     /// The store of a list of `len` elements after a sort: the elements of
@@ -273,6 +402,19 @@ impl Exec<'_> {
                 exec.fresh_like(store, "sorted")
             }),
         };
+        // The arrays the list reads, and the positions of them it holds:
+        // the facts read those arrays at a position itself, which a
+        // solver matches more readily than at a sum.
+        let (source, low, high) = match leaf_range(store, "0".to_string(), len.to_string()) {
+            Some((array, low, high)) => {
+                let sort = scalar_sort(store).expect("a store with one array is of scalars");
+                (Store::Leaf(array, sort), low, high)
+            }
+            None if matches!(store, Store::Shifted(..) | Store::Reversed(..)) => {
+                (self.copied_store(store), "0".to_string(), len.to_string())
+            }
+            None => (store.clone(), "0".to_string(), len.to_string()),
+        };
         // Position `i` of the result holds the element that was at
         // `from(i)`, and the element that was at `j` is now at `to(j)`.
         // The two are functions and not arrays: the solver finds a
@@ -283,28 +425,29 @@ impl Exec<'_> {
             self.decls
                 .push(format!("(declare-fun {function} (Int) Int)"));
         }
-        let inside = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
+        let in_result = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
+        let in_source = |k: &str| format!("(and (<= {low} {k}) (< {k} {high}))");
         let same = |new: &str, old: &str| {
             leaf_selects(&result, new)
                 .iter()
-                .zip(leaf_selects(store, old))
+                .zip(leaf_selects(&source, old))
                 .map(|(new, old)| format!("(= {new} {old})"))
                 .collect::<Vec<_>>()
                 .join(" ")
         };
         let moved = |i: &str| {
-            let source = format!("({from} {i})");
+            let origin = format!("({from} {i})");
             format!(
-                "(and {} (= ({to} {source}) {i}) {})",
-                inside(&source),
-                same(i, &source)
+                "(and {} (= ({to} {origin}) {i}) {})",
+                in_source(&origin),
+                same(i, &origin)
             )
         };
         let kept = |j: &str| {
             let target = format!("({to} {j})");
             format!(
                 "(and {} (= ({from} {target}) {j}) {})",
-                inside(&target),
+                in_result(&target),
                 same(&target, j)
             )
         };
@@ -322,7 +465,7 @@ impl Exec<'_> {
                 for position in 0..count {
                     let (here, next) = (position.to_string(), (position + 1).to_string());
                     self.fact(moved(&here));
-                    self.fact(kept(&here));
+                    self.fact(kept(&format!("(+ {low} {here})")));
                     if position + 1 < count {
                         self.fact(in_order(&here, &next));
                     }
@@ -331,12 +474,12 @@ impl Exec<'_> {
             _ => {
                 self.fact(format!(
                     "(forall (({i} Int)) (=> {} {}))",
-                    inside(&i),
+                    in_result(&i),
                     moved(&i)
                 ));
                 self.fact(format!(
                     "(forall (({j} Int)) (=> {} {}))",
-                    inside(&j),
+                    in_source(&j),
                     kept(&j)
                 ));
                 if ordered.is_some() {
@@ -350,15 +493,45 @@ impl Exec<'_> {
         result
     }
 
-    /// `item in list`: some position of the list holds `item`. A contract
-    /// states membership the same way, so the two agree. Floats are left
-    /// out: `nan` is not equal to itself.
+    /// `item in list`: some position of the list holds `item`, as a
+    /// contract states membership. When it holds, a position is named
+    /// that holds the item; when it does not, no position does. Floats
+    /// are left out: `nan` is not equal to itself.
     fn list_contains(&mut self, list: &Val, item: &Val) -> Option<Val> {
+        let Val::List {
+            len,
+            data: Some(data),
+            elem,
+        } = list
+        else {
+            return None;
+        };
         if !matches!(item, Val::Int(..) | Val::Bool(_) | Val::Str(_)) {
             return None;
         }
-        let held = self.membership(item, list).ok()?;
-        Some(Val::Bool(self.define("Bool", "contains", held)))
+        let holds = |exec: &Self, position: &str| {
+            structural_eq(item, &exec.store_select(data, elem, position))
+        };
+        // A short list of a known length holds the item at one of its
+        // positions: no quantifier is needed.
+        if let Some(count) = len.parse::<u8>().ok().filter(|count| *count <= 16) {
+            let mut held = "false".to_string();
+            for position in (0..count).rev() {
+                held = format!("(or {} {held})", holds(self, &position.to_string())?);
+            }
+            return Some(Val::Bool(self.define("Bool", "contains", held)));
+        }
+        holds(self, "0")?;
+        let held = self.fresh_const("Bool", "contains");
+        let (at, k) = (self.fresh_const("Int", "at"), self.bound_name());
+        let (found, other) = (holds(self, &at)?, holds(self, &k)?);
+        let inside = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
+        self.fact(format!("(=> {held} (and {} {found}))", inside(&at)));
+        self.fact(format!(
+            "(=> (not {held}) (forall (({k} Int)) (=> {} (not {other}))))",
+            inside(&k)
+        ));
+        Some(Val::Bool(held))
     }
 
     // ----- Loops the compiler can describe ----------------------------------
@@ -495,6 +668,9 @@ impl Exec<'_> {
         if least == most {
             // The length is known: it is no longer a made-up one.
             let len = self.define("Int", "len", after(least));
+            // No list is longer than `int64` can count.
+            let pc = havoc.pc.clone();
+            self.assume(&pc, format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
             let value = Val::List {
                 len,
                 data: data.clone(),
