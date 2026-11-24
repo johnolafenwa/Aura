@@ -253,7 +253,7 @@ package authorization.
 | --- | --- | --- |
 | `local_path_dependencies/app/` | `Aura.toml`, `src/`, a sibling path dependency, and a package-local helper module | `12` |
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
-| `ffi_getpid/` | Selects the Windows `GetCurrentProcessId` or Unix `getpid` C function | `true` on both backends |
+| `ffi_getpid/` | Selects the Windows `_getpid` or Unix `getpid` C function | `true` on both backends |
 | `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
 | `raylib/` | A binding of the raylib graphics library, generated from raylib's API description: structs by value, `cstr` text, `mut` struct and scalar parameters, and constants. Three programs use it: a brick game with keyboard and mouse input, a 3D scene with a camera and a model, and a picture written to a PNG with no window | `picture.au` prints the size of its image and two colors |
 

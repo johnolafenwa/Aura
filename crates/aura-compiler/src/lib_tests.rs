@@ -4598,13 +4598,14 @@ fn platform_examples_select_the_targets_process_abi_and_command() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     for (target, symbol, command) in [
-        ("x86_64-pc-windows-msvc", "GetCurrentProcessId", "cmd.exe"),
+        ("x86_64-pc-windows-msvc", "_getpid", "cmd.exe"),
         ("aarch64-unknown-linux-gnu", "getpid", "/bin/echo"),
     ] {
         let config = crate::BuildConfig::for_target(target, false).unwrap();
         crate::with_build_config(config, || {
             let program = check_path(&root.join("packages/ffi_getpid/src/main.au")).unwrap();
             let declaration = &program.extern_functions["getpid"].decl;
+            assert_eq!(declaration.return_type.name, "int32");
             assert_eq!(
                 declaration.symbol.as_ref().unwrap_or(&declaration.name),
                 symbol
