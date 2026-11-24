@@ -206,3 +206,5 @@ def main():
     mut nested: list[list[str]] = [[]]
     nested[0].append(greetings[0].clone())
     print(f"{bag.items[0]} {lists['k'][0]} {nested[0][0]}")
+    grid = [["a", "b"], ["c", "a"]]
+    print(f"{kind(grid[1][1])} {kind(grid[0][1])} {size(grid[1][0])}")

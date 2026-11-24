@@ -4138,7 +4138,7 @@ struct FunctionCompiler<'a> {
     clone_moves: HashMap<String, (String, Option<String>)>,
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
-    appended_copies: HashSet<String>,
+    appended_copies: HashMap<String, String>,
     /// The words of each such copy between the two operations, when this
     /// body has the copied `str` as words.
     deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
@@ -6280,7 +6280,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.release_opaque_handle(key);
                 }
             }
-            Instruction::Assign { target, value } if self.defer_str_copy(target, value)? => {}
+            Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();
@@ -12906,7 +12906,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err("direct backend encountered an empty move place".to_string());
         };
         let root_ty = self.local_type(root)?;
-        self.materialize_deferred_str_copy(root)?;
+        self.refuse_deferred_str_copy(root)?;
         if segments.len() == 1 {
             let vars = self.local_vars(root)?;
             let values = vars
@@ -12981,7 +12981,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
         self.materialize_str_slot(name)?;
-        self.materialize_deferred_str_copy(name)?;
+        self.refuse_deferred_str_copy(name)?;
         let vars = self.local_vars(name)?;
         let ty = self.local_type(name)?;
         let values = vars

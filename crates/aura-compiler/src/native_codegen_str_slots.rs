@@ -109,17 +109,19 @@ fn param_uses(
     // (see `element_slots`), compare from their bytes.
     let mut loans = read_str_loans(function);
     loans.extend(str_element_reads(function));
-    let views = |operand: &Operand| match operand {
-        Operand::String(_) => true,
-        Operand::Place(place) => {
-            candidates.contains_key(place.as_str()) || loans.contains(place.as_str())
-        }
-        _ => false,
+    let views = |operand: &Operand| {
+        matches!(operand, Operand::String(_))
+            || matches!(operand, Operand::Place(place)
+                if candidates.contains_key(place.as_str()) || loans.contains(place.as_str()))
     };
     for block in &function.blocks {
-        for instruction in &block.instructions {
+        // The terminator, last, takes what it names as a box.
+        for instruction in block.instructions.iter().map(Some).chain([None]) {
             let mut mentions = Vec::new();
-            instruction_place_mentions(instruction, &mut mentions);
+            match instruction {
+                Some(instruction) => instruction_place_mentions(instruction, &mut mentions),
+                None => mentions.extend(terminator_place_mentions(&block.terminator)),
+            }
             let mentioned = mentions
                 .into_iter()
                 .filter_map(|place| candidates.get(place.split('.').next().unwrap_or(place)))
@@ -129,7 +131,7 @@ fn param_uses(
                 continue;
             }
             let mut forwards = Vec::new();
-            let reads = match instruction {
+            let reads = instruction.is_some_and(|instruction| match instruction {
                 Instruction::Assign {
                     value:
                         Rvalue::Binary {
@@ -195,7 +197,7 @@ fn param_uses(
                         })
                 }
                 _ => false,
-            };
+            });
             for position in mentioned {
                 let entry = uses.entry(position).or_default();
                 if !reads {
@@ -209,13 +211,6 @@ fn param_uses(
                 for (position, target) in forwards {
                     uses.entry(position).or_default().forwards.push(target);
                 }
-            }
-        }
-        for place in terminator_place_mentions(&block.terminator) {
-            if let Some(position) = candidates.get(place.split('.').next().unwrap_or(place)) {
-                let entry = uses.entry(*position).or_default();
-                entry.boxes = true;
-                entry.boxes_on_entry |= block.label == function.entry;
             }
         }
     }
@@ -258,21 +253,32 @@ fn str_element_reads(function: &MirFunction) -> HashSet<&str> {
         .iter()
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
-            Instruction::Assign {
-                target,
-                value:
-                    Rvalue::Call {
-                        callee:
-                            CallTarget::Runtime {
-                                op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
-                                ..
-                            },
-                        ..
-                    },
-            } if strs.contains(target.as_str()) => Some(target.as_str()),
+            Instruction::Assign { target, value }
+                if strs.contains(target.as_str()) && element_read(value).is_some() =>
+            {
+                Some(target.as_str())
+            }
             _ => None,
         })
         .collect()
+}
+
+/// The list and the index and span arguments of `value`, when it reads an
+/// element of a list local.
+fn element_read(value: &Rvalue) -> Option<(&str, &[MirArg; 3])> {
+    match value {
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                    receiver: Some(Operand::Place(list)),
+                    ..
+                },
+            args,
+            ..
+        } => Some((list, <&[MirArg; 3]>::try_from(args.as_slice()).ok()?)),
+        _ => None,
+    }
 }
 
 /// The loans of `function` that select a `str` to read.
@@ -409,18 +415,16 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
                 .map(|(_, argument)| &argument.value)
                 .peekable();
             let words = params.peek().is_some()
-                && params.all(|operand| match operand {
-                    Operand::String(_) => true,
-                    Operand::Place(place) => {
-                        loans.contains(place.as_str())
+                && params.all(|operand| {
+                    matches!(operand, Operand::String(_))
+                        || matches!(operand, Operand::Place(place)
+                        if loans.contains(place.as_str())
                             || elements.lists.contains_key(place.as_str())
                             || own.is_some_and(|own| {
                                 own.get(place.as_str()).is_some_and(|position| {
                                     useful.contains(&(caller.name.as_str(), *position))
                                 })
-                            })
-                    }
-                    _ => false,
+                            }))
                 });
             if words {
                 entered.insert(callee);
@@ -443,9 +447,9 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
     views
 }
 
-/// The local a `clone()` of a `str` place is assigned to, when
-/// `instruction` is that.
-fn copied_str(instruction: &Instruction) -> Option<&str> {
+/// The local a `clone()` of a `str` place is assigned to, and that place,
+/// when `instruction` is that.
+fn copied_str(instruction: &Instruction) -> Option<(&str, &str)> {
     match instruction {
         Instruction::Assign {
             target,
@@ -454,12 +458,12 @@ fn copied_str(instruction: &Instruction) -> Option<&str> {
                     callee:
                         CallTarget::Runtime {
                             op: RuntimeOp::Value(ValueOp::Clone),
-                            receiver: Some(Operand::Place(_)),
+                            receiver: Some(Operand::Place(copied)),
                             ..
                         },
                     ..
                 },
-        } => Some(target),
+        } => Some((target.as_str(), copied.as_str())),
         _ => None,
     }
 }
@@ -499,11 +503,11 @@ fn appended_local(instruction: &Instruction) -> Option<&str> {
 /// `out.append(text.clone())`. Only the end of the loan the copy read may
 /// lie between the two, so the bytes the copy read are still there when
 /// the list takes them.
-pub(super) fn appended_copies(function: &MirFunction) -> HashSet<String> {
-    let mut copies = HashSet::new();
+pub(super) fn appended_copies(function: &MirFunction) -> HashMap<String, String> {
+    let mut copies = HashMap::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
-            let Some(target) = copied_str(instruction) else {
+            let Some((target, copied)) = copied_str(instruction) else {
                 continue;
             };
             let next = block.instructions[index + 1..].iter().find(|next| {
@@ -515,12 +519,12 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashSet<String> {
                 )
             });
             if next.and_then(appended_local) == Some(target) {
-                copies.insert(target);
+                copies.insert(target, copied);
             }
         }
     }
     if copies.is_empty() {
-        return HashSet::new();
+        return HashMap::new();
     }
     // The append is the copy's only use.
     let mut uses = HashMap::<&str, usize>::new();
@@ -544,8 +548,8 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashSet<String> {
         .collect::<HashSet<_>>();
     copies
         .into_iter()
-        .filter(|copy| uses.get(copy) == Some(&1) && strs.contains(copy))
-        .map(str::to_string)
+        .filter(|(copy, _)| uses.get(copy) == Some(&1) && strs.contains(copy))
+        .map(|(copy, copied)| (copy.to_string(), copied.to_string()))
         .collect()
 }
 
@@ -733,20 +737,7 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
     let mut moves = HashMap::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
-            let (Some(target), Instruction::Assign { value, .. }) =
-                (copied_str(instruction), instruction)
-            else {
-                continue;
-            };
-            let Rvalue::Call {
-                callee:
-                    CallTarget::Runtime {
-                        receiver: Some(Operand::Place(copied)),
-                        ..
-                    },
-                ..
-            } = value
-            else {
+            let Some((target, copied)) = copied_str(instruction) else {
                 continue;
             };
             let Some(released) = block.instructions[index + 1..]
@@ -760,7 +751,7 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
                 continue;
             };
             let scrutinee = payloads
-                .get(copied.as_str())
+                .get(copied)
                 .copied()
                 .flatten()
                 .filter(|scrutinee| released.contains(scrutinee));
@@ -770,17 +761,17 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
                     let root = place.split('.').next().unwrap_or(place);
                     root == copied || Some(root) == scrutinee
                 });
-            let defined = scrutinee.is_some() || fresh.contains(copied.as_str());
+            let defined = scrutinee.is_some() || fresh.contains(copied);
             if strs.contains(target)
-                && strs.contains(copied.as_str())
+                && strs.contains(copied)
                 && defined
-                && !function.params.iter().any(|param| param.name == *copied)
-                && released.contains(copied.as_str())
+                && !function.params.iter().any(|param| param.name == copied)
+                && released.contains(copied)
                 && !named
             {
                 moves.insert(
                     target.to_string(),
-                    (copied.clone(), scrutinee.map(str::to_string)),
+                    (copied.to_string(), scrutinee.map(str::to_string)),
                 );
             }
         }
@@ -1345,10 +1336,9 @@ impl FunctionCompiler<'_> {
         }
         let mut held = HashMap::new();
         for param in &twin.params {
-            let argument = args.get(param.position)?;
-            if argument.writeback_place.is_some() {
-                return None;
-            }
+            let argument = args
+                .get(param.position)
+                .filter(|argument| argument.writeback_place.is_none())?;
             held.insert(param.position, self.words_of(&argument.value)?);
         }
         Some((twin.clone(), held))
@@ -1442,52 +1432,29 @@ impl FunctionCompiler<'_> {
     /// Keeps the words of the `str` that `value` copies into `target`,
     /// instead of the copy, when the next operation appends `target` to a
     /// list (see [`appended_copies`]) and this body has the `str` as words.
-    pub(super) fn defer_str_copy(
-        &mut self,
-        target: &str,
-        value: &Rvalue,
-    ) -> std::result::Result<bool, String> {
-        if !self.appended_copies.contains(target) {
-            return Ok(false);
-        }
-        let Rvalue::Call {
-            callee:
-                CallTarget::Runtime {
-                    receiver: Some(receiver),
-                    ..
-                },
-            ..
-        } = value
-        else {
+    pub(super) fn defer_str_copy(&mut self, target: &str) -> std::result::Result<bool, String> {
+        let Some(copied) = self.appended_copies.get(target).cloned() else {
             return Ok(false);
         };
-        let Some(words) = self.load_place_words(receiver)? else {
+        let Some(words) = self.load_place_words(&Operand::Place(copied))? else {
             return Ok(false);
         };
         self.deferred_str_copies.insert(target.to_string(), words);
         Ok(true)
     }
 
-    /// Makes the copy `name` stands for, when it was deferred and something
-    /// other than the append reads it.
-    pub(super) fn materialize_deferred_str_copy(
+    /// Refuses a read of the deferred copy `name` other than its append,
+    /// which [`appended_copies`] makes the copy's only use.
+    pub(super) fn refuse_deferred_str_copy(
         &mut self,
         name: &str,
     ) -> std::result::Result<(), String> {
-        let Some(words) = self.deferred_str_copies.remove(name) else {
-            return Ok(());
-        };
-        let copy = self
-            .builder
-            .call(
-                self.runtime[RuntimeFn::StringFromView],
-                &[words.ptr, words.len],
-            )
-            .results[0];
-        self.release_view_arguments(words.released.into_iter().collect());
-        let variable = self.local_vars(name)?[0];
-        self.builder.def_var(variable, copy);
-        Ok(())
+        match self.deferred_str_copies.contains_key(name) {
+            false => Ok(()),
+            true => Err(format!(
+                "direct backend read the copy `{name}` before the append it was deferred to"
+            )),
+        }
     }
 
     /// Appends the deferred copy `operand` moves to the `list[str]` `list`
@@ -1516,10 +1483,9 @@ impl FunctionCompiler<'_> {
             .filter(|(local, list)| claimed(self, local, list))
             .map(|(local, _)| local.clone())
             .collect::<Vec<_>>();
-        for local in dropped {
-            self.str_element_lists.remove(&local);
-            self.str_slots.remove(&local);
-        }
+        self.str_element_lists
+            .retain(|local, _| !dropped.contains(local));
+        self.str_slots.retain(|local, _| !dropped.contains(local));
     }
 
     /// Assigns the element read `value` to `target` as words, when
@@ -1534,27 +1500,9 @@ impl FunctionCompiler<'_> {
         let Some(list) = self.str_element_lists.get(target).cloned() else {
             return Ok(false);
         };
-        let Rvalue::Call {
-            callee:
-                CallTarget::Runtime {
-                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
-                    receiver: Some(Operand::Place(receiver)),
-                    ..
-                },
-            args,
-            ..
-        } = value
-        else {
-            return Err(format!(
-                "direct backend expected `{target}` to read an element of `{list}`"
-            ));
-        };
-        let [index, line, column] = args.as_slice() else {
-            return Err(format!(
-                "direct backend expected an index and a span for `{target}`"
-            ));
-        };
-        debug_assert_eq!(*receiver, list);
+        let (receiver, [index, line, column]) = element_read(value)
+            .ok_or_else(|| format!("direct backend expected `{target}` to read `{list}`"))?;
+        debug_assert_eq!(receiver, list);
         // The local was released or never held a value, unless the MIR
         // says otherwise.
         if self.emptied_store_root.take().as_deref() != Some(target) {
@@ -1607,11 +1555,7 @@ impl FunctionCompiler<'_> {
         {
             return Ok(false);
         }
-        let copied_vars = self.local_vars(&copied)?;
-        let [copied_var] = copied_vars.as_slice() else {
-            return Ok(false);
-        };
-        let copied_var = *copied_var;
+        let copied_var = self.local_vars(&copied)?[0];
         let moved = self.builder.use_var(copied_var);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(copied_var, zero);
