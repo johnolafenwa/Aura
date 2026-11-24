@@ -1,10 +1,13 @@
 mod api_docs;
+mod profile;
 mod requests;
+mod systems_data;
 use crate::sema::recover;
 pub use api_docs::{
     api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
     API_DOCS_SCHEMA_VERSION,
 };
+pub use profile::with_freestanding_analysis;
 pub use requests::{
     prepare_rename_path_source, references_path_source, rename_path_source,
     signature_help_path_source, AnalysisRename, AnalysisSignatureHelp,
@@ -177,7 +180,7 @@ pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
     };
     let (mut output, reads) = crate::with_source_reads(|| {
         analyze_with_checker(source, is_local, |candidate| {
-            crate::check_path_with_source_without_lockfile(path, candidate)
+            profile::check(path, candidate)
         })
     });
     output.dependencies = reads
@@ -211,7 +214,7 @@ pub fn complete_path_source(
         character,
         trigger_character,
         is_local,
-        |candidate| crate::check_path_with_source_without_lockfile(path, candidate),
+        |candidate| profile::check(path, candidate),
     )
 }
 
@@ -244,7 +247,7 @@ where
     L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
-    match parser::parse(source) {
+    match profile::parse(source) {
         Err(error) => {
             if let Some(program) =
                 recover_checked_program_after_parse_error_with(source, &error, &mut check_program)
@@ -295,6 +298,12 @@ where
                 }
                 Ok(program) => {
                     let mut output = AnalysisBuilder::new(source, &program, symbols).build();
+                    output.diagnostics.extend(
+                        profile::diagnostics(&program)
+                            .iter()
+                            .filter(|error| is_local(error))
+                            .map(analysis_diagnostic),
+                    );
                     output
                         .diagnostics
                         .extend(unused_binding_warnings(source, &output.occurrences));
@@ -789,7 +798,8 @@ impl<'a> AnalysisBuilder<'a> {
             requests::keyword_argument_completions(self, &source, line, character, &scope);
         completions.extend(self.top_level_completions());
         completions.retain(|completion| {
-            (completion.kind != "constant" || scope.contains_key(&completion.name))
+            (!matches!(completion.kind.as_str(), "constant" | "variable")
+                || scope.contains_key(&completion.name))
                 && !is_decorator_generated(&completion.name)
         });
         let mut names = completions
@@ -895,6 +905,9 @@ impl<'a> AnalysisBuilder<'a> {
     /// The hover for a module constant. A decorated function shows its
     /// decorators above its signature.
     fn constant_hover(&self, name: &str, info: &crate::sema::ConstantInfo) -> String {
+        if info.decl.mutable {
+            return format_value_hover("module binding", name, &info.ty);
+        }
         let generated = format!("{}{}", crate::sema::UNDECORATED_PREFIX, info.decl.name);
         let function = if info.module_name == self.program.module_name {
             self.program.functions.get(&generated)
@@ -1858,6 +1871,17 @@ impl<'a> AnalysisBuilder<'a> {
             detail: "Array[T] numeric multidimensional array".to_string(),
             documentation: None,
         });
+        for (name, detail) in [
+            ("fixed", "fixed[T, N] inline array"),
+            ("ptr", "ptr[T] raw pointer"),
+        ] {
+            completions.push(AnalysisCompletion {
+                name: name.into(),
+                kind: "type".into(),
+                detail: detail.into(),
+                documentation: None,
+            });
+        }
         for (visible_name, function_info) in &self.program.functions {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
@@ -1869,7 +1893,7 @@ impl<'a> AnalysisBuilder<'a> {
         for (visible_name, constant) in &self.program.constants {
             completions.push(AnalysisCompletion {
                 name: visible_name.clone(),
-                kind: "constant".to_string(),
+                kind: storage_symbol_kind(&constant.decl).into(),
                 detail: constant.ty.to_string(),
                 documentation: None,
             });
@@ -1913,6 +1937,9 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions = Vec::new();
         if let Type::Module(path) = receiver_type {
             if let Some(namespace) = self.module_namespace(path) {
+                if systems_data::builtin_mem(namespace) {
+                    completions.extend(systems_data::mem_completions());
+                }
                 if namespace.path == recover::MODULE {
                     completions.push(AnalysisCompletion {
                         name: recover::RECOVER.into(),
@@ -1944,7 +1971,7 @@ impl<'a> AnalysisBuilder<'a> {
                 for constant in namespace.constants.values() {
                     completions.push(AnalysisCompletion {
                         name: constant.decl.name.clone(),
-                        kind: "constant".to_string(),
+                        kind: storage_symbol_kind(&constant.decl).into(),
                         detail: constant.ty.to_string(),
                         documentation: None,
                     });
@@ -3508,6 +3535,9 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Call { callee, args } => {
                 self.visit_expr(callee, scope);
+                if self.visit_offset_field(callee, args, scope) {
+                    return;
+                }
                 for arg in args {
                     if let Some(name) = &arg.name {
                         if let Some(definition) =
@@ -3840,6 +3870,17 @@ impl<'a> AnalysisBuilder<'a> {
         }
 
         match name {
+            "fixed" => Some(ResolvedSymbol {
+                hover: builtin_type_hover(
+                    "fixed[T, N]",
+                    "An inline array of N elements of type T.",
+                ),
+                definition: None,
+            }),
+            "ptr" => Some(ResolvedSymbol {
+                hover: builtin_type_hover("ptr[T]", "A raw address pointing to a value of type T."),
+                definition: None,
+            }),
             "Array" => Some(ResolvedSymbol {
                 hover: builtin_type_hover(
                     "Array[T]",
@@ -4006,6 +4047,14 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn resolve_member_type(&self, receiver_type: &Type, field: &str) -> Option<ResolvedMember> {
+        if let Some(element) = receiver_type.as_raw_pointer() {
+            let (signature, ty) = systems_data::raw_pointer_signature(element, field)?;
+            return Some(ResolvedMember {
+                hover: format!("```aura\n{signature}\n```"),
+                definition: None,
+                ty: Some(ty),
+            });
+        }
         if let Type::Module(path) = receiver_type {
             let namespace = self.module_namespace(path)?;
             if namespace.path == recover::MODULE && field == recover::RECOVER {
@@ -4026,6 +4075,11 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: self.find_imported_module_range(&child.path),
                     ty: Some(Type::Module(child.path.clone())),
                 });
+            }
+            if systems_data::builtin_mem(namespace) {
+                if let Some(member) = systems_data::mem_member(field) {
+                    return Some(member);
+                }
             }
             if let Some(alias) = namespace.aliases.get(field) {
                 return Some(ResolvedMember {
@@ -5386,6 +5440,7 @@ impl<'a> AnalysisBuilder<'a> {
                             // the Array, not one element.
                             "Array" if crate::parser::index_has_slice(index) => Some(ty.clone()),
                             "Array" => ty.type_arguments().first().cloned(),
+                            "fixed" => ty.as_fixed_array().map(|(element, _)| element.clone()),
                             "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),
                             "str" => Some(ty.clone()),
@@ -5746,6 +5801,16 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 let receiver_type = self.infer_expr_type(object, scope)?;
                 if let Type::Module(path) = &receiver_type {
+                    if field == "address_of"
+                        && self
+                            .module_namespace(path)
+                            .is_some_and(systems_data::builtin_mem)
+                    {
+                        return Some(Type::Named(
+                            "ptr".into(),
+                            vec![self.infer_expr_type(&args.first()?.value, scope)?],
+                        ));
+                    }
                     if self
                         .module_namespace(path)
                         .is_some_and(|module| module.path == recover::MODULE)
@@ -6187,6 +6252,9 @@ impl<'a> AnalysisBuilder<'a> {
 
         let iterable_ty = self.infer_expr_type(iterable, scope)?;
         match base_type_name(&iterable_ty) {
+            "fixed" => iterable_ty
+                .as_fixed_array()
+                .map(|(element, _)| element.clone()),
             "Queue" | "list" | "set" => iterable_ty.type_arguments().first().cloned(),
             _ => None,
         }
@@ -6493,6 +6561,14 @@ where
     }
 }
 
+fn storage_symbol_kind(decl: &crate::ast::ConstantDecl) -> &'static str {
+    if decl.mutable {
+        "variable"
+    } else {
+        "constant"
+    }
+}
+
 fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
     let lines = source.lines().collect::<Vec<_>>();
     let symbol =
@@ -6529,7 +6605,7 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
         .map(|constant| {
             symbol(
                 &constant.name,
-                "constant",
+                storage_symbol_kind(constant),
                 constant
                     .annotation
                     .as_ref()
@@ -7960,6 +8036,20 @@ fn builtin_enum_variant_completions(base_name: &str) -> Vec<AnalysisCompletion> 
 }
 
 fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
+    if let Some(element) = receiver_type.as_raw_pointer() {
+        return ["read", "write", "volatile_read", "volatile_write", "offset"]
+            .into_iter()
+            .filter_map(|name| {
+                let (detail, _) = systems_data::raw_pointer_signature(element, name)?;
+                Some(AnalysisCompletion {
+                    name: name.into(),
+                    kind: "method".into(),
+                    detail,
+                    documentation: None,
+                })
+            })
+            .collect();
+    }
     let mut completions = Vec::new();
     match base_type_name(receiver_type) {
         "Span" => {
@@ -8390,7 +8480,14 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::RngNextInt,
         BuiltinMember::RngNextFloat,
         BuiltinMember::RngShuffle,
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        aura_core::integer_bits::BitMethod::ALL
+            .iter()
+            .copied()
+            .map(BuiltinMember::IntegerBits),
+    ) {
         if is_array_integer_arithmetic_member(builtin)
             && !matches!(
                 receiver_type,
@@ -8963,7 +9060,7 @@ fn recover_checked_program_after_member_errors_with(
             continue;
         }
 
-        match parser::parse(&candidate) {
+        match profile::parse(&candidate) {
             Ok(_) => match check_program(&candidate) {
                 Ok(program) => return Some(program),
                 Err(error) => {
@@ -9141,7 +9238,7 @@ where
         ));
     }
     for candidate in candidates {
-        let result = match parser::parse(&candidate) {
+        let result = match profile::parse(&candidate) {
             Ok(_) => check_program(&candidate),
             Err(error) => Err(error),
         };
@@ -9262,7 +9359,7 @@ where
     let mut candidate = source.to_string();
     let mut later = Vec::new();
     let mut lost_bindings = BTreeSet::new();
-    let check = |candidate: &str, check_program: &mut F| match parser::parse(candidate) {
+    let check = |candidate: &str, check_program: &mut F| match profile::parse(candidate) {
         Ok(_) => check_program(candidate),
         Err(error) => Err(error),
     };

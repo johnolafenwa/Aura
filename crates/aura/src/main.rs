@@ -1851,8 +1851,14 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
     let overlays = lsp_source_overlays(request)?;
 
-    aura_compiler::with_source_overlays(overlays, || {
-        lsp_method_result(method, path, source, request)
+    let freestanding = request
+        .get("freestanding")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    aura_compiler::analysis::with_freestanding_analysis(freestanding, || {
+        aura_compiler::with_source_overlays(overlays, || {
+            lsp_method_result(method, path, source, request)
+        })
     })
 }
 
