@@ -362,9 +362,10 @@ handle = regex.compile("value")
 
 #[test]
 fn decorator_bindings_and_unsupported_results_do_not_request_evaluation_mir() {
-    let mut program = check_source(include_str!("../tests/fixtures/run-pass/decorators.au")).unwrap();
+    let mut program =
+        check_source(include_str!("../tests/fixtures/run-pass/decorators.au")).unwrap();
     assert!(!program.constant_init_plan.is_empty());
-    assert!(evaluation_mir(&mut program).is_none());
+    assert!(evaluation_mir(&mut program).unwrap().is_none());
 
     let mixed = r#"type Step = Callable[def(n: int64) -> int64]
 
@@ -379,11 +380,21 @@ pending = delayed()
 const folded = make()(40)
 "#;
     let mut program = check_source(mixed).unwrap();
-    assert!(matches!(&program.frozen_constants["<main>::folded"], FrozenValue::Int(n) if n.as_i128() == Some(42)));
-    let module = evaluation_mir(&mut program).unwrap();
+    assert!(
+        matches!(&program.frozen_constants["<main>::folded"], FrozenValue::Int(n) if n.as_i128() == Some(42))
+    );
+    let module = evaluation_mir(&mut program).unwrap().unwrap();
     assert_eq!(module.constants.len(), 1);
     assert_eq!(module.constants[0].key, "<main>::folded");
-    assert!(!module.functions.iter().any(|f| f.name == "__aura_const_init::<main>::pending"));
-    assert_eq!(check_source(&mixed.replace("pending =", "const pending =")).unwrap_err().code, "AU3025");
+    assert!(!module
+        .functions
+        .iter()
+        .any(|f| f.name == "__aura_const_init::<main>::pending"));
+    assert_eq!(
+        check_source(&mixed.replace("pending =", "const pending ="))
+            .unwrap_err()
+            .code,
+        "AU3025"
+    );
     assert!(run_source(mixed).unwrap_err().message.contains("startup"));
 }

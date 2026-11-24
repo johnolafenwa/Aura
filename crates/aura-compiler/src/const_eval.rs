@@ -10,38 +10,84 @@ pub(crate) const STEP_LIMIT: usize = 100_000;
 pub(crate) const MEMORY_LIMIT: usize = 8 * 1024 * 1024;
 
 pub(crate) fn evaluate(program: &mut Program) -> Result<()> {
-    if program.constant_init_plan.is_empty() {
+    let Some(module) = evaluation_mir(program)? else {
         return Ok(());
-    }
-    let mut needs_interpreter = false;
-    for constant in &program.constant_init_plan {
-        if let Some(value) = literal(constant) {
-            program.frozen_constants.insert(key(constant), value);
-        } else {
-            needs_interpreter = true;
-        }
-    }
-    if !needs_interpreter {
-        return Ok(());
-    }
-    let mut module = mir::lower_implicit(program);
-    mir::methods::resolve_methods(&mut module);
+    };
     program
         .frozen_constants
         .extend(crate::mir_runtime::evaluate_constants(module)?);
     for constant in &program.constant_init_plan {
         if constant.decl.required && !program.frozen_constants.contains_key(&key(constant)) {
-            return Err(Diagnostic::coded_at(
-                "AU3025",
-                constant.decl.span,
-                format!(
-                    "module constant `{}` cannot be evaluated at build time",
-                    constant.decl.name
-                ),
-            ));
+            return Err(required_binding_error(constant));
         }
     }
     Ok(())
+}
+
+fn required_binding_error(constant: &ConstantInfo) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU3025",
+        constant.decl.span,
+        format!(
+            "module constant `{}` cannot be evaluated at build time",
+            constant.decl.name
+        ),
+    )
+}
+
+/// Prepare only initializers that can produce a frozen value. The normal
+/// runtime lowering still emits the complete initialization plan.
+fn evaluation_mir(program: &mut Program) -> Result<Option<mir::MirModule>> {
+    let mut needs_interpreter = false;
+    for constant in &program.constant_init_plan {
+        if let Some(value) = literal(constant) {
+            program.frozen_constants.insert(key(constant), value);
+        } else if can_freeze_result(&constant.ty) {
+            needs_interpreter = true;
+        } else if constant.decl.required {
+            return Err(required_binding_error(constant));
+        }
+    }
+    if !needs_interpreter {
+        return Ok(None);
+    }
+    let candidates = program
+        .constant_init_plan
+        .iter()
+        .filter(|constant| can_freeze_result(&constant.ty));
+    let mut module = mir::lower_implicit_with_constants(program, candidates);
+    mir::methods::resolve_methods(&mut module);
+    Ok(Some(module))
+}
+
+/// A union needs only one possible member. A list, map, or set may be
+/// empty even when its element type cannot cross the build boundary.
+fn can_freeze_result(ty: &Type) -> bool {
+    match ty {
+        Type::Callable(_)
+        | Type::Closure { .. }
+        | Type::Function { .. }
+        | Type::ReturnedView(_)
+        | Type::Module(_) => false,
+        Type::Tuple(items) => items.iter().all(can_freeze_result),
+        Type::Union(union) => union.members.iter().any(can_freeze_result),
+        Type::Named(name, args) => {
+            !matches!(
+                name.as_str(),
+                "Array"
+                    | "Range"
+                    | "Queue"
+                    | "Task"
+                    | "TaskGroup"
+                    | "Span"
+                    | "regex.Regex"
+                    | "regex.Captures"
+                    | "random.Rng"
+                    | "collections.__Store"
+            ) && !crate::sema::is_builtin_io_resource_type(name, args)
+        }
+        Type::Unit | Type::TypeParam(_) => true,
+    }
 }
 
 fn key(constant: &ConstantInfo) -> String {

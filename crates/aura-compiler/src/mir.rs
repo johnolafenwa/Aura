@@ -10751,7 +10751,14 @@ fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
 /// every access, and decides ownership itself, so it gains nothing from
 /// them.
 pub fn lower_implicit(program: &Program) -> MirModule {
-    let mut module = lower_unresolved(program);
+    lower_implicit_with_constants(program, program.constant_init_plan.iter())
+}
+
+pub(crate) fn lower_implicit_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
+    let mut module = lower_unresolved_with_constants(program, constants);
     resolve_runtime_ops_and_unions(program, &mut module);
     module
 }
@@ -10856,11 +10863,18 @@ fn drop_measure_checks_outside_cycles(functions: &mut [MirFunction], calls: Meas
 }
 
 fn lower_unresolved(program: &Program) -> MirModule {
+    lower_unresolved_with_constants(program, program.constant_init_plan.iter())
+}
+
+fn lower_unresolved_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let measured = program_has_function_measures(program);
     if measured {
         MEASURE_CALLS.with(|calls| *calls.borrow_mut() = Some(MeasureCalls::default()));
     }
-    let mut module = lower_unresolved_functions(program);
+    let mut module = lower_unresolved_functions(program, constants);
     if measured {
         if let Some(calls) = MEASURE_CALLS.with(|calls| calls.borrow_mut().take()) {
             drop_measure_checks_outside_cycles(&mut module.functions, calls);
@@ -10870,7 +10884,10 @@ fn lower_unresolved(program: &Program) -> MirModule {
     module
 }
 
-fn lower_unresolved_functions(program: &Program) -> MirModule {
+fn lower_unresolved_functions<'a>(
+    program: &Program,
+    constant_plan: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -10997,7 +11014,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
 
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
-    for constant in &program.constant_init_plan {
+    for constant in constant_plan {
         let key = format!("{}::{}", constant.module_name, constant.decl.name);
         if !seen_constants.insert(key.clone()) {
             continue;
