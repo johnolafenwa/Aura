@@ -3526,7 +3526,10 @@ impl<'a> AnalysisBuilder<'a> {
             }
             ExprKind::Member { object, field } => {
                 self.visit_expr(object, scope);
-                if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
+                if let Some((range, member)) = self.written_union_member(expr, object, field, scope)
+                {
+                    self.push_occurrence(range, member.hover, member.definition);
+                } else if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
                     self.push_occurrence(
                         range_from_span(expr.span, field.len()),

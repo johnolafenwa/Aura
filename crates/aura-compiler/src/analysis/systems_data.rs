@@ -42,6 +42,30 @@ pub(super) fn raw_pointer_signature(element: &Type, method: &str) -> Option<(Str
 }
 
 impl AnalysisBuilder<'_> {
+    /// The checker rewrites a union assignment to a setter call whose span is
+    /// the start of the assignment. Recover the written member for navigation.
+    pub(super) fn written_union_member(
+        &self,
+        expr: &Expr,
+        object: &Expr,
+        field: &str,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<(AnalysisRange, ResolvedMember)> {
+        let name = field.strip_prefix("__write_")?;
+        let receiver = self.infer_expr_type(object, scope)?;
+        self.class_info_for_type_name(base_type_name(&receiver))?
+            .decl
+            .c_union
+            .as_ref()?;
+        let line = *self.source_lines.get(expr.span.line.checked_sub(1)?)?;
+        let (start, _) = line.match_indices(name).find(|&(start, _)| {
+            line[..start].trim_end().ends_with('.')
+                && line[start + name.len()..].trim_start().starts_with('=')
+        })?;
+        let range = range_from_span(Span::new(expr.span.line, start + 1), name.len());
+        Some((range, self.resolve_member_type(&receiver, name)?))
+    }
+
     /// In offset_of(T, field), the second operand names a field of T even
     /// when a local binding happens to have the same name.
     pub(super) fn visit_offset_field(
