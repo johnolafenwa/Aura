@@ -17,6 +17,6 @@ trap 1 main.au:${line}:13
 TEXT
 for board in riscv64 aarch64; do
     echo "Booting $board"
-    "$here/run.sh" "$board" "$aura" > "$out/serial"
+    "$here/run.sh" "$board" "$aura" | tee "$out/serial"
     diff -u "$out/expected" "$out/serial"
 done
