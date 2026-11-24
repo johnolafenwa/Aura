@@ -1712,6 +1712,10 @@ mod tests_outcomes;
 #[path = "verify_tests_generators.rs"]
 mod tests_generators;
 
+#[cfg(test)]
+#[path = "verify_tests_spans.rs"]
+mod tests_spans;
+
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
 pub(crate) const LOOKUP: &str = "Lookup";

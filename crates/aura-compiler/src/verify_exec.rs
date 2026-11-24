@@ -28,7 +28,8 @@ use crate::mir::{
     MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::{
-    DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, StrOp, TaskOp, ValueOp,
+    ArrayOp, DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, SpanOp, StrOp, TaskOp,
+    ValueOp, ARRAY_COORDINATE_WORDS,
 };
 use crate::sema::Type;
 
@@ -346,6 +347,10 @@ pub(super) enum Val {
 pub(super) enum Store {
     Leaf(String, &'static str),
     Items(Vec<Store>),
+    /// The elements of a span, read from its base list's store: position
+    /// `i` of the span is position `i` plus the span's start in the base.
+    /// Only a contract reads one; the function's own steps run on the base.
+    Shifted(Box<Store>, String),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -367,6 +372,13 @@ pub(super) struct State {
     pub(super) pc: String,
     pub(super) env: BTreeMap<String, Val>,
     loans: BTreeMap<String, Loan>,
+}
+
+impl State {
+    /// Whether `local` names a view of another place.
+    pub(super) fn is_view(&self, local: &str) -> bool {
+        self.loans.contains_key(local)
+    }
 }
 
 /// What an obligation asks the solver to show.
@@ -471,6 +483,9 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    /// The positions in a base list that a span index was checked to give.
+    /// The base list's own check of such a position cannot fail.
+    span_positions: BTreeSet<String>,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -550,6 +565,7 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            span_positions: BTreeSet::new(),
             rounded: Vec::new(),
             entry_facts: 0,
             defined: BTreeMap::new(),
@@ -869,6 +885,12 @@ impl<'a> Exec<'a> {
                     elem: args[0].clone(),
                 }
             }
+            Type::Named(name, args) if name == "Array" && args.len() == 1 => {
+                let len = self.fresh_const("Int", &format!("{hint}_len"));
+                self.fact(format!("(<= {len} {})", i64::MAX));
+                let shape = self.fresh_at(&shape_type(), &format!("{hint}_shape"), depth + 1);
+                self.array_value("true", len, shape)
+            }
             Type::Tuple(items) => Val::Tuple(
                 items
                     .iter()
@@ -935,6 +957,28 @@ impl<'a> Exec<'a> {
         }
     }
 
+    /// An Array of `len` elements whose `shape()` is the list `shape`, on
+    /// the paths `pc` describes. It has at least one axis, no dimension is
+    /// negative, and with one axis its only dimension is its element count.
+    fn array_value(&mut self, pc: &str, len: String, shape: Val) -> Val {
+        let value = Val::Record(
+            ARRAY_RECORD.to_string(),
+            vec![
+                ("len".to_string(), Val::Int(len, IntTy::INT64)),
+                ("shape".to_string(), shape),
+            ],
+        );
+        if let Some((len, rank, dims)) = array_parts(&value) {
+            self.assume(
+                pc,
+                format!(
+                    "(and (<= 0 {len}) (<= 1 {rank}) (<= 0 (select {dims} 0)) (=> (= {rank} 1) (= {len} (select {dims} 0))))"
+                ),
+            );
+        }
+        value
+    }
+
     /// The type of a place path such as `self.balance` or `pair.0`.
     pub(super) fn place_type(&self, path: &str) -> Option<Type> {
         let mut segments = path.split('.');
@@ -951,6 +995,11 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
+        // A view of a whole place reads that place.
+        if let Some(Loan::Place(source)) = state.loans.get(&root) {
+            let source = join_path(source, &rest.join("."));
+            return self.read_place(state, &source);
+        }
         if !state.env.contains_key(&root) {
             let value = self.fresh_local(&root);
             state.env.insert(root.clone(), value);
@@ -984,6 +1033,18 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
+        // A write through a view changes what it views: the place itself,
+        // or, where the encoding does not follow the view, anything in the
+        // local it came from.
+        match state.loans.get(&root).cloned() {
+            Some(Loan::Place(source)) => {
+                let source = join_path(&source, &rest.join("."));
+                return self.write_place(state, &source, value);
+            }
+            Some(Loan::Element { list, .. }) => self.havoc_place(state, &list),
+            Some(Loan::Unknown(source)) => self.havoc_root(state, &source),
+            None => {}
+        }
         if rest.is_empty() {
             state.env.insert(root, value);
             return;
@@ -1218,8 +1279,27 @@ impl<'a> Exec<'a> {
                 Some((alias, _)) => Val::Contracted(alias),
                 None => self.fresh(&param.ty, &param.name),
             };
-            self.record_inputs(&param.name, &value);
+            // A counterexample names a span parameter's parts by the span.
+            let [_, span_len] = span_range_names(&param.name);
+            let is_span_base = self.local_types.contains_key(&span_len);
+            let label = if is_span_base {
+                format!("base list of {}", param.name)
+            } else if let Some(span) = param.name.strip_prefix(SPAN_LEN_PREFIX) {
+                format!("len({span})")
+            } else if let Some(span) = param.name.strip_prefix(SPAN_START_PREFIX) {
+                format!("start of {span}")
+            } else {
+                param.name.clone()
+            };
+            self.record_inputs(&label, &value);
             state.env.insert(param.name.clone(), value);
+        }
+        // A span parameter's range lies inside the list it views: every
+        // span operation checks its range against that list.
+        for param in &self.function.params {
+            if let Some((base, start, len)) = span_parts(&state.env, &param.name) {
+                self.fact(span_in_list(&start, &len, &base));
+            }
         }
         state
     }
@@ -2333,6 +2413,9 @@ impl<'a> Exec<'a> {
     pub(super) fn store_select(&self, store: &Store, elem: &Type, index: &str) -> Val {
         match store {
             Store::Leaf(array, _) => scalar_val(format!("(select {array} {index})"), elem),
+            Store::Shifted(base, start) => {
+                self.store_select(base, elem, &format!("(+ {index} {start})"))
+            }
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -2411,38 +2494,34 @@ impl<'a> Exec<'a> {
     }
 
     fn merge_stores(&mut self, pcs: &[String], stores: &[&Store], hint: &str) -> Option<Store> {
-        match stores.first()? {
-            Store::Leaf(_, sort) => {
-                let sort = *sort;
-                let mut arrays = Vec::new();
-                for store in stores {
-                    let Store::Leaf(array, _) = store else {
-                        return None;
-                    };
-                    arrays.push(array.as_str());
-                }
-                let array = self.merge_terms(&format!("(Array Int {sort})"), pcs, &arrays, hint);
-                Some(Store::Leaf(array, sort))
+        let Store::Items(first) = stores.first()? else {
+            // Leaves merge as arrays. A span's store is never merged: it
+            // exists only while a contract is read.
+            let mut arrays = Vec::new();
+            let mut sorts = Vec::new();
+            for store in stores {
+                let Store::Leaf(array, sort) = store else {
+                    return None;
+                };
+                arrays.push(array.as_str());
+                sorts.push(*sort);
             }
-            Store::Items(first) => {
-                let mut merged = Vec::new();
-                for position in 0..first.len() {
-                    let mut children = Vec::new();
-                    for store in stores {
-                        let Store::Items(items) = store else {
-                            return None;
-                        };
-                        children.push(items.get(position)?);
-                    }
-                    merged.push(self.merge_stores(
-                        pcs,
-                        &children,
-                        &format!("{hint}_{position}"),
-                    )?);
-                }
-                Some(Store::Items(merged))
+            let sort = sorts[0];
+            let array = self.merge_terms(&format!("(Array Int {sort})"), pcs, &arrays, hint);
+            return Some(Store::Leaf(array, sort));
+        };
+        let mut merged = Vec::new();
+        for position in 0..first.len() {
+            let mut children = Vec::new();
+            for store in stores {
+                let Store::Items(items) = store else {
+                    return None;
+                };
+                children.push(items.get(position)?);
             }
+            merged.push(self.merge_stores(pcs, &children, &format!("{hint}_{position}"))?);
         }
+        Some(Store::Items(merged))
     }
 
     /// Names each scalar of a value built from `select` terms, with the
@@ -2511,6 +2590,11 @@ impl<'a> Exec<'a> {
     }
 
     fn oblige_index(&mut self, state: &State, span: Span, len: &str, index: &str) {
+        // A position a span index gave was checked against the span, whose
+        // range lies inside the list.
+        if self.span_positions.contains(index) {
+            return;
+        }
         let goal = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
         self.oblige(
             ObligationKind::IndexInRange,
@@ -3776,6 +3860,7 @@ impl<'a> Exec<'a> {
             },
         };
         let mut post = pre.clone();
+        let pre_env: BTreeMap<String, Val> = pre.iter().cloned().collect();
         for (param, place) in &post_places {
             let ty = callee
                 .params
@@ -3789,10 +3874,17 @@ impl<'a> Exec<'a> {
                         .find(|local| &local.name == param)
                         .map(|local| local.ty.clone())
                 });
-            let value = match ty {
+            let mut value = match ty {
                 Some(ty) => self.fresh(&ty, param),
                 None => Val::Opaque,
             };
+            // A `mut Span[T]` parameter writes elements of its base list
+            // and keeps the list's length.
+            if let (Val::List { len, .. }, Some((base, ..))) =
+                (&mut value, span_parts(&pre_env, param))
+            {
+                *len = base;
+            }
             if let Some(slot) = post.iter_mut().find(|(name, _)| name == param) {
                 slot.1 = value.clone();
             }
@@ -4284,6 +4376,246 @@ impl<'a> Exec<'a> {
                     _ => None,
                 }
             }
+            RuntimeOp::Span(span_op) => {
+                let Some(Val::List {
+                    len: base, elem, ..
+                }) = receiver
+                else {
+                    return None;
+                };
+                // Every range operand is an `int64` word.
+                let int = |exec: &mut Self, state: &mut State, index: usize| {
+                    scalar_term(&arg(exec, state, index, Some(IntTy::INT64))).map(str::to_string)
+                };
+                match span_op {
+                    SpanOp::Start | SpanOp::Stop => {
+                        // `base[start:end]` inside the outer range, whose
+                        // endpoints count from its end when negative.
+                        let outer_start = int(self, state, 0)?;
+                        let outer_len = int(self, state, 1)?;
+                        let start = int(self, state, 2)?;
+                        let has_start = int(self, state, 3)?;
+                        let end = int(self, state, 4)?;
+                        let has_end = int(self, state, 5)?;
+                        self.assume(&pc, span_in_list(&outer_start, &outer_len, &base));
+                        let low = self.define(
+                            "Int",
+                            "low",
+                            format!(
+                                "(ite (= {has_start} 0) 0 (ite (< {start} 0) (+ {start} {outer_len}) {start}))"
+                            ),
+                        );
+                        let high = self.define(
+                            "Int",
+                            "high",
+                            format!(
+                                "(ite (= {has_end} 0) {outer_len} (ite (< {end} 0) (+ {end} {outer_len}) {end}))"
+                            ),
+                        );
+                        let in_range =
+                            format!("(and (<= 0 {low}) (<= {low} {high}) (<= {high} {outer_len}))");
+                        // The stop is read with the operands the start was
+                        // checked with.
+                        if span_op == SpanOp::Start {
+                            let span = span_of(self, 6);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span range in bounds",
+                                &pc,
+                                Goal::Holds(in_range.clone()),
+                            );
+                        }
+                        self.assume(&pc, in_range);
+                        let bound = if span_op == SpanOp::Start { low } else { high };
+                        Some(Val::Int(
+                            self.define("Int", "bound", format!("(+ {outer_start} {bound})")),
+                            IntTy::INT64,
+                        ))
+                    }
+                    SpanOp::Index => {
+                        let start = int(self, state, 0)?;
+                        let len = int(self, state, 1)?;
+                        let index = int(self, state, 2)?;
+                        self.assume(&pc, span_in_list(&start, &len, &base));
+                        let in_range = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
+                        let span = span_of(self, 3);
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            span,
+                            "span index in range",
+                            &pc,
+                            Goal::Holds(in_range.clone()),
+                        );
+                        self.assume(&pc, in_range);
+                        // The position in the base list. Its name is its
+                        // own, so no other index is taken for it.
+                        let position = self.fresh_const("Int", "position");
+                        self.fact(format!(
+                            "(= {position} (+ {start} (ite (< {index} 0) (+ {index} {len}) {index})))"
+                        ));
+                        self.span_positions.insert(position.clone());
+                        Some(Val::Int(position, IntTy::INT64))
+                    }
+                    // The members that write the base keep or change its
+                    // length as the range they move does. The elements
+                    // they leave are not modeled.
+                    SpanOp::Fill => {
+                        let data = self.fresh_store(&elem, "filled");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: base,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(Val::Unit)
+                    }
+                    SpanOp::Extract => {
+                        let start = int(self, state, 0)?;
+                        let len = int(self, state, 1)?;
+                        self.assume(&pc, span_in_list(&start, &len, &base));
+                        let rest = self.define("Int", "len", format!("(- {base} {len})"));
+                        let taken = Val::List {
+                            len,
+                            data: self.fresh_store(&elem, "taken"),
+                            elem: elem.clone(),
+                        };
+                        let data = self.fresh_store(&elem, "rest");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: rest,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(taken)
+                    }
+                    SpanOp::Restore => {
+                        let whole = self.fresh_const("Int", "len");
+                        self.fact(format!("(and (<= 0 {whole}) (<= {whole} {}))", i64::MAX));
+                        if let Val::List { len: count, .. } = arg(self, state, 1, None) {
+                            self.assume(&pc, format!("(= {whole} (+ {base} {count}))"));
+                        }
+                        let data = self.fresh_store(&elem, "restored");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: whole,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(Val::Unit)
+                    }
+                    // A search or comparison reads elements the span's
+                    // range picks; its result is not modeled.
+                    _ => None,
+                }
+            }
+            RuntimeOp::Array(array_op) => {
+                let parts = receiver.as_ref().and_then(array_parts);
+                // The coordinates of an element access, and where its
+                // source position starts among the arguments.
+                let (coordinates, position) = match array_op {
+                    ArrayOp::Len => return parts.map(|(len, ..)| Val::Int(len, IntTy::INT64)),
+                    ArrayOp::Shape => return parts.map(|(_, rank, dims)| array_shape(rank, dims)),
+                    // `array[c]` or `array[c0, c1, ...]`, as one
+                    // coordinate or a tuple of them.
+                    ArrayOp::Index | ArrayOp::SetIndex => {
+                        let items = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Tuple(items) => items,
+                            single => vec![single],
+                        };
+                        let position = if array_op == ArrayOp::Index { 1 } else { 2 };
+                        (Some(items), position)
+                    }
+                    // The coordinates follow their count, and unused
+                    // words pad them.
+                    ArrayOp::ReadAt | ArrayOp::WriteAt => {
+                        let count = scalar_term(&arg(self, state, 0, None))
+                            .and_then(|count| count.parse::<usize>().ok());
+                        let items = count.map(|count| {
+                            (1..=count)
+                                .map(|index| arg(self, state, index, Some(IntTy::INT64)))
+                                .collect::<Vec<_>>()
+                        });
+                        let position = if array_op == ArrayOp::ReadAt { 1 } else { 2 };
+                        (items, position + ARRAY_COORDINATE_WORDS)
+                    }
+                    // A member that stops the program on a coordinate or a
+                    // slice bound outside the Array.
+                    ArrayOp::Set
+                    | ArrayOp::Slice
+                    | ArrayOp::Select
+                    | ArrayOp::SelectWords
+                    | ArrayOp::Assign
+                    | ArrayOp::AssignWords
+                    | ArrayOp::UpdateWords => (None, args.len()),
+                    _ => return None,
+                };
+                // Every coordinate is an `int64` word.
+                let terms = coordinates.and_then(|items| {
+                    items
+                        .iter()
+                        .map(|item| scalar_term(item).map(str::to_string))
+                        .collect::<Option<Vec<String>>>()
+                });
+                // One coordinate for each axis, each inside its dimension
+                // and counted from its end when negative.
+                let in_range = terms.zip(parts).map(|(terms, (_, rank, dims))| {
+                    let mut parts = vec![format!("(= {rank} {})", terms.len())];
+                    for (axis, term) in terms.iter().enumerate() {
+                        let dim = format!("(select {dims} {axis})");
+                        // No dimension of an Array is negative.
+                        self.assume(&pc, format!("(=> (< {axis} {rank}) (<= 0 {dim}))"));
+                        parts.push(format!("(<= (- {dim}) {term})"));
+                        parts.push(format!("(< {term} {dim})"));
+                    }
+                    conjoin(&parts)
+                });
+                let span = span_of(self, position);
+                let goal = match &in_range {
+                    Some(term) => Goal::Holds(term.clone()),
+                    None => Goal::Unsupported(
+                        "the coordinates and slice bounds of this Array member are not modeled yet"
+                            .into(),
+                    ),
+                };
+                self.oblige(
+                    ObligationKind::IndexInRange,
+                    span,
+                    "array index in range, with one coordinate for each axis",
+                    &pc,
+                    goal,
+                );
+                // Past the access, its check held.
+                if let Some(term) = in_range {
+                    self.assume(&pc, term);
+                }
+                None
+            }
+            RuntimeOp::Function(
+                function @ (FunctionOp::ArrayZeros
+                | FunctionOp::ArrayFull
+                | FunctionOp::ArrayFromList),
+            ) => {
+                // The constructor stops the program on a shape with no
+                // axis or a negative dimension, and `from_list` on a list
+                // of another length.
+                let from_list = function == FunctionOp::ArrayFromList;
+                let shape = arg(self, state, usize::from(from_list), None);
+                let len = self.fresh_const("Int", "array_len");
+                self.fact(format!("(<= {len} {})", i64::MAX));
+                if from_list {
+                    if let Val::List { len: count, .. } = arg(self, state, 0, None) {
+                        self.assume(&pc, format!("(= {len} {count})"));
+                    }
+                }
+                Some(self.array_value(&pc, len, shape))
+            }
             RuntimeOp::Function(
                 function @ (FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max),
             ) => {
@@ -4418,6 +4750,10 @@ fn runtime_op_is_pure(op: RuntimeOp) -> bool {
     match op {
         RuntimeOp::List(op) => list_op_is_pure(op),
         RuntimeOp::Str(_) | RuntimeOp::Scalar(_) | RuntimeOp::Value(_) => true,
+        // No Array member changes its receiver's shape or element count,
+        // which is all the encoding models of an Array.
+        RuntimeOp::Array(_) => true,
+        RuntimeOp::Span(op) => !matches!(op, SpanOp::Extract | SpanOp::Restore | SpanOp::Fill),
         RuntimeOp::Dict(op) => matches!(
             op,
             DictOp::Len
@@ -4608,6 +4944,95 @@ fn join_path(left: &str, right: &str) -> String {
         (_, true) => left.to_string(),
         _ => format!("{left}.{right}"),
     }
+}
+
+/// The class name that marks the record an `Array[T]` is modeled as: its
+/// element count `len`, and its `shape` as a list of dimensions. Elements
+/// are not modeled. No class can have this name.
+const ARRAY_RECORD: &str = "Array[T]";
+
+fn shape_type() -> Type {
+    Type::Named("list".to_string(), vec![Type::named("int64")])
+}
+
+/// The element count, the rank, and the dimensions as an `(Array Int Int)`
+/// of an Array value.
+pub(super) fn array_parts(value: &Val) -> Option<(String, String, String)> {
+    if let Val::Record(class, fields) = value {
+        if let (
+            ARRAY_RECORD,
+            [(_, Val::Int(len, _)), (
+                _,
+                Val::List {
+                    len: rank,
+                    data: Some(Store::Leaf(dims, _)),
+                    ..
+                },
+            )],
+        ) = (class.as_str(), fields.as_slice())
+        {
+            return Some((len.clone(), rank.clone(), dims.clone()));
+        }
+    }
+    None
+}
+
+/// The shape of an Array value, as the list `shape()` gives.
+pub(super) fn array_shape(rank: String, dims: String) -> Val {
+    Val::List {
+        len: rank,
+        data: Some(Store::Leaf(dims, "Int")),
+        elem: Type::named("int64"),
+    }
+}
+
+/// The hidden parameters that carry a `Span[T]` parameter's range: its
+/// start in the base list, and its length (see `mir_spans`).
+const SPAN_START_PREFIX: &str = "__aura_span_start_";
+const SPAN_LEN_PREFIX: &str = "__aura_span_len_";
+
+pub(super) fn span_range_names(param: &str) -> [String; 2] {
+    [
+        format!("{SPAN_START_PREFIX}{param}"),
+        format!("{SPAN_LEN_PREFIX}{param}"),
+    ]
+}
+
+/// The base list length, start, and length of the span parameter `param`,
+/// when `env` holds one.
+fn span_parts(env: &BTreeMap<String, Val>, param: &str) -> Option<(String, String, String)> {
+    let [start, len] = span_range_names(param);
+    match (env.get(param), env.get(&start), env.get(&len)) {
+        (Some(Val::List { len: base, .. }), Some(Val::Int(start, _)), Some(Val::Int(len, _))) => {
+            Some((base.clone(), start.clone(), len.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Binds each span parameter in `env` to the list a contract reads it as:
+/// the span's own length, and its elements read from the base list.
+pub(super) fn bind_span_views(env: &mut BTreeMap<String, Val>) {
+    let params: Vec<String> = env.keys().cloned().collect();
+    for param in params {
+        let Some((_, start, len)) = span_parts(env, &param) else {
+            continue;
+        };
+        if let Some(Val::List {
+            len: base, data, ..
+        }) = env.get_mut(&param)
+        {
+            *base = len;
+            *data = data
+                .take()
+                .map(|store| Store::Shifted(Box::new(store), start));
+        }
+    }
+}
+
+/// A span range lies inside its base list.
+fn span_in_list(start: &str, len: &str, base: &str) -> String {
+    format!("(and (<= 0 {start}) (<= 0 {len}) (<= (+ {start} {len}) {base}))")
 }
 
 pub(super) fn root_of(place: &str) -> &str {
