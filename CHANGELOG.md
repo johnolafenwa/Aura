@@ -12,6 +12,10 @@ in this file.
   `mem`. The new x86-64 `--kernel` profile disables the red zone and
   vector registers. The QEMU kernel example now boots an x86-64 board
   and returns from breakpoint and timer interrupts.
+- Forward a trait and its supertraits to an owned field with `impl Trait for Class by field`. A suite can override individual methods.
+- Pair a computed getter with `@name.setter` to accept assignment and compound assignment on a mutable receiver.
+- Define `__drop__(mut self)` to run cleanup when ownership ends, including collection release and trap recovery.
+- Apply callable decorators to instance and associated methods. Instance methods pass their receiver as the first argument.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

@@ -65,11 +65,11 @@ function isDefinitionSite(occurrence) {
   );
 }
 
-// The first line of a hover's code block, such as `binding total: int64`.
+// The signature in a hover code block follows any decorator lines.
 function hoverSignature(hover) {
   const text = String(hover);
   const body = text.startsWith("```aura\n") ? text.slice("```aura\n".length) : text;
-  return body.split("\n")[0];
+  return body.replace(/^(?:@[^\n]*\n)+/, "").split("\n")[0];
 }
 
 function occurrenceAt(analysis, positions, line, character) {

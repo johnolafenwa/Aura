@@ -856,6 +856,17 @@ pub enum Instruction {
         outputs: Vec<String>,
         span: Span,
     },
+    /// An initialized class now owns its destructor. Its construction has
+    /// finished, including its initializer and invariant checks.
+    ArmDrop {
+        place: String,
+        function: String,
+    },
+    /// Last lexical use of a source owner. A moved owner is already empty.
+    EndOwner {
+        place: String,
+    },
+
     /// A compiler-inserted cooperative scheduling check. Loop lowering places
     /// one on each semantic backedge; runtimes amortize the actual yield with
     /// a per-function fuel counter.
@@ -1346,6 +1357,9 @@ pub enum CallTarget {
     TraitMember {
         object: Operand,
         trait_name: String,
+        /// The selected trait specialization in a generated forwarder.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trait_args: Vec<Type>,
         field: String,
         receiver_place: Option<String>,
         /// What the call runs, as on `Member`.
@@ -1396,6 +1410,10 @@ pub enum MethodDispatch {
 /// function it runs for a value of that type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodCandidate {
+    /// A generic forwarder can select different implementations on the
+    /// same field type. Its enclosing receiver carries the trait arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_type: Option<Type>,
     pub ty: Type,
     pub function: String,
 }
@@ -7852,7 +7870,13 @@ fn validate_loan_rvalue(
                     } = callee
                         .member_parts()
                         .expect("member and receiver runtime calls have member parts");
-                    validate_canonical_mir_identifier(function, field, false)?;
+                    let identifier = match callee {
+                        CallTarget::Member { .. } => field
+                            .strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX)
+                            .unwrap_or(field),
+                        _ => field,
+                    };
+                    validate_canonical_mir_identifier(function, identifier, false)?;
                     validate_loan_operand(function, object, context, state)?;
                     let receiver_passing =
                         context.member_receiver_passing(function, object, trait_name, field)?;
@@ -8482,6 +8506,20 @@ fn validate_loan_instruction(
         }
     }
     match instruction {
+        Instruction::EndOwner { place } => {
+            validate_released_root(function, place, known_roots, state)?
+        }
+        Instruction::ArmDrop {
+            place,
+            function: hook,
+        } => {
+            let ty = context.place_type(function, place)?;
+            if !matches!(ty, Some(Type::Named(ref name, _)) if context.classes.get(name.as_str()).is_some_and(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK && method.function_name == *hook && method.receiver == Some(MirReceiverKind::BorrowMut))))
+            {
+                return Err(format!("invalid drop hook `{hook}` for `{place}`"));
+            }
+            validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
+        }
         Instruction::Retain { place } => {
             let root = place.split('.').next().unwrap_or_default();
             if !known_roots.contains(root) && !state.loans.contains_key(root) {
@@ -10498,7 +10536,10 @@ pub(crate) fn instruction_place_mentions<'a>(
             }
             mentions.extend(outputs.iter().map(String::as_str));
         }
-        Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
+        Instruction::ArmDrop { place, .. }
+        | Instruction::EndOwner { place }
+        | Instruction::Retain { place }
+        | Instruction::Release { place } => mentions.push(place),
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             mentions.extend([place.as_str(), temp])
         }
@@ -11598,6 +11639,10 @@ fn lower_trait_impl(
 ) -> MirTraitImpl {
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
+        // A receiverless generic forwarder is an alias resolved at its use.
+        if crate::sema::delegation::deferred_associated(trait_impl, method) {
+            continue;
+        }
         let qualified_name = format!(
             "{}{} for {}.{}",
             trait_impl.trait_name,
@@ -11910,6 +11955,12 @@ fn lower_function_or_initializer(
         if initializer.is_none() && receiver != Some(ReceiverKind::Value) {
             lowerer.non_owning_roots.insert("self".to_string());
         }
+        if receiver == Some(ReceiverKind::Value) {
+            lowerer
+                .current_binding_block()
+                .owners
+                .push("self".to_string());
+        }
     }
     for ((param, ty), passing) in function
         .params
@@ -11922,6 +11973,11 @@ fn lower_function_or_initializer(
             .insert(param.name.clone(), spans::span_type_as_list(ty));
         if *passing != ReceiverKind::Value {
             lowerer.non_owning_roots.insert(param.name.clone());
+        } else {
+            lowerer
+                .current_binding_block()
+                .owners
+                .push(param.name.clone());
         }
     }
     for param in &span_params {
@@ -12397,10 +12453,13 @@ struct ReturnedViewCallee {
     trait_name: Option<String>,
 }
 
+#[path = "mir_class_drop.rs"]
+mod class_drop;
 #[path = "mir_naked.rs"]
 mod naked;
 
 struct Lowerer<'a> {
+    has_class_hooks: bool,
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
@@ -12483,6 +12542,8 @@ struct Lowerer<'a> {
 /// even with another type.
 #[derive(Default)]
 struct BindingBlock {
+    /// Materialized source owner slots in declaration order.
+    owners: Vec<String>,
     /// Names declared here under their own spelling.
     declared: Vec<String>,
     /// Names declared here with another type than an ended binding of the
@@ -12589,6 +12650,7 @@ struct MatchWritebackState {
 }
 
 struct LoopLabels {
+    owner_depth: usize,
     break_label: String,
     continue_label: String,
     cleanup_depth: usize,
@@ -12691,6 +12753,7 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            has_class_hooks: class_drop::program_has_hooks(program),
             default_helper_owner: None,
             recursive_local: None,
             metadata_module_name: None,
@@ -14188,6 +14251,7 @@ impl<'a> Lowerer<'a> {
 
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
         if self.blocks[self.current_block].terminator.is_none() {
+            self.end_owners_from(0);
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
         }
@@ -14368,6 +14432,9 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::EndLoan { loan });
                 }
             }
+        }
+        if !self.current_terminated() {
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.loan_scopes.pop();
         self.end_binding_block();
@@ -14967,10 +15034,11 @@ impl<'a> Lowerer<'a> {
                         value: Rvalue::Use(value),
                     });
                     self.emit_cleanup_range(cleanup_depth, true, 0);
+                    self.end_owners_from(1);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
-                    if !self.with_stack.is_empty() {
+                    if !self.with_stack.is_empty() || self.has_live_drop_owners() {
                         let temp = self.new_temp();
                         self.emit(Instruction::Assign {
                             target: temp.clone(),
@@ -14979,6 +15047,7 @@ impl<'a> Lowerer<'a> {
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
                     self.emit_cleanup_range(0, true, 0);
+                    self.end_owners_from(0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -15009,9 +15078,11 @@ impl<'a> Lowerer<'a> {
                 let loop_labels = self.loop_stack.last().expect("checked loop context");
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let loan_depth = loop_labels.loan_depth;
+                let owner_depth = loop_labels.owner_depth;
                 let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
                 self.emit_cleanup_range(cleanup_depth, true, loan_depth);
+                self.end_owners_from(owner_depth);
                 self.terminate(Terminator::Goto(continue_label));
                 false
             }
@@ -15025,9 +15096,11 @@ impl<'a> Lowerer<'a> {
         let loop_labels = self.loop_stack.last().expect("checked loop context");
         let cleanup_depth = loop_labels.cleanup_depth;
         let loan_depth = loop_labels.loan_depth;
+        let owner_depth = loop_labels.owner_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
         self.emit_cleanup_range(cleanup_depth, true, loan_depth);
+        self.end_owners_from(owner_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -15094,6 +15167,7 @@ impl<'a> Lowerer<'a> {
             self.emit_class_invariant_check("self", class);
         }
         let value = self.move_place_for_type(return_place, &return_type);
+        self.end_owners_from(0);
         self.terminate(Terminator::Return(value));
     }
 
@@ -15649,6 +15723,7 @@ impl<'a> Lowerer<'a> {
                 target: result.clone(),
                 value: Rvalue::Call {
                     callee: CallTarget::TraitMember {
+                        trait_args: Vec::new(),
                         object: left_value.clone(),
                         trait_name,
                         field,
@@ -15764,13 +15839,15 @@ impl<'a> Lowerer<'a> {
                     .is_some_and(|scope| !scope.contains_key(name))
             {
                 let slot = self.new_typed_temp(ty.clone());
+                self.current_binding_block().owners.push(slot.clone());
                 self.scoped_names
                     .last_mut()
                     .expect("checked scoped local declaration")
                     .insert(name.clone(), slot);
             } else if declares {
                 // A sibling block may have bound the name with another type.
-                self.declare_binding(name, Some(&ty));
+                let slot = self.declare_binding(name, Some(&ty));
+                self.current_binding_block().owners.push(slot);
             }
             let target = self.render_local_name(name);
             self.local_types.entry(target).or_insert(ty);
@@ -16413,6 +16490,7 @@ impl<'a> Lowerer<'a> {
                     self.local_types.insert(target.clone(), source_ty.clone());
                     target
                 };
+                self.current_binding_block().owners.push(target.clone());
                 let source =
                     if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
                         Operand::MovePlace(source_place.to_string())
@@ -19788,6 +19866,7 @@ impl<'a> Lowerer<'a> {
         });
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -20503,6 +20582,7 @@ impl<'a> Lowerer<'a> {
 
         let safepoint_block = self.new_block("for_safepoint");
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -20900,6 +20980,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = self.loan_scopes.len();
         self.loan_scopes.push(Vec::new());
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(continue_block),
             cleanup_depth: self.with_stack.len(),
@@ -20997,6 +21078,7 @@ impl<'a> Lowerer<'a> {
         self.lower_condition_branch(&while_stmt.condition, body_label, after_label);
 
         self.loop_stack.push(LoopLabels {
+            owner_depth: self.binding_blocks.len(),
             break_label: self.label(after_block),
             continue_label: self.label(safepoint_block),
             cleanup_depth: self.with_stack.len(),
@@ -21804,6 +21886,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -21940,6 +22023,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -26050,6 +26134,9 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(value) = self.lower_delegated_call(expr, callee, args) {
+            return value;
+        }
         if let Some(info) = self.recursive_local_call(callee).cloned() {
             let mut forwarded = info
                 .captures
@@ -26435,6 +26522,7 @@ impl<'a> Lowerer<'a> {
                     },
                 });
                 self.emit_class_invariant_check(&temp, &class);
+                self.arm_class_drop(&temp, &class);
             }
             ExprKind::Name(name) if name == "Queue" => {
                 let lowered_args = self.lower_args(args);
@@ -26958,6 +27046,7 @@ impl<'a> Lowerer<'a> {
                                 },
                             });
                             self.emit_class_invariant_check(&temp, &class);
+                            self.arm_class_drop(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -27027,18 +27116,15 @@ impl<'a> Lowerer<'a> {
                     if let Some((function_name, params, param_passings)) = self
                         .trait_impl_method_for_class_name(class_name, &written_type_args, field)
                         .filter(|(_, method)| method.decl.receiver.is_none())
-                        .map(|(trait_impl, method)| {
-                            (
-                                format!(
-                                    "{}{} for {}.{}",
-                                    trait_impl.trait_name,
-                                    format_trait_args(&trait_impl.trait_args),
-                                    trait_impl.for_type,
-                                    field
-                                ),
+                        .and_then(|(trait_impl, method)| {
+                            let actual =
+                                Type::Named(class_name.to_owned(), written_type_args.clone());
+                            let selected = self.associated_alias(&trait_impl, &method, actual)?;
+                            Some((
+                                selected,
                                 method.decl.params.clone(),
                                 method.signature.param_passings.clone(),
-                            )
+                            ))
                         })
                     {
                         let lowered_args = self.lower_user_args(
@@ -27147,6 +27233,8 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: match trait_name {
                             Some(trait_name) => CallTarget::TraitMember {
+                                trait_args: self
+                                    .trait_object_call_args(receiver_type.as_ref(), field),
                                 object: lowered_object,
                                 trait_name,
                                 field: field.clone(),
@@ -28385,6 +28473,7 @@ impl<'a> Lowerer<'a> {
             },
         });
         self.emit_class_invariant_check(target, class);
+        self.arm_class_drop(target, class);
     }
 
     /// Calls the class's hidden invariant method on `object`, when the class
@@ -31612,6 +31701,7 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
             };
+            self.current_binding_block().owners.push(place.clone());
             let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
             self.emit(Instruction::Assign {
                 target: place.clone(),
@@ -31704,6 +31794,7 @@ impl<'a> Lowerer<'a> {
         self.with_stack.pop();
         if !self.current_terminated() {
             self.emit_with_exit(place.clone(), false);
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.manager_exits.remove(&place);
         self.lock_exits.remove(&place);
@@ -32107,6 +32198,8 @@ fn mir_class_type_name(
 #[path = "mir_inline_asm.rs"]
 mod inline_asm;
 
+#[path = "mir_delegation.rs"]
+mod delegation;
 #[path = "mir_spans.rs"]
 mod spans;
 

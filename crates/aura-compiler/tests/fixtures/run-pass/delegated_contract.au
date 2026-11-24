@@ -1,0 +1,26 @@
+trait Echo:
+    def echo(self, n: int64) -> int64:
+        requires n >= 0
+        ensures result == n
+
+class Engine:
+    pass
+
+impl Echo for Engine:
+    def echo(self, n: int64) -> int64:
+        return n
+
+class Car:
+    engine: Engine
+
+impl Echo for Car by engine
+
+def through(value: dyn Echo, n: int64) -> int64:
+    requires n >= 0
+    ensures result == n
+    return value.echo(n)
+
+def main():
+    car = Car(engine=Engine())
+    print(car.echo(2))
+    print(through(car, 3))

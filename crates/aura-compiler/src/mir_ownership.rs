@@ -508,6 +508,8 @@ pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> 
         }
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
+        | Instruction::ArmDrop { .. }
+        | Instruction::EndOwner { .. }
         | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
@@ -1001,9 +1003,10 @@ pub(crate) fn instruction_accesses_with<'a>(
             push_rvalue_places(value, &mut accesses);
             accesses.push((target, Access::Assign));
         }
-        Instruction::PushCleanup { place, .. } | Instruction::PopCleanup { place, .. } => {
-            accesses.push((place, Access::Read))
-        }
+        Instruction::ArmDrop { place, .. }
+        | Instruction::EndOwner { place }
+        | Instruction::PushCleanup { place, .. }
+        | Instruction::PopCleanup { place, .. } => accesses.push((place, Access::Read)),
     }
     accesses
 }
@@ -2334,6 +2337,8 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
         Instruction::Eval { value } => operands.push(value),
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
+        | Instruction::ArmDrop { .. }
+        | Instruction::EndOwner { .. }
         | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }

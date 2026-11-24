@@ -784,6 +784,7 @@ impl ModuleLoader {
         fn visit(
             loader: &ModuleLoader,
             path: &Path,
+            imported: bool,
             visited: &mut BTreeSet<PathBuf>,
             plan: &mut Vec<sema::ConstantInfo>,
             visit_module: &mut dyn FnMut(&Path, &Program),
@@ -814,7 +815,7 @@ impl ModuleLoader {
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
-                visit(loader, &dependency, visited, plan, visit_module)?;
+                visit(loader, &dependency, true, visited, plan, visit_module)?;
             }
             visit_module(&path, &loaded.program);
             let mut local = loaded
@@ -822,7 +823,15 @@ impl ModuleLoader {
                 .constants
                 .values()
                 .filter(|constant| constant.module_name == loaded.program.module_name)
-                .cloned()
+                .map(|constant| {
+                    // A dependency's initializer and every read must agree on
+                    // the module-qualified nominal types in its signature.
+                    if imported {
+                        qualify_constant_info_for_export(&loaded.program, constant)
+                    } else {
+                        constant.clone()
+                    }
+                })
                 .collect::<Vec<_>>();
             local.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
             plan.extend(local);
@@ -831,7 +840,14 @@ impl ModuleLoader {
 
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
-        visit(self, entry_path, &mut visited, &mut plan, visit_module)?;
+        visit(
+            self,
+            entry_path,
+            false,
+            &mut visited,
+            &mut plan,
+            visit_module,
+        )?;
         let mut seen = BTreeSet::new();
         plan.retain(|constant| {
             seen.insert((constant.module_name.clone(), constant.decl.name.clone()))

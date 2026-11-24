@@ -1,6 +1,8 @@
 mod capabilities;
+mod drop_hooks;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+pub(crate) use drop_hooks::DROP_HOOK;
 mod callables;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
@@ -25,6 +27,7 @@ mod prelude;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;
+mod property_setters;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod trait_objects;
@@ -64,6 +67,7 @@ pub(crate) use contracts::RESULT_NAME as CONTRACT_RESULT_NAME;
 mod decorators;
 mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
+pub(crate) mod delegation;
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
@@ -293,6 +297,11 @@ fn reject_initializer_member(expr: &Expr) -> Result<()> {
         _ => None,
     };
     match member {
+        Some((field, span)) if field == DROP_HOOK => Err(Diagnostic::coded_at(
+            "AU2066",
+            span,
+            "`__drop__` runs automatically when an owner releases the value",
+        )),
         Some((field, span)) if field == INITIALIZER_NAME => Err(Diagnostic::coded_at(
             "AU2005",
             span,
@@ -6053,7 +6062,9 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        self.reject_property_assignment(assign, locals)?;
+        if self.discover_property_assignment(assign, locals)? {
+            return Ok(());
+        }
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
@@ -11732,6 +11743,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(ty) = self.check_delegated_call(callee, args, span, locals, expected)? {
+            return Ok(ty);
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {
@@ -13140,7 +13154,10 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Member { object, field } => {
-                if let Some(type_param) = self.names_type_param(object, locals) {
+                if let Some(type_param) = self
+                    .names_type_param(object, locals)
+                    .or_else(|| self.associated_delegate_param(object, field, locals))
+                {
                     return self.type_of_type_param_associated_call(
                         &type_param,
                         field,

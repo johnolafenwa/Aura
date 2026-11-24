@@ -53,7 +53,7 @@
         },
         {
           "name": "storage.modifier.attribute.aura",
-          "match": "@[A-Za-z_][A-Za-z0-9_]*"
+          "match": "@[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*"
         }
       ]
     },
@@ -541,6 +541,34 @@
     },
     "contextualSyntax": {
       "patterns": [
+        {
+          "name": "meta.declaration.delegation.aura",
+          "begin": "^\\s*(impl)\\b(?=[^#]*\\bby\\s+[A-Za-z_]\\w*\\s*:?\\s*(?:#|$))",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.aura"
+            }
+          },
+          "end": "$",
+          "patterns": [
+            {
+              "name": "keyword.control.delegation.aura",
+              "match": "\\bby(?=\\s+[A-Za-z_]\\w*\\s*:?\\s*(?:#|$))"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#types"
+            },
+            {
+              "include": "#operators"
+            }
+          ]
+        },
         {
           "name": "meta.assembly.aura",
           "begin": "^[ \\t]*(asm|module_asm)[ \\t]*\\(",

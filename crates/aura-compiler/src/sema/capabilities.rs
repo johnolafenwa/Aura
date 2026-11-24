@@ -647,6 +647,7 @@ impl<'a> FunctionChecker<'a> {
         if self.is_copy_type(member_ty) {
             return Ok(());
         }
+        self.check_drop_field_move(object, object_ty, locals, expr.span)?;
         // Moving a non-Copy field out of a list element or dictionary entry
         // would move it out of the collection's storage: the element is
         // treated as moved, which is `AU3005` (ADR-0061, contextual reads).

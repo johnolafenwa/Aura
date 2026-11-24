@@ -1,5 +1,6 @@
 "use strict";
 
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
@@ -7319,5 +7320,103 @@ test("compiler bridge completes ordered collection methods and their signatures"
     const item = entries?.find((entry) => entry.name === method);
     assert.ok(item, `missing ${binding}.${method}`);
     assert.ok(item.detail.includes(signature), item.detail);
+  }
+});
+
+test("compiler bridge resolves delegated members, decorated methods, and property writes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-class-items-lsp-"));
+  const lines = [
+    "trait Named:",
+    "    def name(self) -> str",
+    "class Engine:",
+    "    pass",
+    "impl Named for Engine:",
+    "    def name(self) -> str:",
+    '        return "engine"',
+    "type Answer = Callable[def() -> int64]",
+    "def traced(f: own Answer) -> Answer:",
+    "    return f",
+    "class Car:",
+    "    engine: Engine",
+    "    stored: int64",
+    "    @property",
+    "    def count(self) -> int64:",
+    "        return self.stored",
+    "    @count.setter",
+    "    def count(mut self, value: int64):",
+    "        self.stored = value",
+    "    @traced",
+    "    def answer() -> int64:",
+    "        return 42",
+    "    def __drop__(mut self):",
+    "        pass",
+    "impl Named for Car by engine",
+    "def main():",
+    "    mut car = Car(engine=Engine(), stored=0)",
+    "    car.count += 2",
+    "    print(car.count)",
+    "    print(car.name())",
+    "    print(Car.answer())",
+    "",
+  ];
+  const source = lines.join("\n");
+  const uri = pathToFileURL(path.join(root, "main.au")).href;
+  try {
+    setWorkspaceRoots([repoRoot, root]);
+    const analysis = await analyzeWithCompiler(uri, source);
+    assert.deepEqual(analysis?.diagnostics, []);
+    for (const [line, word, definitionLine, hover] of [
+      [16, "count", 14, /property count: int64/],
+      [19, "traced", 8, /traced/],
+      [22, "__drop__", 22, /method __drop__\(mut self\)/],
+      [24, "engine", 11, /field engine/],
+      [27, "count", 17, /@count\.setter/],
+      [28, "count", 14, /property count: int64/],
+      [29, "name", 1, /name\(self\)/],
+      [30, "answer", 20, /@traced\nmethod answer/],
+    ]) {
+      const column = lines[line].lastIndexOf(word);
+      assert.match(compilerHoverAtPosition(analysis, line, column)?.value || "", hover);
+      const location = compilerDefinitionAtPosition(uri, analysis, line, column);
+      assert.deepEqual(location?.range.start, {
+        line: definitionLine, character: lines[definitionLine].indexOf(word),
+      });
+    }
+    const items = await completeWithCompiler(uri, source, 29, lines[29].indexOf(".") + 1, ".");
+    assert.ok(items.some((item) => item.name === "name"));
+    assert.deepEqual(items.filter((item) => item.name === "count").map((item) => item.kind), ["property"]);
+    assert.ok(items.every((item) => !item.name.includes("$") && !item.name.startsWith("__aura_") && item.name !== "__drop__"));
+    const traitFile = path.join(root, "named.au");
+    fs.writeFileSync(traitFile, "public trait Named:\n    def name(self) -> str\n");
+    const imported = ["from named import Named", "", ...lines.slice(2)].join("\n");
+    const importedAnalysis = await analyzeWithCompiler(uri, imported);
+    assert.deepEqual(importedAnalysis?.diagnostics, []);
+    const forwarded = compilerDefinitionAtPosition(uri, importedAnalysis, 29, lines[29].indexOf("name"));
+    assert.equal(forwarded?.uri, pathToFileURL(fs.realpathSync(traitFile)).href);
+    assert.deepEqual(forwarded.range.start, { line: 1, character: 8 });
+    const indexed = [
+      ...lines.slice(0, 25),
+      "def index(label: str) -> int64:",
+      "    print(label)",
+      "    return 0",
+      "def update(cars: mut list[Car]):",
+      '    cars[index("🌍")].count += 2',
+      "    cars[",
+      '        index("é")',
+      "    ].count = 3",
+      "",
+    ];
+    const indexedAnalysis = await analyzeWithCompiler(uri, indexed.join("\n"));
+    assert.deepEqual(indexedAnalysis?.diagnostics, []);
+    for (const line of [29, 32]) {
+      const character = indexed[line].indexOf("count");
+      const hover = compilerHoverAtPosition(indexedAnalysis, line, character);
+      assert.deepEqual(hover?.range, { start: { line, character }, end: { line, character: character + 5 } });
+      assert.equal(compilerDefinitionAtPosition(uri, indexedAnalysis, line, character)?.range.start.line, 17);
+    }
+    const invalid = await analyzeWithCompiler(uri, source.replace("Car by engine", "Car by absent"));
+    assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.code === "AU2060"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
