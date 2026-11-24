@@ -516,7 +516,10 @@ impl FunctionCompiler<'_> {
             let line = self.load_operand(&args[2].value)?.values[0];
             let column = self.load_operand(&args[3].value)?.values[0];
             let at = self.fixed_element_address(&layout, address, index, line, column);
-            return Ok(ValueRef { values: vec![at], ty: DirectType::Scalar(ScalarKind::Uint64) });
+            return Ok(ValueRef {
+                values: vec![at],
+                ty: DirectType::Scalar(ScalarKind::Uint64),
+            });
         }
         let base = layout.slot(self.builder);
         let storage = layout.storage();
@@ -604,6 +607,21 @@ impl FunctionCompiler<'_> {
 /// occupy as many consecutive words as their complete payload requires.
 pub(super) fn union_member_words(ty: &DirectType) -> Option<usize> {
     let abi = ty.abi_types();
+    if abi
+        .iter()
+        .any(|s| matches!(s, ScalarType::OverAligned { .. }))
+    {
+        return Some(
+            abi.iter()
+                .map(|s| match s {
+                    ScalarType::Inline { bytes, .. } | ScalarType::OverAligned { bytes, .. } => {
+                        bytes.div_ceil(8) as usize
+                    }
+                    _ => 1,
+                })
+                .sum(),
+        );
+    }
     abi.iter()
         .any(|s| matches!(s, ScalarType::Inline { .. }))
         .then(|| {
@@ -636,6 +654,14 @@ pub(super) fn pack_union_member(
     let zero = builder.iconst(types::I64, 0);
     for (&value, abi) in values.iter().zip(member.abi_types()) {
         match abi {
+            ScalarType::OverAligned { bytes, align } => {
+                let slot = builder.create_sized_stack_slot(bytes, align.trailing_zeros() as u8);
+                let base = builder.stack_addr(types::I64, slot, 0);
+                builder.store(MemFlags::trusted(), value, base, 0);
+                for offset in (0..bytes).step_by(8) {
+                    words.push(builder.load(types::I64, MemFlags::trusted(), base, offset as i32));
+                }
+            }
             ScalarType::Inline { bytes, align } => {
                 let base = word_slot(builder, bytes, align);
                 if !bytes.is_multiple_of(8) {
@@ -664,6 +690,14 @@ pub(super) fn unpack_union_member(
     let mut values = Vec::new();
     for abi in member.abi_types() {
         let value = match abi {
+            ScalarType::OverAligned { bytes, align } => {
+                let slot = builder.create_sized_stack_slot(bytes, align.trailing_zeros() as u8);
+                let base = builder.stack_addr(types::I64, slot, 0);
+                for offset in (0..bytes).step_by(8) {
+                    builder.store(MemFlags::trusted(), words.next()?, base, offset as i32);
+                }
+                builder.load(abi, MemFlags::trusted(), base, 0)
+            }
             ScalarType::Inline { bytes, align } => {
                 let base = word_slot(builder, bytes, align);
                 for offset in (0..bytes).step_by(8) {

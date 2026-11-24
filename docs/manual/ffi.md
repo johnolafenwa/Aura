@@ -845,14 +845,9 @@ classes, enum payloads, and generic specializations.
 - Consuming operations such as `pop`, `remove`, and replacement are allowed.
 - Equality and inequality are rejected for an opaque handle or any value that
   structurally contains one.
-- Arithmetic and ordering operators on a handle are rejected with dedicated
-  diagnostics. Raw pointer arithmetic and ordering by foreign address are not
-  language capabilities.
+- Opaque handles support neither arithmetic nor ordering. A first-class `ptr[T]` supports element offsets and equality.
 
-FFI does not expose foreign addresses. It does not assume that address
-identity is the native API's identity. When callers need to compare foreign
-objects, a binding should expose reviewed extern operations or a stable scalar
-or `str` key.
+An opaque handle keeps its foreign address private. To compare the objects it refers to, use the foreign API's identity operation or a stable key.
 
 ## Runtime Semantics
 
@@ -977,10 +972,9 @@ FFI does not:
 
 - pass enums
 - pass a struct that holds a pointer Aura can follow
-- allocate foreign memory or expose pointer arithmetic
+- allocate foreign memory
 - return views, or free a `cstr` result
-- pass typed pointers to anything but one scalar, one struct, one handle,
-  or the elements of a list of scalars or structs
+- marshal lists whose elements lack a C representation
 - accept variadics
 - pass a closure as a callback, pass a list or struct to one, or return
   text from one
