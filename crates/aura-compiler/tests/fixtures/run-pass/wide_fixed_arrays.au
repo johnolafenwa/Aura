@@ -1,0 +1,9 @@
+def sample(index: int64) -> uint128:
+    mut values: fixed[uint128, 2] = [340282366920938463463374607431768211455, 1]
+    values[1] = values[0] - 3
+    return values[index]
+
+def main():
+    print(sample(1))
+    signed: fixed[int128, 2] = [-170141183460469231731687303715884105728] * 2
+    print(signed[0])

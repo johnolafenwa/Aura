@@ -993,3 +993,18 @@ export "C" def get(word: uint16) -> uint16:
         assert!(undefined.is_empty(), "{undefined:?}");
     }
 }
+
+#[test]
+fn fixed_arrays_of_wide_words_stay_inline() {
+    let source = r#"
+export "C" def sample(i: int64, high: uint64) -> uint64:
+    word = (high as uint128) << 64
+    mut row: fixed[uint128, 2] = [word, 0]
+    row[1] = row[0]
+    return (row[i] >> 64) as uint64
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
