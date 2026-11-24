@@ -116,12 +116,12 @@ function declarationForLine(line, lineNumber) {
   }
 
   const match = line.match(
-    /^(\s*)(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
+    /^\s*(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
   );
   if (!match) {
     return null;
   }
-  const [, , declaration, name] = match;
+  const [, declaration, name] = match;
   const startCharacter = match[0].length - name.length;
   const kind = ({ def: "function", const: "constant" })[declaration] || declaration;
   return {
