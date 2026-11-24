@@ -121,6 +121,7 @@ impl Exec<'_> {
             }
             self.erasing = erasing;
         }
+        self.prove_inner_arguments(state, callee, pre, span);
     }
 
     /// The invariant clauses of the class of `value`, when it is an object
@@ -195,6 +196,7 @@ impl Exec<'_> {
             }
         }
         self.erasing = erasing;
+        self.prove_inner_returns(state, result);
     }
 
     /// Whether `callee` is a method that only reads `self`.
@@ -273,6 +275,7 @@ impl Exec<'_> {
             )
             .collect();
         self.assume_record_invariants(state, &returned);
+        self.assume_inner_results(state, callee, pre, post, result);
     }
 
     /// A named function passed as a callable alias with a contract meets
@@ -489,6 +492,7 @@ impl Exec<'_> {
             .filter_map(|param| state.env.get(&param.name).cloned())
             .collect();
         self.assume_record_invariants(state, &values);
+        self.assume_inner_parameters(state);
     }
 
     /// The invariant clauses that hold on entry to `callee` and on its
@@ -652,11 +656,18 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, ty))
                     }
+                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                        Ok(Val::Int(super::integers::bitnot(&term, ty), ty))
+                    }
                     _ => Err("this unary operator is not modeled in contracts yet".into()),
                 }
             }
             ExprKind::Binary { op, left, right } => {
                 self.spec_binary(*op, left, right, env, wd, depth)
+            }
+            ExprKind::Cast { expr: inner, ty } => {
+                let value = self.spec(inner, env, wd, depth)?;
+                super::integers::spec_cast(value, ty, wd)
             }
             ExprKind::CompareChain { first, links } => {
                 let mut previous = self.spec(first, env, wd, depth)?;
@@ -804,17 +815,32 @@ impl Exec<'_> {
                             .ok_or("tuple index out of range".to_string()),
                         _ => Err("a tuple index must be a literal".into()),
                     },
+                    Val::Str(text) => {
+                        let index = self.spec(index, env, wd, depth)?;
+                        self.spec_text(&text, "char_at", &[index], wd)
+                    }
                     _ => Err("indexing this type is not modeled in contracts yet".into()),
                 }
             }
-            ExprKind::Member { object, field } => match self.spec(object, env, wd, depth)? {
-                Val::Record(_, fields) => fields
-                    .iter()
-                    .find(|(name, _)| name == field)
-                    .map(|(_, value)| value.clone())
-                    .ok_or(format!("field `{field}` is not modeled")),
-                _ => Err(format!("`.{field}` on this value is not modeled yet")),
-            },
+            ExprKind::Slice {
+                object, start, end, ..
+            } => self.spec_slice(object, [start, end], env, wd, depth),
+            ExprKind::FString(parts) => self.spec_format(parts, env, wd, depth),
+            ExprKind::IsNone { value, negated, .. } => {
+                let value = self.spec(value, env, wd, depth)?;
+                self.spec_is_none(&value, *negated)
+            }
+            ExprKind::Member { object, field } => {
+                match self.spec_object(object, field, env, wd, depth)? {
+                    value @ Val::Enum(..) => Ok(value),
+                    Val::Record(_, fields) => fields
+                        .iter()
+                        .find(|(name, _)| name == field)
+                        .map(|(_, value)| value.clone())
+                        .ok_or(format!("field `{field}` is not modeled")),
+                    _ => Err(format!("`.{field}` on this value is not modeled yet")),
+                }
+            }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { object, field } = &callee.kind {
                     if let Some(module_path) = self.spec_module_path(object, env) {
@@ -849,20 +875,11 @@ impl Exec<'_> {
                         return self.membership(&item, &receiver).map(Val::Bool);
                     }
                     if let Val::Str(text) = &receiver {
-                        let [arg] = args.as_slice() else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        let Val::Str(other) = self.spec(&arg.value, env, wd, depth)? else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        return match field.as_str() {
-                            "starts_with" => {
-                                Ok(Val::Bool(format!("(str.prefixof {other} {text})")))
-                            }
-                            "ends_with" => Ok(Val::Bool(format!("(str.suffixof {other} {text})"))),
-                            "contains" => Ok(Val::Bool(format!("(str.contains {text} {other})"))),
-                            _ => Err(format!("`str.{field}` is not modeled in contracts yet")),
-                        };
+                        let mut values = Vec::new();
+                        for arg in args {
+                            values.push(self.spec(&arg.value, env, wd, depth)?);
+                        }
+                        return self.spec_text(text, field, &values, wd);
                     }
                     let Val::Record(class, _) = &receiver else {
                         return Err(format!(
@@ -909,6 +926,7 @@ impl Exec<'_> {
                     ("len", [Val::Str(text)]) => {
                         Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
                     }
+                    ("str", [value]) => self.spec_display(value),
                     ("abs", [Val::Float(term, float)]) => {
                         Ok(Val::Float(format!("(fp.abs {term})"), *float))
                     }
@@ -1013,13 +1031,14 @@ impl Exec<'_> {
         );
         if depth >= limit || self.active_specs.contains(&call_key) {
             if self.proving {
-                wd.push("false".to_string());
+                wd.push(self.spec_cutoff(&spec.name, limit));
                 self.spec_limit_hit = Some(limit);
             }
             return match self.cx.spec_return_type(spec) {
                 Some(Type::Unit) => Ok(Val::Unit),
                 Some(ty) => {
-                    let fresh = self.fresh(ty, &spec.name);
+                    let what = super::shapes::spec_cutoff_name(&spec.name, limit);
+                    let fresh = self.unmodeled(what, |exec| exec.fresh(ty, &spec.name));
                     if matches!(fresh, Val::Opaque) {
                         Err(format!(
                             "`spec def {}` unfolds more than {limit} levels",
@@ -1112,6 +1131,12 @@ impl Exec<'_> {
         }
         let lhs = self.spec(left, env, wd, depth)?;
         let rhs = self.spec(right, env, wd, depth)?;
+        // Any operator but `==` reads a union as the member it holds.
+        let (lhs, rhs) = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            (lhs, rhs)
+        } else {
+            (self.spec_member(lhs, wd), self.spec_member(rhs, wd))
+        };
         match op {
             BinaryOp::Eq
             | BinaryOp::NotEq
@@ -1183,6 +1208,18 @@ impl Exec<'_> {
                 };
                 wd.push(ty.contains(&term));
                 Ok(Val::Int(term, ty))
+            }
+            BinaryOp::Pow => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_pow(&lhs, &rhs, literal_left, wd)
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_bits(op, &lhs, &rhs, literal_left, wd)
             }
             _ => Err(format!("`{op:?}` is not modeled in contracts yet")),
         }
@@ -1488,8 +1525,13 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
             BinaryOp::GreaterEq => format!("(str.<= {b} {a})"),
             _ => format!("(= {a} {b})"),
         },
-        (Val::Map { .. } | Val::Set { .. }, _) if symbol == "=" => structural_eq(lhs, rhs)
-            .ok_or("comparing these values is not modeled in contracts yet".to_string())?,
+        (Val::Map { .. } | Val::Set { .. } | Val::Union(..) | Val::Enum(..), _)
+        | (_, Val::Union(..))
+            if symbol == "=" =>
+        {
+            structural_eq(lhs, rhs)
+                .ok_or("comparing these values is not modeled in contracts yet".to_string())?
+        }
         _ => return Err("comparing these values is not modeled in contracts yet".into()),
     };
     Ok(if op == BinaryOp::NotEq {
@@ -1683,7 +1725,7 @@ fn find_condition<'a>(
 }
 
 /// The range facts of each integer a value holds.
-fn int_ranges(value: &Val, facts: &mut Vec<String>) {
+pub(super) fn int_ranges(value: &Val, facts: &mut Vec<String>) {
     match value {
         Val::Int(term, int) => facts.push(int.contains(term)),
         Val::Tuple(items) => items.iter().for_each(|item| int_ranges(item, facts)),
