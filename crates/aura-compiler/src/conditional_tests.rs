@@ -199,3 +199,10 @@ fn nested_declaration_suites_can_define_marked_bindings() {
     );
     assert_eq!(run_source(source).unwrap().stdout, "host\n");
 }
+
+#[test]
+fn nested_entry_infers_its_root_from_unconditional_user_imports() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-pass/conditional_support/nested/entry.au");
+    assert_eq!(crate::run_path(&path).unwrap().stdout, "23\n");
+}
