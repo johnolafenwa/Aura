@@ -11682,7 +11682,11 @@ fn assembly_visits_operand_expressions_without_resolving_clause_names() {
     let analysis = crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
         analyze_path_source(&path, source)
     });
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
     let assembly = source.lines().nth(4).unwrap();
     let bound_to = |column| {
         analysis
@@ -11697,4 +11701,23 @@ fn assembly_visits_operand_expressions_without_resolving_clause_names() {
     assert_eq!(bound_to(assembly.find("word").unwrap()), None);
     assert_eq!(bound_to(assembly.rfind("word").unwrap()), Some(2));
     assert_eq!(bound_to(assembly.find("result").unwrap()), Some(3));
+}
+
+#[test]
+fn assembly_form_completion_uses_statement_scope_and_target() {
+    let source = "export \"C\" def entry() -> None:\n    pass\n";
+    let offers = |line, column, name| {
+        complete_source(source, line, column, None)
+            .unwrap()
+            .iter()
+            .any(|item| item.name == name)
+    };
+    assert!(!offers(0, 0, "module_asm"));
+    crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
+        assert!(offers(0, 0, "module_asm"));
+        assert!(!offers(0, 0, "asm"));
+        assert!(offers(1, 4, "asm"));
+        assert!(!offers(1, 4, "module_asm"));
+        assert!(!offers(1, 6, "asm"));
+    });
 }

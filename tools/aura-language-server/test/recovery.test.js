@@ -248,3 +248,33 @@ test("contextual machine names offer hover and completion only in their syntax s
   assert.deepEqual(completionsForDocument("@machine.", 0, 9, ".").map(item => item.name).sort(),
     ["align", "always_inline", "interrupt", "link_name", "naked", "noinline", "section", "used"]);
 });
+
+test("an unfinished multiline template and CRLF preserve editor coordinates", () => {
+  const lines = [
+    '# module_asm("""',
+    'class Kernel:',
+    '    asm(',
+    "        r'Kernel',",
+    '        input("reg", Kernel))',
+    "module_asm('''",
+    "😀 Kernel",
+    "def hidden()"
+  ];
+  const text = lines.join("\r\n");
+  assert.deepEqual(documentSymbols(text).map(s => s.name), ["Kernel"]);
+  assert.deepEqual(completionsForDocument(text, 6, 4), []);
+  assert.equal(hoverForPosition(text, 3, 13), null);
+  assert.equal(definitionForPosition(text, 4, 22).line, 1);
+  assert.deepEqual(hoverForPosition(text, 4, 10).range, {
+    start: {line: 4, character: 8}, end: {line: 4, character: 13}
+  });
+});
+
+test("typing at the end of an unfinished assembly string suppresses suggestions", () => {
+  for (const source of ['    asm("mov', "module_asm('''\n", "    asm('mov\\"]) {
+    const lines = source.split("\n");
+    assert.deepEqual(completionsForDocument(source, lines.length - 1, lines.at(-1).length), []);
+  }
+  const complete = '    asm("ret")';
+  assert.ok(completionsForDocument(complete, 0, complete.length).length > 0);
+});

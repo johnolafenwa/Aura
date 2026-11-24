@@ -49,6 +49,7 @@ const {
 } = require("./verification");
 const { canonicalFileUri, uriToPath } = require("./uri");
 
+const { machineCompletions, machineHover } = require("./machine_syntax");
 const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
 const {
   SEMANTIC_TOKEN_MODIFIERS,
@@ -159,6 +160,8 @@ connection.onCompletion(async (params, cancellationToken) => {
     return [];
   }
 
+  const syntax = machineCompletions(document.getText(), params.position.line, params.position.character);
+  if (syntax) return syntax.map(item => compilerCompletionToLsp(item, completionKind(item.kind)));
   const compilerItems = await completeWithCompiler(
     params.textDocument.uri,
     document.getText(),
@@ -273,6 +276,8 @@ connection.onHover(async (params) => {
     return null;
   }
 
+  const syntax = machineHover(document.getText(), params.position.line, params.position.character);
+  if (syntax) return { contents: { kind: MarkupKind.Markdown, value: syntax.value }, range: syntax.range };
   const state = await getDocumentState(document);
   if (state.compilerAnalysis) {
     const compilerHover = compilerHoverAtPosition(

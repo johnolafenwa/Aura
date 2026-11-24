@@ -1770,6 +1770,17 @@ impl TestRecord {
 }
 
 fn handle_lsp_service() {
+    // A language-server restart selects a new target for every open buffer.
+    let _target = std::env::var("AURA_LSP_FREESTANDING_TARGET")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let target = aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
+                eprintln!("aura lsp: unknown freestanding target `{name}`");
+                process::exit(2);
+            });
+            aura_compiler::enter_freestanding_target(target)
+        });
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
