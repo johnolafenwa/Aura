@@ -136,20 +136,20 @@ pub(super) fn evaluate(
         }
     }
     // A space makes the compiler's private spelling inaccessible in source.
-    const RESULT: &str = "conditional predicate";
+    let span = crate::analysis::expression_start_span(expression);
     probe.constants.push(ConstantDecl {
         public: false,
         required: true,
-        name: RESULT.to_string(),
-        annotation: None,
+        name: CONDITION_RESULT.to_string(),
+        annotation: Some(TypeRef::named("bool", Vec::new(), false, span)),
         value: expression.clone(),
-        span: expression.span,
+        span,
     });
     resolver.check_dependencies(&mut probe, tokens, expression.span)?;
     let program = resolver.compile(probe)?;
     match program
         .frozen_constants
-        .get(&format!("{}::{RESULT}", program.module_name))
+        .get(&format!("{}::{CONDITION_RESULT}", program.module_name))
     {
         Some(FrozenValue::Bool(value)) => Ok(Some(*value)),
         _ => Err(Diagnostic::coded_at(

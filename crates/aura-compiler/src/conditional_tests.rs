@@ -19,7 +19,10 @@ fn malformed_inactive_body_keeps_its_source_location() {
     let error =
         parse_source("import build\nif build.freestanding:\n    def broken(:\n        pass\n")
             .unwrap_err();
-    assert_eq!(error.span.unwrap().line, 3);
+    let ordinary =
+        parse_source("import build\nif condition:\n    def broken(:\n        pass\n").unwrap_err();
+    assert_eq!(error.span, ordinary.span);
+    assert_eq!(error.code, ordinary.code);
 }
 
 #[test]
