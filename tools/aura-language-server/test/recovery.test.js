@@ -207,3 +207,44 @@ test("recovery locates an extern declaration named C after the ABI string", () =
     });
   }
 });
+
+test("assembly templates stay opaque to recovery symbols, navigation and completion", () => {
+  const text = [
+    'module_asm("""',
+    'def fictitious():',
+    'call real',
+    '""")',
+    'def real() -> None:',
+    '    asm("call real")'
+  ].join("\n");
+  assert.deepEqual(documentSymbols(text).map(s => s.name), ["real"]);
+  for (const [line, character] of [[2, 6], [5, 15]]) {
+    assert.equal(hoverForPosition(text, line, character), null);
+    assert.equal(definitionForPosition(text, line, character), null);
+    assert.deepEqual(completionsForDocument(text, line, character), []);
+  }
+});
+
+test("contextual machine names offer hover and completion only in their syntax slots", () => {
+  const source = [
+    '@machine.interrupt("x86_64")',
+    'export "C" def irq() -> None:',
+    '    asm("nop",',
+    '        input("reg", helper()),',
+    '        options("preserves_flags"))',
+    '    x = ordinary(input())',
+    '    # asm("call helper")',
+    'def helper() -> uint64:',
+    '    return 1'
+  ].join("\n");
+  const at = (line, word) => source.split("\n")[line].indexOf(word) + 1;
+  assert.match(hoverForPosition(source, 0, at(0, "interrupt")).value, /interrupt/i);
+  assert.match(hoverForPosition(source, 2, at(2, "asm")).value, /assembly/i);
+  assert.match(hoverForPosition(source, 3, at(3, "input")).value, /operand/i);
+  assert.equal(hoverForPosition(source, 5, at(5, "input")), null);
+  assert.equal(definitionForPosition(source, 3, at(3, "helper")).line, 7);
+  assert.deepEqual(completionsForDocument(source, 3, 8).map(item => item.name).sort(),
+    ["clobber", "input", "options", "output"]);
+  assert.deepEqual(completionsForDocument("@machine.", 0, 9, ".").map(item => item.name).sort(),
+    ["align", "always_inline", "interrupt", "link_name", "naked", "noinline", "section", "used"]);
+});
