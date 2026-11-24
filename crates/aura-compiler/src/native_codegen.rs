@@ -9073,6 +9073,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
+        if self.freestanding.is_some() {
+            self.builder.set_cold_block(fail_block);
+        }
         let continue_block = self.builder.create_block();
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
