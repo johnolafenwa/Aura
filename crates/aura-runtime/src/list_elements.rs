@@ -209,6 +209,12 @@ impl TypedElements {
     unsafe fn push_words(&mut self, src: *const u64) {
         // SAFETY: the caller's contract.
         let words = unsafe { std::slice::from_raw_parts(src, self.stride()) };
+        // The first element makes room for four, as a list of scalars
+        // starts, so a short list grows once and not at each of its first
+        // few elements.
+        if self.words.capacity() == 0 {
+            self.words.reserve(4 * words.len());
+        }
         self.words.extend_from_slice(words);
     }
 
