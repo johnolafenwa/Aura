@@ -1368,3 +1368,63 @@ test("saving package cfg updates the dimmed branch of an open document", async (
   });
   assert.ok(!faded(3)(await update));
 });
+
+test("guarded class members retain property and decorator navigation", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const uri = pathToFileURL(path.join(workspaceRoot, "guarded-class-editor.au")).href;
+  const lines = [
+    "import build",
+    "type Answer = Callable[def() -> int64]",
+    "def traced(f: own Answer) -> Answer:",
+    "    return f",
+    "class Counter:",
+    "    stored: int64",
+    "    if build.hosted:",
+    "        @property",
+    "        def count(self) -> int64:",
+    "            return self.stored",
+    "        @count.setter",
+    "        def count(mut self, value: int64):",
+    "            self.stored = value",
+    "        @traced",
+    "        def answer() -> int64:",
+    "            return 42",
+    "    else:",
+    "        @traced",
+    "        def alternative() -> int64:",
+    "            return missing_target_function()",
+    "def main():",
+    "    mut counter = Counter(stored=0)",
+    "    counter.count += 1",
+    "    print(counter.count)",
+    "    print(Counter.answer())",
+    ""
+  ];
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((entry) => entry.severity === 1), []);
+  const hints = diagnostics.filter((entry) => entry.tags?.includes(1));
+  assert.deepEqual(hints.map(({ range }) => range), [{
+    start: { line: 17, character: 0 },
+    end: { line: 19, character: lines[19].length }
+  }]);
+  for (const [line, name, target, hoverPattern] of [
+    [10, "count", 8, /property count: int64/],
+    [13, "traced", 2, /traced/],
+    [17, "traced", 2, /traced/],
+    [22, "count", 11, /@count\.setter/],
+    [23, "count", 8, /property count: int64/],
+    [24, "answer", 14, /@traced\nmethod answer/]
+  ]) {
+    const params = { textDocument: { uri }, position: { line, character: lines[line].lastIndexOf(name) } };
+    const hover = await client.request("textDocument/hover", params);
+    assert.match(hover.result?.contents?.value || "", hoverPattern, lines[line]);
+    const definition = await client.request("textDocument/definition", params);
+    assert.deepEqual(definition.result?.range.start, {
+      line: target, character: lines[target].indexOf(name)
+    }, lines[line]);
+  }
+});
