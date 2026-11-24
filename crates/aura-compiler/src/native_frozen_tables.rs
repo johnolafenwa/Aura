@@ -89,11 +89,12 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
             .iter()
             .map(|l| (l.name.clone(), l.ty.clone()))
             .collect();
-        let records: HashSet<_> = types
+        let inline_values: HashSet<_> = types
             .iter()
             .filter(|(_, ty)| {
-                matches!(ty, Type::Named(n,_) if classes.contains_key(n.as_str()))
-                    && direct_type(ty, &definitions).is_some_and(|ty| plain_record(&ty))
+                let aggregate = matches!(ty, Type::Union(_))
+                    || matches!(ty, Type::Named(n,_) if classes.contains_key(n.as_str()));
+                aggregate && direct_type(ty, &definitions).is_some_and(|ty| inline_aggregate(&ty))
             })
             .map(|(place, _)| place.clone())
             .collect();
@@ -116,7 +117,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                         }
                         _ => false,
                     };
-                    if !eligible || records.contains(target) {
+                    if !eligible || inline_values.contains(target) {
                         continue;
                     }
                     let static_read = match value {
@@ -154,7 +155,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                         &addresses,
                         &types,
                         &classes,
-                        addresses.contains(target) || records.contains(target),
+                        addresses.contains(target) || inline_values.contains(target),
                     ) {
                         *value = replacement;
                         continue;
@@ -287,9 +288,15 @@ fn argument(value: Operand) -> MirArg {
     }
 }
 
-/// A record that the existing freestanding ABI passes as ordinary words.
-fn plain_record(ty: &DirectType) -> bool {
-    matches!(ty, DirectType::PlainClass(record) if record.fields.iter().all(|field| matches!(field.ty, DirectType::Scalar(_)) || plain_record(&field.ty)))
+/// A class or union that freestanding Aura already carries in native registers.
+fn inline_aggregate(ty: &DirectType) -> bool {
+    let inline =
+        |field: &DirectType| matches!(field, DirectType::Scalar(_)) || inline_aggregate(field);
+    match ty {
+        DirectType::PlainClass(record) => record.fields.iter().all(|field| inline(&field.ty)),
+        DirectType::Union(union) => union.members.iter().all(|member| inline(&member.ty)),
+        _ => false,
+    }
 }
 
 fn is_word(ty: &Type) -> bool {
@@ -591,8 +598,8 @@ impl FunctionCompiler<'_> {
         };
         let global = self.builder.import_data(data);
         let base = self.builder.symbol_value(types::I64, global);
-        if plain_record(target) {
-            return Ok(self.frozen_plain_record(base, target));
+        if inline_aggregate(target) {
+            return self.frozen_inline_value(base, target);
         }
         Ok(ValueRef {
             values: vec![base],
@@ -659,8 +666,8 @@ impl FunctionCompiler<'_> {
             }
             _ => unreachable!("only frozen projections reach the table emitter"),
         };
-        if plain_record(target) {
-            return Ok(self.frozen_plain_record(value, target));
+        if inline_aggregate(target) {
+            return self.frozen_inline_value(value, target);
         }
         Ok(ValueRef {
             values: vec![value],
@@ -668,25 +675,66 @@ impl FunctionCompiler<'_> {
         })
     }
 
-    /// Load a frozen record into the same flattened words a class method takes.
-    fn frozen_plain_record(&mut self, base: Val, ty: &DirectType) -> ValueRef {
-        let DirectType::PlainClass(record) = ty else {
-            unreachable!("plain record type")
-        };
+    /// A register-layout aggregate keeps its ordinary MIR type. In particular,
+    /// its tag tests still prove projected reads in the narrowed branch.
+    fn frozen_inline_value(&mut self, base: Val, ty: &DirectType) -> Result<ValueRef, String> {
         let mut values = Vec::new();
-        for (index, field) in record.fields.iter().enumerate() {
-            let at = self.builder.iconst(types::I64, index as i64);
-            let nested = plain_record(&field.ty);
-            let word = self.frozen_slot(base, at, 1, nested, &field.ty);
-            if nested {
-                values.extend(self.frozen_plain_record(word, &field.ty).values);
-            } else {
-                values.push(word);
+        match ty {
+            DirectType::PlainClass(record) => {
+                for (i, field) in record.fields.iter().enumerate() {
+                    let loaded = self.frozen_field(base, i, &field.ty)?;
+                    values.extend(loaded.values);
+                }
             }
+            DirectType::Union(union) => {
+                let tag = self.builder.load(types::I64, MemFlags::new(), base, 16);
+                let done = self.builder.create_block();
+                values.extend(
+                    ty.abi_types()
+                        .into_iter()
+                        .map(|abi| self.builder.append_block_param(done, abi)),
+                );
+                for (i, member) in union.members.iter().enumerate() {
+                    let selected = self.builder.create_block();
+                    let next = self.builder.create_block();
+                    let equal = self.builder.icmp_imm(IntCC::Equal, tag, i as i64);
+                    self.builder.brif(equal, selected, &[], next, &[]);
+                    self.builder.switch_to_block(selected);
+                    self.builder.seal_block(selected);
+                    let member = self.frozen_field(base, 0, &member.ty)?;
+                    let words = self.union_words_from_member(union, i, member)?;
+                    self.builder.jump(done, &words);
+                    self.builder.switch_to_block(next);
+                    self.builder.seal_block(next);
+                }
+                self.builder.trap(TrapCode::User(1));
+                self.builder.switch_to_block(done);
+                self.builder.seal_block(done);
+            }
+            _ => unreachable!("only native aggregate layouts are unpacked"),
         }
-        ValueRef {
+        Ok(ValueRef {
             values,
             ty: ty.clone(),
+        })
+    }
+
+    fn frozen_field(
+        &mut self,
+        base: Val,
+        index: usize,
+        ty: &DirectType,
+    ) -> Result<ValueRef, String> {
+        let at = self.builder.iconst(types::I64, index as i64);
+        let nested = inline_aggregate(ty);
+        let word = self.frozen_slot(base, at, 1, nested, ty);
+        if nested {
+            self.frozen_inline_value(word, ty)
+        } else {
+            Ok(ValueRef {
+                values: vec![word],
+                ty: ty.clone(),
+            })
         }
     }
 

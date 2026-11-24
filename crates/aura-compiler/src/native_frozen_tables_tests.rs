@@ -73,3 +73,37 @@ fn signed_and_unsigned_wide_values_keep_their_high_words() {
         None
     );
 }
+
+#[test]
+fn frozen_projection_fixture_emits_without_hosted_symbols() {
+    let source = include_str!("../tests/fixtures/check-pass/compile_time_frozen_projections.au");
+    let mir = crate::lower_source_to_mir(source).unwrap();
+    let bytes = crate::native_codegen::emit_freestanding_object(
+        &mir,
+        "table.au",
+        source,
+        FreestandingTarget::Aarch64,
+    )
+    .expect("all of the table reads use freestanding data");
+    use object::{Object, ObjectSymbol};
+    let object = object::File::parse(bytes.as_slice()).unwrap();
+    let imports: Vec<_> = object
+        .symbols()
+        .filter(|s| s.is_undefined())
+        .map(|s| s.name().unwrap())
+        .collect();
+    assert_eq!(imports, ["aura_trap"]);
+}
+
+#[test]
+fn unsupported_frozen_operations_keep_the_freestanding_subset_diagnostic() {
+    let source = "const table = [11, 13]\nexport \"C\" def copy_size() -> int64:\n    return table.clone().len()\n";
+    let mir = crate::lower_source_to_mir(source).unwrap();
+    let errors = crate::native_codegen::check_freestanding(&mir);
+    assert!(
+        errors.iter().any(|e| e.code == UNSUPPORTED
+            && e.message
+                .contains("a frozen aggregate in an operation that needs the hosted runtime")),
+        "{errors:?}"
+    );
+}
