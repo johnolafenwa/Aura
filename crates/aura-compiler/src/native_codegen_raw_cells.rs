@@ -23,6 +23,15 @@ impl FunctionCompiler<'_> {
         slot: Val,
         ty: DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if let DirectType::Fixed(fixed) = &ty {
+            let value = self
+                .builder
+                .load(fixed.storage(), MemFlags::trusted(), slot, 0);
+            return Ok(ValueRef {
+                values: vec![value],
+                ty,
+            });
+        }
         if layout.is_plain() {
             return self.load_foreign_struct(layout, slot, ty, "mem.address_of");
         }
@@ -41,6 +50,11 @@ impl FunctionCompiler<'_> {
         value: &ValueRef,
         slot: Val,
     ) -> std::result::Result<(), String> {
+        if matches!(value.ty, DirectType::Fixed(_)) {
+            self.builder
+                .store(MemFlags::trusted(), value.values[0], slot, 0);
+            return Ok(());
+        }
         self.store_foreign_struct(layout, value, slot)
     }
 
@@ -56,6 +70,9 @@ impl FunctionCompiler<'_> {
             else {
                 continue;
             };
+            if layout.name == "#fixed" && !self.raw_cells.contains_key(root) {
+                self.prepare_boxed_array_field(function, root, layout)?;
+            }
             if layout.name == "#fixed" || self.raw_cells.contains_key(root) {
                 continue;
             }
@@ -80,11 +97,51 @@ impl FunctionCompiler<'_> {
             self.raw_cells
                 .insert(root.clone(), (layout.clone(), address));
         }
+        // Reading boxed parameter fields can create temporary handles before
+        // the function's first block. Their values are now in the stack slots.
+        if !self.layout_scratch.is_empty() {
+            self.release_all_temporary_owned();
+        }
         Ok(())
     }
 }
 
 impl FunctionCompiler<'_> {
+    // A boxed owner's fields do not have separate native local variables.
+    // Materialize an addressed array field for this frame, as for a C field.
+    fn prepare_boxed_array_field(
+        &mut self,
+        function: &MirFunction,
+        root: &str,
+        layout: &CStruct,
+    ) -> Result<(), String> {
+        let Some((binding, projection)) = root.split_once('.') else {
+            return Ok(());
+        };
+        if !matches!(
+            self.variable_types.get(binding),
+            Some(DirectType::Opaque(_))
+        ) {
+            return Ok(());
+        }
+        let size = u32::try_from(layout.size()).map_err(|_| "array field exceeds target limit")?;
+        let slot = self
+            .builder
+            .create_sized_stack_slot(size, layout.align().trailing_zeros() as u8);
+        let address = self.builder.stack_addr(types::I64, slot, 0);
+        if function.params.iter().any(|param| param.name == binding) {
+            let value = self.load_place(root)?;
+            self.write_raw_class(layout, &value, address)?;
+        }
+        self.addressed_members
+            .entry(binding.to_owned())
+            .or_default()
+            .push(projection.to_owned());
+        self.raw_cells
+            .insert(root.to_owned(), (layout.clone(), address));
+        Ok(())
+    }
+
     pub(in super::super) fn refresh_addressed_members(
         &mut self,
         root: &str,
@@ -95,6 +152,16 @@ impl FunctionCompiler<'_> {
             let (layout, address) = self.raw_cells[&name].clone();
             let member_type = self.type_of_place(&name)?;
             let member = self.read_raw_class(&layout, address, member_type)?;
+            if matches!(value.ty, DirectType::Opaque(_)) {
+                let field = self.ensure_opaque(member)?;
+                let word = self.transfer_owned_opaque_value(&field);
+                let (text, length) = self.string_constant(projection.as_bytes())?;
+                self.builder.call(
+                    self.runtime[RuntimeFn::InstanceSetFieldOwned],
+                    &[value.values[0], text, length, word],
+                );
+                continue;
+            }
             let path = projection.split('.').collect::<Vec<_>>();
             value = self.replace_nested_field(value, &path, member)?;
         }
