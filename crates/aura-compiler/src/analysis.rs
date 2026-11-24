@@ -801,7 +801,7 @@ impl<'a> AnalysisBuilder<'a> {
             .map(|completion| completion.name.clone())
             .collect::<BTreeSet<_>>();
         for (name, binding) in scope {
-            if !is_decorator_generated(&name) && names.insert(name.clone()) {
+            if !is_generated_binding(&name) && names.insert(name.clone()) {
                 completions.push(AnalysisCompletion {
                     name,
                     kind: "variable".to_string(),
@@ -3157,7 +3157,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(definition.clone(), hover, Some(definition));
+        if !is_generated_binding(name) {
+            self.push_occurrence(definition.clone(), hover, Some(definition));
+        }
     }
 
     /// The type and hover kind of a `with` item's name. A manager whose
@@ -3249,7 +3251,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(declaration, hover, Some(definition));
+        if !is_generated_binding(&view.name) {
+            self.push_occurrence(declaration, hover, Some(definition));
+        }
     }
 
     fn keyword_argument_definition(
@@ -3484,8 +3488,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_expr(&link.operand, scope);
                 }
             }
-            // A decorated function's generated parts have no source text.
-            ExprKind::Name(name) if is_decorator_generated(name) => {}
+            // Rewritten properties and decorated callables use internal bindings.
+            ExprKind::Name(name) if is_generated_binding(name) => {}
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
@@ -7334,6 +7338,10 @@ fn append_alias_target(
 fn is_decorator_generated(name: &str) -> bool {
     name.starts_with(crate::sema::UNDECORATED_PREFIX)
         || name.starts_with(crate::sema::DECORATED_PREFIX)
+}
+
+fn is_generated_binding(name: &str) -> bool {
+    name.contains(' ') || is_decorator_generated(name)
 }
 
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
