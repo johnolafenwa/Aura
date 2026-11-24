@@ -1908,3 +1908,6 @@ impl FunctionCompiler<'_> {
         Ok(self.owned_opaque_result(injected.results, union_type.clone()))
     }
 }
+
+#[path = "native_codegen_raw_cells.rs"]
+mod raw_cells;

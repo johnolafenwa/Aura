@@ -2560,6 +2560,35 @@ fn mem_namespace() -> ModuleNamespace {
     let none = || type_ref("None", Vec::new());
     let address = || value_param("address", unsigned(64));
     let mut functions = Vec::new();
+    functions.push(function_info(
+        "mem",
+        "__pointer_offset",
+        vec![
+            address(),
+            value_param("count", type_ref("int64", Vec::new())),
+            value_param("stride", unsigned(64)),
+        ],
+        unsigned(64),
+    ));
+    for kind in [
+        "bool", "int8", "int16", "int32", "int64", "float32", "float64",
+    ] {
+        let ty = || type_ref(kind, Vec::new());
+        for prefix in ["", "volatile_"] {
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}read_{kind}"),
+                vec![address()],
+                ty(),
+            ));
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}write_{kind}"),
+                vec![address(), value_param("value", ty())],
+                none(),
+            ));
+        }
+    }
     for bits in [8, 16, 32, 64] {
         for prefix in ["", "volatile_"] {
             functions.push(function_info(

@@ -577,9 +577,14 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::Member {
             object: operand, ..
         } => roles.push((operand, Borrow)),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            roles.push((address, Borrow));
+            roles.extend(store.iter().map(|value| (value, Borrow)));
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -2369,9 +2374,14 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
         | Rvalue::Member {
             object: operand, ..
         } => operands.push(operand),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            operands.push(address);
+            operands.extend(store.iter_mut());
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             operands.extend(captures.iter_mut().map(|capture| &mut capture.value))

@@ -12,6 +12,8 @@ use aura_core::types::{ReturnedViewType, TraitBound, Type, UnionType};
 /// AST declarations remain intact for source-facing tooling.
 #[derive(Clone, Debug, Default)]
 pub struct TypeDefinitions {
+    pub(crate) uses_raw_pointer: std::rc::Rc<std::cell::Cell<bool>>,
+    pub(super) c_class_names: BTreeSet<String>,
     pub(super) module_name: String,
     names: BTreeMap<String, crate::diag::Span>,
     pub(super) aliases: BTreeMap<String, crate::ast::TypeAliasDecl>,
@@ -74,6 +76,8 @@ impl std::ops::DerefMut for TypeDefinitions {
 impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
     fn from(names: BTreeMap<String, crate::diag::Span>) -> Self {
         Self {
+            uses_raw_pointer: Default::default(),
+            c_class_names: Default::default(),
             module_name: String::new(),
             names,
             aliases: BTreeMap::new(),
@@ -755,6 +759,9 @@ pub(super) fn lower_type_with_self(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    if type_name == "ptr" {
+        return super::raw_pointers::pointer_type(args, type_names, type_ref.span);
+    }
     if type_name == "Span" {
         if args.len() != 1 {
             return Err(Diagnostic::at(

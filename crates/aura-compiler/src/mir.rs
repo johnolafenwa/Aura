@@ -1167,6 +1167,19 @@ pub enum Rvalue {
     NoneTest {
         value: Operand,
     },
+    /// Copy an aggregate between an Aura value and storage laid out by C.
+    CPointerAccess {
+        address: Operand,
+        store: Option<Operand>,
+        layout: crate::c_layout::CStruct,
+        volatile: bool,
+    },
+    /// The address of a field in a local with stable C representation.
+    CFieldAddress {
+        root: String,
+        layout: crate::c_layout::CStruct,
+        offset: usize,
+    },
     /// Read a once-initialized immutable module value. The initializer thunk
     /// is shared by MIR and direct execution and guarded against re-entry.
     ModuleConstant {
@@ -4757,6 +4770,8 @@ fn rebase_callable_rvalue(
             }
             identities
         }
+        Rvalue::CPointerAccess { .. } => Vec::new(),
+        Rvalue::CFieldAddress { .. } => Vec::new(),
         Rvalue::ModuleConstant { initializer, .. } => context
             .functions
             .get(initializer.as_str())
@@ -5172,6 +5187,13 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::UnionTakePayload { place, .. } | Rvalue::TupleTakeElement { place, .. } => {
                 place.split('.').next() == Some(root)
             }
+            Rvalue::CPointerAccess { address, store, .. } => {
+                operand_moves(address, root)
+                    || store
+                        .as_ref()
+                        .is_some_and(|value| operand_moves(value, root))
+            }
+            Rvalue::CFieldAddress { .. } => false,
             Rvalue::UnionTagTest { .. } | Rvalue::ModuleConstant { .. } => false,
             Rvalue::Closure { captures, .. } => captures
                 .iter()
@@ -7457,6 +7479,33 @@ fn validate_loan_rvalue(
         Rvalue::Member { object, field } => {
             validate_canonical_mir_identifier(function, field, false)?;
             validate_loan_operand(function, object, context, state)
+        }
+        Rvalue::CPointerAccess { address, store, .. } => {
+            validate_loan_operand(function, address, context, state)?;
+            if let Some(value) = store {
+                validate_loan_operand(function, value, context, state)?;
+            }
+            Ok(())
+        }
+        Rvalue::CFieldAddress {
+            root,
+            layout,
+            offset,
+        } => {
+            if *offset >= layout.size()
+                || context.operand_type(function, &Operand::Place(root.clone()))?
+                    != Some(Type::named(&layout.name))
+            {
+                return Err(format!("invalid MIR address of C field in `{root}`"));
+            }
+            validate_checked_loan_place_access(
+                function,
+                root,
+                LoanPlaceAccess::Mutate,
+                context,
+                state,
+                None,
+            )
         }
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
@@ -10531,6 +10580,13 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         Rvalue::UnionTagTest { place, .. }
         | Rvalue::UnionTakePayload { place, .. }
         | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            operand_place_mention(address, mentions);
+            if let Some(value) = store {
+                operand_place_mention(value, mentions);
+            }
+        }
+        Rvalue::CFieldAddress { root, .. } => mentions.push(root),
         Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -26033,6 +26089,13 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ExprKind::Member { object, field } => {
+                if field == "address_of" && self.infer_module_path(object).as_deref() == Some("mem")
+                {
+                    return self.lower_raw_address(&args[0].value);
+                }
+                if let Some(value) = self.lower_raw_pointer_call(expr, object, field, args) {
+                    return value;
+                }
                 if let Some(value) = self.lower_span_member_call(expr, object, field, args) {
                     return value;
                 }
@@ -26669,6 +26732,11 @@ impl<'a> Lowerer<'a> {
                 if let Some(module_path) = self.infer_module_path(object) {
                     if let Some(namespace) = self.module_namespace(&module_path) {
                         if let Some(function) = namespace.extern_functions.get(field).cloned() {
+                            let function = function
+                                .with_raw_arguments(args, callee.span, |arg| {
+                                    self.infer_expr_type(arg)
+                                })
+                                .expect("checked extern pointer arguments");
                             let lowered_args = self.lower_user_args_with_types(
                                 &format!("extern function `{}`", function.decl.name),
                                 &function.decl.params,
@@ -27292,6 +27360,9 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Name(name) => {
                 if let Some(function) = self.resolve_extern_function_info(name).cloned() {
+                    let function = function
+                        .with_raw_arguments(args, callee.span, |arg| self.infer_expr_type(arg))
+                        .expect("checked extern pointer arguments");
                     let lowered_args = self.lower_user_args_with_types(
                         &format!("extern function `{}`", function.decl.name),
                         &function.decl.params,
@@ -29543,6 +29614,27 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { object, field } = &callee.kind {
+                    if field == "address_of"
+                        && self.infer_module_path(object).as_deref() == Some("mem")
+                    {
+                        return Some(Type::Named(
+                            "ptr".into(),
+                            vec![self.infer_expr_type(&args.first()?.value)?],
+                        ));
+                    }
+                    if matches!(
+                        field.as_str(),
+                        "read" | "write" | "volatile_read" | "volatile_write" | "offset"
+                    ) {
+                        if let Some(element) = self
+                            .infer_expr_type(object)
+                            .and_then(|ty| ty.as_raw_pointer().cloned())
+                        {
+                            return crate::sema::raw_pointer_result(&element, field);
+                        }
+                    }
+                }
                 let (base_callee, explicit_type_args) = match &callee.kind {
                     ExprKind::Specialize { expr, type_args } => {
                         (&**expr, Some(type_args.as_slice()))
@@ -32050,6 +32142,9 @@ fn mir_class_type_name(
             }
         })
 }
+
+#[path = "mir_raw_pointers.rs"]
+mod raw_pointers;
 
 #[path = "mir_spans.rs"]
 mod spans;

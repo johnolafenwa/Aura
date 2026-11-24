@@ -9,3 +9,11 @@ export "C" def links(block: uint64) -> int32:
     first.write(Link(next=last, value=2))
     node = first.volatile_read()
     return node.value + node.next.read().value
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    block = malloc(32)
+    assert links(block) == 9
+    free(block)

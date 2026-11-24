@@ -275,6 +275,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2083",
+        band: "names/types",
+        title: "invalid raw pointer operation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2084",
+        band: "names/types",
+        title: "raw pointer requires FFI permission",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -340,6 +350,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3032",
+        band: "ownership",
+        title: "place has no writable stable address",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -388,6 +403,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4032",
+        band: "runtime",
+        title: "invalid raw pointer value",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

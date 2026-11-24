@@ -141,6 +141,14 @@ impl<'de> Deserialize<'de> for UnionType {
 pub const TRAIT_OBJECT_TYPE_NAME: &str = "dyn";
 
 impl Type {
+    /// The pointee of a first-class raw pointer.
+    pub fn as_raw_pointer(&self) -> Option<&Type> {
+        match self {
+            Type::Named(name, args) if name == "ptr" && args.len() == 1 => args.first(),
+            _ => None,
+        }
+    }
+
     /// The trait object type `dyn trait_name[trait_args]`.
     pub fn trait_object(trait_name: impl Into<String>, trait_args: Vec<Type>) -> Type {
         Type::Named(
@@ -959,6 +967,7 @@ pub fn is_builtin_type(name: &str) -> bool {
             | "float32"
             | "float64"
             | "str"
+            | "ptr"
             | "Array"
             | "list"
             | "set"
@@ -984,7 +993,7 @@ pub fn is_builtin_type(name: &str) -> bool {
 /// Whether a builtin named type is `Copy` with these arguments.
 pub fn is_builtin_copy_named_type(name: &str, args: &[Type]) -> bool {
     match name {
-        "Queue" => args.len() == 1,
+        "ptr" | "Queue" => args.len() == 1,
         _ => {
             args.is_empty()
                 && matches!(

@@ -875,6 +875,8 @@ fn typed_pointer_objects_use_target_memory_operations() {
     for source in [
         include_str!("../tests/fixtures/typed-pointers/scalars.au"),
         include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../tests/fixtures/typed-pointers/links.au"),
+        include_str!("../tests/fixtures/typed-pointers/widths.au"),
     ] {
         for target in TARGETS {
             let (_, _, undefined) = symbols(&object(source, target));

@@ -121,6 +121,9 @@ fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, 
     Ok(module)
 }
 
+#[path = "native_codegen_typed_memory.rs"]
+mod typed_memory;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
     Int8,
@@ -2498,6 +2501,7 @@ impl<'a> NativeCodegen<'a> {
         })
         .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
+            raw_cells: HashMap::new(),
             builder,
             blocks,
             variables,
@@ -2651,6 +2655,7 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        compiler.prepare_raw_cells(function)?;
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
@@ -3904,6 +3909,7 @@ fn direct_reverse_postorder(
 }
 
 struct FunctionCompiler<'a> {
+    raw_cells: HashMap<String, (crate::c_layout::CStruct, Val)>,
     builder: &'a mut dyn FunctionBackend,
     /// The machine of a freestanding object, whose checks call the trap
     /// hook in place of the runtime.
@@ -6844,6 +6850,20 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(ValueRef {
                     values: call.results,
                     ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            Rvalue::CPointerAccess {
+                address,
+                store,
+                layout,
+                volatile,
+            } => self.compile_pointer_class(address, store.as_ref(), layout, *volatile, target),
+            Rvalue::CFieldAddress { root, offset, .. } => {
+                let (_, slot) = self.raw_cells.get(root).ok_or("missing C local storage")?;
+                let address = self.builder.iadd_imm(*slot, *offset as i64);
+                Ok(ValueRef {
+                    values: vec![address],
+                    ty: DirectType::Scalar(ScalarKind::Uint64),
                 })
             }
             Rvalue::ModuleConstant { key, initializer } => {
@@ -12668,6 +12688,10 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
+        if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
+            let ty = self.local_type(name)?;
+            return self.read_raw_class(&layout, slot, ty);
+        }
         let vars = self.local_vars(name)?;
         let ty = self.local_type(name)?;
         let values = vars
@@ -14426,6 +14450,9 @@ impl<'a> FunctionCompiler<'a> {
     /// other store, such as a writeback or a field written into an inline
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
+        if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
+            self.write_raw_class(&layout, &value, slot)?;
+        }
         let expected = self.local_type(name)?;
         // These locals may hold a payload box or the null success marker.
         // The declared enum describes the original MIR value.
@@ -20845,6 +20872,14 @@ fn validate_rvalue(
         | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            validate_operand(address)?;
+            if let Some(value) = store {
+                validate_operand(value)?;
+            }
+            Ok(())
+        }
+        Rvalue::CFieldAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -21175,6 +21210,9 @@ fn direct_ffi_type_for_source(
     ty: &Type,
     passing: Option<MirReceiverKind>,
 ) -> std::result::Result<DirectFfiType, String> {
+    if ty.as_raw_pointer().is_some() {
+        return Ok(DirectFfiType::scalar(FfiType::U64));
+    }
     let Type::Named(name, args) = ty else {
         if *ty == Type::Unit && passing.is_none() {
             return Ok(DirectFfiType::scalar(FfiType::Unit));
@@ -21341,6 +21379,7 @@ fn direct_type_inner(
         Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
             Some(DirectType::Callable(DirectCallableType::new(ty.clone())))
         }
+        _ if ty.as_raw_pointer().is_some() => Some(DirectType::Scalar(ScalarKind::Uint64)),
         Type::Named(name, args) if args.is_empty() && ScalarKind::of_name(name).is_some() => {
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }

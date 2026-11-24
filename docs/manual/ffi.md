@@ -3,7 +3,7 @@
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers.
+code. Raw pointer values use the same package permission.
 
 ## Package Opt-In
 
@@ -296,8 +296,7 @@ rejects an `own` scalar with `AU3004`.
 ### Array Pointers
 
 `ptr[T]` is a pointer to the first of a run of scalars, such as
-`const double *` in C. The name is a type only in an extern parameter. The
-argument is a `list[T]`, and its elements are laid out as a C array of `T`.
+`const double *` in C. An extern pointer parameter accepts a typed pointer or a `list[T]`. A list passes its elements as a C array for the duration of the call.
 
 ```aura fragment
 extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
@@ -323,7 +322,7 @@ def main() -> int32:
 - **Lifetime.** The pointer is valid only during the call. The callee must
   not keep it.
 - **Empty lists.** An empty list passes a null pointer.
-- **Reads.** A function must not write through a `ptr[T]`. Declare the
+- **Reads.** A C function receiving a list view must not write through a `ptr[T]`. Declare the
   parameter `mut ptr[T]` if it does.
 - **Writes.** What the function writes through a `mut ptr[T]` is in the list
   when the call returns. The list keeps its length. A `mut ptr[bool]` list
@@ -333,7 +332,7 @@ A built program passes the address of the list's own storage, with no copy,
 when the list keeps its elements unboxed. Lists of scalars do. A `ptr[T]`
 parameter accepts fixed-width scalars, `extern "C"` classes and `extern "C"`
 unions as its element type. Other element types produce `AU2002`, and
-`own ptr[T]` produces `AU3004`. `ptr[T]` cannot be a result, and
+`own ptr[T]` produces `AU3004`. A `ptr[T]` result returns a raw address, and
 `list[uint8]` remains the form for bytes with a length.
 
 
@@ -341,6 +340,24 @@ unions as its element type. Other element types produce `AU2002`, and
 `list[Name]` and passes a C array of `struct name`, as a vertex buffer or a
 list of points is passed. [Arrays Of Structs](#arrays-of-structs) has the
 rules.
+
+### Raw Pointer Values
+
+Use `ptr[T]` for a typed address supplied by C or by the platform. Copying a pointer copies its address. The C library specifies how long the storage stays valid and who releases it. The null value is `0 as ptr[T]`. Compare two pointers of the same type with `==` or `!=`.
+
+```aura fragment
+extern "C" def malloc(size: uint64) -> ptr[uint8]
+extern "C" def free(block: mut ptr[uint8]) -> None
+
+def example() -> None:
+    p = malloc(8)
+    if p != (0 as ptr[uint8]):
+        p.offset(7).write(42)
+        assert p.offset(7).read() == 42
+        free(p)
+```
+
+A raw pointer passed to a `mut ptr[T]` parameter lets C write the pointee. The pointer binding can be immutable. A list argument still needs a mutable list. Contracts on an extern list view use the list's bounds and require a list argument.
 
 ### Arrays
 
@@ -971,7 +988,7 @@ Implemented:
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
+Reserved or unavailable: closures as callbacks, variadics, returned views,
 other nullable shapes, and Aura union types such as `int32 | float64`.
 Aura does not infer them from current syntax.
 

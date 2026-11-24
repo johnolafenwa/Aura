@@ -286,7 +286,8 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 Rvalue::Call {
                     callee: CallTarget::Extern(call),
                     ..
-                } => Some(call.symbol.as_str()),
+                } => Some(Err(call.symbol.as_str())),
+                value if raw_cells::requires_package_grant(value) => Some(Ok(())),
                 _ => None,
             },
             Instruction::Safepoint
@@ -311,7 +312,11 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
         });
 
     match symbol {
-        Some(symbol) => Err(Diagnostic::coded(
+        Some(Ok(())) => Err(Diagnostic::coded(
+            "AU2084",
+            "raw memory operations require a manifest-checked path with allow_ffi = true",
+        )),
+        Some(Err(symbol)) => Err(Diagnostic::coded(
             "AU4001",
             format!(
                 "public MIR execution rejects the untrusted extern call `{symbol}`; FFI must be authorized by a manifest-rooted package with `[package] allow_ffi = true` and executed through a path-based API"
@@ -465,6 +470,8 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::CPointerAccess { .. } => false,
+        Rvalue::CFieldAddress { .. } => false,
         Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
@@ -932,8 +939,12 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
     try_clone_array_containing_value(value)
 }
 
+#[path = "mir_runtime_raw_cells.rs"]
+mod raw_cells;
+
 #[derive(Default)]
 struct Env {
+    raw_cells: HashMap<String, raw_cells::CellBytes>,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
@@ -1484,6 +1495,9 @@ impl Env {
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
 
+        if self.raw_cells.contains_key(root) {
+            self.write_raw_cell(root, rest, place, &value)?;
+        }
         if rest.is_empty() {
             self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
@@ -3873,6 +3887,7 @@ impl MirRuntime {
             let block = &function.blocks[block_index];
             for instruction in &block.instructions {
                 let instruction_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    env.refresh_raw_cells()?;
                     self.execute_instruction(
                         instruction,
                         env,
@@ -3914,6 +3929,7 @@ impl MirRuntime {
                 }
             }
 
+            env.refresh_raw_cells()?;
             let outcome = match self.execute_terminator(
                 &block.label,
                 &block.terminator,
@@ -4703,6 +4719,34 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::CPointerAccess {
+                address,
+                store,
+                layout,
+                volatile,
+            } => {
+                let word = self.evaluate_operand(address, env)?;
+                let value = store
+                    .as_ref()
+                    .map(|operand| self.evaluate_operand(operand, env))
+                    .transpose()?;
+                Ok(RvalueOutcome::Value(raw_cells::access(
+                    &word,
+                    value.as_ref(),
+                    layout,
+                    *volatile,
+                )?))
+            }
+            Rvalue::CFieldAddress {
+                root,
+                layout,
+                offset,
+            } => {
+                let addr = env.raw_field_address(root, layout, *offset)?;
+                Ok(RvalueOutcome::Value(Value::Int(IntegerValue::from_u64(
+                    addr,
+                ))))
+            }
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),
@@ -4826,6 +4870,12 @@ impl MirRuntime {
             }
             Rvalue::Cast { value, ty, span } => {
                 let value = self.evaluate_operand(value, env)?;
+                let address = Type::named("uint64");
+                let ty = if ty.as_raw_pointer().is_some() {
+                    &address
+                } else {
+                    ty
+                };
                 Ok(RvalueOutcome::Value(cast_numeric_value(
                     value,
                     ty,
@@ -11386,6 +11436,9 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
 /// by-value boundary type of a parameter. `c_string` marks a `str` or
 /// `str | None` that crosses as NUL-terminated text.
 fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
+    if ty.as_raw_pointer().is_some() {
+        return Ok(FfiType::U64);
+    }
     if c_string {
         return Ok(match ty {
             Type::Union(_) => FfiType::NullableCString,
@@ -11436,6 +11489,9 @@ fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
 }
 
 fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    if ty.as_raw_pointer().is_some() {
+        return ffi_value_from_runtime(value, &Type::named("uint64"));
+    }
     let mismatch = || {
         Diagnostic::coded(
             "AU4005",
@@ -11543,6 +11599,7 @@ thread_local! {
 pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
     let scalar = |ty: &Type| match ty {
+        _ if ty.as_raw_pointer().is_some() => Some(FfiScalar::U64),
         Type::Named(name, args) if args.is_empty() => {
             let name = if name == "int" {
                 "int64"
@@ -11942,6 +11999,9 @@ fn runtime_value_from_ffi_with(
         )
     };
     match (value, ty) {
+        (FfiValue::U64(address), ty) if ty.as_raw_pointer().is_some() => {
+            Ok(Value::Int(IntegerValue::from_u64(address)))
+        }
         (FfiValue::Unit, Type::Unit) => Ok(Value::Unit),
         (FfiValue::Bool(value), Type::Named(name, args)) if name == "bool" && args.is_empty() => {
             Ok(Value::Bool(value))

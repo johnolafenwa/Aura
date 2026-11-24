@@ -707,12 +707,17 @@ fn the_bare_metal_example_builds_for_its_boards() {
 fn typed_pointers_run_on_both_hosted_backends() {
     let workspace = Workspace::new();
     workspace.write("Aura.toml", MEMORY_MANIFEST);
-    workspace.write(
-        "src/main.au",
+    for source in [
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/scalars.au"),
-    );
-    for backend in ["mir", "native"] {
-        let run = workspace.aura(&["run", "--backend", backend, "src/main.au"]);
-        assert!(run.status.success(), "{backend}: {}", stderr(&run));
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/foreign.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/links.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/widths.au"),
+    ] {
+        workspace.write("src/main.au", source);
+        for backend in ["mir", "direct"] {
+            let run = workspace.aura(&["run", "--backend", backend, "src/main.au"]);
+            assert!(run.status.success(), "{backend}: {}", stderr(&run));
+        }
     }
 }

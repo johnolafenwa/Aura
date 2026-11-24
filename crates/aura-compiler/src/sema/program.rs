@@ -697,6 +697,12 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     name.clone(),
                     format!("{}.{}", class_info.module_name, class_info.decl.name),
                 );
+                if class_info.decl.c_layout {
+                    type_names.c_class_names.insert(format!(
+                        "{}.{}",
+                        class_info.module_name, class_info.decl.name
+                    ));
+                }
                 type_names.insert(name.clone(), class_info.decl.span);
                 type_arities.insert(name.clone(), class_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("class", class_info.decl.span));
@@ -785,6 +791,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                             class_decl.name, kind, existing
                         ),
                     ));
+                }
+                if class_decl.c_layout {
+                    type_names.c_class_names.insert(class_decl.name.clone());
                 }
                 type_names.insert(class_decl.name.clone(), class_decl.span);
                 type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
@@ -3065,6 +3074,9 @@ pub(super) fn register_module_namespace_types(
     }
     for class in namespace.classes.values() {
         let qualified_name = format!("{}.{}", namespace.path, class.decl.name);
+        if class.decl.c_layout {
+            type_names.c_class_names.insert(qualified_name.clone());
+        }
         type_names.insert(qualified_name.clone(), class.decl.span);
         type_arities.insert(qualified_name, class.decl.type_params.len());
     }
@@ -3085,6 +3097,9 @@ pub(super) fn register_module_namespace_types(
     for class in namespace.all_classes.values() {
         if !class.module_name.is_empty() && class.module_name != namespace.path {
             let qualified_name = format!("{}.{}", class.module_name, class.decl.name);
+            if class.decl.c_layout {
+                type_names.c_class_names.insert(qualified_name.clone());
+            }
             type_names.insert(qualified_name.clone(), class.decl.span);
             type_arities.insert(qualified_name, class.decl.type_params.len());
         }
