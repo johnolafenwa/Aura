@@ -54,3 +54,19 @@ struct Line bump_line(uint32_t before, struct Line line, uint32_t after) {
     line.value += before + after;
     return line;
 }
+
+struct __attribute__((packed)) Crossing {
+    uint64_t head : 60;
+    uint64_t body : 12;
+};
+
+uint8_t check_crossing(struct Crossing value, uint32_t trailing, double marker) {
+    return value.head == 17 && value.body == 2748 && trailing == 31 && marker == 1.5;
+}
+
+union Event { int32_t code; uint32_t flags; };
+
+void fill_events(union Event *events, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i)
+        events[i].code += 10;
+}

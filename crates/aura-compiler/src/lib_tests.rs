@@ -4588,3 +4588,40 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     .expect_err("the store definition is internal even in a type annotation");
     assert!(error.message.contains("collections.__Store"));
 }
+
+#[test]
+fn imported_c_layout_queries_use_public_types_and_respect_shadowing() {
+    let temp = TempDir::new("aura-layout-query-imports");
+    fs::create_dir(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"layouts\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("src/records.au"),
+        "public extern \"C\" packed class Header:\n    tag: uint8\n    word: uint32\n\nextern \"C\" class Hidden:\n    word: uint32\n",
+    )
+    .unwrap();
+    let imports = "import mem as m\nimport records as r\n";
+    let main = temp.path().join("src/main.au");
+    let source = format!(
+        "{imports}\nrecord_bytes = m.size_of(fixed[r.Header, 3])\ndef main():\n    print(record_bytes)\n    print(m.align_of(r.Header))\n    print(m.offset_of(r.Header, word))\n"
+    );
+    fs::write(&main, &source).unwrap();
+    assert_eq!(run_path(&main).unwrap().stdout, "15\n1\n1\n");
+    for (param, query) in [
+        ("", "m.size_of(r.Hidden)"),
+        ("", "m.size_of(r.Header.word)"),
+        ("", "m.size_of(r.Header[uint8])"),
+        ("", "m.size_of(fixed[uint32, 2, 1])"),
+        ("r: int32", "m.size_of(r.Header)"),
+    ] {
+        let probe = format!("{imports}\ndef probe({param}) -> uint64:\n    return {query}\n");
+        assert_eq!(
+            check_path_with_source(&main, &probe).unwrap_err().code,
+            "AU2086",
+            "{probe}"
+        );
+    }
+}

@@ -32,6 +32,30 @@ extern "C" class Packet:
 
 extern "C" def check_packet(p: mut Packet) -> uint8
 
+extern "C" packed class Crossing:
+    head: uint64 bits(60)
+    body: uint64 bits(12)
+
+extern "C" def check_crossing(value: Crossing, trailing: uint32, marker: float64) -> uint8
+
+extern "C" union Event:
+    code: int32
+    flags: uint32
+
+extern "C" def fill_events(events: mut ptr[Event], count: uint32) -> None
+
+def read_events(events: mut list[Event], index: int64) -> int32:
+    fill_events(events, 2)
+    return events[index].code
+
+def read_literal_events(index: int64) -> int32:
+    mut events = [Event.from_code(1), Event.from_code(2)]
+    before = events[index].code
+    fill_events(events, 2)
+    after = events[index].code
+    events = [Event.from_code(5), Event.from_code(7)]
+    return before + after + events[index].code
+
 def main() -> int32:
     print(mem.size_of(Header) == header_size())
     print(mem.align_of(Header) == header_alignment())
@@ -53,4 +77,8 @@ def main() -> int32:
     print(p.lines[1].value)
     shifted = bump_line(3, Line(value=5), 7)
     print(shifted.value)
+    print(check_crossing(Crossing(head=17, body=2748), 31, 1.5) == 1)
+    mut events = [Event.from_code(11), Event.from_code(13)]
+    print(read_events(events, 1))
+    print(read_literal_events(1))
     return 0

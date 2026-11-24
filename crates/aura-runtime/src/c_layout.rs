@@ -380,32 +380,27 @@ impl CStruct {
         }
         let pieces = (0..size)
             .step_by(8)
-            .filter(|offset| {
-                abi != CAbi::SysV64
-                    || leaves.iter().any(|leaf| {
+            .filter_map(|offset| {
+                // A packed bit-field may begin in one eightbyte and continue
+                // into the next. Both contain integer data for the SysV ABI.
+                let mut occupied = leaves
+                    .iter()
+                    .filter(|leaf| {
                         let bytes = leaf.bits.map_or(leaf.scalar.size(), |(start, width)| {
                             usize::from(start + width).div_ceil(8)
                         });
-                        leaf.offset < offset + 8 && leaf.offset + bytes > *offset
+                        leaf.offset < offset + 8 && leaf.offset + bytes > offset
                     })
-            })
-            .map(|offset| {
-                let piece = (size - offset).min(8);
-                // Natural alignment keeps a scalar inside one eightbyte.
-                let all_float = leaves
-                    .iter()
-                    .filter(|leaf| leaf.offset / 8 == offset / 8)
-                    .all(is_float);
-                match (abi, all_float) {
-                    (CAbi::SysV64, true) => CPiece::Sse {
-                        offset,
-                        size: piece,
-                    },
-                    _ => CPiece::Int {
-                        offset,
-                        size: piece,
-                    },
+                    .peekable();
+                if abi == CAbi::SysV64 && occupied.peek().is_none() {
+                    return None;
                 }
+                let size = (size - offset).min(8);
+                Some(if abi == CAbi::SysV64 && occupied.all(is_float) {
+                    CPiece::Sse { offset, size }
+                } else {
+                    CPiece::Int { offset, size }
+                })
             })
             .collect();
         CPassing::Registers(pieces)

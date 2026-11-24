@@ -520,3 +520,33 @@ fn bit_field_storage_and_calling_classes_follow_the_record_abi() {
     );
     assert_eq!(bit_chunks(1, 64).count(), 9);
 }
+
+#[test]
+fn packed_bit_fields_classify_every_integer_register_they_overlap() {
+    let mut record = scalars("Crossing", &[U64, U64]);
+    record.layout_controls.bit_widths = [("f0".into(), 60), ("f1".into(), 12)].into();
+
+    assert_eq!(record.field_offsets(), [0, 8]);
+    assert_eq!((record.size(), record.align()), (16, 8));
+    record.layout_controls.packed = true;
+    assert_eq!(record.field_offsets(), [0, 7]);
+    assert_eq!((record.size(), record.align()), (9, 1));
+    assert_eq!(
+        record.passing(CAbi::SysV64),
+        CPassing::Registers(vec![int(0, 8), int(8, 1)])
+    );
+}
+
+#[test]
+fn over_aligned_float_record_padding_is_not_an_aarch64_float_member() {
+    let mut record = scalars("WideFloat", &[F32]);
+    record.layout_controls.alignment = Some(16);
+    assert_eq!(
+        record.passing(CAbi::Aapcs64),
+        CPassing::Registers(vec![int(0, 8), int(8, 8)])
+    );
+    assert_eq!(
+        record.passing(CAbi::SysV64),
+        CPassing::Registers(vec![sse(0, 8)])
+    );
+}

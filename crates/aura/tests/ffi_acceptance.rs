@@ -3281,7 +3281,7 @@ fn packed_bit_fields_match_c_and_union_writes_preserve_tail_bytes() {
         assert_success(&output, "checking C layout controls");
         assert_eq!(
             output.stdout,
-            b"true\ntrue\ntrue\ntrue\n17\n5\ntrue\ntrue\ntrue\ntrue\n55\n77\n15\n"
+            b"true\ntrue\ntrue\ntrue\n17\n5\ntrue\ntrue\ntrue\ntrue\n55\n77\n15\ntrue\n23\n21\n"
         );
     }
 }
