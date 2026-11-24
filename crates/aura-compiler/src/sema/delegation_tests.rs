@@ -140,3 +140,70 @@ fn trait_delegation_open_args_resolve_in_every_native_body() {
     }
     crate::native_codegen::emit_host_object(&mir).expect("both bodies should emit machine code");
 }
+
+#[test]
+fn trait_delegation_parent_witnesses_and_returned_views() {
+    for name in ["qualified_associated", "parent_reuse", "returned_view"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/run-pass/trait_delegation_{name}.au"
+        ));
+        let output = crate::run_path(&path).unwrap();
+        assert_eq!(
+            output.stdout,
+            std::fs::read_to_string(path.with_extension("stdout")).unwrap(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn trait_delegation_parent_binding_must_match_the_field() {
+    let source = include_str!("../../tests/fixtures/run-pass/trait_delegation_parent_reuse.au");
+    let source = source.replace(
+        "impl Read for Truck by engine:\n    type Output = int64",
+        "impl Read for Truck by engine:\n    type Output = str",
+    );
+    let error = crate::check_source(&source).unwrap_err();
+    assert_eq!(error.code, "AU2061");
+    assert!(
+        error.message.contains("does not implement `Source`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn trait_delegation_needs_an_independent_implementation() {
+    let source = r#"
+trait Named:
+    def name(self) -> int64
+class Link:
+    next: indirect Link
+impl Named for Link by next
+"#;
+    let error = crate::check_source(source).unwrap_err();
+    assert_eq!(error.code, "AU2061");
+    assert!(
+        error.message.contains("field `next` of type `Link`"),
+        "{error}"
+    );
+}
+
+#[test]
+fn trait_delegation_invalid_headers_preserve_trait_diagnostics() {
+    let source = include_str!("../../tests/fixtures/check-pass/trait_delegation.au");
+    let header = "impl Named for Car by engine";
+    let extra_method =
+        "impl Named for Car by engine:\n    def typo(self) -> int64:\n        return 0";
+    let second_impl = concat!(
+        "impl Named for Car:\n    def number(self) -> int64:\n        return 0\n\n",
+        "impl Named for Car by engine",
+    );
+    for (declaration, expected) in [
+        ("impl Missing for Car by engine", "unknown trait `Missing`"),
+        (extra_method, "method `typo` is not part of trait `Named`"),
+        (second_impl, "duplicate impl of trait `Named` for `Car`"),
+    ] {
+        let error = crate::check_source(&source.replace(header, declaration)).unwrap_err();
+        assert_eq!(error.message, expected);
+    }
+}
