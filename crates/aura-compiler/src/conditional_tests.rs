@@ -321,3 +321,28 @@ fn a_discarded_getter_does_not_change_the_meaning_of_a_later_method_decorator() 
     assert_eq!(class.methods[0].name, "score");
     assert_eq!(class.methods[0].decorators[0].text, "@wrappers.setter");
 }
+
+#[test]
+fn duplicate_setters_are_diagnosed_in_the_selected_class_members() {
+    let source = concat!(
+        "import build\n",
+        "class Counter:\n",
+        "    stored: int64\n",
+        "    @property\n",
+        "    def n(self) -> int64:\n        return self.stored\n",
+        "    if \"alternate\" in build.cfg:\n",
+        "        @n.setter\n",
+        "        def n(mut self, value: int64):\n            self.stored = value\n",
+        "    @n.setter\n",
+        "    def n(mut self, value: int64):\n        self.stored = value\n",
+    );
+    parse_source(source).unwrap();
+    let mut config = crate::current_build_config();
+    config.cfg.insert("alternate".into(), "true".into());
+    crate::with_build_config(config, || {
+        let error = parse_source(source).unwrap_err();
+        assert_eq!(error.code, "AU2064");
+        assert_eq!(error.span.unwrap().line, 11);
+        assert!(error.message.contains("duplicate setter"));
+    });
+}
