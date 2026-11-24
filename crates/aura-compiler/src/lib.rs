@@ -233,7 +233,14 @@ pub fn parse_source(source: &str) -> Result<ast::Module> {
 pub fn check_source(source: &str) -> Result<Program> {
     let module = parse_source(source)?;
     reject_source_only_ffi(&module)?;
-    check_module_with_builtin_imports(module)
+    let program = check_module_with_builtin_imports(module)?;
+    if program.type_definitions.uses_raw_pointer.get() {
+        return Err(Diagnostic::coded(
+            "AU2084",
+            "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+        ));
+    }
+    Ok(program)
 }
 
 fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
@@ -746,6 +753,15 @@ impl ModuleLoader {
         )
         .map_err(|error| error.with_render_context(display_path, source.clone()))?;
         let mut program = program;
+        if program.type_definitions.uses_raw_pointer.get() {
+            match &self.package_graph {
+                Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
+                None => return Err(Diagnostic::coded(
+                    "AU2084",
+                    "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+                )),
+            }
+        }
         self.qualify_program_imported_modules(&path, &mut program);
         program.source_path = Some(path.display().to_string());
 

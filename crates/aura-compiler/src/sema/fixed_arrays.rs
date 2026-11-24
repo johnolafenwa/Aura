@@ -134,6 +134,9 @@ fn shape(
     if !args.is_empty() {
         return None;
     }
+    if matches!(name.as_str(), "int128" | "uint128") {
+        return Some((16, 8));
+    }
     let scalar: Option<u32> = match name.as_str() {
         "bool" | "int8" | "uint8" => Some(1),
         "int16" | "uint16" => Some(2),

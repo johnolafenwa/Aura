@@ -6,13 +6,49 @@ use crate::sema::fixed_arrays::{initializer, Initializer};
 pub(crate) const LITERAL: &str = "#fixed.literal";
 pub(crate) const REPEAT: &str = "#fixed.repeat";
 pub(crate) const READ: &str = "#fixed.read";
+pub(crate) const ADDRESS: &str = "#fixed.address";
 pub(crate) const WRITE: &str = "#fixed.write";
 
-pub(crate) fn is_operation(name: &str) -> bool {
-    matches!(name, LITERAL | REPEAT | READ | WRITE)
+pub(crate) const READ_PROVED: &str = "#fixed.readUnchecked";
+pub(crate) const WRITE_PROVED: &str = "#fixed.writeUnchecked";
+
+pub(crate) fn checked_form(name: &str) -> &str {
+    match name {
+        READ_PROVED => READ,
+        WRITE_PROVED => WRITE,
+        other => other,
+    }
 }
 
-fn call(op: &str, ty: &Type, values: Vec<Operand>) -> Rvalue {
+pub(super) fn access_places(instruction: &Instruction) -> Option<(&str, &str, &str)> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    if !matches!(checked_form(name), READ | WRITE) {
+        return None;
+    }
+    let (Operand::Place(array), Operand::Place(index)) =
+        (&args.first()?.value, &args.get(1)?.value)
+    else {
+        return None;
+    };
+    Some((array, index, name))
+}
+
+pub(crate) fn is_operation(name: &str) -> bool {
+    matches!(checked_form(name), LITERAL | REPEAT | READ | WRITE | ADDRESS)
+}
+
+pub(super) fn call(op: &str, ty: &Type, values: Vec<Operand>) -> Rvalue {
     Rvalue::Call {
         callee: CallTarget::Name(op.to_owned()),
         args: values
@@ -93,7 +129,9 @@ impl Lowerer<'_> {
     pub(super) fn lower_fixed_read(&mut self, object: &Expr, index: &Expr) -> Option<Operand> {
         let ty = self.infer_expr_type(object)?;
         let (element, _) = ty.as_fixed_array()?;
-        let array = self.lower_expr_at_sequence_point(object, Some(&ty));
+        // The base is borrowed while its index is evaluated. Snapshotting
+        // a Copy array here would copy every lane to read just one.
+        let array = self.lower_expr_with_expected(object, Some(&ty));
         let offset = self.lower_index_domain_expr(index);
         let dest = self.new_typed_temp(element.clone());
         self.emit(Instruction::Assign {
@@ -295,6 +333,12 @@ impl Lowerer<'_> {
             else_label: self.label(end),
         });
         self.switch_to(next);
+        if let Operand::Place(list) = &array {
+            self.emit(Instruction::IndexInRange {
+                list: list.clone(),
+                index: index.clone(),
+            });
+        }
         self.emit(Instruction::Assign {
             target: binding,
             value: access(READ, ty, array, Operand::Place(index.clone()), None, span),

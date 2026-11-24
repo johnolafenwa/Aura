@@ -4158,13 +4158,19 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
         assert!(std::env::var_os("CI").is_none());
         return;
     }
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/typed-pointers/verify/src/main.au");
+    let package = script_dir("typed-pointer-effects");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/typed-pointers/verify");
+    std::fs::create_dir(package.join("src")).unwrap();
+    std::fs::copy(fixture.join("Aura.toml"), package.join("Aura.toml")).unwrap();
+    let path = package.join("src/main.au");
+    std::fs::copy(fixture.join("src/main.au"), &path).unwrap();
     let options = Options {
         prove_sites: true,
         ..Options::default()
     };
     let report = crate::verify_path(&path, &options).expect("the pointer program checks");
+    std::fs::remove_dir_all(package).unwrap();
     for name in [
         "write_raw",
         "relay",
@@ -4210,4 +4216,38 @@ fn wide_float_conversion_uses_finite_bounds() {
     assert_proved(
         "def signed(x: float64) -> int128:\n    requires -1.0 <= x and x <= 1.0\n    return x as int128\n\ndef unsigned(x: float64) -> uint128:\n    requires 0.0 <= x and x <= 1.0\n    return x as uint128\n\ndef main() -> None:\n    signed(-1.0)\n    unsigned(1.0)\n"
     );
+}
+
+#[test]
+fn fixed_array_build_drops_only_proved_access_checks() {
+    let source = r#"
+def checked(a: mut fixed[uint16, 4], i: int64) -> uint16:
+    requires 0 <= i and i < 4
+    a[i] = 22
+    return a[i]
+
+def dynamic(a: fixed[uint16, 4], i: int64) -> uint16:
+    return a[i]
+"#;
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let program = crate::check_source(source).unwrap();
+    let (module, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        verify_module(
+            &program,
+            module,
+            &Options {
+                prove_sites: true,
+                ..Options::default()
+            },
+        )
+        .map(|report| report.proved_sites)
+    })
+    .unwrap();
+    assert_eq!(removed.bounds, 2);
+    let accesses = unchecked_accesses(&module);
+    assert_eq!(accesses["checked"], 2);
+    assert_eq!(accesses["dynamic"], 0);
 }

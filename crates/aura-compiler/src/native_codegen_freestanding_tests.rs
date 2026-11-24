@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 37);
+    assert_eq!(namespace.all_functions.len(), 66);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -1050,4 +1050,57 @@ export "C" def reset(code: uint16) -> uint32:
         assert!(undefined.iter().any(|name| name == "advance"));
         assert!(undefined.iter().all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
     }
+}
+
+#[test]
+fn typed_pointer_objects_use_target_memory_operations() {
+    for source in [
+        include_str!("../tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../tests/fixtures/typed-pointers/links.au"),
+        include_str!("../tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../tests/fixtures/typed-pointers/wide.au"),
+        include_str!("../tests/fixtures/typed-pointers/fixed.au"),
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+        }
+    }
+}
+
+#[test]
+fn a_pointer_cast_requires_ffi_without_a_mem_import() {
+    let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
+    let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
+    assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
+}
+
+#[test]
+fn fixed_arrays_of_wide_words_stay_inline() {
+    let source = r#"
+export "C" def sample(i: int64, high: uint64) -> uint64:
+    word = (high as uint128) << 64
+    mut row: fixed[uint128, 2] = [word, 0]
+    row[1] = row[0]
+    return (row[i] >> 64) as uint64
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_updates_do_not_copy_the_entire_ring() {
+    let kernels = include_str!("../../../benchmarks/freestanding/kernels.au");
+    let bytes = object(kernels, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let ring = file
+        .symbols()
+        .find(|sym| sym.name() == Ok("aura_ring_mix"))
+        .unwrap();
+    // The loop needs one indexed load and store. Copying every lane
+    // into and out of scratch storage produced 814 bytes on x86-64.
+    assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
 }

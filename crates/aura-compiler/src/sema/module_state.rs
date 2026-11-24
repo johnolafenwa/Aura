@@ -400,7 +400,7 @@ impl FunctionChecker<'_> {
             .filter(|binding| binding.decl.mutable)
     }
 
-    fn is_state_place(&self, expr: &Expr, locals: &HashMap<String, LocalBinding>) -> bool {
+    pub(super) fn is_state_place(&self, expr: &Expr, locals: &HashMap<String, LocalBinding>) -> bool {
         match &grouped_expr(expr).kind {
             ExprKind::Name(name) => locals
                 .get(name)

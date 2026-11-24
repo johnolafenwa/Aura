@@ -160,6 +160,9 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
 /// An access the `mem` module makes at a raw address (ADR-0095).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryAccess {
+    /// Compute an address plus a displacement in units of the element size.
+    PointerOffset,
+    WideCopy { volatile_read: bool, volatile_write: bool },
     /// A read the optimizer may move or remove. Any alignment.
     Read,
     /// A write the optimizer may move or merge. Any alignment.
@@ -198,7 +201,7 @@ impl MemoryAccess {
         }
         !matches!(
             self,
-            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::Fence
+            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::WideCopy {..} | Self::Fence
         )
     }
 }
@@ -774,6 +777,8 @@ pub(crate) trait FunctionBackend {
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;
     fn append_block_params_for_function_params(&mut self, block: Blk);
 
+    fn bind_array_parameter(&mut self, var: Var, index: usize);
+    fn borrow_array_argument(&mut self, value: Val, address: Val) -> Val;
     fn var_addr(&mut self, var: Var) -> Val;
     fn declare_var(&mut self, var: Var, ty: ScalarType);
     fn def_var(&mut self, var: Var, value: Val);
