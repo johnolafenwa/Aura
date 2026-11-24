@@ -476,6 +476,46 @@ A trap inside a field default, method, or cleanup body keeps the code for the op
 | `AU4004` | Zero divisor. |
 | `AU4005` | Resource or I/O failure. |
 
+## Verification
+
+A class states what is true of every object with
+[`invariant` lines](/manual/contracts#class-invariants). `aura verify` proves
+that each construction and each `public` method that takes `mut self` keeps
+them, and it assumes them at the start of every `public` method.
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+    invariant 0 <= self.balance and self.balance <= self.limit
+
+    public def deposit(mut self, amount: int64):
+        requires 0 < amount and amount <= self.limit - self.balance
+        ensures self.balance == old(self.balance) + amount
+        self.balance += amount
+
+    public def room(self) -> int64:
+        ensures result >= 0
+        return self.limit - self.balance
+
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.room())
+```
+
+`aura verify` proves all 12 checks. The subtraction in `room` cannot
+overflow and its result is never negative, because the invariant bounds
+`balance` by `limit`. The `requires` clause of `deposit` is what keeps the
+invariant true after the addition.
+
+A method in an `impl` of a trait does not assume the invariants. After a call
+of a `mut self` method, the caller knows about each field only what the
+method's `ensures` says.
+
+See [Verification](/manual/verification) for the report, the options, and what the verifier models.
+
 ## Backend Support
 
 MIR execution and direct native generation both implement nominal classes, generic specialization, fields and defaults, all maintained receiver modes, partial moves, structural equality, `copy class`, `indirect`, visibility, and context manager entry and exit. Both backends receive the same checked class and method metadata. Compiler analysis and the language server use that metadata for member resolution and signatures.

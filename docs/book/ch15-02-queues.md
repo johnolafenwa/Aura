@@ -32,7 +32,7 @@ def main():
     print(f"total: {total}")
 ```
 
-<span class="caption">Listing 15-3: A producer task feeding the main task through a queue</span>
+<span class="caption">Listing 15-4: A producer task feeding the main task through a queue</span>
 
 ```console
 $ aura run src/main.au
@@ -195,7 +195,7 @@ def main():
         print("draining " + job)
 ```
 
-<span class="caption">Listing 15-4: `try_put` on a full queue and a closed one</span>
+<span class="caption">Listing 15-5: `try_put` on a full queue and a closed one</span>
 
 ```console
 $ aura run src/main.au
@@ -280,7 +280,7 @@ program: try again, report that a producer is slow, or give up.
 For the common cases there are two shorter forms. `poll(timeout=...)` returns
 `Poll.Ready(value)` or `Poll.Unavailable`, and `get_or(default, timeout=...)`
 returns the value or the default you pass. Without a timeout, both check once and
-return immediately, as `jobs.poll()` did in Listing 15-4.
+return immediately, as `jobs.poll()` did in Listing 15-5.
 
 One kind of wait is missing from that list: waiting with no timeout for a value
 that can never come. We'll see in the next section that the group's exit is

@@ -272,6 +272,84 @@ with `unwrap_or[str]`. That bracket syntax is called explicit specialization,
 and it works on constructors (`Stack[int64](...)`) and on enum variants
 (`Result[int64, str].Ok(7)`) too.
 
+### Contracts on generic code
+
+A generic body knows nothing about the values of `T`, but it knows a good
+deal about the containers that hold them. That is enough for contracts.
+`aura verify` proves, before the program runs, that a function's `requires`
+and `ensures` clauses hold and that operations such as `pop` can't trap;
+[section 11.4](/book/ch11-04-contracts-and-proofs) is the full introduction.
+Here is the stack again, with each method stating what it does to the number
+of items:
+
+*Filename: src/main.au*
+
+```aura
+class Stack[T]:
+    items: list[T]
+
+    def push(mut self, item: own T):
+        ensures len(self.items) == len(old(self.items)) + 1
+        self.items.append(item)
+
+    def pop(mut self) -> T | None:
+        ensures len(self.items) == max(len(old(self.items)) - 1, 0)
+        if self.items.len() == 0:
+            return None
+        return self.items.pop()
+
+    def size(self) -> int64:
+        ensures result == len(self.items)
+        return self.items.len()
+
+def drain[T](stack: mut Stack[T]) -> list[T]:
+    ensures len(stack.items) == 0
+    mut out: list[T] = []
+    while stack.size() > 0:
+        decreases len(stack.items)
+        item = stack.pop()
+        if item is not None:
+            out.append(item)
+    return out
+
+def main():
+    mut undo: Stack[str] = Stack(items=[])
+    undo.push("type hello")
+    undo.push("delete word")
+    print(drain(undo))
+    mut depths: Stack[int64] = Stack(items=[])
+    depths.push(1)
+    depths.push(2)
+    print(drain(depths))
+    print(depths.size())
+```
+
+<span class="caption">Listing 10-4: A generic stack whose methods promise what they do to its size</span>
+
+```console
+$ aura run src/main.au
+[delete word, type hello]
+[2, 1]
+0
+$ aura verify src/main.au
+verified src/main.au: 9 of 9 checks proved in 13 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+An `ensures` clause is a promise about how a call leaves things, and
+`old(self.items)` is the list as it was when the call began. None of the
+clauses mentions an item, so they read the same for a stack of strings and a
+stack of depths. The proof covers three things a test would have to sample.
+The `self.items.pop()` inside `Stack.pop` never meets an empty list, because
+the `if` above it returns first. The loop in `drain` ends, because its
+`decreases` measure, the number of items left, is proved to shrink on every
+pass. And `drain` leaves the stack empty, which is
+its own promise to its callers.
+
+Notice what `drain` had to go on. The verifier proves each function from the
+contracts of the functions it calls, never from their bodies, so the loop
+knows only what `size` and `pop` promise. Take the `ensures` off `size` and
+the proof of `drain` fails, even though the code is unchanged.
+
 ## Generic enums
 
 You've been using generic enums for a while, and Chapter 9 leaned on them
@@ -364,7 +442,7 @@ def main():
     print(largest([3, 9, 4]))
 ```
 
-<span class="caption">Listing 10-4: A generic `largest` that doesn't compile yet</span>
+<span class="caption">Listing 10-5: A generic `largest` that doesn't compile yet</span>
 
 ```console
 $ aura check src/main.au

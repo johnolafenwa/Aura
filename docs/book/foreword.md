@@ -16,7 +16,9 @@ fit on a screen now needs a build system and an hour of reading before a new
 colleague can change it. Aura is an attempt to avoid that trade. It keeps the
 part of Python that people love, which is code that reads close to how you
 would explain it out loud, and it adds a compiler that checks the things
-Python leaves to luck.
+Python leaves to luck. Then it goes one step further than most compilers do:
+it lets you write down what a function is supposed to do, and proves that it
+does.
 
 ## What the compiler checks
 
@@ -47,6 +49,33 @@ Some failures, like an index past the end of a list, are bugs rather than
 conditions to recover from, and those stop the task with a clear diagnostic
 pointing at the line.
 
+## What the verifier proves
+
+Types, ownership, and typed failure rule out whole families of mistakes, but
+they cannot tell you that a discount never makes a price negative, or that an
+index computed three lines earlier is still inside the list. In most
+languages, that kind of fact lives in a comment, an `assert`, and a few tests
+that try the inputs somebody thought of.
+
+In Aura it is part of the function. A `requires` line states what the caller
+must provide, an `ensures` line states what the function promises in return,
+and an `invariant` states what stays true around a loop or inside every
+object of a class. These *contracts* are checked while the program runs, so a
+broken one stops the task at the line that broke it. And `aura verify` hands
+them to a solver that proves them for every input there is, along with the
+bugs nobody wrote a contract about: integer overflow, division by zero, an
+index out of range, a missing dictionary key. When a proof fails, you get the
+input that breaks the code, before the code has ever run.
+
+We think this belongs in the language, next to types, and not in a separate
+tool that few projects get round to adopting. So the book treats it that way.
+You will write your first contract in Chapter 1, and from Chapter 3 on, the
+examples say what they need and promise, and we check them with
+`aura verify` as routinely as we run them.
+
+The verifier is younger than the rest of the compiler, and there is Aura
+code it does not understand yet. The book says so where we meet it.
+
 ## What you get for it
 
 Because the compiler knows every type and every owner, it can produce fast
@@ -62,7 +91,8 @@ you can read top to bottom.
 
 None of this is free. You will write `mut` when a binding changes. You will
 meet errors about moved values in your first week, and some of them will feel
-fussy until the reason behind them clicks. We think the trade is worth it, and
+fussy until the reason behind them clicks. A proof sometimes needs you to
+spell out a fact that seemed too obvious to write down. We think the trade is worth it, and
 this book tries to show you why, one real error at a time.
 
 ## About this book
