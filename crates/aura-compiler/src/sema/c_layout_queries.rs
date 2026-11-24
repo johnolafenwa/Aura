@@ -3,9 +3,21 @@
 use super::*;
 
 impl FunctionChecker<'_> {
-    pub(super) fn c_layout_query(&self, callee: &Expr, args: &[Argument], locals: &HashMap<String, LocalBinding>) -> Option<Result<usize>> {
-        let (modules, classes) = self.current_module_namespace().map(|ns| (&ns.imported_modules, &ns.all_classes)).unwrap_or((self.imported_modules, self.classes));
-        evaluate(callee, args, modules, classes, |name| locals.get(name).is_some_and(|binding| !matches!(binding.ty, Type::Module(_))))
+    pub(super) fn c_layout_query(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Result<usize>> {
+        let (modules, classes) = self
+            .current_module_namespace()
+            .map(|ns| (&ns.imported_modules, &ns.all_classes))
+            .unwrap_or((self.imported_modules, self.classes));
+        evaluate(callee, args, modules, classes, |name| {
+            locals
+                .get(name)
+                .is_some_and(|binding| !matches!(binding.ty, Type::Module(_)))
+        })
     }
 }
 
@@ -75,30 +87,46 @@ fn query_type(
     let (name, classes) = match &expr.kind {
         ExprKind::Name(name) => (name, classes),
         ExprKind::Member { object, field } => {
-            let ExprKind::Name(module) = &object.kind else { return None };
+            let ExprKind::Name(module) = &object.kind else {
+                return None;
+            };
             let namespace = modules.get(module).filter(|_| !shadowed(module))?;
             namespace.classes.get(field)?;
             (field, &namespace.all_classes)
         }
         ExprKind::Index { object, index } => {
-            let ExprKind::Name(name) = &object.kind else { return None };
+            let ExprKind::Name(name) = &object.kind else {
+                return None;
+            };
             if name == "ptr" {
                 query_type(index, modules, classes, shadowed)?;
                 return Some(CFieldKind::Scalar(crate::ffi::FfiScalar::U64));
             }
-            let ExprKind::Tuple(args) = &index.kind else { return None };
-            let [element, length] = args.as_slice() else { return None };
-            let ExprKind::Int(length @ 1..=1_048_576) = length.kind else { return None };
-            if name != "fixed" { return None; }
+            let ExprKind::Tuple(args) = &index.kind else {
+                return None;
+            };
+            let [element, length] = args.as_slice() else {
+                return None;
+            };
+            let ExprKind::Int(length @ 1..=1_048_576) = length.kind else {
+                return None;
+            };
+            if name != "fixed" {
+                return None;
+            }
             let element = query_type(element, modules, classes, shadowed)?;
             let count = length as usize;
-            element.size().checked_mul(count)?;
+            if element.size().checked_mul(count)? > i32::MAX as usize {
+                return None;
+            }
             return Some(CFieldKind::Array(Box::new(element), count));
         }
         _ => return None,
     };
     let ty = Type::named(name);
-    ffi_scalar(&ty).map(CFieldKind::Scalar).or_else(|| ffi_struct_layout(&ty, classes).map(CFieldKind::Struct))
+    ffi_scalar(&ty)
+        .map(CFieldKind::Scalar)
+        .or_else(|| ffi_struct_layout(&ty, classes).map(CFieldKind::Struct))
 }
 
 #[cfg(test)]

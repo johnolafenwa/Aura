@@ -2315,7 +2315,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     })
                     .transpose()?
                     .map(std::sync::Arc::new),
-                decl: super::c_layout_queries::folded_binding(constant, &imported_modules, &classes),
+                decl: super::c_layout_queries::folded_binding(
+                    constant,
+                    &imported_modules,
+                    &classes,
+                ),
                 ty: expected.unwrap_or(inferred),
             },
         );

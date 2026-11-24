@@ -914,6 +914,8 @@ int main(void) {
         .output()
         .unwrap();
     assert!(linked.status.success(), "{}", stderr(&linked));
-    let run = Command::new(workspace.path.join("word-test")).output().unwrap();
+    let run = Command::new(workspace.path.join("word-test"))
+        .output()
+        .unwrap();
     assert!(run.status.success(), "{run:?}");
 }

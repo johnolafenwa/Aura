@@ -767,6 +767,9 @@ pub struct MirLocalType {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirClass {
+    /// A C record whose packed, aligned, or overlapping storage differs from Aura fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_layout: Option<crate::c_layout::CStruct>,
     pub name: String,
     pub type_params: Vec<String>,
     pub fields: Vec<MirClassField>,
@@ -10971,6 +10974,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         }
         let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
+            c_layout: c_bit_fields::record_storage(class, &class_name, &program.classes),
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
@@ -11408,6 +11412,7 @@ fn push_imported_module_classes_from_namespace(
         }
         let copy = mir_class_is_copy(program, &class_name, class);
         classes.push(MirClass {
+            c_layout: c_bit_fields::record_storage(class, &class_name, &namespace.all_classes),
             name: class_name,
             type_params: class.decl.type_params.clone(),
             fields,
@@ -29442,9 +29447,7 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
-            if self.c_layout_query(callee, args)
-            .is_some()
-            {
+            if self.c_layout_query(callee, args).is_some() {
                 return Some(Type::named("uint64"));
             }
             if let Some(info) = self.recursive_local_call(callee) {

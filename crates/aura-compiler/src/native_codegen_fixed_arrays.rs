@@ -6,12 +6,19 @@ pub(super) struct FixedArrayLayout {
     pub(super) ty: Type,
     pub(super) bytes: u32,
     pub(super) align: u8,
+    exact_align: u16,
     element: Box<DirectType>,
     count: u32,
 }
 
 impl FixedArrayLayout {
     pub(super) fn storage(&self) -> ScalarType {
+        if self.exact_align > 16 {
+            return ScalarType::OverAligned {
+                bytes: self.bytes,
+                align: self.exact_align,
+            };
+        }
         ScalarType::Inline {
             bytes: self.bytes,
             align: self.align,
@@ -27,6 +34,7 @@ pub(super) fn direct_layout(
     let (element, count) = ty.as_fixed_array()?;
     let element = direct_type_inner(element, classes, visiting)?;
     let (stride, align) = storage(&element)?;
+    let (stride, exact_align) = physical_storage(&element, stride, align)?;
     let count = u32::try_from(count).ok()?;
     let bytes = stride.checked_mul(count)?;
     if bytes == 0 || bytes > i32::MAX as u32 {
@@ -35,6 +43,7 @@ pub(super) fn direct_layout(
     Some(DirectType::Fixed(FixedArrayLayout {
         ty: ty.clone(),
         bytes,
+        exact_align,
         align,
         element: Box::new(element),
         count,
@@ -55,6 +64,9 @@ fn storage(ty: &DirectType) -> Option<(u32, u8)> {
         }
         DirectType::Fixed(layout) => Some((layout.bytes, layout.align)),
         DirectType::PlainClass(class) => {
+            if let Some(layout) = &class.c_layout {
+                return Some((layout.size().try_into().ok()?, layout.align().min(16) as u8));
+            }
             let mut size: u32 = 0;
             let mut align = 1;
             for field in &class.fields {
@@ -76,6 +88,9 @@ impl FixedArrayLayout {
         use crate::ffi::FfiScalar;
         fn kind(ty: &DirectType) -> CFieldKind {
             match ty {
+                DirectType::PlainClass(class) if class.c_layout.is_some() => {
+                    CFieldKind::Struct(class.c_layout.as_deref().unwrap().clone())
+                }
                 DirectType::Fixed(layout) => {
                     CFieldKind::Array(Box::new(kind(&layout.element)), layout.count as usize)
                 }
@@ -122,6 +137,11 @@ impl FixedArrayLayout {
     }
 
     fn slot(&self, builder: &mut dyn FunctionBackend) -> Val {
+        if self.exact_align > 16 {
+            let slot = builder
+                .create_sized_stack_slot(self.bytes, self.exact_align.trailing_zeros() as u8);
+            return builder.stack_addr(types::I64, slot, 0);
+        }
         let slot = builder.create_sized_stack_slot(self.bytes, self.align.trailing_zeros() as u8);
         builder.stack_addr(types::I64, slot, 0)
     }
@@ -211,9 +231,28 @@ impl FunctionCompiler<'_> {
     ) -> Result<(), String> {
         let flags = MemFlags::trusted();
         if let DirectType::PlainClass(class) = ty {
+            if let Some(layout) = &class.c_layout {
+                let slot = self.builder.iadd_imm(address, i64::from(offset));
+                if let Some(src) = src {
+                    let words = &src[dest.len()..dest.len() + ty.value_count()];
+                    let value = ValueRef {
+                        ty: ty.clone(),
+                        values: words.to_vec(),
+                    };
+                    self.store_controlled_struct(layout, &value, slot);
+                    dest.extend_from_slice(words);
+                } else {
+                    let value =
+                        self.load_controlled_struct(layout, slot, ty.clone(), &class.class_name)?;
+                    dest.extend(value.values);
+                }
+                return Ok(());
+            }
             let mut at = offset;
             for field in &class.fields {
                 let (bytes, align) = storage(&field.ty).ok_or("field has no inline storage")?;
+                let (bytes, align) = physical_storage(&field.ty, bytes, align)
+                    .ok_or("field exceeds inline storage limits")?;
                 at = at.next_multiple_of(u32::from(align));
                 self.fixed_parts(&field.ty, address, at, dest, src)?;
                 at += bytes;
@@ -238,6 +277,7 @@ impl FunctionCompiler<'_> {
             .map_err(|_| "fixed array field offset exceeds the target limit")?;
         let word = if let Some(word) = store {
             let packed = match width {
+                ScalarType::OverAligned { .. } => word,
                 ScalarType::Inline { .. } => word,
                 _ => foreign::callback_narrow(self.builder, width, word),
             };
@@ -246,6 +286,7 @@ impl FunctionCompiler<'_> {
         } else {
             let raw = self.builder.load(width, flags, address, offset);
             match (ty, width) {
+                (_, ScalarType::OverAligned { .. }) => raw,
                 (_, ScalarType::Inline { .. } | ScalarType::I64 | ScalarType::F64) => raw,
                 (_, ScalarType::F32) => self.builder.fpromote(types::F64, raw),
                 (DirectType::Scalar(ScalarKind::Int8), _) => {
@@ -410,5 +451,36 @@ impl FunctionCompiler<'_> {
             values: vec![self.builder.load(storage, MemFlags::trusted(), base, 0)],
             ty: DirectType::Fixed(layout),
         })
+    }
+}
+
+/// Preserve the target C layout through fixed arrays and through plain Aura
+/// values containing them. Most Aura scalars use their ordinary alignment.
+fn physical_storage(ty: &DirectType, bytes: u32, align: u8) -> Option<(u32, u16)> {
+    match ty {
+        DirectType::Fixed(layout) => Some((layout.bytes, layout.exact_align)),
+        DirectType::PlainClass(class) => {
+            if let Some(layout) = &class.c_layout {
+                return Some((
+                    layout.size().try_into().ok()?,
+                    layout.align().try_into().ok()?,
+                ));
+            }
+            let mut end = 0u32;
+            let mut alignment = 1;
+            for field in &class.fields {
+                let (size, align) = storage(&field.ty)?;
+                let (size, align) = physical_storage(&field.ty, size, align)?;
+                alignment = alignment.max(align);
+                end = end
+                    .checked_next_multiple_of(u32::from(align))?
+                    .checked_add(size)?;
+            }
+            Some((
+                end.checked_next_multiple_of(u32::from(alignment))?,
+                alignment,
+            ))
+        }
+        _ => Some((bytes, u16::from(align))),
     }
 }

@@ -1101,6 +1101,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
         enums: Vec::new(),
         functions: vec![main, update],
         classes: vec![MirClass {
+            c_layout: None,
             name: "Pair".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -1191,6 +1192,7 @@ fn adr0038_closure_main(blocks: Vec<BasicBlock>, local_types: Vec<MirLocalType>)
 #[cfg(unix)]
 fn adr0038_pair_class() -> MirClass {
     MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
