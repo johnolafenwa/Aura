@@ -62,4 +62,4 @@ Accept decorator expressions on inherent and associated methods. Preserve the sp
 
 ## Acceptance Evidence
 
-Start with parse, check, diagnostic and execution fixtures for each feature. Exercise native and interpreted output, verification, and editor navigation. Every new diagnostic path needs a library test. Test observable cleanup order, nested collections, moved values, tasks, recovery, and failures inside cleanup. Record same-host Callgrind counts for three unchanged cross-language programs before and after. Use only the assigned diagnostic ranges, checking the manual for used numbers.
+Start with parse, check, diagnostic and execution fixtures for each feature. Exercise native and interpreted output, verification, and editor navigation. Every new diagnostic path needs a library test. Test observable cleanup order, nested collections, moved values, tasks, recovery, and failures inside cleanup. Record same-host Callgrind counts for three unchanged cross-language programs before and after. Use only AU2060 through AU2069, AU3020 through AU3024, and AU4020 through AU4024 for new diagnostics.
