@@ -1,9 +1,8 @@
 # Memory Module
 
-The `mem` module reads and writes integers at a raw address. It is for
+The `mem` module reads and writes scalars at a raw address. It is for
 device registers, memory shared with C, and the lock-free cells a kernel or
-a driver needs. Each function compiles to one machine instruction, in
-hosted and [freestanding](/manual/freestanding) builds alike.
+a driver needs. Hosted and [freestanding](/manual/freestanding) builds use the same target memory ordering rules.
 
 ```aura fragment
 import mem
@@ -23,8 +22,7 @@ functions](/manual/ffi) need.
 
 ## Public API
 
-`N` is 8, 16, 32, or 64 for the plain and volatile functions, and 32 or 64
-for the atomic ones.
+`N` is 8, 16, 32 or 64 for unsigned plain, volatile and atomic access.
 
 | API | Signature | Result |
 | --- | --- | --- |
@@ -32,12 +30,14 @@ for the atomic ones.
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | Reads once, exactly where the program says. |
 | `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | Writes once, exactly where the program says. |
-| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
-| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
-| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
-| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
-| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
-| `mem.fence` | `fence() -> None` | Orders every earlier memory access before every later one. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64, order="seq_cst") -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN, order="seq_cst") -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN, order="seq_cst", failure_order=…) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
+| `mem.fence` | `fence(order="seq_cst") -> None` | Orders every earlier memory access before every later one. |
+
+The `order` argument takes a string literal. Loads allow `"relaxed"`, `"acquire"` or `"seq_cst"`. Stores allow `"relaxed"`, `"release"` or `"seq_cst"`. Read-modify-write operations allow all five orders, including `"acq_rel"`. A fence accepts all except `"relaxed"`. A compare-exchange failure order must permit a load and must be no stronger than the success order. Omitting it drops release semantics from the success order.
 
 ## Rules
 
@@ -51,17 +51,38 @@ for the atomic ones.
   in program order, and the compiler never merges, drops, or splits it.
   Use it for device registers. The address must be a multiple of `N / 8`.
 - **Atomic access.** Each call is one indivisible step with respect to
-  every other atomic call on the same cell, on every core. All atomic
-  functions use sequentially consistent ordering. The address must be a
+  every other atomic call on the same cell, on every core. Atomic operations default to sequentially consistent ordering. The address must be a
   multiple of `N / 8`.
 - **`atomic_add` wraps.** It is the one place an Aura addition does not
   check for overflow, because a failed check could not undo the step.
-- **Aura values have no address.** There is no way to take the address of a
-  local, a field, or a list element. Addresses come from the platform, a
-  linker symbol read through C, or a foreign function.
+- **Field addresses.** `mem.address_of(point.x)` returns a typed pointer to the field of a mutable C class. The pointer expires with its enclosing storage.
 - **Verification.** `aura verify` treats a read as an unknown value of its
   type and does not model writes. A write to memory that an Aura value
   occupies is outside what a proof covers.
+
+Compile-time queries accept C layout types. `mem.size_of(T)` returns the storage size, `mem.align_of(T)` the alignment, and `mem.offset_of(T, member)` the byte offset of an addressable member. Results are `uint64` constants for the selected target.
+
+## Typed Access
+
+Use `ptr[T]` to keep the memory representation with the address. The package must opt in to FFI even if the file uses only pointer casts and methods.
+
+```aura fragment
+p = address as ptr[float32]
+p.write(-1.5)
+next_value = p.offset(1).read()
+raw_bytes = p as ptr[uint8]
+address_again = raw_bytes as uint64
+```
+
+| Operation | Result |
+| --- | --- |
+| `p.read()`, `p.write(value)` | Read or write one value of the pointee type. |
+| `p.volatile_read()`, `p.volatile_write(value)` | Read or write at the program point. A scalar uses one naturally aligned access. |
+| `p.offset(count)` | Advance by a signed number of elements. The unit is the size of the pointee. |
+| `p as ptr[U]` | Interpret the same address as a pointer to U. |
+| `p as uint64`, `address as ptr[T]` | Convert between an address word and a typed pointer. |
+
+The signed forms `mem.read_intN` and `mem.write_intN` use 8, 16, 32 or 64 bits. The floating forms `mem.read_floatN` and `mem.write_floatN` use 32 or 64 bits. Prefix either form with `volatile_` for a volatile access. A floating read interprets the stored bits in the target's floating-point representation.
 
 ## A Spin Lock
 
@@ -96,9 +117,5 @@ def main() -> None:
 
 ## Current Limits
 
-- Unsigned integers only. Convert with `as` for a signed or float value's
-  bits.
-- No atomic access to 8-bit and 16-bit cells.
-- One ordering, sequentially consistent.
 - No inline assembly and no port I/O instructions. On x86-64, reach I/O
   ports through an `extern "C"` function written in assembly.
