@@ -869,3 +869,25 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn systems_integer_operations_emit_self_contained_objects() {
+    for source in [
+        include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|s| s == "aura_trap"), "{undefined:?}");
+        }
+    }
+}
+
+#[test]
+fn load_rejects_release_order_during_checking() {
+    let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
+    let module = crate::parse_source(source).expect("valid syntax");
+    let errors = crate::check_module_with_builtin_imports(module).err().expect("invalid order");
+    assert!(errors.iter().any(|e| e.code == "AU2087"), "{errors:?}");
+}
