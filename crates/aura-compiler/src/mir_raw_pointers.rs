@@ -38,19 +38,17 @@ impl Lowerer<'_> {
     fn pointer_class_layout(&self, element: &Type) -> Option<crate::c_layout::CStruct> {
         if element == &Type::named("int128") || element == &Type::named("uint128") {
             use crate::c_layout::{CField, CFieldKind, CStruct};
-            let mut layout = CStruct {
-                name: format!("#{element}"),
+            let layout = CStruct {
+                name: format!("#fixed.{element}"),
                 union: false,
                 layout_controls: Default::default(),
-                fields: vec![CField {
-                    name: "bits".into(),
-                    kind: CFieldKind::Array(
-                        Box::new(CFieldKind::Scalar(crate::ffi::FfiScalar::U64)),
-                        2,
-                    ),
-                }],
+                fields: ["low", "high"]
+                    .map(|name| CField {
+                        name: name.into(),
+                        kind: CFieldKind::Scalar(crate::ffi::FfiScalar::U64),
+                    })
+                    .to_vec(),
             };
-            layout.layout_controls.alignment = Some(16);
             return Some(layout);
         }
         if let Some((inner, length)) = element.as_fixed_array() {

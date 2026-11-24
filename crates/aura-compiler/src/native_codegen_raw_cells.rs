@@ -126,11 +126,11 @@ impl FunctionCompiler<'_> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let address = self.load_operand(address)?.values[0];
-        if matches!(layout.name.as_str(), "#int128" | "#uint128") {
+        if matches!(layout.name.as_str(), "#fixed.int128" | "#fixed.uint128") {
             return self.compile_wide_memory(
                 address,
                 store,
-                layout.name == "#int128",
+                layout.name == "#fixed.int128",
                 volatile,
                 target,
             );

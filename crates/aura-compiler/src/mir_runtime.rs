@@ -3680,7 +3680,10 @@ impl MirRuntime {
                 }
             }
 
-            let mut env = Env { raw_cells: borrowed_cells, ..Default::default() };
+            let mut env = Env {
+                raw_cells: borrowed_cells,
+                ..Default::default()
+            };
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -4740,7 +4743,11 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
-            Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. } if !self.raw_memory_allowed => Err(raw_cells::permission_error()),
+            Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. }
+                if !self.raw_memory_allowed =>
+            {
+                Err(raw_cells::permission_error())
+            }
             Rvalue::CPointerAccess {
                 address,
                 store,
@@ -5927,7 +5934,11 @@ impl MirRuntime {
                 let writeback_places =
                     bind_function_writeback_places(&function.params, &evaluated_args)?;
                 if !env.raw_cells.is_empty() || self.raw_parameters.contains_key(&function.name) {
-                    self.borrowed_raw_cells = env.borrowed_cells(&function, args, self.raw_parameters.get(&function.name))?;
+                    self.borrowed_raw_cells = env.borrowed_cells(
+                        &function,
+                        args,
+                        self.raw_parameters.get(&function.name),
+                    )?;
                 }
                 let outcome = self.call_function_for_target(
                     &function,

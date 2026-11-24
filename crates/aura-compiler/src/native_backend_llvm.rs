@@ -3085,15 +3085,31 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
                 widen(previous.into_int_value())
             }
-            MemoryAccess::WideCopy { volatile_read, volatile_write } => {
-                let dst = built(self.builder.build_int_to_ptr(self.int(operands[1])?,self.context.ptr_type(AddressSpace::default()),""))?;
-                let value = built(self.builder.build_load(self.context.i128_type(), pointer, ""))?;
+            MemoryAccess::WideCopy {
+                volatile_read,
+                volatile_write,
+            } => {
+                let dst = built(self.builder.build_int_to_ptr(
+                    self.int(operands[1])?,
+                    self.context.ptr_type(AddressSpace::default()),
+                    "",
+                ))?;
+                let value = built(
+                    self.builder
+                        .build_load(self.context.i128_type(), pointer, ""),
+                )?;
                 let read = value.as_instruction_value().ok_or("missing wide load")?;
-                read.set_alignment(if volatile_read {16} else {1}).map_err(problem("invalid wide load alignment"))?;
-                read.set_volatile(volatile_read).map_err(problem("invalid wide load volatility"))?;
+                read.set_alignment(if volatile_read { 16 } else { 1 })
+                    .map_err(problem("invalid wide load alignment"))?;
+                read.set_volatile(volatile_read)
+                    .map_err(problem("invalid wide load volatility"))?;
                 let write = built(self.builder.build_store(dst, value))?;
-                write.set_alignment(if volatile_write {16} else {1}).map_err(problem("invalid wide store alignment"))?;
-                write.set_volatile(volatile_write).map_err(problem("invalid wide store volatility"))?;
+                write
+                    .set_alignment(if volatile_write { 16 } else { 1 })
+                    .map_err(problem("invalid wide store alignment"))?;
+                write
+                    .set_volatile(volatile_write)
+                    .map_err(problem("invalid wide store volatility"))?;
                 Ok(None)
             }
             MemoryAccess::PointerOffset => {

@@ -516,7 +516,10 @@ impl FunctionCompiler<'_> {
             let line = self.load_operand(&args[2].value)?.values[0];
             let column = self.load_operand(&args[3].value)?.values[0];
             let at = self.fixed_element_address(&layout, address, index, line, column);
-            return Ok(ValueRef { values: vec![at], ty: DirectType::Scalar(ScalarKind::Uint64) });
+            return Ok(ValueRef {
+                values: vec![at],
+                ty: DirectType::Scalar(ScalarKind::Uint64),
+            });
         }
         let base = layout.slot(self.builder);
         let storage = layout.storage();

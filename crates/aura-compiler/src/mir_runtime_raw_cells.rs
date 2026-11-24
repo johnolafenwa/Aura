@@ -199,7 +199,7 @@ pub(super) fn access(
         _ => None,
     }
     .ok_or_else(|| Diagnostic::coded("AU4032", "raw storage needs a pointer-sized address"))?;
-    if matches!(layout.name.as_str(), "#int128" | "#uint128") {
+    if matches!(layout.name.as_str(), "#fixed.int128" | "#fixed.uint128") {
         // SAFETY: the caller of a typed pointer operation supplies the required
         // range, access rights, and (for volatility) alignment.
         return unsafe {
@@ -219,7 +219,7 @@ pub(super) fn access(
                 )),
                 None => Ok(aura_runtime::raw_wide_memory::read(
                     address as *const u128,
-                    layout.name == "#int128",
+                    layout.name == "#fixed.int128",
                     volatile,
                 )),
             }
@@ -256,7 +256,10 @@ pub(super) fn access(
 }
 
 pub(super) fn permission_error() -> Diagnostic {
-    Diagnostic::coded("AU2084","raw memory operations require a manifest-checked path with allow_ffi = true")
+    Diagnostic::coded(
+        "AU2084",
+        "raw memory operations require a manifest-checked path with allow_ffi = true",
+    )
 }
 
 #[cfg(test)]
@@ -275,12 +278,19 @@ mod tests {
         let mut cell = 1_i32;
         let addr = &mut cell as *mut i32 as usize;
         for operation in ["p.read()", "p.write(2)"] {
-            let source = format!("def main() -> None:\n    p = {addr} as ptr[int32]\n    {operation}\n");
-            assert_eq!(crate::mir_runtime::run(&lower(&source)).unwrap_err().code,"AU2084");
+            let source =
+                format!("def main() -> None:\n    p = {addr} as ptr[int32]\n    {operation}\n");
+            assert_eq!(
+                crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
+                "AU2084"
+            );
         }
         let source = format!("extern \"C\" class Item:\n    value: int32\n\ndef main() -> None:\n    p = {addr} as ptr[Item]\n    p.read()\n");
-        assert_eq!(crate::mir_runtime::run(&lower(&source)).unwrap_err().code,"AU2084");
-        assert_eq!(cell,1);
+        assert_eq!(
+            crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
+            "AU2084"
+        );
+        assert_eq!(cell, 1);
     }
 
     #[test]
@@ -292,6 +302,7 @@ mod tests {
             include_str!("../tests/fixtures/typed-pointers/foreign_array.au"),
             include_str!("../tests/fixtures/typed-pointers/links.au"),
             include_str!("../tests/fixtures/typed-pointers/widths.au"),
+            include_str!("../tests/fixtures/typed-pointers/nested.au"),
             include_str!("../tests/fixtures/typed-pointers/wide.au"),
             include_str!("../tests/fixtures/typed-pointers/fixed.au"),
         ] {
