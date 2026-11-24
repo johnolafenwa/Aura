@@ -763,7 +763,9 @@ fn linked_frozen_collections_use_aura_indexing_and_lookup_rules() {
     let workspace = Workspace::new();
     workspace.write(
         "table.au",
-        include_str!("../../aura-compiler/tests/fixtures/check-pass/compile_time_frozen_projections.au"),
+        include_str!(
+            "../../aura-compiler/tests/fixtures/check-pass/compile_time_frozen_projections.au"
+        ),
     );
     let build = workspace.aura(&["build", "--freestanding", "-o", "table.o", "table.au"]);
     assert!(build.status.success(), "{}", stderr(&build));
@@ -781,7 +783,9 @@ void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint3
 }
 int main(int argc, char **argv) {
     if (argc > 1) { total(-3, 10); return 1; }
-    return (total(-1, 40) == 126 && total(0, 30) == 111 && nested(0) == 47 && nested(1) == 52 && details(0) == 15 && title_len() == 5) ? 0 : 1;
+    return (total(-1, 40) == 126 && total(0, 30) == 111
+        && nested(0) == 47 && nested(1) == 52
+        && details(0) == 15 && title_len() == 5) ? 0 : 1;
 }
 "#,
     );
