@@ -214,8 +214,25 @@ impl Exec<'_> {
         post: &[(String, Val)],
         result: &Val,
     ) {
+        let pc = state.pc.clone();
+        for fact in self.call_ensures_terms(callee, pre, post, result) {
+            self.assume(&pc, fact);
+        }
+    }
+
+    /// Collects the SMT terms for each `ensures` and returned class invariant
+    /// of `callee` without asserting them into `self.facts`, so callers whose
+    /// target may trap or remain incomplete can guard them on normal return.
+    pub(super) fn call_ensures_terms(
+        &mut self,
+        callee: &str,
+        pre: &[(String, Val)],
+        post: &[(String, Val)],
+        result: &Val,
+    ) -> Vec<String> {
+        let mut facts = Vec::new();
         let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
-            return;
+            return facts;
         };
         let decl_module = self.cx.decl_module(decl);
         let mut pre_env: Env = pre.iter().cloned().collect();
@@ -246,11 +263,15 @@ impl Exec<'_> {
                     self.spec_module = prev_module;
                     self.proving = prev_proving;
                     if olds_ok {
-                        self.assume_clause_in(state, clause, &env, decl_module);
+                        if let Some(fact) = self.clause_assumption_in(clause, &env, decl_module) {
+                            facts.push(fact);
+                        }
                     }
                 }
                 ContractKind::Invariant if checks_invariant => {
-                    self.assume_clause_in(state, clause, &pre_env, decl_module);
+                    if let Some(fact) = self.clause_assumption_in(clause, &pre_env, decl_module) {
+                        facts.push(fact);
+                    }
                 }
                 _ => {}
             }
@@ -259,7 +280,10 @@ impl Exec<'_> {
             if let Some((_, receiver)) = post.first() {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
                 for clause in clauses {
-                    self.assume_clause_in(state, &clause, &env, Some(&inv_module));
+                    if let Some(fact) = self.clause_assumption_in(&clause, &env, Some(&inv_module))
+                    {
+                        facts.push(fact);
+                    }
                 }
             }
         }
@@ -272,7 +296,18 @@ impl Exec<'_> {
                     .map(|(_, value)| value.clone()),
             )
             .collect();
-        self.assume_record_invariants(state, &returned);
+        for value in &returned {
+            if let Some((inv_module, clauses)) = self.record_invariant(value) {
+                let env: Env = [("self".to_string(), value.clone())].into();
+                for clause in clauses {
+                    if let Some(fact) = self.clause_assumption_in(&clause, &env, Some(&inv_module))
+                    {
+                        facts.push(fact);
+                    }
+                }
+            }
+        }
+        facts
     }
 
     /// A named function passed as a callable alias with a contract meets
@@ -622,13 +657,12 @@ impl Exec<'_> {
         self.oblige(kind, span, message, &state.pc, goal);
     }
 
-    fn assume_clause_in(
+    fn clause_assumption_in(
         &mut self,
-        state: &State,
         clause: &ContractClause,
         env: &Env,
         module_name: Option<&str>,
-    ) {
+    ) -> Option<String> {
         let prev_proving = self.proving;
         let prev_module = self.spec_module.clone();
         self.proving = false;
@@ -636,14 +670,29 @@ impl Exec<'_> {
             self.spec_module = m.to_string();
         }
         let mut wd = Vec::new();
-        if let Ok(Val::Bool(term)) = self.spec(&clause.condition, env, &mut wd, 0) {
-            wd.push(term);
-            let fact = conjoin(&wd);
+        let fact = match self.spec(&clause.condition, env, &mut wd, 0) {
+            Ok(Val::Bool(term)) => {
+                wd.push(term);
+                Some(conjoin(&wd))
+            }
+            _ => None,
+        };
+        self.spec_module = prev_module;
+        self.proving = prev_proving;
+        fact
+    }
+
+    fn assume_clause_in(
+        &mut self,
+        state: &State,
+        clause: &ContractClause,
+        env: &Env,
+        module_name: Option<&str>,
+    ) {
+        if let Some(fact) = self.clause_assumption_in(clause, env, module_name) {
             let pc = state.pc.clone();
             self.assume(&pc, fact);
         }
-        self.spec_module = prev_module;
-        self.proving = prev_proving;
     }
 
     /// The value of a specification expression. Each condition the

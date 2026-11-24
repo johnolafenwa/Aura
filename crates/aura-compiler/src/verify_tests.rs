@@ -4557,3 +4557,130 @@ def main():
         "loop counter monotonicity falsely proved: {falsely_proved:?}"
     );
 }
+
+#[test]
+fn recover_and_task_start_do_not_assume_trapping_callee_ensures() {
+    let recover_source = r#"
+import control
+
+def guard(x: int64) -> int64:
+    ensures x > 0
+    assert x > 0
+    return x
+
+def caller_assert(x: int64) -> int64:
+    _ = control.recover(guard, x)
+    assert x > 0
+    return x
+
+def caller_index(x: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0 and x < len(xs)
+    _ = control.recover(guard, x)
+    return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(recover_source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "caller_assert"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert after control.recover must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "caller_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "bounds check after control.recover must fail: {report:#?}"
+    );
+    let program = crate::check_source(recover_source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "bounds check after control.recover must not be removed"
+    );
+
+    let task_source = r#"
+def guard(x: int64) -> int64:
+    ensures x > 0
+    assert x > 0
+    return x
+
+def before_ready_assert(x: int64) -> int64:
+    with group = TaskGroup():
+        _ = group.start(guard, x)
+        assert x > 0
+    return x
+
+def before_ready_index(x: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0 and x < len(xs)
+    with group = TaskGroup():
+        _ = group.start(guard, x)
+        return xs[x]
+    return 0
+
+def on_failure(x: int64) -> int64:
+    with group = TaskGroup():
+        task = group.start(guard, x)
+        match task.result():
+            case TaskResult.Ready(v):
+                assert x > 0
+                return v
+            case _:
+                assert x > 0
+                return 0
+    return 0
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(task_source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "before_ready_assert"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert before TaskResult.Ready must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "before_ready_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "bounds check before TaskResult.Ready must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "on_failure"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert in non-Ready arm must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "on_failure"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Proved)
+        }),
+        "assert in Ready arm should still prove: {report:#?}"
+    );
+}

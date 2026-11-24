@@ -295,9 +295,9 @@ pub(super) enum Val {
     /// A function value that names one function: a call through it is a
     /// call of that function.
     Func(String),
-    /// A `Task[T]` handle, with the value its task returns when it
-    /// finishes normally.
-    Task(Box<Val>),
+    /// A `Task[T]` handle, with the value its task returns and the
+    /// postcondition terms that hold only if it finishes normally (`Ready`).
+    Task(Box<Val>, Vec<String>),
     /// A function value of a callable alias with a contract, named by the
     /// alias: a call through it has that contract.
     Contracted(String),
@@ -2158,7 +2158,7 @@ impl<'a> Exec<'a> {
                 let mut merged = self.merge_children(pcs, values, hint);
                 Val::Held(held.clone(), Box::new(merged.remove(0)))
             }
-            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
+            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(..) | Val::Contracted(_) => {
                 Val::Opaque
             }
         }
@@ -3307,14 +3307,20 @@ impl<'a> Exec<'a> {
                     }
                     _ => None,
                 };
-                let result =
-                    self.user_call(state, &name, None, actuals, result_type.as_ref(), target);
+                let (result, ensures) = self.user_call_deferred(
+                    state,
+                    &name,
+                    None,
+                    actuals,
+                    result_type.as_ref(),
+                    target,
+                );
                 if *recover {
-                    // `control.recover` yields a `Result`, and whether the
-                    // call trapped is not known here.
+                    // `control.recover` catches traps, so the callee's
+                    // `ensures` cannot be assumed unconditionally.
                     return fresh_target(self);
                 }
-                Val::Task(Box::new(result))
+                Val::Task(Box::new(result), ensures)
             }
             _ => fresh_target(self),
         }
@@ -4004,6 +4010,26 @@ impl<'a> Exec<'a> {
         result_type: Option<&Type>,
         hint: Option<&str>,
     ) -> Val {
+        let (result, ensures) =
+            self.user_call_deferred(state, name, receiver, actuals, result_type, hint);
+        let pc = state.pc.clone();
+        for fact in ensures {
+            self.assume(&pc, fact);
+        }
+        result
+    }
+
+    /// Runs the call side of a user function and returns the result with its
+    /// `ensures` terms collected without asserting them yet.
+    fn user_call_deferred(
+        &mut self,
+        state: &mut State,
+        name: &str,
+        receiver: Option<(Val, Option<String>)>,
+        actuals: Vec<(Option<String>, Val, Option<String>)>,
+        result_type: Option<&Type>,
+        hint: Option<&str>,
+    ) -> (Val, Vec<String>) {
         let callee = self.cx.function(name).expect("checked callee");
         let mut pre: Vec<(String, Val)> = Vec::new();
         let mut post_places: Vec<(String, String)> = Vec::new();
@@ -4078,8 +4104,8 @@ impl<'a> Exec<'a> {
             }
             self.write_place(state, place, value);
         }
-        self.call_ensures(state, name, &pre, &post, &result);
-        result
+        let ensures = self.call_ensures_terms(name, &pre, &post, &result);
+        (result, ensures)
     }
 
     /// The value the `mut` parameter `param` of `name` leaves in its
@@ -4871,13 +4897,14 @@ impl<'a> Exec<'a> {
                 }
             }
             RuntimeOp::Task(task_op) => {
-                let Some(Val::Task(value)) = receiver else {
+                let Some(Val::Task(value, ensures)) = receiver else {
                     return None;
                 };
                 let result_type = target.and_then(|target| self.place_type(target))?;
+                let post = conjoin(&ensures);
                 match task_op {
                     TaskOp::Result | TaskOp::ResultTimeout | TaskOp::Poll | TaskOp::PollTimeout => {
-                        // A `Ready` outcome carries the task's value.
+                        // A `Ready` outcome carries the task's value and postconditions.
                         let Val::Enum(name, tag, mut payloads) =
                             self.fresh(&result_type, target.unwrap_or("outcome"))
                         else {
@@ -4891,6 +4918,9 @@ impl<'a> Exec<'a> {
                             .enum_variants(&name, type_args)?
                             .iter()
                             .position(|(variant, _)| variant == "Ready")?;
+                        if post != "true" {
+                            self.assume(&pc, format!("(=> (= {tag} {ready}) {post})"));
+                        }
                         payloads[ready] = vec![*value];
                         Some(Val::Enum(name, tag, payloads))
                     }
@@ -4898,6 +4928,9 @@ impl<'a> Exec<'a> {
                         let default =
                             fit(arg(self, state, 0, IntTy::of(&result_type)), &result_type);
                         let ready = self.fresh_const("Bool", "ready");
+                        if post != "true" {
+                            self.assume(&pc, format!("(=> {ready} {post})"));
+                        }
                         let pcs = [ready.clone(), not(&ready)];
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
