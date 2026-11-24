@@ -287,3 +287,29 @@ fn render(ty: &TypeRef) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod method_tests {
+    use crate::{check_source, parse_source, run_source};
+
+    #[test]
+    fn method_decorators_preserve_receiver_modes_recursion_and_call_order() {
+        let source = include_str!("../../tests/fixtures/run-pass/method_decorators.au");
+        let expected = include_str!("../../tests/fixtures/run-pass/method_decorators.stdout");
+        assert_eq!(run_source(source).unwrap(), expected);
+        check_source(include_str!("../../tests/fixtures/check-pass/method_decorators.au")).unwrap();
+        let module = parse_source(include_str!("../../tests/fixtures/parse-pass/method_decorators.au")).unwrap();
+        let crate::ast::Item::Class(class) = &module.items[0] else { panic!("class") };
+        let method = &class.methods[0];
+        assert_eq!(method.decorators[0].text, "@tools.traced");
+        assert_eq!(method.decorators[1].text, "@retry(3)");
+        assert!(method.public);
+    }
+
+    #[test]
+    fn method_decorator_restrictions_name_the_method() {
+        let error = check_source(include_str!("../../tests/fixtures/check-fail/method_decorator_default.au")).unwrap_err();
+        assert_eq!(error.code, "AU2047");
+        assert!(error.message.contains("Counter.read"));
+    }
+}
