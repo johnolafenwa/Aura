@@ -1239,6 +1239,38 @@ fn a_copy_of_a_part_or_a_loop_over_one_reads_the_element() {
 }
 
 #[test]
+fn a_field_lent_to_a_call_that_borrows_it_lends_its_box() {
+    let (module, borrowing) = copies_module();
+    let method = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name.ends_with(name))
+            .expect("the method should exist")
+    };
+    let borrows = |instruction: &Instruction| {
+        matches!(
+            instruction,
+            Instruction::Assign {
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    ..
+                },
+                ..
+            } if borrowing.contains_key(name)
+        )
+    };
+    let lent = crate::native_codegen::classes::field_lend_temps(method("probe"), borrows);
+    assert_eq!(lent.len(), 1, "{lent:?}");
+    // A call that owns its arguments may keep the field.
+    assert!(
+        crate::native_codegen::classes::field_lend_temps(method("probe"), |_| false).is_empty()
+    );
+    // A call that is also passed the instance may reach the field.
+    assert!(crate::native_codegen::classes::field_lend_temps(method("mixed"), borrows).is_empty());
+}
+
+#[test]
 fn a_mutable_lend_of_a_part_only_read_as_a_list_reads_the_element() {
     let lend = |temp: &str, mutable| Instruction::Lend {
         place: format!("{temp}.tags"),

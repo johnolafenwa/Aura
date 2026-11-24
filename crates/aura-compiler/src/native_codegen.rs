@@ -2204,7 +2204,30 @@ impl<'a> NativeCodegen<'a> {
                 _ => false,
             },
         );
-        let field_lend_temps = classes::field_lend_temps(function);
+        let field_lend_temps = classes::field_lend_temps(function, |instruction| {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                return false;
+            };
+            match (
+                self.borrowing.get(name),
+                self.function_param_types.get(name),
+            ) {
+                (Some(callee), Some(expected)) => {
+                    args.len() == expected.len()
+                        && reads_arguments_only(args, &callee.params, expected)
+                }
+                _ => false,
+            }
+        });
         // A local of a Copy type the MIR never releases holds a box all the
         // same, which `release_boxed_copy_roots` releases by its flag.
         let owns_its_word = |place: &str| {
