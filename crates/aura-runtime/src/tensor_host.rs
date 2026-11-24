@@ -888,6 +888,9 @@ fn planned_result(
     // The Metal device moves elements by index where its library can,
     // and makes random floats where it makes the CPU kernel's floats.
     let metal = inputs[0].device() == TensorDevice::Metal;
+    // The Metal library gathers and scatters elements as `float32`, which
+    // rounds an integer past 2^24, so it moves floats and masks only.
+    let gathered = !metal || !matches!(dtype, Int32 | Int64);
     #[cfg(target_os = "macos")]
     let (indexed, random) = (
         !metal || tensor_metal::moves_by_index(),
@@ -1029,15 +1032,17 @@ fn planned_result(
                     ));
             exact.then(|| (target, inputs[0].shape().into()))
         }
-        Operation::Slice { axis, length, .. } => indexed.then(|| resized(*axis, *length)),
+        Operation::Slice { axis, length, .. } => {
+            (indexed && gathered).then(|| resized(*axis, *length))
+        }
         // Metal fills the gaps by adding into zeros, which a mask cannot do.
         Operation::Unslice { axis, size, .. } => {
-            (indexed && (number || !metal)).then(|| resized(*axis, *size))
+            (indexed && (real || !metal)).then(|| resized(*axis, *size))
         }
         Operation::Expand(shape) => indexed.then(|| (dtype, shape.clone().into())),
         Operation::Concat { axis } => (indexed && same_dtype)
             .then(|| resized(*axis, inputs[0].shape()[*axis] + inputs[1].shape()[*axis])),
-        Operation::Take { axis } => indexed.then(|| {
+        Operation::Take { axis } => (indexed && gathered).then(|| {
             (
                 dtype,
                 tensor_kernels::take_shape(inputs[0].shape(), inputs[1].shape(), *axis),
@@ -1058,13 +1063,17 @@ fn planned_result(
         }),
         Operation::ArgReduce { axis, .. } => (indexed && number)
             .then(|| (Int64, tensor_kernels::lane_shape(inputs[0].shape(), *axis))),
-        Operation::Random { dtype, shape, .. } => {
+        Operation::Random { fill, dtype, shape } => {
             let dtype = ArrayDType::from_code(*dtype)?;
-            // Metal counts the elements in an `int32`.
+            // Metal counts the words it reads in an `int32`: one for each
+            // uniform float and two for each normal one.
+            let words = if *fill == 1 { 2 } else { 1 };
             let counted = !metal
                 || shape
                     .iter()
-                    .try_fold(1_usize, |count, &dimension| count.checked_mul(dimension))
+                    .try_fold(words, |count: usize, &dimension| {
+                        count.checked_mul(dimension)
+                    })
                     .is_some_and(|count| i32::try_from(count).is_ok());
             (random && counted && !shape.contains(&0) && (dtype == Float32 || double))
                 .then(|| (dtype, shape.clone().into()))

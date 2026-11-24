@@ -491,15 +491,32 @@ static MPSGraphTensor *aura_random(AuraGraph *graph, int32_t fill, MPSGraphTenso
     if (count < 1 || count > INT32_MAX || (fill != 0 && fill != 1)) {
         return nil;
     }
-    MPSGraphTensor *index = [g coordinateAlongAxis:0 withShape:@[[aura_number_class numberWithLongLong:count]] name:nil];
-    index = [g castTensor:index toType:MPSDataTypeInt64 name:nil];
+    NSNumber *elements = [aura_number_class numberWithLongLong:count];
     MPSGraphTensor *made;
     if (fill == 0) {
+        MPSGraphTensor *index = [g coordinateAlongAxis:0 withShape:@[elements] name:nil];
+        index = [g castTensor:index toType:MPSDataTypeInt64 name:nil];
         made = aura_unit(graph, aura_random_bits(graph, seed, index));
     } else {
-        // The method of Box and Muller, over two uniform floats.
-        MPSGraphTensor *even = [g multiplicationWithPrimaryTensor:index secondaryTensor:aura_word(graph, 2) name:nil];
-        MPSGraphTensor *odd = [g additionWithPrimaryTensor:even secondaryTensor:aura_word(graph, 1) name:nil];
+        // The method of Box and Muller, over two uniform floats. Element
+        // `j` reads the words at `2j` and `2j + 1`. The library computes
+        // `index * 2 + 1` wrongly above 2^24 when only the final tensor
+        // is an output, so both places are columns of one line of
+        // coordinates and no arithmetic is done on a coordinate.
+        if (count > INT32_MAX / 2) {
+            return nil;
+        }
+        NSNumber *two = [aura_number_class numberWithLongLong:2];
+        MPSGraphTensor *pairs = [g coordinateAlongAxis:0
+                                             withShape:@[[aura_number_class numberWithLongLong:count * 2]]
+                                                  name:nil];
+        pairs = [g reshapeTensor:[g castTensor:pairs toType:MPSDataTypeInt64 name:nil] withShape:@[elements, two] name:nil];
+        MPSGraphTensor *even = [g reshapeTensor:[g sliceTensor:pairs dimension:1 start:0 length:1 name:nil]
+                                      withShape:@[elements]
+                                           name:nil];
+        MPSGraphTensor *odd = [g reshapeTensor:[g sliceTensor:pairs dimension:1 start:1 length:1 name:nil]
+                                     withShape:@[elements]
+                                          name:nil];
         MPSGraphTensor *first = aura_unit(graph, aura_random_bits(graph, seed, even));
         MPSGraphTensor *second = aura_unit(graph, aura_random_bits(graph, seed, odd));
         MPSGraphTensor *one = [g constantWithScalar:1.0 dataType:MPSDataTypeFloat32];

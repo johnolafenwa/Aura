@@ -332,6 +332,92 @@ fn a_gpu_device_agrees_on_large_random_tensors() {
 }
 
 #[test]
+fn a_gpu_device_agrees_on_random_tensors_past_the_exact_floats() {
+    // More than 2^24 elements: an index held as a `float32` would repeat.
+    for device in gpus() {
+        let like = |device| tensor(float32(&[0.0], &[1]), device);
+        for (name, fill) in [("uniform", 0), ("normal", 1)] {
+            let shape = [4100_i64, 4100];
+            let host = random(
+                fill,
+                5,
+                ArrayDType::Float32,
+                &shape,
+                &like(TensorDevice::Cpu),
+            );
+            let gpu = random(fill, 5, ArrayDType::Float32, &shape, &like(device));
+            close(name, &array(&gpu.unwrap()), &array(&host.unwrap()));
+        }
+        println!(
+            "RAN: random tensors of more than 2^24 elements on the {} device",
+            device.name()
+        );
+    }
+}
+
+#[test]
+fn a_gpu_device_keeps_wide_integers_that_it_moves_by_index() {
+    // Integers that a `float32` cannot hold: a device that moves them
+    // through floats rounds them.
+    for device in gpus() {
+        let wide = |device| {
+            tensor(
+                int64(
+                    &[
+                        16_777_217,
+                        1_099_511_627_777,
+                        -16_777_219,
+                        123_456_789_012_345,
+                        5,
+                        33_554_435,
+                    ],
+                    &[6],
+                ),
+                device,
+            )
+        };
+        let narrow = |device| {
+            tensor(
+                int32(
+                    &[
+                        16_777_217,
+                        i32::MAX,
+                        -16_777_219,
+                        123_456_789,
+                        5,
+                        33_554_435,
+                    ],
+                    &[6],
+                ),
+                device,
+            )
+        };
+        let results = |device| {
+            let mut made = Vec::new();
+            for operand in [wide(device), narrow(device)] {
+                let at = indices(&[3, 0, 5], &[3], &operand);
+                made.push(("slice", slice(&operand, 0, 0, 6, 1).unwrap()));
+                made.push(("slice with a step", slice(&operand, 0, 1, 6, 2).unwrap()));
+                made.push(("take", pair_op(&operand, &at, 1, &[0]).unwrap()));
+                made.push(("unslice", unslice(&operand, 0, 1, 2, 12).unwrap()));
+                made.push(("expand", node_op(&operand, 1, &[2, 6]).unwrap()));
+                made.push(("concat", pair_op(&operand, &operand, 0, &[0]).unwrap()));
+            }
+            made
+        };
+        for ((name, found), (_, expected)) in
+            results(device).iter().zip(&results(TensorDevice::Cpu))
+        {
+            assert_eq!(array(found), array(expected), "{name}");
+        }
+        println!(
+            "RAN: wide integers moved by index on the {} device",
+            device.name()
+        );
+    }
+}
+
+#[test]
 fn a_gpu_device_runs_several_results_as_one_plan() {
     for device in gpus() {
         let results = |device| {

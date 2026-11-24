@@ -69,55 +69,68 @@ pub(crate) fn moves_by_index() -> bool {
 /// Whether the device makes random tensors. The random bits are 64-bit
 /// integer arithmetic, which the library must do exactly, so the first
 /// call makes a few floats on the device and compares them with the
-/// floats of the CPU kernel. A device that differs, or cannot build the
-/// graph, leaves random tensors to the CPU kernel.
+/// floats of the CPU kernel: the uniform ones bit for bit, and the normal
+/// ones within the rounding of the library's own logarithm and cosine. A
+/// device that differs, or cannot build the graph, leaves random tensors
+/// to the CPU kernel.
 pub(crate) fn makes_random() -> bool {
     static RANDOM: OnceLock<bool> = OnceLock::new();
     *RANDOM.get_or_init(|| {
         const COUNT: usize = 96;
-        let plan = Plan {
-            slots: vec![
-                Slot::Leaf {
-                    dtype: ArrayDType::Int64 as i64,
-                    shape: vec![1],
-                },
-                Slot::Step {
-                    operation: super::Operation::Random {
-                        fill: 0,
+        let agrees = |fill: i64, seed: i64| -> Result<bool> {
+            let plan = Plan {
+                slots: vec![
+                    Slot::Leaf {
+                        dtype: ArrayDType::Int64 as i64,
+                        shape: vec![1],
+                    },
+                    Slot::Step {
+                        operation: super::Operation::Random {
+                            fill,
+                            dtype: ArrayDType::Float32 as i64,
+                            shape: vec![COUNT],
+                        },
+                        inputs: vec![0],
                         dtype: ArrayDType::Float32 as i64,
                         shape: vec![COUNT],
                     },
-                    inputs: vec![0],
-                    dtype: ArrayDType::Float32 as i64,
-                    shape: vec![COUNT],
-                },
-            ],
-            outputs: vec![1],
+                ],
+                outputs: vec![1],
+            };
+            let leaf = ArrayValue::new(Box::new([1]), ArrayStorage::Int64(vec![seed].into()))?;
+            let storage = run(&plan, &[Storage::Host(leaf)])?
+                .pop()
+                .expect("a plan gives its result");
+            let found = storage.to_host(ArrayDType::Float32 as i64, &[COUNT])?;
+            let kernel = if fill == 0 {
+                super::tensor_kernels::Fill::Uniform
+            } else {
+                super::tensor_kernels::Fill::Normal
+            };
+            let expected = super::tensor_kernels::filled(
+                kernel,
+                Box::new([COUNT]),
+                seed as u64,
+                ArrayDType::Float32,
+            )?;
+            let same = match (&*found.elements()?, &*expected.elements()?) {
+                (ArrayStorage::Float32(found), ArrayStorage::Float32(expected)) if fill == 0 => {
+                    found[..] == expected[..]
+                }
+                (ArrayStorage::Float32(found), ArrayStorage::Float32(expected)) => {
+                    found.iter().zip(expected.iter()).all(|(found, expected)| {
+                        (found - expected).abs() <= 8.0 * f32::EPSILON * expected.abs().max(1.0)
+                    })
+                }
+                _ => false,
+            };
+            Ok(same)
         };
         moves_by_index()
-            && [7_i64, -3, i64::MIN + 12_345].into_iter().all(|seed| {
-                let made = || -> Result<bool> {
-                    let leaf =
-                        ArrayValue::new(Box::new([1]), ArrayStorage::Int64(vec![seed].into()))?;
-                    let storage = run(&plan, &[Storage::Host(leaf)])?
-                        .pop()
-                        .expect("a plan gives its result");
-                    let found = storage.to_host(ArrayDType::Float32 as i64, &[COUNT])?;
-                    let expected = super::tensor_kernels::filled(
-                        super::tensor_kernels::Fill::Uniform,
-                        Box::new([COUNT]),
-                        seed as u64,
-                        ArrayDType::Float32,
-                    )?;
-                    let same = match (&*found.elements()?, &*expected.elements()?) {
-                        (ArrayStorage::Float32(found), ArrayStorage::Float32(expected)) => {
-                            found[..] == expected[..]
-                        }
-                        _ => false,
-                    };
-                    Ok(same)
-                };
-                made().unwrap_or(false)
+            && [0_i64, 1].into_iter().all(|fill| {
+                [7_i64, -3, i64::MIN + 12_345]
+                    .into_iter()
+                    .all(|seed| agrees(fill, seed).unwrap_or(false))
             })
     })
 }
