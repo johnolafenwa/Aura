@@ -1,0 +1,51 @@
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+    Empty
+
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+
+
+def total(shapes: list[Shape]) -> float64:
+    mut sum = 0.0
+    for i in range(shapes.len()):
+        sum += area(shapes[i])
+    return sum
+
+
+def main():
+    # Variants appended one by one join the list in their own boxes.
+    mut shapes = list[Shape]()
+    for i in range(4):
+        if i % 2 == 0:
+            shapes.append(Shape.Circle(i as float64))
+        else:
+            shapes.append(Shape.Rect(i as float64, 2.0))
+    shapes.append(Shape.Empty)
+    print(total(shapes))
+
+    # A copy of the list is its own: a write to one leaves the other.
+    mut copied = shapes.copy()
+    copied[0] = Shape.Rect(10.0, 10.0)
+    shapes[1] = Shape.Circle(5.0)
+    print(total(shapes))
+    print(total(copied))
+    print(shapes[0] == copied[0])
+    print(shapes[2] == copied[2])
+
+    # An element read before a write keeps the value it read.
+    first = shapes[3]
+    shapes[3] = Shape.Empty
+    print(area(first))
+    print(area(shapes[3]))
+    print(shapes.len())
+    print(shapes.pop())
+    print(shapes)

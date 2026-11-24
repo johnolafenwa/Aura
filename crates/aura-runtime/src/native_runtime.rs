@@ -9273,10 +9273,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        // An instance kept in its class's layout, or a collection, joins
-        // the list in its own box, which then needs no copy for generated
-        // code to lend it or change it in place (see
-        // `aura_direct_element_path_probe`).
+        // An instance kept in its class's layout, a variant kept in its
+        // enum's layout, or a collection, joins the list in its own box,
+        // which then needs no copy for generated code to lend it or change
+        // it in place (see `aura_direct_element_path_probe`).
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
@@ -16235,9 +16235,32 @@ unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
         )
 }
 
+/// Whether `boxed` holds a variant generated code built in its enum's
+/// layout, whose box carries the layout's access code.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_typed_variant(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { boxed.as_ref() }) else {
+        return false;
+    };
+    let access = header.list_access.load(Ordering::Relaxed);
+    // SAFETY: a box with an enum's access code is confined to this thread,
+    // and the running task owns a reference, so nothing changes it now.
+    access >= FIRST_ENUM_ACCESS
+        && access != UNREGISTERED_PLAIN_ACCESS
+        && matches!(
+            unsafe { &*header.value.get() },
+            Value::EnumVariant(variant) if variant.payloads.typed().is_some()
+        )
+}
+
 /// Whether `boxed` holds a value a list keeps in a box of its own when it
-/// is appended: an instance kept in its class's layout, or a list, dict or
-/// set, which generated code reads or changes in place through the box.
+/// is appended: an instance kept in its class's layout, a variant kept in
+/// its enum's layout, or a list, dict or set, which generated code reads,
+/// lends, or changes in place through the box.
 ///
 /// # Safety
 ///
@@ -16246,6 +16269,7 @@ unsafe fn holds_element_box_value(boxed: *mut OpaqueValue) -> bool {
     // SAFETY: the caller's contract.
     unsafe {
         holds_typed_instance(boxed)
+            || holds_typed_variant(boxed)
             || boxed.as_ref().is_some_and(|header| {
                 header.shared_lock().is_none()
                     && matches!(

@@ -19,9 +19,10 @@ use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
     aura_direct_enum_new_typed, aura_direct_instance_put_field, aura_direct_register_enum_layouts,
     aura_direct_release_value, aura_direct_variant_matches, aura_direct_variant_payload,
-    aura_direct_variant_payload_int64, aura_direct_variant_take_payload, boxed_value, list_view_of,
-    share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
-    with_task_runtime_error_capture, DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
+    aura_direct_variant_payload_int64, aura_direct_variant_take_payload,
+    aura_direct_vec_push_in_place, boxed_value, list_view_of, share_direct_value, value_mut,
+    value_ref, with_direct_task_runtime_scope, with_task_runtime_error_capture,
+    DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, EnumVariantValue, RuntimeName, Value, VariantPayloads,
@@ -1576,4 +1577,38 @@ fn a_literal_documents_string_must_be_a_str() {
         unsafe { aura_direct_json_tape_string(std::ptr::null(), -1, number) };
     });
     assert!(message.contains("expected `str`"), "{message}");
+}
+
+#[test]
+fn appended_typed_variants_keep_their_own_boxes() {
+    in_task(|| {
+        let prefix = "Appended";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 80);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let list = boxed_value(Value::Vec(crate::runtime_value::VecValue {
+            element_type: crate::runtime_value::SharedType::from(Type::named(format!(
+                "{prefix}Shape"
+            ))),
+            elements: crate::list_elements::ListElements::new(),
+            str_view: Default::default(),
+        }));
+        let boxes = || match unsafe { value_ref(list) } {
+            Value::Vec(crate::runtime_value::VecValue {
+                elements: crate::list_elements::ListElements::Boxes(boxes),
+                ..
+            }) => boxes.iter().map(ElementBox::as_ptr).collect::<Vec<_>>(),
+            other => panic!("the list keeps boxes, found {other:?}"),
+        };
+        // A variant with one reference joins the list in its own box.
+        let first = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        aura_direct_vec_push_in_place(list, first);
+        assert_eq!(boxes(), vec![first]);
+        // A variant whose payloads are values is taken out of its box.
+        aura_direct_vec_push_in_place(list, boxed_value(variant(prefix, "Circle", vec![])));
+        assert_eq!(boxes().len(), 2);
+        assert_ne!(boxes()[1], first);
+        unsafe { aura_direct_release_value(list) };
+    });
 }
