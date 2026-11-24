@@ -2171,12 +2171,14 @@ impl<'a> NativeCodegen<'a> {
         let mut lent_element_reads = elements::lent_element_reads(
             function,
             |place| {
-                explicit_locals.tracked.contains(place)
+                (explicit_locals.tracked.contains(place) || !explicit_locals.loans.contains(place))
                     && matches!(
                         variable_types.get(place),
                         Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                     )
             },
+            // A local the MIR does not release holds a boxed Copy value.
+            |place| !explicit_locals.tracked.contains(place),
             |instruction| {
                 if let Some(receiver) = self.shared_method_receiver(instruction) {
                     return vec![receiver];

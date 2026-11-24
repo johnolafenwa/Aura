@@ -45,7 +45,12 @@ fn function(name: &str) -> MirFunction {
 }
 
 fn lent(function: &MirFunction) -> LentElements {
-    lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new())
+    lent_element_reads(
+        function,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    )
 }
 
 /// The block and position of the read that assigns `temp`.
@@ -114,9 +119,11 @@ fn a_released_list_first_gives_its_live_element_a_copy() {
         Some(&vec![temp.clone()])
     );
     // Locals that may not hold a lent box are left alone.
-    assert!(lent_element_reads(&first, |_| false, |_| Vec::new())
-        .lists
-        .is_empty());
+    assert!(
+        lent_element_reads(&first, |_| false, |_| false, |_| Vec::new())
+            .lists
+            .is_empty()
+    );
 }
 
 /// `target = receiver.op()`, a runtime call that names its receiver as
@@ -633,7 +640,7 @@ fn lent_payloads(name: &str) -> (MirFunction, LentElements) {
         .find(|function| function.name == name)
         .expect("the function should exist")
         .clone();
-    let mut found = lent_element_reads(&function, |_| true, |_| Vec::new());
+    let mut found = lent_element_reads(&function, |_| true, |_| false, |_| Vec::new());
     lent_payload_reads(
         &function,
         &mut found,
@@ -721,7 +728,12 @@ fn a_payload_takes_a_reference_before_its_scrutinee_is_handed_on() {
             place: "expr".to_string(),
         },
     );
-    let mut found = lent_element_reads(&changed, |place| place.starts_with("%t"), |_| Vec::new());
+    let mut found = lent_element_reads(
+        &changed,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    );
     lent_payload_reads(
         &changed,
         &mut found,
@@ -827,7 +839,7 @@ def main():
             .iter()
             .find(|function| function.name == name)
             .expect("the function should exist");
-        let mut found = lent_element_reads(function, |_| true, |_| Vec::new());
+        let mut found = lent_element_reads(function, |_| true, |_| false, |_| Vec::new());
         lent_payload_reads(
             function,
             &mut found,
@@ -914,7 +926,12 @@ fn view_function(name: &str) -> MirFunction {
 fn adopted_views(function: &MirFunction) -> (LentElements, Vec<String>) {
     use super::super::element_loans::{entry_copy_loans, fused_entry_probes};
     use super::super::json_views::object_view_candidates;
-    let mut found = lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new());
+    let mut found = lent_element_reads(
+        function,
+        |place| place.starts_with("%t"),
+        |_| false,
+        |_| Vec::new(),
+    );
     let views = object_view_candidates(
         function,
         &fused_entry_probes(function),
@@ -1168,4 +1185,38 @@ fn a_copy_parameter_returned_stored_reassigned_or_captured_is_owned() {
     for name in ["chosen", "stored", "renamed", "later"] {
         assert_eq!(kept_copies(name), vec![false], "{name}");
     }
+}
+
+#[test]
+fn a_copy_element_only_read_is_lent() {
+    let (module, borrowing) = copies_module();
+    let find = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist")
+    };
+    let borrowed = |instruction| {
+        crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+    };
+    // The left side of the comparison is copied into a temporary first.
+    for (name, reads) in [("each", 1), ("equal", 1)] {
+        let found = lent_element_reads(
+            find(name),
+            |place| place.starts_with("%t"),
+            |_| true,
+            borrowed,
+        );
+        assert_eq!(found.lists.len(), reads, "{name}: {found:?}");
+        assert!(found.promotions.is_empty(), "{found:?}");
+    }
+    // A call that owns its argument takes the element.
+    let found = lent_element_reads(
+        find("each"),
+        |place| place.starts_with("%t"),
+        |_| true,
+        |_| Vec::new(),
+    );
+    assert!(found.lists.is_empty(), "{found:?}");
 }

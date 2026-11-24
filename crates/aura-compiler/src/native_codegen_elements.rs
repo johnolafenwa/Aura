@@ -494,6 +494,7 @@ fn shares_list(instruction: &Instruction, list: &str) -> bool {
 pub(super) fn lent_element_reads<'f>(
     function: &'f MirFunction,
     lendable: impl Fn(&str) -> bool,
+    copies: impl Fn(&str) -> bool,
     borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
 ) -> LentElements {
     let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
@@ -534,7 +535,11 @@ pub(super) fn lent_element_reads<'f>(
                 if captures(instruction, list)
                     || (roots.contains(temp)
                         && !defines
-                        && !reads_lent(instruction, temp, &borrowed))
+                        && !(if copies(temp) {
+                            reads_kept_copy(instruction, temp, &borrowed)
+                        } else {
+                            reads_lent(instruction, temp, &borrowed)
+                        }))
                 {
                     rejected.insert(temp);
                 }
