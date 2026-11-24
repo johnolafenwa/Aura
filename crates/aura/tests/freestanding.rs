@@ -965,3 +965,14 @@ fn typed_pointers_run_on_both_hosted_backends() {
         }
     }
 }
+
+#[test]
+fn typed_pointer_module_addresses_are_persistent() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write("src/main.au", include_str!("../../aura-compiler/tests/fixtures/typed-pointers/state.au"));
+    for target in ["x86_64-unknown-none","aarch64-unknown-none","riscv64gc-unknown-none-elf"] {
+        let build = workspace.aura(&["build","--freestanding","--target",target,"-o","state.o","src/main.au"]);
+        assert!(build.status.success(), "{target}: {}",stderr(&build));
+    }
+}

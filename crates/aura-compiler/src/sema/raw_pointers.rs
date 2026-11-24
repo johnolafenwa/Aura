@@ -104,7 +104,7 @@ impl FunctionChecker<'_> {
                 self.imported_state(object, field).is_some()
                     || matches!(self.type_of_member_object_expr(object, locals)?, Type::Named(name, _)
                         if self.resolve_class_info(&name).is_some_and(|class|
-                            class.decl.c_layout && class.fields.contains_key(field)))
+                            class.decl.c_layout && class.fields.contains_key(field) && !class.decl.layout_controls.bit_widths.contains_key(field)))
             }
             _ => false,
         };

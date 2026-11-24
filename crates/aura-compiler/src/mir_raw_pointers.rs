@@ -49,7 +49,7 @@ impl Lowerer<'_> {
                 }
             };
             return Some(CStruct {
-                name: "#fixed".into(), union: false,
+                name: "#fixed".into(), union: false, layout_controls: Default::default(),
                 fields: vec![CField { name: "elements".into(), kind: CFieldKind::Array(Box::new(kind), length) }],
             });
         }
