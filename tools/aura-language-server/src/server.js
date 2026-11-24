@@ -590,6 +590,8 @@ function symbolKind(kind) {
       return SymbolKind.Field;
     case "trait":
       return SymbolKind.Interface;
+    case "constant":
+      return SymbolKind.Constant;
     default:
       return SymbolKind.Variable;
   }

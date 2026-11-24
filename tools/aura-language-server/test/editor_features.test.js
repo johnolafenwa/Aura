@@ -282,3 +282,13 @@ test("wordAt finds the identifier under or just after the cursor", () => {
   assert.equal(wordAt("", 4, 0), null);
   assert.equal(wordAt(null, 0, 0), null);
 });
+
+test("workspace search returns module const declarations as LSP constants", () => {
+  const uri = "file:///settings.au";
+  const symbols = workspaceSymbols("lanes", new Map([[uri, "public const lanes = 4"]]));
+  assert.equal(symbols.length, 1);
+  assert.equal(symbols[0].kind, 14);
+  assert.deepEqual(symbols[0].location.range, {
+    start: { line: 0, character: 13 }, end: { line: 0, character: 18 }
+  });
+});
