@@ -1,0 +1,12 @@
+type Score = Callable[def(self: Counter) -> int64]
+
+def reported(f: own Score) -> Score:
+    print("register score")
+    return Score(lambda [own f] self: f(self) + 1)
+
+public class Counter:
+    public value: int64
+
+    @reported
+    public def score(self) -> int64:
+        return self.value
