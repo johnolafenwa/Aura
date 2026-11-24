@@ -44,6 +44,25 @@ bash benchmarks/tensor/run_workloads.sh small    # sizes that finish in seconds
 CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
 ```
 
+## Real Weights and a Real Text
+
+`gpt2.au` and `gpt2.py` run GPT-2 with the weights OpenAI released, the
+124M model. Each writes 20 tokens after a fixed prompt, one token at a
+time, and then names the next token of 8 rows of 256 tokens ten times.
+Both parts run in `float32` and again in `float16`. The two sides print
+the same tokens.
+
+`nanogpt.au` and `nanogpt.py` train a character model of the nanoGPT
+shape, 6 layers of 384 with 6 heads and a context of 256, for 200 steps
+of 64 rows of Tiny Shakespeare.
+
+```sh
+curl -L -o model.safetensors https://huggingface.co/openai-community/gpt2/resolve/main/model.safetensors
+curl -L -o input.txt https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
+bash benchmarks/tensor/run_models.sh model.safetensors input.txt          # the GPU sides
+bash benchmarks/tensor/run_models.sh model.safetensors input.txt small    # sizes that finish in seconds
+```
+
 ## Results
 
 ### Whole Programs, NVIDIA A40
