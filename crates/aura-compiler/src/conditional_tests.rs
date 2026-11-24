@@ -120,7 +120,8 @@ fn file_predicates_can_call_a_function_from_an_import() {
         "def main():\n    print(available)\n",
     );
     let module = crate::parse_path_with_source(&path, source).unwrap();
-    assert_eq!(module.inactive_lines, [5..6]);
+    assert_eq!(module.inactive_lines.len(), 1);
+    assert_eq!(module.inactive_lines[0], 5..6);
     assert_eq!(
         crate::run_path_with_source(&path, source).unwrap().stdout,
         "9\n"
