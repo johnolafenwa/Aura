@@ -7299,7 +7299,12 @@ impl<'a> FunctionCompiler<'a> {
         // calls `append` falls back to.
         let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
         let record = self.plain_record(&element_direct_ty)?;
-        for element in elements {
+        for (position, element) in elements.iter().enumerate() {
+            // The first element's call gives the list its storage, which
+            // has room for the next few, so those go in place as an
+            // `append` does. A long literal keeps the calls, which take
+            // less code.
+            let in_place = (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
             if let Some(kind) = scalar {
                 let loaded =
                     self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
@@ -7312,7 +7317,12 @@ impl<'a> FunctionCompiler<'a> {
                 let call = RuntimeOp::List(ListOp::PushScalar(kind)).runtime_call();
                 let mut words = vec![vector.values[0], bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.builder.call(self.runtime[call.function], &words);
+                let function = self.runtime[call.function];
+                if in_place {
+                    self.emit_scalar_list_push(vector.values[0], bits, kind, function, &words);
+                } else {
+                    self.builder.call(function, &words);
+                }
                 continue;
             }
             if let (Operand::String(text), false) = (element, wildcard) {
@@ -7328,7 +7338,11 @@ impl<'a> FunctionCompiler<'a> {
             if let Some(record) = &record {
                 let value = self.load_operand_for_target(element, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
-                self.push_plain_record_by_call(record, vector.values[0], &value);
+                if in_place {
+                    self.emit_plain_list_push(record, vector.values[0], &value);
+                } else {
+                    self.push_plain_record_by_call(record, vector.values[0], &value);
+                }
                 continue;
             }
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
@@ -21597,6 +21611,11 @@ fn infer_operand_type(
         Operand::Default(default) => direct_type(&default.ty()?, classes),
     }
 }
+
+/// How many leading elements of a list literal of scalars or plain records
+/// are built with the in-place append: the first by its call, and the rest
+/// up to this position where the list has room.
+const LITERAL_ELEMENTS_IN_PLACE: usize = 8;
 
 /// How a list that keeps `kind` scalars unboxed holds them: the view's
 /// access code and each element's width in bytes.
