@@ -862,3 +862,22 @@ fn a_constant_scale_and_offset_share_one_overflow_check() {
         "{ir}"
     );
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn module_array_index_runs_once_and_rhs_updates_survive() {
+    let workspace=Workspace::new();
+    workspace.write("ring.au",include_str!("../../aura-compiler/tests/fixtures/freestanding/module_state/fixed.au"));
+    let build=workspace.aura(&["build","--freestanding","-o","ring.o","ring.au"]);
+    assert!(build.status.success(),"{}",stderr(&build));
+    workspace.write("test.c",r#"
+#include <stdint.h>
+#include <stdlib.h>
+extern int32_t write_ring(void);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) { abort(); }
+int main(void) { return write_ring() == 19 && write_ring() == 38 ? 0 : 1; }
+"#);
+    let cc=Command::new("cc").current_dir(&workspace.path).args(["test.c","ring.o","-o","test-ring"]).output().unwrap();
+    assert!(cc.status.success(),"{}",stderr(&cc));
+    assert!(Command::new(workspace.path.join("test-ring")).status().unwrap().success());
+}
