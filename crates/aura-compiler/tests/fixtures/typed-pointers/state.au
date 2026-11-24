@@ -1,0 +1,11 @@
+import mem
+
+mut counter: uint32 = 17
+mut cells: fixed[uint16, 3] = [4, 5, 6]
+
+export "C" def increment(index: int32) -> uint32:
+    p = mem.address_of(counter)
+    p.write(p.read() + 1)
+    q = mem.address_of(cells[index])
+    q.write(14)
+    return counter + (cells[index] as uint32)

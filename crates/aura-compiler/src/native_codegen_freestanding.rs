@@ -889,6 +889,8 @@ fn check_function(
                 Rvalue::Call { callee, args, .. } => {
                     check_call(callee, args, classes, functions)
                 }
+                Rvalue::CPointerAccess { .. } => None,
+                Rvalue::CFieldAddress { .. } => None,
                 Rvalue::ModuleLoad {..} | Rvalue::ModuleAddress {..} | Rvalue::ModuleStore {..} => None,
                 Rvalue::ModuleConstant { key, .. } => Some((
                     format!("reads the module constant `{key}`"),
@@ -948,6 +950,9 @@ pub(super) fn memory_operation(name: &str) -> Option<(MemoryAccess, ScalarKind)>
     if operation == "fence" {
         return Some((MemoryAccess::Fence, ScalarKind::Unit));
     }
+    if let Some(access) = super::typed_memory::operation(operation) {
+        return Some(access);
+    }
     let (operation, width) = operation.rsplit_once("_uint")?;
     let kind = match width {
         "8" => ScalarKind::Uint8,
@@ -1000,6 +1005,12 @@ impl FunctionCompiler<'_> {
         let mut words = Vec::with_capacity(args.len());
         for argument in args {
             words.push(self.load_operand(&argument.value)?.values[0]);
+        }
+        if kind == ScalarKind::Bool {
+            return self.compile_memory_bool(access, &words).map(Some);
+        }
+        if let Some(value) = self.compile_typed_memory(access, kind, &words) {
+            return Ok(Some(value));
         }
         let width = match kind {
             ScalarKind::Uint8 => types::I8,

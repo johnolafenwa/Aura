@@ -154,6 +154,8 @@ pub(crate) use types::{
     substitute_trait_bound, substitute_type, substitutions_from_decl_type_args,
     trait_impl_specificity, trait_impl_specificity_parts, type_pattern_matches, wrap_returned_view,
 };
+mod raw_pointers;
+pub(crate) use raw_pointers::{raw_pointer_parameter, raw_pointer_result};
 mod properties;
 pub(crate) use properties::integer_type_bounds;
 #[cfg(test)]
@@ -529,8 +531,11 @@ pub(crate) fn ffi_struct<'a>(
 }
 
 /// The scalar an FFI scalar type crosses as.
-fn ffi_scalar(ty: &Type) -> Option<crate::ffi::FfiScalar> {
+pub(crate) fn ffi_scalar(ty: &Type) -> Option<crate::ffi::FfiScalar> {
     use crate::ffi::FfiScalar as Scalar;
+    if ty.as_raw_pointer().is_some() {
+        return Some(Scalar::U64);
+    }
     let Type::Named(name, args) = ty else {
         return None;
     };
@@ -1093,6 +1098,9 @@ fn validate_ffi_return(
             span,
             "a C text result must be exactly `cstr` or `cstr | None`",
         ));
+    }
+    if ty.as_raw_pointer().is_some() {
+        return Ok(());
     }
     if *ty == Type::Unit
         || ffi_scalar_type(ty)
@@ -9314,6 +9322,11 @@ impl<'a> FunctionChecker<'a> {
                     self.canonical_type_names,
                     &self.type_params,
                 )?;
+                if target_ty.as_raw_pointer().is_some() {
+                    let address = Type::named("uint64");
+                    let source = self.type_of_expr_hint(value, locals, Some(&address))?;
+                    return raw_pointers::cast(&source, target_ty, expr.span);
+                }
                 if target_ty.is_trait_object() {
                     return self.type_trait_object_cast(expr, value, locals, &target_ty);
                 }
@@ -9329,6 +9342,10 @@ impl<'a> FunctionChecker<'a> {
                     // conditional keeps its own type and the cast converts it.
                     self.type_of_expr(value, locals)?
                 };
+                if source_ty.as_raw_pointer().is_some() {
+                    self.type_names.uses_raw_pointer.set(true);
+                    return raw_pointers::cast(&source_ty, target_ty, expr.span);
+                }
                 if let (Some(source_dtype), Some(target_dtype)) = (
                     array_element_type(&source_ty),
                     array_element_type(&target_ty),
@@ -10776,6 +10793,18 @@ impl<'a> FunctionChecker<'a> {
                 )?;
             }
         }
+        if left_ty.as_raw_pointer().is_some() || right_ty.as_raw_pointer().is_some() {
+            self.type_names.uses_raw_pointer.set(true);
+            return if left_ty == right_ty && matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                Ok(Type::named("bool"))
+            } else {
+                Err(Diagnostic::coded_at(
+                    "AU2083",
+                    span,
+                    "pointers support equality between matching pointer types",
+                ))
+            };
+        }
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
         }
@@ -11982,6 +12011,9 @@ impl<'a> FunctionChecker<'a> {
                     format!("{display_name} does not take type arguments"),
                 ));
             }
+            let function = function.with_raw_arguments(args, span, |arg| {
+                self.type_of_expr_without_move_state(arg, locals, None).ok()
+            })?;
             // C gets the address of code, so a callback argument is a
             // named function, which has no captured environment.
             for (index, param) in function.decl.params.iter().enumerate() {
@@ -13576,6 +13608,10 @@ impl<'a> FunctionChecker<'a> {
                 } else {
                     self.type_of_expr(object, locals)?
                 };
+                if let Some(element) = receiver_ty.as_raw_pointer() {
+                    self.type_names.uses_raw_pointer.set(true);
+                    return self.check_raw_pointer_call(element, field, args, span, locals);
+                }
                 let receiver_ty = match types::span_element_type(&receiver_ty).cloned() {
                     Some(element) => {
                         if let Some(result) = self
@@ -13642,6 +13678,9 @@ impl<'a> FunctionChecker<'a> {
                     let namespace = self.module_namespace(module_path).ok_or_else(|| {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
+                    if namespace.path == "mem" && field == "address_of" {
+                        return self.check_raw_address(args, span, locals);
+                    }
                     if namespace.path == recover::MODULE && field == recover::RECOVER {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(

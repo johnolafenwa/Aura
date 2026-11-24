@@ -1,6 +1,6 @@
 # Memory Module
 
-The `mem` module reads and writes integers at a raw address. It is for
+The `mem` module reads and writes scalars at a raw address. It is for
 device registers, memory shared with C, and the lock-free cells a kernel or
 a driver needs. Each function compiles to one machine instruction, in
 hosted and [freestanding](/manual/freestanding) builds alike.
@@ -56,12 +56,32 @@ for the atomic ones.
   multiple of `N / 8`.
 - **`atomic_add` wraps.** It is the one place an Aura addition does not
   check for overflow, because a failed check could not undo the step.
-- **Aura values have no address.** There is no way to take the address of a
-  local, a field, or a list element. Addresses come from the platform, a
-  linker symbol read through C, or a foreign function.
+- **Field addresses.** `mem.address_of(point.x)` returns a typed pointer to the field of a mutable C class. The pointer expires with its enclosing storage.
 - **Verification.** `aura verify` treats a read as an unknown value of its
   type and does not model writes. A write to memory that an Aura value
   occupies is outside what a proof covers.
+
+## Typed Access
+
+Use `ptr[T]` to keep the memory representation with the address. The package must opt in to FFI even if the file uses only pointer casts and methods.
+
+```aura fragment
+p = address as ptr[float32]
+p.write(-1.5)
+next_value = p.offset(1).read()
+raw_bytes = p as ptr[uint8]
+address_again = raw_bytes as uint64
+```
+
+| Operation | Result |
+| --- | --- |
+| `p.read()`, `p.write(value)` | Read or write one value of the pointee type. |
+| `p.volatile_read()`, `p.volatile_write(value)` | Read or write at the program point. A scalar uses one naturally aligned access. |
+| `p.offset(count)` | Advance by a signed number of elements. The unit is the size of the pointee. |
+| `p as ptr[U]` | Interpret the same address as a pointer to U. |
+| `p as uint64`, `address as ptr[T]` | Convert between an address word and a typed pointer. |
+
+The signed forms `mem.read_intN` and `mem.write_intN` use 8, 16, 32 or 64 bits. The floating forms `mem.read_floatN` and `mem.write_floatN` use 32 or 64 bits. Prefix either form with `volatile_` for a volatile access. A floating read interprets the stored bits in the target's floating-point representation.
 
 ## A Spin Lock
 
@@ -96,8 +116,6 @@ def main() -> None:
 
 ## Current Limits
 
-- Unsigned integers only. Convert with `as` for a signed or float value's
-  bits.
 - No atomic access to 8-bit and 16-bit cells.
 - One ordering, sequentially consistent.
 - No inline assembly and no port I/O instructions. On x86-64, reach I/O

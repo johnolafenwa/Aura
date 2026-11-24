@@ -1,0 +1,2 @@
+def observe(p: ptr[str]) -> None:
+    pass
