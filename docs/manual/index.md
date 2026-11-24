@@ -59,7 +59,9 @@ maintained surface by area and states how it may change.
   invariants, `decreases`, `old`, `forall`, `exists`, `spec def`, and
   `AU4009` failures.
 - [Verification](/manual/verification): `aura verify`, which proves with an
-  SMT solver that contracts, arithmetic, and list indexes cannot fail.
+  SMT solver, for every input, that contracts hold and that arithmetic,
+  indexes, and key lookups cannot fail. It also covers the proof report,
+  what the verifier models, and `aura build --remove-proved-checks`.
 - [Functions](/manual/functions): signatures, the bare, `own`, and `mut`
   parameter modes, default and named arguments, `main`, owned returns, and
   call binding.

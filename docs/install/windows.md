@@ -58,6 +58,20 @@ aura build -o basic_addition.exe "$env:LOCALAPPDATA\Programs\Aura\share\aura\exa
 .\basic_addition.exe
 ```
 
+## 6. Install A Solver For `aura verify`
+
+`aura verify` proves a program's [contracts](/manual/contracts) with an SMT
+solver, a program that answers logic questions. With Python installed, this
+command puts Z3 on `PATH`:
+
+```powershell
+pip install z3-solver
+z3 --version
+```
+
+Then `aura verify file.au` proves the contracts of `file.au`. See
+[Verification](/manual/verification).
+
 ## What Gets Installed
 
 ```text

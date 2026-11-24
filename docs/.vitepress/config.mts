@@ -50,6 +50,7 @@ export default defineConfig({
       { text: 'Install', link: '/install/' },
       { text: 'Book', link: '/book/' },
       { text: 'Manual', link: '/manual/' },
+      { text: 'Verification', link: '/manual/verification' },
       { text: 'Downloads', link: '/downloads' },
       { text: 'Why Aura', link: '/positioning' },
       { text: 'Examples', link: 'https://github.com/johnolafenwa/Aura/tree/main/examples' },

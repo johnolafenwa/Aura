@@ -2,14 +2,15 @@
 
 Aura 0.17.0 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
-ownership, structured concurrency, typed failure, and native executables.
+ownership, structured concurrency, typed failure, contracts that
+`aura verify` proves, and native executables.
 
 The current language focuses on agents, machine learning (ML) infrastructure,
 evaluation workers, network services, and the control-plane software around
 models. These workloads benefit from readable source code, explicit resource
 lifetimes, structured tasks, and failures that appear in the type system.
 
-Three commitments shape the language:
+Four commitments shape the language:
 
 - **Deterministic ownership.** Bare access is shared, `mut` is exclusive
   mutation, and `own` transfers a value. The owning scope defines cleanup.
@@ -18,6 +19,41 @@ Three commitments shape the language:
 - **Typed failure.** Files, subprocesses, sockets, HTTP, retries, and
   supervisors report recoverable failure through `Result`, `Option`, and
   focused outcome enums.
+- **Verified contracts.** A function states what it needs with `requires` and
+  what it promises with `ensures`. Loops and classes state invariants. The
+  program checks them at run time, and `aura verify` proves them for every
+  input, together with the absence of integer overflow, zero divisors,
+  out-of-range indexes, and missing keys.
+
+## Verification Is Part Of The Language
+
+Most languages leave correctness beyond types to tests, and tests cover the
+inputs someone wrote down. Aura puts the specification in the function and
+ships the prover with the compiler:
+
+```aura
+def clamp(x: int64, lo: int64, hi: int64) -> int64:
+    requires lo <= hi
+    ensures lo <= result and result <= hi
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+```
+
+`aura verify` proves the `ensures` clause on every path, and proves at each
+call of `clamp` that the caller meets the `requires` clause. A check it
+cannot prove is reported with the input that breaks it. The VS Code extension
+runs the verifier on save and marks proved lines.
+`aura build --remove-proved-checks` drops the run-time checks that a proof
+makes unnecessary.
+
+The verifier models integers, floats, lists, strings, dictionaries, sets,
+tuples, classes, enums, trait contracts, task starts, and trusted contracts
+on C functions. It does not yet model every library call or every language
+form. [Verification](/manual/verification) lists what it proves and what it
+treats as unknown, and [Contracts](/manual/contracts) defines the clauses.
 
 Ownership governs access, transfer, and cleanup. It does not govern
 scheduling. Aura leaves unspecified the order in which concurrent tasks
@@ -41,6 +77,7 @@ Aura gives this work one coherent contract:
 - Ownership describes resource lifetime.
 - Structured concurrency accounts for child tasks.
 - Typed outcomes keep operational failure visible.
+- Contracts state what the code relies on, and the verifier proves them.
 - Native compilation produces deployable executables with no garbage
   collector.
 

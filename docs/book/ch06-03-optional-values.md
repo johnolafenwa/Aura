@@ -37,7 +37,7 @@ def main():
     print(find(titles, "Ulysses"))
 ```
 
-<span class="caption">Listing 6-10: A search that returns `int64 | None`</span>
+<span class="caption">Listing 6-11: A search that returns `int64 | None`</span>
 
 ```console
 $ aura run src/main.au
@@ -149,7 +149,7 @@ def main():
             print("missing")
 ```
 
-<span class="caption">Listing 6-11: Narrowing with `is None`, and matching on a union member</span>
+<span class="caption">Listing 6-12: Narrowing with `is None`, and matching on a union member</span>
 
 ```console
 $ aura run src/main.au
@@ -197,7 +197,7 @@ comparison that returns a `bool` and tells the compiler nothing.
 
 ## Matching on a union member
 
-The `match` at the end of Listing 6-11 is the other way. A union is matched
+The `match` at the end of Listing 6-12 is the other way. A union is matched
 by the type of its members: `case int64 as index:` matches when the value is
 an integer and binds it as `index`, and `case None:` matches the absence. As
 with enums, the arms must cover every member, so a `match` over
@@ -208,6 +208,52 @@ missing case is a short detour, like printing a message and stopping, and the
 rest of the function works on the value. `match` reads best when both cases
 do real work, or when the union has more than two members, as in
 `int64 | str | None`.
+
+## Narrowing in proofs
+
+`aura verify` narrows the same way the compiler does. In the branch where a
+value is `None` it proves the code for that case, and in the other branch it
+treats the value as the plain member, with every value that member can have.
+Here a bookmark may be missing, and the function promises a sensible answer
+either way:
+
+```aura
+def pages_left(pages: int64, bookmark: int64 | None) -> int64:
+    requires 0 <= pages
+    ensures 0 <= result and result <= pages
+    if bookmark is None:
+        return pages
+    return pages - min(max(bookmark, 0), pages)
+
+def main():
+    print(pages_left(412, 103))
+    print(pages_left(412, None))
+    print(pages_left(412, 999))
+```
+
+```console
+$ aura run src/main.au
+309
+412
+0
+$ aura verify src/main.au
+verified src/main.au: 5 of 5 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+After the `is None` check, `bookmark` is an `int64`, and the verifier
+considers all of them. That is why the last line clamps it: write
+`return pages - bookmark` and the verifier reports that the subtraction can
+overflow and that the `ensures` clause can fail, because a bookmark that is
+present can still be negative or past the end of the book. The type says
+whether a value is there. A contract says which values the function has to
+be right for. A `match` with `case int64 as page:` and `case None:` arms is
+proved the same way.
+
+One limit applies today. A clause that talks about an optional value across
+a call, such as `ensures result is None or result < len(titles)` on `find`,
+is checked while the program runs, but the verifier does not yet hand that
+fact to the caller. A caller that wants a proved index compares the narrowed
+value with `len(titles)` itself before using it.
 
 ## No `Option`, no `T?`
 
@@ -311,7 +357,7 @@ def main():
                 print("bye")
 ```
 
-<span class="caption">Listing 6-12: Parsing and running tracker commands</span>
+<span class="caption">Listing 6-13: Parsing and running tracker commands</span>
 
 ```console
 $ aura run src/main.au
@@ -346,7 +392,9 @@ every variant is handled. Like function parameters, a `match` borrows by
 default, with `match own` and `match mut` when an arm needs to take or change
 the payload. For values that might be missing, `T | None` puts the
 possibility in the type, and `is None` or a type pattern selects the member
-before you can use it.
+before you can use it. `aura verify` follows the same arms and the same
+narrowing, so a function over an enum or an optional value can carry a
+contract that is proved for every case.
 
 Our programs are getting long enough to want more than one file. In the next
 chapter we'll split code into modules, decide what each module exposes, and
