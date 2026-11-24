@@ -11719,3 +11719,19 @@ fn editor_preserves_active_outline_and_dimmed_ranges_after_a_type_error() {
         .iter()
         .any(|symbol| symbol.name == "hidden"));
 }
+
+#[test]
+fn conditional_outline_keeps_source_decorators_and_only_active_members() {
+    let source = format!(
+        "import build\nclass Platform:\n    if build.hosted:\n        def id(self) -> int64:\n            return 1\n    else:\n        def unused(self) -> int64:\n            return absent()\n{}",
+        include_str!("../tests/fixtures/run-pass/decorators.au")
+    );
+    let analysis = analyze_source(&source);
+    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    let class = analysis.symbols.iter().find(|s| s.name == "Platform").unwrap();
+    assert_eq!(class.children.len(), 1);
+    assert_eq!(class.children[0].name, "id");
+    let fact = analysis.symbols.iter().find(|s| s.name == "fact").unwrap();
+    assert_eq!(fact.kind, "function");
+    assert!(analysis.symbols.iter().all(|s| !s.name.starts_with("__aura_")));
+}
