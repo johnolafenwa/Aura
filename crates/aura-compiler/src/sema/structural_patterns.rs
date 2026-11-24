@@ -452,10 +452,20 @@ impl FunctionChecker<'_> {
                 .find(|(name, _)| name == &field.name)
                 .map(|(_, ty)| ty)
                 .expect("checked class pattern field");
-            if borrow_mode == ReceiverKind::Value && !self.is_copy_type(field_ty)
-                && self.resolve_class_info(&class.class_name).is_some_and(|c| c.methods.contains_key(super::DROP_HOOK)) {
-                return Err(Diagnostic::coded_at("AU3020", class.span,
-                    format!("cannot move a field out of `{}` because it declares `__drop__`", class.class_name)));
+            if borrow_mode == ReceiverKind::Value
+                && !self.is_copy_type(field_ty)
+                && self
+                    .resolve_class_info(&class.class_name)
+                    .is_some_and(|c| c.methods.contains_key(super::DROP_HOOK))
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU3020",
+                    class.span,
+                    format!(
+                        "cannot move a field out of `{}` because it declares `__drop__`",
+                        class.class_name
+                    ),
+                ));
             }
             self.bind_pattern_locals(
                 &field.pattern,

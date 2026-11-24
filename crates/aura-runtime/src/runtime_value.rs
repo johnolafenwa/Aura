@@ -5002,7 +5002,10 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                     }
                 }
                 Value::Instance(instance)
-                    if matches!(instance.fields, InstanceFields::Recovered(_) | InstanceFields::Hooked(_)) =>
+                    if matches!(
+                        instance.fields,
+                        InstanceFields::Recovered(_) | InstanceFields::Hooked(_)
+                    ) =>
                 {
                     Some(Value::Instance(instance.clone()))
                 }

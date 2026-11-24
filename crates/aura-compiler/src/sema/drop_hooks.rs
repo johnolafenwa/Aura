@@ -17,8 +17,16 @@ pub(super) fn validate(class: &ClassDecl, method: &FunctionDecl, result: &Type) 
             format!("copy class `{}` cannot declare `__drop__`", class.name),
         ));
     }
-    if method.contracts.iter().any(|clause| clause.kind == crate::ast::ContractKind::Requires) {
-        return Err(Diagnostic::coded_at("AU2065", method.span, "drop hook cannot require a precondition"));
+    if method
+        .contracts
+        .iter()
+        .any(|clause| clause.kind == crate::ast::ContractKind::Requires)
+    {
+        return Err(Diagnostic::coded_at(
+            "AU2065",
+            method.span,
+            "drop hook cannot require a precondition",
+        ));
     }
     if method.receiver != Some(ReceiverKind::BorrowMut)
         || !method.params.is_empty()
@@ -65,8 +73,12 @@ impl FunctionChecker<'_> {
                 let mut parent = root.ty.clone();
                 for component in &path.projections.0 {
                     check_type(&parent)?;
-                    let PlaceProjection::Field(field) = component else { break };
-                    let Ok(next) = self.resolve_member_type(&parent, field, span) else { break };
+                    let PlaceProjection::Field(field) = component else {
+                        break;
+                    };
+                    let Ok(next) = self.resolve_member_type(&parent, field, span) else {
+                        break;
+                    };
                     parent = next;
                 }
             }
@@ -82,15 +94,41 @@ mod tests {
     #[test]
     fn accepts_valid_hook_and_diagnoses_ownership_errors() {
         for (source, code) in [
-            (include_str!("../../tests/fixtures/check-fail/class_drop_copy.au"), "AU2065"),
-            (include_str!("../../tests/fixtures/check-fail/class_drop_signature.au"), "AU2065"),
-            (include_str!("../../tests/fixtures/check-fail/class_drop_precondition.au"), "AU2065"),
-            (include_str!("../../tests/fixtures/check-fail/class_drop_explicit.au"), "AU2066"),
-            (include_str!("../../tests/fixtures/check-fail/class_drop_partial_move.au"), "AU3020"),
+            (
+                include_str!("../../tests/fixtures/check-fail/class_drop_copy.au"),
+                "AU2065",
+            ),
+            (
+                include_str!("../../tests/fixtures/check-fail/class_drop_signature.au"),
+                "AU2065",
+            ),
+            (
+                include_str!("../../tests/fixtures/check-fail/class_drop_precondition.au"),
+                "AU2065",
+            ),
+            (
+                include_str!("../../tests/fixtures/check-fail/class_drop_explicit.au"),
+                "AU2066",
+            ),
+            (
+                include_str!("../../tests/fixtures/check-fail/class_drop_partial_move.au"),
+                "AU3020",
+            ),
         ] {
             let module = crate::parser::parse(source).unwrap();
             assert_eq!(check(module).unwrap_err().code, code);
         }
-        check(crate::parser::parse(include_str!("../../tests/fixtures/check-pass/class_drop_hook.au")).unwrap()).unwrap();
+        for constructor in ["Ticket(1)", "[Ticket(1)]"] {
+            let source = format!("class Ticket:\n    id: int64\n    def __drop__(mut self):\n        print(self.id)\n\ndef main():\n    obj = {constructor}\n    print(obj.clone())\n");
+            let error = check(crate::parser::parse(&source).unwrap()).unwrap_err();
+            assert!(error.message.contains("unsupported method call `clone`"));
+        }
+        check(
+            crate::parser::parse(include_str!(
+                "../../tests/fixtures/check-pass/class_drop_hook.au"
+            ))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }

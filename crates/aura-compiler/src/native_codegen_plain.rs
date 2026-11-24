@@ -140,7 +140,17 @@ impl PlainRecords {
             by_class: HashMap::new(),
             classes: HashMap::new(),
             enums: HashMap::new(),
-            hooked_classes: module.classes.iter().filter(|class| class.methods.iter().any(|m| m.name == crate::sema::DROP_HOOK)).map(|c| c.name.clone()).collect(),
+            hooked_classes: module
+                .classes
+                .iter()
+                .filter(|class| {
+                    class
+                        .methods
+                        .iter()
+                        .any(|m| m.name == crate::sema::DROP_HOOK)
+                })
+                .map(|c| c.name.clone())
+                .collect(),
             copy_classes: module
                 .classes
                 .iter()

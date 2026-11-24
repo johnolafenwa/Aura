@@ -4,20 +4,7 @@
 use super::*;
 use aura_runtime::runtime_value::class_drop::{released_instances, DropMethod};
 
-pub(super) fn holds_owner(value: &Value) -> bool {
-    match value {
-        Value::Instance(instance) => matches!(instance.fields, crate::runtime_value::InstanceFields::Hooked(_))
-            || (!matches!(instance.fields, crate::runtime_value::InstanceFields::Recovered(_))
-                && instance.fields.values().any(|field| holds_owner(&field))),
-        Value::Vec(list) => list.elements.iter().any(|element| holds_owner(&element)),
-        Value::Map(map) => map.entries.iter().any(|(key, value)| holds_owner(key) || holds_owner(value)),
-        Value::Tuple(tuple) => tuple.elements.iter().any(holds_owner),
-        Value::Union(union) => holds_owner(&union.payload),
-        Value::EnumVariant(variant) => variant.payloads.iter().any(|v| holds_owner(&v)),
-        Value::TraitObject(object) => holds_owner(&object.value),
-        _ => false,
-    }
-}
+pub(super) use aura_runtime::runtime_value::class_drop::holds_owner;
 
 impl MirRuntime {
     pub(super) fn drain_owner_hooks(&mut self) -> Result<()> {
@@ -26,16 +13,23 @@ impl MirRuntime {
             let DropMethod::Interpreted(name) = method else {
                 return Err(Diagnostic::new("native drop hook inside interpreted code"));
             };
-            let function = self.functions.get(&name).cloned()
+            let function = self
+                .functions
+                .get(&name)
+                .cloned()
                 .ok_or_else(|| Diagnostic::new(format!("missing drop hook `{name}`")))?;
-            if let Err(error) = self.call_function(&function, Some(Value::Instance(value)), vec![])
-                .and_then(|outcome| outcome.value.into_result()) {
+            if let Err(error) = self
+                .call_function(&function, Some(Value::Instance(value)), vec![])
+                .and_then(|outcome| outcome.value.into_result())
+            {
                 if first.is_ok() {
                     first = Err(error);
                 }
             }
             if let Err(error) = self.drain_owner_hooks() {
-                if first.is_ok() { first = Err(error); }
+                if first.is_ok() {
+                    first = Err(error);
+                }
             }
         }
         first
@@ -44,11 +38,15 @@ impl MirRuntime {
     pub(super) fn drop_frame_owners(&mut self, env: &mut Env) -> Result<()> {
         let mut first = Ok(());
         for place in std::mem::take(&mut env.owner_order).into_iter().rev() {
+            env.shared_values.remove(&place);
             env.values.remove(&place);
             if let Err(error) = self.drain_owner_hooks() {
-                if first.is_ok() { first = Err(error); }
+                if first.is_ok() {
+                    first = Err(error);
+                }
             }
         }
+        env.shared_values.clear();
         env.values.clear();
         let rest = self.drain_owner_hooks();
         first.and(rest)
@@ -61,12 +59,36 @@ mod tests {
     fn class_drop_hook_fixtures_release_owners_on_normal_and_trapping_exits() {
         for (source, expected) in [
             (
+                include_str!("../tests/fixtures/run-pass/class_drop_reinitialized_local.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_reinitialized_local.stdout"),
+            ),
+            (
                 include_str!("../tests/fixtures/run-pass/class_drop_hook.au"),
                 include_str!("../tests/fixtures/run-pass/class_drop_hook.stdout"),
             ),
             (
                 include_str!("../tests/fixtures/run-pass/class_drop_traps.au"),
                 include_str!("../tests/fixtures/run-pass/class_drop_traps.stdout"),
+            ),
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_reassigned_order.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_reassigned_order.stdout"),
+            ),
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_lexical_bindings.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_lexical_bindings.stdout"),
+            ),
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_field_trap.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_field_trap.stdout"),
+            ),
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_nested_trap.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_nested_trap.stdout"),
+            ),
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_trait_object.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_trait_object.stdout"),
             ),
             (
                 include_str!("../tests/fixtures/run-pass/class_drop_copy_collection.au"),

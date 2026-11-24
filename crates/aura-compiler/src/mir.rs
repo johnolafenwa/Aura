@@ -852,9 +852,14 @@ pub const NATIVE_LOOP_SAFEPOINT_INTERVAL: u64 = 4_096;
 pub enum Instruction {
     /// An initialized class now owns its destructor. Its construction has
     /// finished, including its initializer and invariant checks.
-    ArmDrop { place: String, function: String },
+    ArmDrop {
+        place: String,
+        function: String,
+    },
     /// Last lexical use of a source owner. A moved owner is already empty.
-    EndOwner { place: String },
+    EndOwner {
+        place: String,
+    },
 
     /// A compiler-inserted cooperative scheduling check. Loop lowering places
     /// one on each semantic backedge; runtimes amortize the actual yield with
@@ -8482,10 +8487,16 @@ fn validate_loan_instruction(
         }
     }
     match instruction {
-        Instruction::EndOwner { place } => validate_released_root(function, place, known_roots, state)?,
-        Instruction::ArmDrop { place, function: hook } => {
+        Instruction::EndOwner { place } => {
+            validate_released_root(function, place, known_roots, state)?
+        }
+        Instruction::ArmDrop {
+            place,
+            function: hook,
+        } => {
             let ty = context.place_type(function, place)?;
-            if !matches!(ty, Some(Type::Named(ref name, _)) if context.classes.get(name.as_str()).is_some_and(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK && method.function_name == *hook && method.receiver == Some(MirReceiverKind::BorrowMut)))) {
+            if !matches!(ty, Some(Type::Named(ref name, _)) if context.classes.get(name.as_str()).is_some_and(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK && method.function_name == *hook && method.receiver == Some(MirReceiverKind::BorrowMut))))
+            {
                 return Err(format!("invalid drop hook `{hook}` for `{place}`"));
             }
             validate_loan_operand(function, &Operand::Place(place.clone()), context, state)?;
@@ -10481,7 +10492,10 @@ pub(crate) fn instruction_place_mentions<'a>(
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. } => {}
-        Instruction::ArmDrop { place, .. } | Instruction::EndOwner { place } | Instruction::Retain { place } | Instruction::Release { place } => mentions.push(place),
+        Instruction::ArmDrop { place, .. }
+        | Instruction::EndOwner { place }
+        | Instruction::Retain { place }
+        | Instruction::Release { place } => mentions.push(place),
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             mentions.extend([place.as_str(), temp])
         }
@@ -11878,7 +11892,10 @@ fn lower_function_or_initializer(
             lowerer.non_owning_roots.insert("self".to_string());
         }
         if receiver == Some(ReceiverKind::Value) {
-            lowerer.current_binding_block().declared.push("self".to_string());
+            lowerer
+                .current_binding_block()
+                .owners
+                .push("self".to_string());
         }
     }
     for ((param, ty), passing) in function
@@ -11893,7 +11910,10 @@ fn lower_function_or_initializer(
         if *passing != ReceiverKind::Value {
             lowerer.non_owning_roots.insert(param.name.clone());
         } else {
-            lowerer.current_binding_block().declared.push(param.name.clone());
+            lowerer
+                .current_binding_block()
+                .owners
+                .push(param.name.clone());
         }
     }
     for param in &span_params {
@@ -12373,6 +12393,7 @@ struct ReturnedViewCallee {
 mod class_drop;
 
 struct Lowerer<'a> {
+    has_class_hooks: bool,
     program: &'a Program,
     function_name: &'a str,
     module_name: &'a str,
@@ -12455,6 +12476,8 @@ struct Lowerer<'a> {
 /// even with another type.
 #[derive(Default)]
 struct BindingBlock {
+    /// Materialized source owner slots in declaration order.
+    owners: Vec<String>,
     /// Names declared here under their own spelling.
     declared: Vec<String>,
     /// Names declared here with another type than an ended binding of the
@@ -12664,6 +12687,7 @@ impl<'a> Lowerer<'a> {
             program,
             function_name,
             module_name,
+            has_class_hooks: class_drop::program_has_hooks(program),
             default_helper_owner: None,
             recursive_local: None,
             metadata_module_name: None,
@@ -14941,6 +14965,7 @@ impl<'a> Lowerer<'a> {
                         value: Rvalue::Use(value),
                     });
                     self.emit_cleanup_range(cleanup_depth, true, 0);
+                    self.end_owners_from(1);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
@@ -14985,11 +15010,11 @@ impl<'a> Lowerer<'a> {
                 let cleanup_depth = loop_labels.cleanup_depth;
                 let loan_depth = loop_labels.loan_depth;
                 let owner_depth = loop_labels.owner_depth;
-        let continue_label = loop_labels.continue_label.clone();
+                let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
                 self.emit_cleanup_range(cleanup_depth, true, loan_depth);
                 self.end_owners_from(owner_depth);
-        self.terminate(Terminator::Goto(continue_label));
+                self.terminate(Terminator::Goto(continue_label));
                 false
             }
         }
@@ -15744,13 +15769,15 @@ impl<'a> Lowerer<'a> {
                     .is_some_and(|scope| !scope.contains_key(name))
             {
                 let slot = self.new_typed_temp(ty.clone());
+                self.current_binding_block().owners.push(slot.clone());
                 self.scoped_names
                     .last_mut()
                     .expect("checked scoped local declaration")
                     .insert(name.clone(), slot);
             } else if declares {
                 // A sibling block may have bound the name with another type.
-                self.declare_binding(name, Some(&ty));
+                let slot = self.declare_binding(name, Some(&ty));
+                self.current_binding_block().owners.push(slot);
             }
             let target = self.render_local_name(name);
             self.local_types.entry(target).or_insert(ty);
@@ -16393,6 +16420,7 @@ impl<'a> Lowerer<'a> {
                     self.local_types.insert(target.clone(), source_ty.clone());
                     target
                 };
+                self.current_binding_block().owners.push(target.clone());
                 let source =
                     if consume_non_copy && !type_is_copy_in_program(source_ty, self.program) {
                         Operand::MovePlace(source_place.to_string())
@@ -26943,7 +26971,7 @@ impl<'a> Lowerer<'a> {
                                 },
                             });
                             self.emit_class_invariant_check(&temp, &class);
-                self.arm_class_drop(&temp, &class);
+                            self.arm_class_drop(&temp, &class);
                             return Operand::Place(temp);
                         }
                     }
@@ -31599,6 +31627,7 @@ impl<'a> Lowerer<'a> {
             } else {
                 self.declare_binding(&with_stmt.binding, manager_ty.as_ref())
             };
+            self.current_binding_block().owners.push(place.clone());
             let value = self.lower_expr_for_owned_value(&with_stmt.value, manager_ty.as_ref());
             self.emit(Instruction::Assign {
                 target: place.clone(),
@@ -31691,6 +31720,7 @@ impl<'a> Lowerer<'a> {
         self.with_stack.pop();
         if !self.current_terminated() {
             self.emit_with_exit(place.clone(), false);
+            self.end_owners_from(self.binding_blocks.len() - 1);
         }
         self.manager_exits.remove(&place);
         self.lock_exits.remove(&place);

@@ -1,8 +1,8 @@
 mod capabilities;
 mod drop_hooks;
-pub(crate) use drop_hooks::DROP_HOOK;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+pub(crate) use drop_hooks::DROP_HOOK;
 mod callables;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,

@@ -291,7 +291,8 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             },
             Instruction::Safepoint
             | Instruction::SourceLocation { .. }
-            | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
+            | Instruction::ArmDrop { .. }
+            | Instruction::EndOwner { .. }
             | Instruction::SourceName { .. }
             | Instruction::Retain { .. }
             | Instruction::Release { .. }
@@ -350,8 +351,9 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
-                | Instruction::ArmDrop { .. } | Instruction::EndOwner { .. }
-            | Instruction::SourceName { .. }
+                | Instruction::ArmDrop { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
@@ -940,6 +942,7 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
 
 #[derive(Default)]
 struct Env {
+    lexical_owners: BTreeSet<String>,
     owner_order: Vec<String>,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
@@ -2696,7 +2699,12 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
-            has_owner_hooks: module.classes.iter().any(|class| class.methods.iter().any(|method| method.name == crate::sema::DROP_HOOK)),
+            has_owner_hooks: module.classes.iter().any(|class| {
+                class
+                    .methods
+                    .iter()
+                    .any(|method| method.name == crate::sema::DROP_HOOK)
+            }),
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
@@ -3654,6 +3662,21 @@ impl MirRuntime {
             }
 
             let mut env = Env::default();
+            if self.has_owner_hooks {
+                env.lexical_owners.extend(
+                    function
+                        .blocks
+                        .iter()
+                        .flat_map(|block| &block.instructions)
+                        .filter_map(|instruction| match instruction {
+                            Instruction::EndOwner { place } => Some(place.clone()),
+                            _ => None,
+                        }),
+                );
+                if env.lexical_owners.contains("self") {
+                    env.owner_order.push("self".to_string());
+                }
+            }
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -3672,7 +3695,7 @@ impl MirRuntime {
             }
 
             for (param, argument) in function.params.iter().zip(bound_args) {
-                if self.has_owner_hooks && param.passing == MirReceiverKind::Value {
+                if env.lexical_owners.contains(&param.name) {
                     env.owner_order.push(param.name.clone());
                 }
                 let ty = substitute_type(&param.ty, &substitutions);
@@ -3758,10 +3781,14 @@ impl MirRuntime {
             };
             let value = if self.has_owner_hooks {
                 match (value, self.drop_frame_owners(&mut env)) {
-                    (CallValueOutcome::Completed(Ok(_)), Err(error)) => CallValueOutcome::Completed(Err(error)),
+                    (CallValueOutcome::Completed(Ok(_)), Err(error)) => {
+                        CallValueOutcome::Completed(Err(error))
+                    }
                     (outcome, _) => outcome,
                 }
-            } else { value };
+            } else {
+                value
+            };
             Ok(CallOutcome {
                 value,
                 updated_receiver,
@@ -3909,7 +3936,9 @@ impl MirRuntime {
                 };
                 let instruction_result = if self.has_owner_hooks {
                     instruction_result.and_then(|result| self.drain_owner_hooks().map(|()| result))
-                } else { instruction_result };
+                } else {
+                    instruction_result
+                };
                 match instruction_result {
                     Ok(Some(value)) => {
                         self.unwind_cleanups(&mut cleanup_stack, env, true, &mut Vec::new())?;
@@ -4003,17 +4032,26 @@ impl MirRuntime {
                 let Value::Instance(value) = env.place_mut(place)? else {
                     return Err(Diagnostic::new("drop hook receiver must be a class"));
                 };
-                value.arm_drop(aura_runtime::runtime_value::class_drop::DropMethod::Interpreted(function.clone()));
+                value.arm_drop(
+                    aura_runtime::runtime_value::class_drop::DropMethod::Interpreted(
+                        function.clone(),
+                    ),
+                );
                 Ok(None)
             }
             Instruction::EndOwner { place } => {
+                env.owner_order.retain(|owner| owner != place);
+                env.shared_values.remove(place);
                 env.values.remove(place);
                 Ok(None)
             }
             Instruction::Retain { .. } => Ok(None),
             Instruction::Release { place } => {
                 let on_cleanup_stack = cleanup_stack.iter().any(|(active, _)| active == place);
-                if self.has_owner_hooks && !on_cleanup_stack && env.values.get(place).is_some_and(class_drop::holds_owner) {
+                if self.has_owner_hooks
+                    && !on_cleanup_stack
+                    && env.values.get(place).is_some_and(class_drop::holds_owner)
+                {
                     env.values.remove(place);
                     return Ok(None);
                 }
@@ -4169,8 +4207,10 @@ impl MirRuntime {
                 Ok(None)
             }
             Instruction::Assign { target, value } => {
-                if self.has_owner_hooks && !target.starts_with('%') && !target.contains('.') && !env.values.contains_key(target) {
-                    env.owner_order.retain(|previous| previous != target);
+                if self.has_owner_hooks
+                    && env.lexical_owners.contains(target)
+                    && !env.owner_order.contains(target)
+                {
                     env.owner_order.push(target.clone());
                 }
                 let target_ty = self.resolve_place_type(target, env);
@@ -5958,7 +5998,15 @@ impl MirRuntime {
                     .resolve_operand_type(object, env)
                     .filter(|ty| !matches!(ty, Type::TypeParam(_)));
                 let mut receiver = self.evaluate_owned_operand(object, env)?;
-                if self.has_owner_hooks && matches!(op, RuntimeOp::Value(crate::runtime_ops::ValueOp::Copy | crate::runtime_ops::ValueOp::Clone)) && class_drop::holds_owner(&receiver) {
+                if self.has_owner_hooks
+                    && matches!(
+                        op,
+                        RuntimeOp::Value(
+                            crate::runtime_ops::ValueOp::Copy | crate::runtime_ops::ValueOp::Clone
+                        )
+                    )
+                    && class_drop::holds_owner(&receiver)
+                {
                     aura_runtime::runtime_value::class_drop::renew_owners(&mut receiver);
                 }
                 self.evaluate_receiver_method(
@@ -12213,7 +12261,8 @@ impl MirRuntime {
                     }
                     // A recovered snapshot contains only text, integers and a
                     // list of text. Mutation first converts it to an ordinary map.
-                    crate::runtime_value::InstanceFields::Hooked(_) | crate::runtime_value::InstanceFields::Recovered(_) => {}
+                    crate::runtime_value::InstanceFields::Hooked(_)
+                    | crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(_) => {
                         for (_, field) in instance.fields.iter() {
                             if let Value::Generator(generator) = field.as_ref() {

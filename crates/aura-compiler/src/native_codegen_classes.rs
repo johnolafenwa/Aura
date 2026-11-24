@@ -101,7 +101,9 @@ impl PlainRecords {
     }
 
     pub(super) fn class_layout(&self, class_name: &str) -> Option<(LayoutTable, LayoutId)> {
-        if self.hooked_classes.contains(class_name) { return None; }
+        if self.hooked_classes.contains(class_name) {
+            return None;
+        }
         let class = self.env.classes.get(class_name)?;
         if !class.type_params.is_empty() {
             return None;
@@ -134,7 +136,9 @@ impl PlainRecords {
     /// instance's block in its own layout rather than in a box. A class
     /// field stays inline, where generated code reads its scalars.
     fn field_lies_inline(&self, ty: &Type) -> bool {
-        if matches!(ty, Type::Named(name, _) if self.hooked_classes.contains(name)) { return false; }
+        if matches!(ty, Type::Named(name, _) if self.hooked_classes.contains(name)) {
+            return false;
+        }
         match ty {
             Type::Union(_) => false,
             Type::Named(name, _) => !self.env.enums.contains_key(name),
