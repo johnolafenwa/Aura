@@ -12,6 +12,7 @@ pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
 mod freestanding_mode;
+pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
@@ -754,6 +755,29 @@ impl ModuleLoader {
         if is_entry_module {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
+            }
+            let mut imported: Vec<_> = self
+                .cache
+                .iter()
+                .filter(|(file, _)| **file != path)
+                .collect();
+            imported.sort_by_key(|(file, _)| *file);
+            for (_, loaded) in imported {
+                let module = &loaded.program;
+                program
+                    .foreign_link
+                    .module_asm
+                    .extend_from_slice(&module.module.module_asm);
+                if module.module.asm_span.is_some() {
+                    program.foreign_link.asm_arch =
+                        module.machine_target.map(|target| target.arch().to_owned());
+                    program.foreign_link.asm_externs.extend(
+                        module
+                            .extern_functions
+                            .values()
+                            .map(|f| f.decl.link_name().to_owned()),
+                    );
+                }
             }
             program.constant_init_plan = self.build_constant_init_plan(&path)?;
             self.cache.insert(
@@ -2173,3 +2197,6 @@ mod tests;
 
 #[cfg(test)]
 use aura_runtime::array_kernel_corpus;
+
+#[cfg(test)]
+mod inline_asm_tests;

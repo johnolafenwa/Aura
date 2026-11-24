@@ -1,0 +1,2 @@
+export "C" def entry(value: uint32) -> None:
+    asm("nop", input("r88", value))

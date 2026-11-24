@@ -135,6 +135,13 @@ impl GitSelector {
 /// one.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForeignLinkPlan {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_asm: Vec<String>,
+    /// Target and permitted native references for source-level assembly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asm_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asm_externs: Vec<String>,
     /// Library names as the linker's `-l` option takes them: `sqlite3` for
     /// `libsqlite3.so` or `libsqlite3.dylib`.
     pub libraries: Vec<String>,
@@ -164,7 +171,10 @@ impl ForeignLinkPlan {
 
     /// Whether the plan names nothing at all, so MIR leaves it out.
     pub fn is_blank(&self) -> bool {
-        self.is_empty() && self.exports.is_empty()
+        self.is_empty()
+            && self.exports.is_empty()
+            && self.module_asm.is_empty()
+            && self.asm_arch.is_none()
     }
 
     /// Adds what `other` names and this plan does not, keeping the order.

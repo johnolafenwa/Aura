@@ -5768,6 +5768,12 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::SourceLocation { line, column } => {
                 self.builder.set_source_location(*line, *column);
             }
+            Instruction::InlineAsm {
+                asm,
+                inputs,
+                outputs,
+                ..
+            } => self.compile_inline_asm(asm, inputs, outputs)?,
             Instruction::SourceName { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -20790,6 +20796,11 @@ fn validate_function_in_reachable(
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
                 | Instruction::EndLend { .. } => {}
+                Instruction::InlineAsm { inputs, .. } => {
+                    for input in inputs {
+                        validate_operand(input)?;
+                    }
+                }
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }
@@ -22364,6 +22375,8 @@ mod freestanding;
 #[cfg(test)]
 #[path = "native_codegen_freestanding_tests.rs"]
 mod freestanding_tests;
+#[path = "native_codegen_inline_asm.rs"]
+mod inline_asm;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]
