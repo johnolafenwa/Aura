@@ -1173,3 +1173,26 @@ fn hosted_ordered_atomics_emit_without_generic_order_wrappers() {
     let named = lower("import mem\n\ndef main() -> None:\n    print(\"mem::fence\")\n");
     emit_host_object(&named).expect("a string naming the generic wrapper can compile");
 }
+
+#[test]
+fn wide_integer_comparisons_and_narrow_casts_are_self_contained() {
+    let source = r#"
+export "C" def check(low: uint64, divisor: int64) -> uint16:
+    numerator = low as uint128
+    signed = low as int128
+    quotient = signed // (divisor as int128)
+    if quotient >= 0 and quotient <= signed:
+        exact = quotient as float64
+        if (exact as int128) == quotient:
+            small = numerator as int16
+            return (small as int128) as uint16
+    return 0
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(
+            undefined.iter().all(|name| name == "aura_trap"),
+            "{target:?}: {undefined:?}"
+        );
+    }
+}

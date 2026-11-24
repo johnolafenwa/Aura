@@ -18399,3 +18399,53 @@ def main() -> None:
         .iter()
         .any(|name| name.contains("aura_direct_integer_bits")));
 }
+
+#[test]
+fn mixed_width_mir_comparisons_only_box_the_full_unsigned_and_signed_pair() {
+    // A saved MIR comparison can have operands of different integer widths.
+    // The source checker normally gives both operands the same kind.
+    let comparisons = [
+        ("eq", "=="),
+        ("ne", "!="),
+        ("lt", "<"),
+        ("le", "<="),
+        ("gt", ">"),
+        ("ge", ">="),
+    ];
+    for (left_type, right_type, boxed) in [
+        ("int16", "uint8", false),
+        ("uint64", "uint16", false),
+        ("int64", "uint64", true),
+    ] {
+        let mut source = "def main() -> None:\n    pass\n".to_string();
+        for (name, op) in comparisons {
+            source.push_str(&format!(
+                "\ndef cmp_{name}(a: {left_type}, b: {left_type}) -> bool:\n    return a {op} b\n"
+            ));
+        }
+        let mut module = lower_source_to_mir(&source).unwrap();
+        for function in module
+            .functions
+            .iter_mut()
+            .filter(|f| f.name.starts_with("cmp_"))
+        {
+            function.params[1].ty = Type::named(right_type);
+            for local in &mut function.local_types {
+                if local.name == "b" {
+                    local.ty = Type::named(right_type);
+                }
+            }
+        }
+        let object = emit_unoptimized_object(&module).unwrap();
+        for (name, _) in comparisons {
+            let refs = object_function_referenced_symbols(&object, &format!("aura_fn_cmp_{name}"));
+            let calls_boxed_comparison = refs
+                .iter()
+                .any(|symbol| symbol.trim_start_matches('_') == "aura_direct_compare_values");
+            assert_eq!(
+                calls_boxed_comparison, boxed,
+                "{left_type} {name} {right_type}: {refs:?}"
+            );
+        }
+    }
+}

@@ -1997,3 +1997,35 @@ fn fixed_array_arguments_use_the_callers_address() {
     assert!(text.contains("@inspect(ptr %0)"), "{text}");
     assert!(text.contains("ptrtoint ptr %0 to i64"), "{text}");
 }
+
+#[test]
+fn llvm_rejects_invalid_load_and_store_orderings_from_the_backend_boundary() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::{Load, Store};
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+    for (op, order, reason) in [
+        (Load, Release, "release ordering is not valid on load"),
+        (Store, Acquire, "acquire ordering is not valid on store"),
+    ] {
+        let mut module = module();
+        let sig = signature(CallConv::C, &[types::I64, types::I64], &[]);
+        define(&mut module, "bad_order", Linkage::Export, &sig, move |b| {
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let words = b.block_params(entry);
+            b.memory_access(
+                Ordered(op, order, Relaxed),
+                types::I16,
+                &words[..op.arity()],
+            );
+            b.return_(&[]);
+        });
+        let machine = host_target_machine().unwrap();
+        let context = Context::create();
+        let error = module
+            .lower(&context, &machine)
+            .expect_err("invalid atomic order");
+        assert!(error.contains(reason), "{error}");
+    }
+}

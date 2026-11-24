@@ -25579,3 +25579,94 @@ def main():
 "#;
     assert_eq!(crate::run_source(source).unwrap().stdout, "7\n4\n");
 }
+
+#[test]
+fn ffi_numeric_array_writeback_keeps_shape_and_every_element_bit() {
+    use crate::ffi::{FfiScalar, FfiValue};
+
+    let f32_words = [(-0.0_f32).to_bits(), 0x7fc0_1234];
+    let f64_words = [(-0.0_f64).to_bits(), 0x7ff8_0000_0000_1234];
+    for (kind, scalar, storage, words) in [
+        (
+            "int32",
+            FfiScalar::I32,
+            ArrayStorage::Int32(vec![i32::MIN, -1].into()),
+            [u64::from(i32::MIN as u32), u64::from(u32::MAX)],
+        ),
+        (
+            "int64",
+            FfiScalar::I64,
+            ArrayStorage::Int64(vec![i64::MIN, -1].into()),
+            [i64::MIN as u64, u64::MAX],
+        ),
+        (
+            "float32",
+            FfiScalar::F32,
+            ArrayStorage::Float32(f32_words.map(f32::from_bits).to_vec().into()),
+            f32_words.map(u64::from),
+        ),
+        (
+            "float64",
+            FfiScalar::F64,
+            ArrayStorage::Float64(f64_words.map(f64::from_bits).to_vec().into()),
+            f64_words,
+        ),
+    ] {
+        let ty = Type::Named("Array".into(), vec![Type::named(kind)]);
+        let input = ArrayValue::new(vec![1, 2].into_boxed_slice(), storage).unwrap();
+        let before = super::ffi_elements_from_runtime(&Value::Array(input.clone()), &ty).unwrap();
+        assert_eq!(before, FfiValue::Elements(scalar, words.to_vec()));
+        let swapped = [words[1], words[0]];
+        let after = super::array_elements_runtime_value(scalar, &swapped, &input).unwrap();
+        let Value::Array(ref array) = after else {
+            panic!("an Array argument keeps its shape");
+        };
+        assert_eq!(array.shape, input.shape);
+        assert_eq!(
+            super::ffi_elements_from_runtime(&after, &ty).unwrap(),
+            FfiValue::Elements(scalar, swapped.to_vec())
+        );
+        assert!(super::array_elements_runtime_value(scalar, &swapped[..1], &input).is_err());
+    }
+
+    let input = ArrayValue::new(
+        vec![1].into_boxed_slice(),
+        ArrayStorage::Bool(vec![true].into()),
+    )
+    .unwrap();
+    let error = super::array_elements_runtime_value(FfiScalar::Bool, &[1], &input).unwrap_err();
+    assert_eq!(error.code, "AU4005");
+    let ty = Type::Named("Array".into(), vec![Type::named("int32")]);
+    assert_eq!(
+        super::ffi_elements_from_runtime(&Value::Array(input), &ty)
+            .unwrap_err()
+            .code,
+        "AU4005"
+    );
+}
+
+#[test]
+fn mir_rotation_checks_counts_and_falls_back_to_the_value_width() {
+    use aura_core::integer_bits::BitMethod;
+    let byte = IntegerValue::from_typed_signed(-2, IntegerKind::Int8).unwrap();
+    let mut env = Env::default();
+    let rotate = |args: &[MirArg], env: &mut Env| {
+        super::integer_bits::evaluate(BitMethod::RotateLeft, byte, Some(&Type::Unit), args, env)
+    };
+    assert_eq!(
+        rotate(&[mir_arg(None, Operand::Int(9))], &mut env).unwrap(),
+        Value::Int(IntegerValue::from_typed_signed(-3, IntegerKind::Int8).unwrap())
+    );
+    env.define_typed(
+        "count",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(-1)),
+    );
+    let negative = rotate(&[mir_arg(None, Operand::Place("count".into()))], &mut env).unwrap_err();
+    assert_eq!(negative.code, "AU4034");
+    let args = [
+        mir_arg(None, Operand::Int(0)),
+        mir_arg(None, Operand::Int(1)),
+    ];
+    assert_eq!(rotate(&args, &mut env).unwrap_err().code, "AU4034");
+}
