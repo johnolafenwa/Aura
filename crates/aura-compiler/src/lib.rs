@@ -11,6 +11,7 @@ pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
+mod freestanding_mode;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
@@ -47,6 +48,9 @@ pub use diag::{
     AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
     Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
     StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
+};
+pub use freestanding_mode::{
+    enter_freestanding_target, freestanding_check_target, with_freestanding_target,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
