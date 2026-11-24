@@ -19,6 +19,8 @@ pub(crate) use exec::CHECK_FAILURE_SITE;
 mod float;
 #[path = "verify_frame.rs"]
 mod frame;
+#[path = "verify_guard.rs"]
+mod guard;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -243,6 +245,8 @@ pub(crate) struct VerifyContext<'a> {
     /// What each function may write of its `mut` parameters, found when a
     /// call first asks.
     frames: std::cell::OnceCell<frame::Frames<'a>>,
+    /// The trait implementation methods that assume their class invariant.
+    guards: guard::Guards,
 }
 
 impl<'a> VerifyContext<'a> {
@@ -653,7 +657,7 @@ impl<'a> VerifyContext<'a> {
                 }
             }
         }
-        Self {
+        let mut cx = Self {
             functions: module
                 .functions
                 .iter()
@@ -682,7 +686,77 @@ impl<'a> VerifyContext<'a> {
             callable_contracts,
             field_contracts,
             frames: std::cell::OnceCell::new(),
+            guards: guard::Guards::default(),
+        };
+        cx.guards = cx.find_guards(program, module);
+        cx
+    }
+
+    /// Finds the trait implementation methods of classes with invariants
+    /// that every caller is proved to reach with the invariant holding.
+    fn find_guards(&self, program: &Program, module: &'a MirModule) -> guard::Guards {
+        let candidates: BTreeSet<&str> = module
+            .functions
+            .iter()
+            .filter(|function| {
+                matches!(
+                    function.receiver,
+                    Some(
+                        crate::mir::MirReceiverKind::Borrow
+                            | crate::mir::MirReceiverKind::BorrowMut
+                    )
+                )
+            })
+            .map(|function| function.name.as_str())
+            .filter(|name| {
+                guard::impl_method_parts(name).is_some_and(|(_, class)| {
+                    self.class_invariant(class)
+                        .is_some_and(|(_, clauses)| !clauses.is_empty())
+                })
+            })
+            .collect();
+        // Most programs have none, and then nothing is read.
+        if candidates.is_empty() {
+            return guard::Guards::default();
         }
+        let mut functions = self.functions.clone();
+        let top_level = module.top_level.as_ref();
+        functions.extend(top_level.map(|function| (function.name.as_str(), function)));
+        guard::guards(
+            &functions,
+            &candidates,
+            &program.module_name,
+            top_level.map(|function| function.name.as_str()),
+        )
+    }
+
+    /// The class whose invariant the trait implementation method `name`
+    /// assumes on entry, because every call is proved to establish it.
+    pub(crate) fn impl_guard(&self, name: &str) -> Option<&str> {
+        let (_, class) = guard::impl_method_parts(self.guards.guarded.get(name)?)?;
+        Some(class)
+    }
+
+    /// Whether a trait implementation method of `class` assumes the class
+    /// invariant, so a trait object made from a `class` value must hold it.
+    pub(crate) fn guards_class(&self, class: &str) -> bool {
+        let invariant = |class: &str| {
+            self.class_invariant(class)
+                .map(|(_, clauses)| clauses.as_ptr())
+        };
+        let wanted = invariant(class);
+        wanted.is_some()
+            && self
+                .guards
+                .guarded
+                .iter()
+                .any(|name| self.impl_guard(name).and_then(invariant) == wanted)
+    }
+
+    /// The guarded method of another module that `function` reaches in a
+    /// way that proves nothing about its receiver.
+    pub(crate) fn charged(&self, function: &str) -> Option<&str> {
+        self.guards.charged.get(function).map(String::as_str)
     }
 
     /// The field paths of its `mut` parameter `param` that `function` may
@@ -1028,6 +1102,20 @@ pub fn verify_module(
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
         exec.assume_entry_parameters(&entry);
+        if let Some(target) = cx.charged(&function.name) {
+            exec.oblige(
+                ObligationKind::ClassInvariant,
+                function.span,
+                format!(
+                    "class invariant holds wherever `{public}` may call `{}`, which assumes it",
+                    crate::mir::public_function_name(target)
+                ),
+                &entry.pc,
+                exec::Goal::Unsupported(
+                    "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
+                ),
+            );
+        }
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
             if !is_primary {

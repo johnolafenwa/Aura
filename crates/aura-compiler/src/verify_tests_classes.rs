@@ -258,3 +258,304 @@ def main():
         ],
     );
 }
+
+// ----- Class invariants in trait implementations ------------------------
+
+#[test]
+fn a_trait_implementation_method_assumes_its_class_invariant() {
+    assert_proved(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+def main():
+    print(Sq(side=2).area())
+"#,
+    );
+    // A call on a trait object relies on the object holding the invariant.
+    assert_proved(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+
+    public def double(self) -> int64:
+        return self.side * 2
+
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+
+def total(shapes: list[dyn Shape]) -> int64:
+    ensures result >= 0
+    mut sum = 0
+    for s in shapes:
+        invariant sum >= 0
+        a = s.area()
+        if sum < 1000000:
+            sum += a % 1000
+    return sum
+
+def main():
+    print(Sq(side=2).area())
+"#,
+    );
+    // A generic function is verified as the copy each call uses, where
+    // the call names the method and proves the invariant.
+    assert_proved(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+class Ci:
+    r: int64
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+impl Shape for Ci:
+    def area(self) -> int64:
+        return 1
+def twice[T: Shape](x: T) -> int64:
+    ensures result >= 0
+    return x.area() % 100 + x.area() % 100
+def boxed[T: Shape](x: own T) -> dyn Shape:
+    return x
+def main():
+    print(twice(Sq(side=2)))
+    print(boxed(Sq(side=3)).area())
+"#,
+    );
+}
+
+#[test]
+fn a_trait_implementation_method_of_a_class_without_invariant_assumes_nothing() {
+    assert_open(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+def main():
+    print(Sq(side=2).area())
+"#,
+        &["8 overflow failed"],
+    );
+}
+
+#[test]
+fn each_way_to_a_trait_implementation_method_proves_the_invariant() {
+    // A call on `self` while the invariant is broken, a `mut self` method
+    // that breaks it, a call on a broken object, and a trait object made
+    // from one.
+    assert_open(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+    def grow(mut self)
+    def shrink(mut self)
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+    def poke(mut self) -> int64:
+        self.side = 0 - 5
+        r = self.area()
+        self.side = 5
+        return r
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+    def grow(mut self):
+        self.side += 1
+    def shrink(mut self):
+        if self.side > 0:
+            self.side -= 1
+def broken_static() -> int64:
+    mut s = Sq(side=2)
+    s.side = 5000000000
+    return s.area()
+def broken_object() -> int64:
+    mut s = Sq(side=2)
+    s.side = 5000000000
+    d: dyn Shape = s
+    return d.area()
+def fine(shapes: mut list[dyn Shape]) -> int64:
+    requires len(shapes) > 0
+    shapes[0].shrink()
+    mut d: dyn Shape = Sq(side=3)
+    d.shrink()
+    return d.area() % 7 + shapes[0].area() % 7
+def main():
+    print(broken_static())
+"#,
+        &[
+            "11 class invariant failed",
+            "18 class invariant failed",
+            "25 class invariant failed",
+            "29 class invariant failed",
+            "30 class invariant failed",
+        ],
+    );
+}
+
+#[test]
+fn a_method_reached_without_proof_assumes_nothing() {
+    // A call on a union runs the method with no proof about the receiver.
+    assert_open(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+class Ci:
+    r: int64
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+impl Shape for Ci:
+    def area(self) -> int64:
+        return 1
+def main():
+    u: Sq | Ci = Sq(side=2)
+    print(u.area())
+"#,
+        &["11 overflow failed"],
+    );
+    // So does a generic original that a call could not copy.
+    assert_open(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+class Ci:
+    r: int64
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+impl Shape for Ci:
+    def area(self) -> int64:
+        return 1
+def pick[T: Shape, U](x: T, y: U | int64) -> int64:
+    return x.area() % 100
+def main():
+    print(pick[Sq, int64](Sq(side=2), 5))
+"#,
+        &["11 overflow failed"],
+    );
+    // The renderer calls `display` on any value it prints.
+    assert_open(
+        r#"trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+class Sq:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+class Ci:
+    r: int64
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+impl Shape for Ci:
+    def area(self) -> int64:
+        return 1
+impl Display for Sq:
+    def display(self) -> str:
+        x = self.side * self.side
+        return f"sq {x}"
+def main():
+    print(Sq(side=2))
+"#,
+        &["17 overflow failed"],
+    );
+}
+
+#[test]
+fn an_importing_module_answers_for_calls_that_prove_nothing() {
+    if smt::SolverCommand::find(None).is_err() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("aura_verify_guard_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"guard\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/shapes.au"),
+        r#"public trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+public class Sq:
+    public side: int64
+    invariant 0 <= self.side and self.side <= 1000
+
+public class Ci:
+    public r: int64
+
+impl Shape for Sq:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Ci:
+    def area(self) -> int64:
+        return 1
+"#,
+    )
+    .expect("shapes.au");
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"from shapes import Shape, Sq, Ci
+
+def on_union(u: Sq | Ci) -> int64:
+    return u.area()
+
+def broken() -> int64:
+    mut s = Sq(side=2)
+    s.side = 5000000000
+    return s.area()
+
+def kept() -> int64:
+    return Sq(side=2).area()
+
+def main():
+    print(kept())
+"#,
+    )
+    .expect("main.au");
+    // The module that declares the method sees nothing that reaches it
+    // without proof, so the method assumes its invariant.
+    let program = crate::check_path(&dir.join("src/shapes.au")).expect("shapes checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    assert_eq!(open_checks(&report), Vec::<String>::new(), "{report:#?}");
+    // The importing module cannot withdraw that, so its call on a union
+    // is an open obligation, and its call on a broken object fails.
+    let program = crate::check_path(&main).expect("main checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    assert_eq!(
+        open_checks(&report),
+        ["3 class invariant unsupported", "9 class invariant failed"],
+        "{report:#?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

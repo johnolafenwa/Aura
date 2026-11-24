@@ -44,6 +44,40 @@ takes an `Account`, starts from an object that keeps its invariants. No run
 checks these places, so while one of them is unproved
 `aura build --remove-proved-checks` removes nothing.
 
+A method of an `impl Trait for Class:` block cannot be `public`, so no run
+checks the class invariants around it. The verifier treats it like a public
+method anyway. Its proof assumes the invariants on entry, and a `mut self`
+method is proved to hold them again on return. In exchange, each call that
+names the method proves the invariants of its receiver, and so does each
+conversion of an object to a trait object:
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+
+class Square:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side  # proved: `side` is at most 1000
+
+
+def main():
+    print(Square(side=2).area())  # 4
+```
+
+The method assumes nothing when the program reaches it in a way that proves
+nothing about the receiver. Those ways are a call on a union value, a call
+in a generic function that the verifier could not copy for its type
+arguments, and `Display.display`, which printing calls. When the method
+belongs to an imported module, the function that reaches it this way gets an
+unsupported class invariant obligation instead.
+
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a

@@ -2812,6 +2812,7 @@ impl<'a> Exec<'a> {
             // was made from, so a type arm and a call on it are decided.
             Rvalue::TraitObject { value, held } => {
                 let inner = self.followed_operand(state, value, IntTy::of(held));
+                self.prove_held_invariant(state, &inner);
                 Val::Held(held.clone(), Box::new(inner))
             }
             Rvalue::TraitObjectHolds { value, ty } => {
