@@ -5,6 +5,21 @@
 use super::*;
 use aura_runtime::frozen_value::FrozenValue;
 
+/// A frozen binding has no runtime caller of its synthesized initializer.
+pub(super) fn omit_initializers(module: &mut MirModule) {
+    let frozen: HashSet<_> = module
+        .constants
+        .iter()
+        .filter(|constant| constant.frozen.is_some())
+        .map(|constant| constant.initializer.as_str())
+        .collect();
+    if !frozen.is_empty() {
+        module
+            .functions
+            .retain(|function| !frozen.contains(function.name.as_str()));
+    }
+}
+
 impl FunctionCompiler<'_> {
     pub(super) fn read_frozen_constant(
         &mut self,
@@ -22,6 +37,9 @@ impl FunctionCompiler<'_> {
             &[cell, data, len, name, name_len],
         );
         let value = self.owned_opaque_result(call.results, constant.ty.clone());
+        if value.ty == *target {
+            return Ok(value);
+        }
         self.coerce_value(value, target)
     }
 }

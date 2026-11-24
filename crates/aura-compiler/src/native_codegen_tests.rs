@@ -18350,10 +18350,16 @@ fn compiled_constant_data_has_no_initializer_call_at_entry() {
     let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
     let mir = lower_source_to_mir(source).expect("constant should lower");
     let bytes = emit_host_object(&mir).expect("constant should emit");
-    let initializer = mir.constants.iter().find(|value| value.key.ends_with("::values")).unwrap();
+    let initializer = mir
+        .constants
+        .iter()
+        .find(|value| value.key.ends_with("::values"))
+        .unwrap();
     let symbol = mangle_symbol(&initializer.initializer);
     let object = object::File::parse(&*bytes).unwrap();
-    assert!(object.symbols().all(|entry| !entry.name().unwrap_or("").ends_with(&symbol)));
+    assert!(object
+        .symbols()
+        .all(|entry| !entry.name().unwrap_or("").ends_with(&symbol)));
     assert!(!object_referenced_symbols(&bytes)
         .iter()
         .any(|symbol| symbol.ends_with("aura_direct_module_constant")));

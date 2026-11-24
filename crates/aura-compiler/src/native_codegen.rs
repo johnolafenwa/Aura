@@ -118,6 +118,7 @@ fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, 
         | crate::mir::BoundaryError::Ownership(error)
         | crate::mir::BoundaryError::Checks(error) => error,
     })?;
+    frozen::omit_initializers(&mut module);
     Ok(module)
 }
 
