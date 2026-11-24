@@ -188,28 +188,59 @@ pub(super) fn expand_parents(
 pub(super) fn order_after_field_impls(
     decls: &mut Vec<&ImplDecl>,
     classes: &BTreeMap<String, ClassInfo>,
+    traits: &BTreeMap<String, TraitInfo>,
 ) {
     if !decls.iter().any(|decl| decl.delegation.is_some()) {
         return;
     }
-    let (mut ready, mut pending): (Vec<_>, Vec<_>) =
-        decls.drain(..).partition(|decl| decl.delegation.is_none());
+    let key = |class: &str, trait_name: &str| {
+        let identity = traits.get(trait_name).map_or_else(
+            || trait_name.to_owned(),
+            |info| format!("{}.{}", info.module_name, info.decl.name),
+        );
+        (class.to_owned(), identity)
+    };
+    let mut ready = Vec::new();
+    let mut pending = std::mem::take(decls);
     while !pending.is_empty() {
-        let waiting: BTreeSet<_> = pending
+        let waiting = pending
             .iter()
-            .filter_map(|decl| decl.for_type.named_parts().map(|(name, _)| name.to_owned()))
-            .collect();
+            .filter_map(|decl| {
+                decl.for_type
+                    .named_parts()
+                    .map(|(name, _)| key(name, &decl.trait_name))
+            })
+            .collect::<BTreeSet<_>>();
         let (next, rest): (Vec<_>, Vec<_>) = pending.into_iter().partition(|decl| {
-            let field_class = decl
-                .for_type
-                .named_parts()
-                .and_then(|(name, _)| classes.get(name))
-                .and_then(|class| class.fields.get(&decl.delegation.as_ref().unwrap().0))
-                .and_then(|field| match &field.ty {
-                    Type::Named(name, _) => Some(name),
-                    _ => None,
-                });
-            !field_class.is_some_and(|name| waiting.contains(name))
+            let Some((name, args)) = decl.for_type.named_parts() else {
+                return true;
+            };
+            if let Some(info) = traits.get(&decl.trait_name) {
+                if info
+                    .supertraits
+                    .iter()
+                    .any(|parent| waiting.contains(&key(name, &parent.trait_name)))
+                {
+                    return false;
+                }
+            }
+            let Some((field, _)) = &decl.delegation else {
+                return true;
+            };
+            let Some(class) = classes.get(name) else {
+                return true;
+            };
+            let field_class = class.fields.get(field).and_then(|field| match &field.ty {
+                Type::Named(name, _) => Some(name.as_str()),
+                Type::TypeParam(param) => class
+                    .decl
+                    .type_params
+                    .iter()
+                    .position(|name| name == param)
+                    .and_then(|index| args.get(index)?.named_parts().map(|(name, _)| name)),
+                _ => None,
+            });
+            !field_class.is_some_and(|name| waiting.contains(&key(name, &decl.trait_name)))
         });
         if next.is_empty() {
             ready.extend(rest);

@@ -24,6 +24,7 @@ fn trait_delegation_calls_preserve_the_selected_contract() {
         "trait_delegation",
         "trait_delegation_identity",
         "trait_delegation_chain",
+        "trait_delegation_parent_associated",
         "trait_delegation_methods",
         "trait_delegation_specialized",
         "trait_delegation_generic_associated",
