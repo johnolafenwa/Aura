@@ -587,6 +587,7 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
         .map(str::to_string)
         .collect::<HashSet<_>>();
     super::freestanding_heap::include_allocator(&mut module, &declared);
+    super::freestanding_values::lower_plain_values(&mut module);
     for function in &mut module.functions {
         strip_assertion_text(function);
     }
@@ -723,7 +724,7 @@ fn strip_assertion_text(function: &mut MirFunction) {
 
 /// Whether a freestanding program can hold a value of type `ty`: the
 /// emitter keeps it in machine words with no box.
-fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
+pub(super) fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
     fn words(ty: &DirectType) -> bool {
         match ty {
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,

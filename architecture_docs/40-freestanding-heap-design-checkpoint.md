@@ -92,13 +92,17 @@ freestanding program.
 Out of memory in a heap value of the language calls the trap hook with a
 new code, 9. A program that must survive that uses `mem.alloc`.
 
+The owner chose D1 on 2026-11-24.
+
 ## Steps
 
 1. Hooks, `mem.alloc`, `mem.free`, `mem.realloc`, the region functions,
    and the default allocator (ADR-0128).
-2. Boxed values that need no library of operations: enums with payloads,
-   tuples, `Result`, and classes with an `indirect` field.
-3. `str`, `bytes`, and `list`. Then `dict` and `set`. Then closures and
+2. Tuples, enums, and `Result` whose parts are all words, kept in machine
+   words with no heap (ADR-0129). Done.
+3. Boxed values that need no library of operations: enums and tuples
+   that hold a heap value, and classes with an `indirect` field.
+4. `str`, `bytes`, and `list`. Then `dict` and `set`. Then closures and
    trait objects.
 
 ## Proof

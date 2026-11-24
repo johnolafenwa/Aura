@@ -17,7 +17,11 @@ Last updated: 2026-11-24
 - Verified locally on Linux x86-64: 9 compiler tests, 5 command tests, and
   4 runtime tests for the heap pass. The example kernel boots under QEMU on
   RISC-V and AArch64 and prints `h=76127` and `f=0`.
-- Remaining: `str`, `list`, enums with payloads, boxed classes, `dict`,
+- Done after that, not yet in a pull request: tuples, enums, and `Result`
+  of words in freestanding builds, kept in machine words (ADR-0129), with
+  6 compiler tests and 1 command test.
+  [Notes](2026-11-24-freestanding-values.md)
+- Remaining: `str`, `list`, enums that hold them, boxed classes, `dict`,
   and closures in freestanding builds, by route D1 of
   [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
   a lean value layer written in Aura, which the owner chose.

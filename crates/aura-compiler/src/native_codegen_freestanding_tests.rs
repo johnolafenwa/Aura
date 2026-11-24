@@ -684,7 +684,7 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
         ("    print(count)\n    return count\n", "calls `print`"),
         ("    return 2 ** count\n", "uses `**`"),
         (
-            "    pair = (count, count)\n    return pair[0]\n",
+            "    pair = (count, \"count\")\n    return pair[0]\n",
             "uses a tuple",
         ),
         (
@@ -717,6 +717,7 @@ def describe(code: int64) -> str:
 enum Shape:
     Circle(radius: float64)
     Square(side: float64)
+    Named(name: str)
 
 def area(shape: Shape) -> float64:
     match shape:
@@ -724,6 +725,8 @@ def area(shape: Shape) -> float64:
             return radius * radius
         case Shape.Square(side):
             return side * side
+        case Shape.Named(_):
+            return 0.0
 
 export "C" def entry(count: int64) -> int64:
     print(describe(count))
@@ -740,10 +743,10 @@ export "C" def entry(count: int64) -> int64:
     };
     assert_eq!(at("`describe` builds text"), Some(3));
     assert_eq!(at("`describe` returns `str`"), Some(2));
-    assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(9));
-    assert_eq!(at("`area` matches on an enum value"), Some(10));
-    assert_eq!(at("`entry` calls `print`"), Some(17));
-    assert_eq!(at("`entry` uses an enum value"), Some(18));
+    assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(10));
+    assert_eq!(at("`area` matches on an enum value"), Some(11));
+    assert_eq!(at("`entry` calls `print`"), Some(20));
+    assert_eq!(at("`entry` uses an enum value"), Some(21));
     // One report for each construct and position.
     let mut seen = found
         .iter()

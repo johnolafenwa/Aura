@@ -45,11 +45,11 @@ function hands back a second result.
 Aura keeps a number, a `bool`, or a class made of those directly in machine
 registers and on the stack. Those values need no runtime, and they are what
 a freestanding program is made of: fixed-width integers and floats, classes
-of them, `T | None`, functions, generics, traits, loops, `assert`, and
-contracts.
+of them, tuples and enums of them, `T | None`, functions, generics,
+traits, loops, `match`, `assert`, and contracts.
 
 The values Aura keeps on the heap for you are out: `str`, lists,
-dictionaries, enums with payloads, closures, tasks. You do not have to remember the list. Ask
+dictionaries, enums that hold any of those, closures, tasks. You do not have to remember the list. Ask
 the compiler:
 
 ```console

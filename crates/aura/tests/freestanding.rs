@@ -472,6 +472,55 @@ fn a_freestanding_object_computes_what_the_hosted_program_prints() {
 }
 
 #[test]
+fn tuples_and_enums_of_words_compute_what_the_hosted_program_prints() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    let workspace = Workspace::new();
+    workspace.write("values.au", include_str!("freestanding_values.au"));
+    let hosted = workspace.aura(&["run", "values.au"]);
+    assert!(hosted.status.success(), "{}", stderr(&hosted));
+    assert_eq!(
+        stdout(&hosted),
+        "15726
+"
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "values.o", "values.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let harness = workspace.write(
+        "values.c",
+        r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+int64_t total(int64_t n);
+void aura_trap(uint32_t code, const char *file, uint64_t file_len, uint32_t line, uint32_t column) {
+    printf("trap %u at %.*s:%u:%u\n", code, (int)file_len, file, line, column);
+    exit(1);
+}
+int main(void) {
+    printf("%lld\n", (long long)total(40));
+    return 0;
+}
+"#,
+    );
+    let binary = workspace.path.join("values.bin");
+    let link = Command::new(compiler)
+        .arg(&harness)
+        .arg(workspace.path.join("values.o"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("the C compiler should start");
+    assert!(link.status.success(), "{}", stderr(&link));
+    let run = Command::new(&binary)
+        .output()
+        .expect("the linked program should start");
+    assert!(run.status.success(), "{}", stdout(&run));
+    assert_eq!(stdout(&run), stdout(&hosted));
+}
+
+#[test]
 fn a_failed_check_calls_the_trap_hook_with_its_code_and_position() {
     let Some(compiler) = c_compiler() else {
         return;

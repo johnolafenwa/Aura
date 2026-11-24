@@ -17,6 +17,11 @@ in this file.
   nothing. In a hosted program the same functions use the process
   allocator. The values the language keeps on a heap, such as `str` and
   `list`, are still not available in a freestanding build.
+- Freestanding builds compile tuples, enums, and `Result` whose parts are
+  all numbers, `bool`, classes of those, or other such tuples and enums,
+  and `match` on them. The compiler keeps each in machine words with no
+  heap. An enum that holds text, a collection, a union, or an `indirect`
+  payload is still reported as `AU2052`.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

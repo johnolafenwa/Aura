@@ -22368,6 +22368,8 @@ mod freestanding_heap;
 #[cfg(test)]
 #[path = "native_codegen_freestanding_tests.rs"]
 mod freestanding_tests;
+#[path = "native_codegen_freestanding_values.rs"]
+mod freestanding_values;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

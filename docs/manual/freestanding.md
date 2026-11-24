@@ -66,14 +66,32 @@ Every value is one or more machine words. No value of the language lives
 on a heap. A program reaches heap memory through addresses: see
 [The Heap](#the-heap).
 
+A tuple or an enum whose parts are all available types is available too.
+The compiler keeps it in machine words, as it keeps a class: a tuple is its
+elements, and an enum is the variant's number and room for each variant's
+payloads.
+
+```aura
+enum Reading:
+    Value(int64)
+    Missing
+
+def read(port: uint64) -> (Reading, uint64):
+    if port == 0:
+        return (Reading.Missing, port)
+    return (Reading.Value(42), port + 1)
+```
+
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
-| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
-| `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
+| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, `Array` |
+| Tuples of available types | Tuples that hold any other type |
+| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types | Enums that hold a union, text, a collection, or an `indirect` payload, and `Lookup` |
+| `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
+| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum | `try`, `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
@@ -318,7 +336,10 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- No heap values. A freestanding program cannot allocate.
+- No heap values of the language: no `str`, no collection, and no enum
+  with an `indirect` payload. A program allocates through the
+  [`mem` module](/manual/mem).
+- No `try`. Match on the `Result` instead.
 - No inline assembly and no port I/O instructions. Memory-mapped devices
   are reached with the [`mem` module](/manual/mem), and everything else
   through `extern "C"` functions.
