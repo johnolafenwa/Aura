@@ -1,0 +1,23 @@
+import control
+
+class Ticket:
+    id: int64
+    def __drop__(mut self):
+        print(self.id)
+        assert self.id != 2, "field failed"
+
+class Envelope:
+    ticket: Ticket
+    def __drop__(mut self):
+        print("envelope")
+
+def work():
+    other = Ticket(1)
+    enclosed = Envelope(Ticket(2))
+
+def main():
+    match control.recover(work):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("expected failure")
