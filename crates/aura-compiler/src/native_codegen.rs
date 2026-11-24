@@ -20468,10 +20468,8 @@ fn keep_boxed_copy_params(
         ) else {
             continue;
         };
-        let Some(first) = types.len().checked_sub(function.params.len()) else {
-            continue;
-        };
         // The receiver's type comes first, the parameters' after it.
+        let first = types.len().saturating_sub(function.params.len());
         let slot_types = types[first..].iter().chain(types[..first].iter());
         let mut started = Vec::new();
         for ((kept, ty), undropped) in slots(callee).zip(slot_types).zip(undropped) {

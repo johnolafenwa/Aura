@@ -495,38 +495,39 @@ pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Ve
     if module.ownership != MirOwnership::Explicit || module.borrowing.is_empty() {
         return BTreeMap::new();
     }
-    let Ok(context) = MirLoanValidationContext::new(module) else {
-        return BTreeMap::new();
-    };
     let dispatched = candidate_dispatched(module);
-    module
-        .functions
-        .iter()
-        .filter(|function| {
-            module.borrowing.contains(&function.name)
-                && !dispatched.contains(function.name.as_str())
-        })
-        .map(|function| {
-            let receiver = function.receiver.map(|passing| {
-                passing == MirReceiverKind::Borrow
-                    && function
-                        .local_types
-                        .iter()
-                        .find(|local| local.name == "self")
-                        .is_some_and(|local| !type_needs_drop(&context, &local.ty))
-            });
-            let params = function
-                .params
+    MirLoanValidationContext::new(module)
+        .map(|context| {
+            module
+                .functions
                 .iter()
-                .map(|param| {
-                    param.passing == MirReceiverKind::Borrow
-                        && !type_needs_drop(&context, &param.ty)
+                .filter(|function| {
+                    module.borrowing.contains(&function.name)
+                        && !dispatched.contains(function.name.as_str())
                 })
-                .chain(receiver)
-                .collect();
-            (function.name.clone(), params)
+                .map(|function| {
+                    let receiver = function.receiver.map(|passing| {
+                        passing == MirReceiverKind::Borrow
+                            && function
+                                .local_types
+                                .iter()
+                                .find(|local| local.name == "self")
+                                .is_some_and(|local| !type_needs_drop(&context, &local.ty))
+                    });
+                    let params = function
+                        .params
+                        .iter()
+                        .map(|param| {
+                            param.passing == MirReceiverKind::Borrow
+                                && !type_needs_drop(&context, &param.ty)
+                        })
+                        .chain(receiver)
+                        .collect();
+                    (function.name.clone(), params)
+                })
+                .collect()
         })
-        .collect()
+        .unwrap_or_default()
 }
 
 /// [`recorded_borrowing`] for a backend: how each function that keeps its

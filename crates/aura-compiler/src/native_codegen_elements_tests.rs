@@ -1286,6 +1286,17 @@ fn a_field_lent_to_a_call_that_borrows_it_lends_its_box() {
     );
     // A call that is also passed the instance may reach the field.
     assert!(crate::native_codegen::classes::field_lend_temps(method("mixed"), borrows).is_empty());
+    // Anything else between the lend and its end may reach the field.
+    let mut probe = method("probe").clone();
+    let lend = probe.blocks[0]
+        .instructions
+        .iter()
+        .position(|instruction| matches!(instruction, Instruction::Lend { .. }))
+        .expect("the field is lent");
+    probe.blocks[0]
+        .instructions
+        .insert(lend + 1, Instruction::Safepoint);
+    assert!(crate::native_codegen::classes::field_lend_temps(&probe, |_| true).is_empty());
 }
 
 #[test]
@@ -1365,4 +1376,27 @@ fn a_copy_receiver_only_read_stays_with_the_caller() {
     assert_eq!(kept_copies("Point.twice"), vec![true]);
     // Returned, so the method owns it.
     assert_eq!(kept_copies("Point.itself"), vec![false]);
+}
+
+#[test]
+fn a_copy_parameter_lent_is_owned() {
+    let (module, _) = copies_module();
+    let mut area = module
+        .functions
+        .iter()
+        .find(|function| function.name == "area")
+        .expect("the function should exist")
+        .clone();
+    area.blocks[0].instructions.insert(
+        0,
+        Instruction::Lend {
+            place: "shape".to_string(),
+            temp: "%t_lent".to_string(),
+            mutable: false,
+        },
+    );
+    assert_eq!(
+        super::kept_copy_params(&area, &[true], |_| Vec::new()),
+        vec![false]
+    );
 }
