@@ -25,8 +25,8 @@
 
 use super::{Diagnostic, Item, Module, Result};
 use crate::ast::{
-    Argument, ConstantDecl, Expr, ExprKind, FunctionDecl, FunctionTypeParam, ParamMode,
-    TypeAliasDecl, TypeRef, TypeRefKind,
+    Argument, ClassDecl, ConstantDecl, Expr, ExprKind, FunctionDecl, FunctionTypeParam, Param,
+    ParamMode, ReturnStmt, Stmt, TypeAliasDecl, TypeRef, TypeRefKind,
 };
 use crate::diag::Span;
 use aura_core::ops::ReceiverKind;
@@ -96,39 +96,169 @@ impl Applications {
 pub(super) fn expand(module: &mut Module) -> Result<Applications> {
     let mut applications = Applications::default();
     let mut items = Vec::with_capacity(module.items.len());
-    for item in std::mem::take(&mut module.items) {
-        let Item::Function(function) = item else {
-            items.push(item);
-            continue;
-        };
-        if function.decorators.is_empty() {
-            items.push(Item::Function(function));
-            continue;
+    for mut item in std::mem::take(&mut module.items) {
+        match item {
+            Item::Function(function) if !function.decorators.is_empty() => {
+                let (alias, function, constant) = desugar(function, None, &mut applications)?;
+                insert_constant(module, constant);
+                items.push(Item::TypeAlias(alias));
+                items.push(Item::Function(function));
+            }
+            Item::Class(ref mut class) => {
+                expand_methods(class, module, &mut items, &mut applications)?;
+                items.push(item);
+            }
+            _ => items.push(item),
         }
-        let (alias, function, constant) = desugar(function, &mut applications)?;
-        let position = module
-            .constants
-            .iter()
-            .position(|existing| {
-                (existing.span.line, existing.span.column)
-                    > (constant.span.line, constant.span.column)
-            })
-            .unwrap_or(module.constants.len());
-        module.constants.insert(position, constant);
-        items.push(Item::TypeAlias(alias));
-        items.push(Item::Function(function));
     }
     module.items = items;
     Ok(applications)
 }
 
+fn insert_constant(module: &mut Module, constant: ConstantDecl) {
+    let position = module
+        .constants
+        .iter()
+        .position(|existing| {
+            (existing.span.line, existing.span.column) > (constant.span.line, constant.span.column)
+        })
+        .unwrap_or(module.constants.len());
+    module.constants.insert(position, constant);
+}
+
+/// Keep the source method as the receiver-aware entry point. Its body calls
+/// the same kind of initialized constant as a decorated free function. The
+/// original body becomes a private associated function so module
+/// initialization can pack it without capturing any particular receiver.
+fn expand_methods(
+    class: &mut ClassDecl,
+    module: &mut Module,
+    items: &mut Vec<Item>,
+    applications: &mut Applications,
+) -> Result<()> {
+    let mut bodies = Vec::new();
+    for method in class
+        .methods
+        .iter_mut()
+        .filter(|m| !m.decorators.is_empty())
+    {
+        let span = method.span;
+        if !class.type_params.is_empty() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                method.decorators[0].span,
+                format!(
+                    "decorated method `{}.{}` cannot belong to a generic class",
+                    class.name, method.name
+                ),
+            ));
+        }
+        if method.name == "__init__" {
+            return Err(Diagnostic::coded_at(CODE, method.decorators[0].span,
+                "an initializer cannot be decorated because its receiver is still under construction"));
+        }
+        let mut body = method.clone();
+        let mut args = Vec::new();
+        if let Some(receiver) = body.receiver.take() {
+            body.params.insert(
+                0,
+                Param {
+                    name: "self".into(),
+                    mode: match receiver {
+                        ReceiverKind::Borrow => ParamMode::Default,
+                        ReceiverKind::BorrowMut => ParamMode::BorrowMut,
+                        ReceiverKind::Value => ParamMode::Own,
+                    },
+                    ty: TypeRef::named(&class.name, Vec::new(), false, span),
+                    default: None,
+                    keyword_only: false,
+                    span,
+                },
+            );
+        }
+        for p in &body.params {
+            args.push(Argument {
+                name: p.keyword_only.then(|| p.name.clone()),
+                value: Expr {
+                    kind: ExprKind::Name(p.name.clone()),
+                    span: p.span,
+                },
+                span: p.span,
+            });
+        }
+        let (alias, mut body, constant) = desugar(body, Some(&class.name), applications)?;
+        method.body = vec![Stmt::Return(ReturnStmt {
+            value: Some(Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(Expr {
+                        kind: ExprKind::Name(constant.name.clone()),
+                        span,
+                    }),
+                    args,
+                },
+                span,
+            }),
+            view: None,
+            span,
+        })];
+        body.decorators.clear();
+        body.doc = None;
+        bodies.push(body);
+        items.push(Item::TypeAlias(alias));
+        insert_constant(module, constant);
+    }
+    class.methods.extend(bodies);
+    Ok(())
+}
+
+/// The module-level callable signature needs the class name wherever the
+/// method's signature spells its enclosing type as `Self`.
+fn resolve_method_self(ty: &mut TypeRef, class: &str) {
+    match &mut ty.kind {
+        TypeRefKind::Named { name, args } => {
+            if name == "Self" {
+                *name = class.to_owned();
+            }
+            for arg in args {
+                resolve_method_self(arg, class);
+            }
+        }
+        TypeRefKind::Union(items) | TypeRefKind::Tuple(items) => {
+            for item in items {
+                resolve_method_self(item, class);
+            }
+        }
+        TypeRefKind::Callable { signature, .. } => resolve_method_self(signature, class),
+        TypeRefKind::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            for param in params {
+                resolve_method_self(&mut param.ty, class);
+            }
+            resolve_method_self(return_type, class);
+        }
+    }
+}
+
 fn desugar(
     mut function: FunctionDecl,
+    class: Option<&str>,
     applications: &mut Applications,
 ) -> Result<(TypeAliasDecl, FunctionDecl, ConstantDecl)> {
     let first = function.decorators[0].span;
     let reject = |message: String| Err(Diagnostic::coded_at(CODE, first, message));
-    let name = function.name.clone();
+    let name = match class {
+        Some(class) => format!("{class}.{}", function.name),
+        None => function.name.clone(),
+    };
+    // Include the class name's length so underscores in source identifiers
+    // cannot give two distinct methods the same module-level binding.
+    let key = match class {
+        Some(class) => format!("method_{}_{}_{}", class.len(), class, function.name),
+        None => function.name.clone(),
+    };
     if !function.type_params.is_empty() {
         return reject(format!("decorated function `{name}` cannot be generic"));
     }
@@ -165,10 +295,13 @@ fn desugar(
         .collect();
     let signature =
         TypeRef::function_with_view_return(params, function.return_type.clone(), None, span);
-    let callable = TypeRef::callable(false, ReceiverKind::Borrow, signature, span);
+    let mut callable = TypeRef::callable(false, ReceiverKind::Borrow, signature, span);
+    if let Some(class) = class {
+        resolve_method_self(&mut callable, class);
+    }
     let alias = TypeAliasDecl {
         public: false,
-        name: format!("{DECORATED_PREFIX}{name}"),
+        name: format!("{DECORATED_PREFIX}{key}"),
         type_params: Vec::new(),
         type_param_bounds: Default::default(),
         target: callable.clone(),
@@ -176,7 +309,17 @@ fn desugar(
         contracts: Vec::new(),
     };
 
-    let undecorated = format!("{UNDECORATED_PREFIX}{name}");
+    let undecorated = format!("{UNDECORATED_PREFIX}{}", function.name);
+    let target = match class {
+        Some(class) => ExprKind::Member {
+            object: Box::new(Expr {
+                kind: ExprKind::Name(class.to_owned()),
+                span,
+            }),
+            field: undecorated.clone(),
+        },
+        None => ExprKind::Name(undecorated.clone()),
+    };
     // The packed function is the innermost decorator's argument, so a
     // mismatch in passing it reports at that decorator.
     let innermost = function.decorators[function.decorators.len() - 1].span;
@@ -186,7 +329,7 @@ fn desugar(
             span: innermost,
         },
         Expr {
-            kind: ExprKind::Name(undecorated.clone()),
+            kind: target,
             span: innermost,
         },
         innermost,
@@ -209,8 +352,12 @@ fn desugar(
         value = call(decorator.expr.clone(), value, decorator.span);
     }
     let constant = ConstantDecl {
-        public: function.public,
-        name,
+        public: class.is_none() && function.public,
+        name: if class.is_some() {
+            format!("{DECORATED_PREFIX}slot_{key}")
+        } else {
+            name
+        },
         annotation: Some(callable),
         value,
         span,
@@ -296,10 +443,18 @@ mod method_tests {
     fn method_decorators_preserve_receiver_modes_recursion_and_call_order() {
         let source = include_str!("../../tests/fixtures/run-pass/method_decorators.au");
         let expected = include_str!("../../tests/fixtures/run-pass/method_decorators.stdout");
-        assert_eq!(run_source(source).unwrap(), expected);
-        check_source(include_str!("../../tests/fixtures/check-pass/method_decorators.au")).unwrap();
-        let module = parse_source(include_str!("../../tests/fixtures/parse-pass/method_decorators.au")).unwrap();
-        let crate::ast::Item::Class(class) = &module.items[0] else { panic!("class") };
+        assert_eq!(run_source(source).unwrap().stdout, expected);
+        check_source(include_str!(
+            "../../tests/fixtures/check-pass/method_decorators.au"
+        ))
+        .unwrap();
+        let module = parse_source(include_str!(
+            "../../tests/fixtures/parse-pass/method_decorators.au"
+        ))
+        .unwrap();
+        let crate::ast::Item::Class(class) = &module.items[0] else {
+            panic!("class")
+        };
         let method = &class.methods[0];
         assert_eq!(method.decorators[0].text, "@tools.traced");
         assert_eq!(method.decorators[1].text, "@retry(3)");
@@ -308,8 +463,88 @@ mod method_tests {
 
     #[test]
     fn method_decorator_restrictions_name_the_method() {
-        let error = check_source(include_str!("../../tests/fixtures/check-fail/method_decorator_default.au")).unwrap_err();
+        let error = check_source(include_str!(
+            "../../tests/fixtures/check-fail/method_decorator_default.au"
+        ))
+        .unwrap_err();
         assert_eq!(error.code, "AU2047");
         assert!(error.message.contains("Counter.read"));
+    }
+
+    #[test]
+    fn decorated_method_admits_only_a_complete_callable() {
+        for (source, reason) in [
+            (
+                "class Box[T]:\n    @wrapped\n    def get(self):\n        pass\n",
+                "generic class",
+            ),
+            (
+                "class Box:\n    @wrapped\n    def __init__(self):\n        pass\n",
+                "under construction",
+            ),
+            (
+                "class Box:\n    @wrapped\n    def get[T](self, other: T):\n        pass\n",
+                "cannot be generic",
+            ),
+            (
+                "class Box:\n    @wrapped\n    field: int64\n",
+                "method definition",
+            ),
+        ] {
+            let error = check_source(source)
+                .err()
+                .expect("invalid decorated declaration");
+            assert_eq!(error.code, "AU2047");
+            assert!(error.message.contains(reason), "{error}");
+        }
+        for source in [
+            include_str!("../../tests/fixtures/check-fail/property_not_a_name.au"),
+            include_str!("../../tests/fixtures/check-fail/property_other_decorator.au"),
+        ] {
+            parse_source(source).unwrap();
+            assert!(check_source(source).is_err());
+        }
+    }
+
+    #[test]
+    fn decorated_associated_method_resolves_nested_self_types_and_docs() {
+        let source = r#"type Group = Callable[def(items: list[(Box, Box | None)]) -> Box]
+def keep(f: own Group) -> Group:
+    return f
+
+public class Box:
+    @keep
+    public def first(items: list[(Self, Self | None)]) -> Self:
+        return Box()
+
+def main():
+    box = Box.first([])
+"#;
+        let program = check_source(source).unwrap();
+        let api = crate::analysis::api_module_from_program("example", &program);
+        let class = api
+            .declarations
+            .iter()
+            .find(|entry| entry.name == "Box")
+            .unwrap();
+        assert_eq!(class.methods.len(), 1);
+        assert!(class.methods[0].signature.starts_with("@keep\ndef first("));
+    }
+
+    #[test]
+    fn documented_method_decorator_example_runs() {
+        let source = include_str!("../../../../examples/classes/method_decorators.au");
+        assert_eq!(run_source(source).unwrap().stdout, "42\n");
+    }
+
+    #[test]
+    fn imported_decorated_method_qualifies_its_receiver_in_the_initializer() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass");
+        let result = crate::run_path(&fixtures.join("imported_method_decorator.au")).unwrap();
+        assert_eq!(
+            result.stdout,
+            include_str!("../../tests/fixtures/run-pass/imported_method_decorator.stdout")
+        );
     }
 }

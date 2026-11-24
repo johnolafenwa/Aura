@@ -44,6 +44,6 @@ class Counter:
 def main():
     mut counter = Counter(value=Counter.start(1))
     print(counter.bump())
-    read = counter.read
+    read = Counter(value=counter.value).read
     print(read(n=1))
     print(counter.finish())
