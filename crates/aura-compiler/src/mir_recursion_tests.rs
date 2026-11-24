@@ -128,32 +128,34 @@ def main() -> int32:
 }
 
 #[test]
-fn callee_counts_include_values_and_exclude_keys_and_the_functions_own_name() {
-    let mut module = lower_source_to_mir("def leaf() -> int64:\n    return 1\n")
-        .expect("source should lower to MIR");
-    let function = module.functions.iter_mut().find(|f| f.name == "leaf").unwrap();
-    function.module_name = "quoted\"name".into();
-    function.source_path = Some("quoted\"name".into());
-    let index = ["quoted\"name", "leaf", "source_path", "int64", "entry", "Int", "Named"]
-        .into_iter().enumerate().map(|(i, name)| (name, i)).collect();
-    fn visit(value: &serde_json::Value, names: &mut Vec<String>) {
-        match value {
-            serde_json::Value::String(name) => names.push(name.clone()),
-            serde_json::Value::Array(items) => items.iter().for_each(|item| visit(item, names)),
-            serde_json::Value::Object(fields) => fields.values().for_each(|item| visit(item, names)),
-            _ => {}
+fn callback_dispatch_preserves_cycles_for_all_two_function_graphs() {
+    for edge_mask in 0u8..16 {
+        let direct = (0..2)
+            .map(|from| {
+                (0..2)
+                    .filter(|to| edge_mask & (1 << (2 * from + to)) != 0)
+                    .collect()
+            })
+            .collect::<Vec<Vec<usize>>>();
+        for opaque_mask in 0u8..4 {
+            let opaque = [opaque_mask & 1 != 0, opaque_mask & 2 != 0];
+            for escape_mask in 0u8..4 {
+                let escaping = (0..2)
+                    .filter(|to| escape_mask & (1 << to) != 0)
+                    .collect::<Vec<_>>();
+                let mut expanded = direct.clone();
+                for (callees, calls_back) in expanded.iter_mut().zip(opaque) {
+                    if calls_back {
+                        callees.extend_from_slice(&escaping);
+                    }
+                }
+                let expected = cyclic_nodes(&expanded);
+                let actual = super::cyclic_functions(direct.clone(), &opaque, escaping);
+                assert_eq!(
+                    actual, expected,
+                    "direct={edge_mask}, opaque={opaque_mask}, escaping={escape_mask}"
+                );
+            }
         }
     }
-    let mut encoded = serde_json::to_value(&*function).unwrap();
-    encoded.as_object_mut().unwrap().remove("name");
-    let mut names = Vec::new();
-    visit(&encoded, &mut names);
-    let mut expected = std::collections::HashMap::new();
-    for name in names {
-        if let Some(&callee) = std::collections::HashMap::get(&index, name.as_str()) {
-            *expected.entry(callee).or_insert(0) += 1;
-        }
-    }
-    assert_eq!(expected[&0], 2);
-    assert_eq!(super::named_callees(function, &index), expected);
 }
