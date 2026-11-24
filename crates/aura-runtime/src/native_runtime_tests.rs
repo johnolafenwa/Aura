@@ -26978,6 +26978,60 @@ fn a_shared_list_of_lists_takes_in_place_appends_in_for_two_readers_at_once() {
 }
 
 #[test]
+fn a_list_of_lists_takes_each_new_list_in_its_box_with_no_general_write() {
+    use super::DirectListAccess;
+    let list_of = |element: Type| Type::Named("list".to_string(), vec![element]);
+    let outer_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let inner_type = super::canonical_runtime_type_name(&list_of(Type::named("int64")));
+    let outer_type =
+        super::canonical_runtime_type_name(&list_of(list_of(Type::named("int64"))));
+    let new_inner = || {
+        super::aura_direct_vec_empty_tagged(&inner_cell, inner_type.as_ptr(), inner_type.len())
+    };
+    let outer =
+        super::aura_direct_vec_empty_tagged(&outer_cell, outer_type.as_ptr(), outer_type.len());
+    let shape = |list: *mut OpaqueValue| unsafe { &*list }.shape_tag.load(Ordering::Relaxed);
+    let tagged = shape(outer);
+    assert!(!tagged.is_null());
+    // The first list gives the outer list its boxes through the general
+    // write, which clears the shape.
+    let first = new_inner();
+    super::aura_direct_vec_push_in_place(outer, first);
+    assert_eq!(list_view_access(outer), DirectListAccess::Boxes as u32);
+    assert!(shape(outer).is_null());
+    unsafe { &*outer }.shape_tag.store(tagged, Ordering::Relaxed);
+    // The rest join in their own boxes and leave the shape as it is.
+    let mut boxes = vec![first];
+    for _ in 0..20 {
+        let inner = new_inner();
+        super::aura_direct_vec_push_in_place(outer, inner);
+        boxes.push(inner);
+    }
+    assert_eq!(shape(outer), tagged);
+    assert_eq!(list_view_len(outer), 21);
+    assert!(list_view_capacity(outer) >= 21);
+    for (index, inner) in boxes.iter().enumerate() {
+        let lent = super::aura_direct_vec_lend(outer, index as i64, 1, 1);
+        assert_eq!(lent.wrapping_byte_sub(1), *inner);
+    }
+    assert_eq!(super::aura_direct_vec_len(outer), 21);
+    // A copy shares the boxes, so the next list takes the general write,
+    // and the copy keeps its length.
+    let copy = super::aura_direct_clone_value(outer);
+    super::aura_direct_vec_push_in_place(outer, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 21);
+    assert_eq!(super::aura_direct_vec_len(outer), 22);
+    // A list another thread may read takes its lock.
+    unsafe { super::share_direct_value(copy) };
+    super::aura_direct_vec_push_in_place(copy, new_inner());
+    assert_eq!(super::aura_direct_vec_len(copy), 22);
+    for value in [outer, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn a_full_scalar_list_grows_from_what_generated_code_left() {
     use super::DirectListAccess;
     let header = |list: *mut OpaqueValue| unsafe { &*list };

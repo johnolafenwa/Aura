@@ -9280,6 +9280,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
+                // SAFETY: generated code passes null or a live list.
+                let Some(element) = (unsafe { grow_box_list(vec, element) }) else {
+                    return;
+                };
                 with_vector_mut(vec, |vector| {
                     if is_unknown_runtime_type(&vector.element_type) {
                         let inferred = inferred_collection_type(element.value());
@@ -9303,6 +9307,52 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
     })
+}
+
+/// The whole of an append of `element` for a confined list that already
+/// keeps its elements in boxes, in storage no other list shares, and
+/// knows its element type: it appends the box and records where the boxes
+/// now lie, and nothing else. Any other list gets the box back and takes
+/// the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_box_list(vec: *mut OpaqueValue, element: ElementBox) -> Option<ElementBox> {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return Some(element);
+    };
+    // The view must be the one of the boxes, not a table beside them.
+    if !header.shared_lock.load(Ordering::Acquire).is_null()
+        || header.list_access.load(Ordering::Relaxed) != DirectListAccess::Boxes as u32
+    {
+        return Some(element);
+    }
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return Some(element);
+    };
+    if is_unknown_runtime_type(&vector.element_type) {
+        return Some(element);
+    }
+    let ListElements::Boxes(boxes) = &mut vector.elements else {
+        return Some(element);
+    };
+    let Some(boxes) = boxes.unshared_mut() else {
+        return Some(element);
+    };
+    boxes.push(element);
+    header.list_elements.set(boxes.as_ptr() as usize);
+    header.list_len.set(boxes.len());
+    header.list_capacity.store(
+        u32::try_from(boxes.capacity()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    None
 }
 
 /// Appends a `str` literal of a list literal, read where the program keeps
