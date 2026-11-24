@@ -40,11 +40,24 @@ of `benchmarks/tensor` on an Apple M2 Pro.
 
 - `cargo test -p aura-runtime --lib tensor` passes on Linux.
 - `cargo clippy -p aura-runtime --all-targets -- -D warnings` passes.
-- The Metal module type-checks on Linux with its platform gate widened.
-  The shim passes `clang -fsyntax-only` against the macOS 14.5 MPSGraph
-  headers with stub system headers.
-- Pending: the GPU tests and the timings on the Mac.
+- On an Apple M2 Pro with macOS 26.5.2, `cargo test -p aura-runtime
+  --lib tensor` passes with every GPU test run on the Metal device, and
+  the eight small workloads of `benchmarks/tensor/workloads.au` give the
+  CPU device's results.
+- One defect was found there: MPSGraph keeps an `int64` constant as a
+  double, which rounded the four multipliers of the random hash. A word
+  wider than 53 bits is fed from a buffer on each run.
+- With `AURA_TENSOR_TRACE=1`, the workloads show two kinds of work still
+  in host memory on Metal: the sum of an `int64` tensor, which is
+  checked for overflow, and a cast from `float32` to `int64`, which is
+  checked for range. Both are by design.
 
 ## Follow-up
 
-- Record the Mac timings in `benchmarks/tensor/README.md`.
+- Record the Mac timings in `benchmarks/tensor/README.md`. A first run
+  was taken on battery in Low Power Mode and is not recorded.
+- That run shows `cnn_train` and `monte_carlo` well behind PyTorch on
+  MPS. A training step of `cnn_train` is one graph of 812 steps that
+  runs in about 45 ms, and its convolution is built from an index
+  select. `monte_carlo` spends its time in the 64-bit hash of the normal
+  floats.

@@ -338,11 +338,11 @@ See `2026-11-17-ordered-collections.md`.
   reverse, `expand`, `cat`, `index_select`, `index_add`, `argmax`,
   `argmin`, and random tensors; plans with several outputs; variables
   that wait for the next run.
-- Verification: the runtime tensor tests pass on Linux, where the Metal
-  code is type-checked only. The shim is checked against the macOS 14.5
-  MPSGraph headers. The GPU tests and timings wait for a run on the Mac.
-- Remaining: build and run the GPU tests on the Mac, time
-  `benchmarks/tensor` there, and record the numbers.
+- Verification: the runtime tensor tests pass on Linux and on an Apple
+  M2 Pro, where every GPU test runs on the Metal device. The small
+  workloads give the CPU device's results on Metal.
+- Remaining: time `benchmarks/tensor` on the Mac on mains power and
+  record the numbers.
 
 ## GPU tensors (in progress)
 
