@@ -195,3 +195,112 @@ fn fixed_module_elements_have_inline_storage_on_each_target() {
         emit_freestanding_object(&mir, "ring.au", source, target).unwrap();
     }
 }
+
+#[test]
+fn packed_module_record_uses_c_offsets_alignment_and_shared_bit_storage() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let mir = lower_to_mir(&check_freestanding_path(&path, None).unwrap());
+    for target in FreestandingTarget::ALL {
+        let bytes = emit_freestanding_object(&mir, "main.au", &source, target).unwrap();
+        let obj = object::File::parse(&bytes[..]).unwrap();
+        let header = obj
+            .symbols()
+            .find(|s| {
+                s.name()
+                    .is_ok_and(|s| s.contains("__aura_state_") && s.ends_with("686561646572"))
+            })
+            .unwrap();
+        let section = obj
+            .section_by_index(header.section_index().unwrap())
+            .unwrap();
+        let offset = (header.address() - section.address()) as usize;
+        assert!(section.align() >= 16);
+        assert_eq!(header.size(), 16);
+        assert_eq!(
+            &section.data().unwrap()[offset..offset + 16],
+            &[5, 0x44, 0x33, 0x22, 0x11, 0x2b, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        let word = obj
+            .symbols()
+            .find(|s| {
+                s.name()
+                    .is_ok_and(|s| s.contains("__aura_state_") && s.ends_with("776f7264"))
+            })
+            .unwrap();
+        assert_eq!(word.size(), 4);
+        assert_eq!(
+            obj.section_by_index(word.section_index().unwrap())
+                .unwrap()
+                .kind(),
+            object::SectionKind::UninitializedData
+        );
+    }
+}
+
+#[test]
+fn literal_device_addresses_preserve_uint64_values() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = "public mut base: ptr[uint8] = 18446744073709551615 as ptr[uint8]\nexport \"C\" def base_address() -> uint64:\n    return base as uint64\n";
+    let checked = check_freestanding_path(&path, Some(source)).unwrap();
+    assert_eq!(
+        checked.constants["base"].state.as_ref().unwrap().bytes,
+        u64::MAX.to_le_bytes()
+    );
+}
+
+#[test]
+fn tagged_module_state_packs_fixed_leaves_as_little_endian_words() {
+    let source = include_str!("../../tests/fixtures/freestanding/module_state/tagged_fixed.au");
+    let checked = program(source).unwrap();
+    let active = &checked.constants["packet"].state.as_ref().unwrap().bytes;
+    assert_eq!(active.len(), 32);
+    assert_eq!(&active[8..16], &(-2_i64).to_le_bytes());
+    assert_eq!(
+        &active[16..],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0]
+    );
+    let empty = &checked.constants["empty"].state.as_ref().unwrap().bytes;
+    assert_eq!(empty.len(), 32);
+    assert_eq!(&empty[8..], &[0; 24]);
+    for target in FreestandingTarget::ALL {
+        emit_freestanding_object(&lower_to_mir(&checked), "tagged_fixed.au", source, target)
+            .unwrap();
+    }
+}
+
+#[test]
+fn static_initializer_uses_the_imported_record_definition() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = "import records\nmut saved: records.Record = records.Record(tag=7, count=67305985)\nexport \"C\" def read() -> uint32:\n    return saved.count\n";
+    let checked = check_freestanding_path(&path, Some(source)).unwrap();
+    let image = checked.constants["saved"].state.as_ref().unwrap();
+    assert_eq!(image.bytes, [7, 1, 2, 3, 4]);
+    assert_eq!(image.alignment, 1);
+    emit_freestanding_object(
+        &lower_to_mir(&checked),
+        "main.au",
+        source,
+        FreestandingTarget::Aarch64,
+    )
+    .unwrap();
+}
+
+#[test]
+fn inline_union_fields_contribute_their_tag_and_payload_to_outer_unions() {
+    let source = "copy class Reading:\n    value: int32 | None\nmut current: Reading | None = Reading(value=-7)\nexport \"C\" def clear():\n    current = None\n";
+    let checked = program(source).unwrap();
+    let bytes = &checked.constants["current"].state.as_ref().unwrap().bytes;
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(&bytes[16..], &(-7_i64).to_le_bytes());
+    emit_freestanding_object(
+        &lower_to_mir(&checked),
+        "nested.au",
+        source,
+        FreestandingTarget::X86_64,
+    )
+    .unwrap();
+}

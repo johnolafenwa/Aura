@@ -62,7 +62,7 @@ pub(super) fn complete_lengths(classes: &mut BTreeMap<String, ClassInfo>) {
     }
 }
 
-pub(super) fn setter_statement(assign: &crate::ast::AssignStmt) -> Option<Stmt> {
+pub(crate) fn setter_statement(assign: &crate::ast::AssignStmt) -> Option<Stmt> {
     let crate::ast::AssignTarget::Member { object, field } = &assign.target else {
         return None;
     };

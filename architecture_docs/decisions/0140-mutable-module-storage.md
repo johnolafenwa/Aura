@@ -1,6 +1,6 @@
 # 0140. Mutable Module Storage
 
-Freestanding programs own their execution environment. A module can allocate a mutable cell with a literal initializer. The cell occupies writable, naturally aligned storage in the object. The target's startup code zeroes .bss and installs the contents of .data before calling an export. Calling a second export reaches the same cell. The defining module owns the storage even when several modules import its name.
+Freestanding programs own their execution environment. A module can allocate a mutable cell with a literal initializer. Each reachable cell occupies writable storage with its declared alignment in the object. C records use the same target layout for the initializer bytes, subsequent field writes and foreign pointers. The target's startup code zeroes .bss and installs the contents of .data before calling an export. Calling a second export reaches the same cell. The defining module owns the storage even when several modules import its name.
 
 A hosted task may change state through an immutable binding to a sync handle. Replacing a module binding would race with reads of the handle itself. Hosted module declarations reject mut and point to sync.AtomicInt and sync.Mutex in the diagnostic. In executable scripts, the existing task-owned mut local keeps its scope. A task-local module binding would require per-task storage, initialization and cleanup across suspension. Defer that feature.
 

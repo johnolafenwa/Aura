@@ -66,7 +66,7 @@ impl FunctionCompiler<'_> {
         use crate::c_layout::StoragePart;
         for (part, &word) in layout.storage_parts().into_iter().zip(&value.values) {
             match part {
-                StoragePart::Inline { offset } => {
+                StoragePart::Inline { offset, .. } => {
                     self.builder
                         .store(MemFlags::new(), word, slot, offset as i32)
                 }
@@ -96,7 +96,7 @@ impl FunctionCompiler<'_> {
         let mut values = Vec::new();
         for (part, storage) in layout.storage_parts().into_iter().zip(ty.abi_types()) {
             values.push(match part {
-                StoragePart::Inline { offset } => {
+                StoragePart::Inline { offset, .. } => {
                     self.builder
                         .load(storage, MemFlags::new(), slot, offset as i32)
                 }
