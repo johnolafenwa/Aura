@@ -25,6 +25,14 @@ in this file.
   assertion about the list after such a call could be proved wrongly.
 - `aura verify` checks every `Array[T]` element read and write: the rank
   and each coordinate. Before, an `Array` index created no check at all.
+- `aura verify` assumes a class's invariants in the methods of its
+  `impl Trait for Class:` blocks, proves them again when a `mut self` one
+  returns, and proves them wherever such a method is called or an object
+  becomes a trait object.
+- `aura verify` keeps what a call cannot change: after a call, a `mut`
+  argument keeps the value of every field the callee never writes, so two
+  `push` calls in a row prove without an `ensures` for the untouched
+  fields.
 - `aura verify` proves the body of a generator function with its `requires`
   clauses known, and reports its checks under the generator's name.
 
