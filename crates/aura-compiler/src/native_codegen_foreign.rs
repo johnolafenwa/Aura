@@ -91,17 +91,26 @@ pub(super) fn module_callbacks(module: &MirModule) -> Vec<CallbackKey> {
         .flat_map(|function| &function.blocks)
         .flat_map(|block| &block.instructions);
     for instruction in instructions {
-        let Instruction::Assign {
-            value:
-                Rvalue::Call {
-                    callee: CallTarget::Extern(call),
-                    args,
-                    ..
-                },
-            ..
-        } = instruction
-        else {
-            continue;
+        let (call, args) = match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                        ..
+                    },
+                ..
+            }
+            | Instruction::WriteLoan {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        args,
+                        ..
+                    },
+                ..
+            } => (call, args),
+            _ => continue,
         };
         for (param, argument) in call.params.iter().zip(args) {
             if let (Some(signature), Operand::Function { name, .. }) =

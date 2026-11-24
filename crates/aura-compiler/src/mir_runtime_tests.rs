@@ -25238,6 +25238,7 @@ def main() -> int32:
         super::ffi_type_for_extern_param(&param).expect("a callback parameter"),
         FfiType::Callback
     );
+    let closures = std::sync::Mutex::new(HashMap::new());
     for (value, ty) in [
         (Value::Bool(true), nothing.clone()),
         (
@@ -25245,7 +25246,7 @@ def main() -> int32:
             Type::named("int32"),
         ),
     ] {
-        let error = super::ffi_callback_from_runtime(&value, &ty)
+        let error = super::ffi_callback_from_runtime(&closures, &value, &ty)
             .expect_err("a callback is a named function of a callback type");
         assert_eq!(error.code, "AU4005");
         assert!(
@@ -25254,12 +25255,18 @@ def main() -> int32:
             error.message
         );
     }
-    let first =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
-    let again =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
+    let first = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
+    let again = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
     assert_eq!(first, again, "one function and signature share their code");
 
     // Outside a foreign call there is no interpreter to re-enter, and the
@@ -25271,6 +25278,125 @@ def main() -> int32:
         &mut frame,
     );
     assert_eq!(frame, [7]);
+}
+
+#[test]
+fn mir_runtime_nested_reentrant_callbacks_and_panic_containment() {
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" def outer_c(cb: def(x: int32) -> int32, n: int32) -> int32
+extern "C" def inner_c(cb: def(x: int32) -> int32, n: int32) -> int32
+
+def inner_cb(x: int32) -> int32:
+    return x * 3
+
+def outer_cb(x: int32) -> int32:
+    return inner_c(inner_cb, x + 1)
+
+def run() -> int32:
+    return outer_c(outer_cb, 4)
+"#,
+    );
+    // Verify RAII restore when dispatch panics mid-call and nested re-entry
+    // runs without aliasing `&mut MirRuntime`.
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(std::sync::Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    let cb_ty = Type::Function {
+        params: vec![aura_core::types::FunctionParamContract {
+            keyword_only: false,
+            name: "x".to_string(),
+            passing: crate::ast::ReceiverKind::Borrow,
+            ty: Type::named("int32"),
+            has_default: false,
+        }],
+        return_type: Box::new(Type::named("int32")),
+    };
+    let outer_call = MirExternCall {
+        name: String::new(),
+        symbol: "outer_c".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "cb".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: cb_ty.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "n".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("int32"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::named("int32"),
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Function {
+                name: "inner_cb".to_string(),
+                signature: Box::new(cb_ty.clone()),
+            },
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Int(5),
+            writeback_place: None,
+        },
+    ];
+
+    // Re-entrant nested invocation via the scoped callback trampoline.
+    let nested_result = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            // Invoke callback twice inside one foreign call (and while runtime is
+            // owned by CALLBACK_RUNTIME).
+            let a = cb_fn(5);
+            let b = cb_fn(a);
+            Ok(crate::ffi::FfiValue::I32(b))
+        })
+        .expect("re-entrant callback call should succeed");
+    assert_eq!(nested_result.render(), "45");
+
+    // Panicking inside dispatch must still restore CALLBACK_RUNTIME to None
+    // and return the live MirRuntime cleanly to the caller.
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = runtime.evaluate_extern_call_with(&outer_call, &args, &mut env, |_, _, _| {
+            panic!("simulated dispatch panic");
+        });
+    }));
+    assert!(caught.is_err());
+    assert!(
+        super::CALLBACK_RUNTIME.with(|cell| cell.borrow().is_none()),
+        "CALLBACK_RUNTIME must be cleared after unwind"
+    );
+    // Runtime remains usable after the caught dispatch panic.
+    let after = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            Ok(crate::ffi::FfiValue::I32(cb_fn(7)))
+        })
+        .expect("runtime must remain intact after unwound dispatch");
+    assert_eq!(after.render(), "21");
 }
 
 // The program calls `posix_memalign` from the C library by name.

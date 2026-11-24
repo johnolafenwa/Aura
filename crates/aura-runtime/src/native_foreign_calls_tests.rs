@@ -764,6 +764,49 @@ fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task(
 }
 
 #[test]
+fn foreign_thread_callback_enables_stack_guard_and_releases_owned_handles() {
+    use super::aura_direct_ffi_callback_guard;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OBSERVED_STACK_LIMIT: AtomicUsize = AtomicUsize::new(0);
+    static TARGET_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn callback_on_foreign_thread(_frame: *mut u64) {
+        let limit =
+            super::super::with_direct_task_runtime_state(|state| state.frames().stack_limit());
+        OBSERVED_STACK_LIMIT.store(limit, Ordering::SeqCst);
+        let name = "ForeignHandle";
+        let ptr = TARGET_ADDR.load(Ordering::SeqCst) as *mut c_void;
+        let _leaked_into_ledger =
+            unsafe { aura_direct_ffi_handle(ptr, name.as_ptr(), name.len(), Some(note_release)) };
+        // Simulate a trap mid-callback on the foreign thread.
+        super::task_runtime_boundary(|| super::runtime_error("foreign callback trapped"));
+    }
+
+    let target = 0u8;
+    let target_ptr = &target as *const u8 as *mut c_void;
+    OBSERVED_STACK_LIMIT.store(0, Ordering::SeqCst);
+    TARGET_ADDR.store(target_ptr as usize, Ordering::SeqCst);
+
+    let thread = std::thread::spawn(|| {
+        let mut frame = 0u64;
+        unsafe { aura_direct_ffi_callback_guard(callback_on_foreign_thread, &mut frame) };
+    });
+    thread.join().expect("foreign thread should finish cleanly");
+
+    assert_ne!(
+        OBSERVED_STACK_LIMIT.load(Ordering::SeqCst),
+        0,
+        "foreign-thread callback must install a non-zero stack guard limit"
+    );
+    assert_eq!(
+        releases_of(target_ptr),
+        1,
+        "owned handle created in a foreign-thread callback must be released on thread exit"
+    );
+}
+
+#[test]
 fn a_scoped_callback_with_no_text_preserves_its_scalar_arguments() {
     unsafe extern "C-unwind" fn increment(frame: *mut u64) {
         unsafe { *frame += 1 };

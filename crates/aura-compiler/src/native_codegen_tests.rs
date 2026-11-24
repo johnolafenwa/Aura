@@ -17682,6 +17682,48 @@ def main() -> int32:
         );
     }
 
+    // A separate function calling an extern symbol without any callback
+    // parameter must still check for callback failures registered elsewhere.
+    let split = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reg(cb: def(x: int32) -> int32) -> None
+extern "C" def fire() -> int32
+
+def handler(x: int32) -> int32:
+    return x + 1
+
+def setup() -> None:
+    reg(handler)
+
+def trigger() -> int32:
+    return fire()
+
+def main() -> int32:
+    setup()
+    return trigger()
+"#,
+    );
+    let split_obj = emit_unoptimized_object(&split).expect("split callback module should emit");
+    let file = object::File::parse(&*split_obj).expect("parse object");
+    let mut callback_checks = 0usize;
+    for section in file.sections() {
+        for (_, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if sym.name().is_ok_and(|name| {
+                        name.trim_start_matches('_') == "aura_direct_ffi_callback_check"
+                    }) {
+                        callback_checks += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        callback_checks >= 2,
+        "both `reg` and `fire` must emit aura_direct_ffi_callback_check, found {callback_checks}"
+    );
+
     // C text reaches a callback as a pointer, which the body copies into
     // a `str` and frees when the function returns.
     let text = lower_ffi_source_to_mir(

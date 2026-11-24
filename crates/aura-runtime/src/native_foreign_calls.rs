@@ -719,10 +719,26 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     with_callback_guard(|| unsafe { body(frame) });
 }
 
+/// Conservative stack size assumed for a foreign OS thread that invokes an
+/// Aura callback without an active Aura task stack bound (fits macOS 512 KiB
+/// secondary threads while leaving headroom above `DIRECT_STACK_RESERVE`).
+const FOREIGN_THREAD_CALLBACK_STACK_SIZE: usize = 512 * 1024;
+
 fn with_callback_guard(body: impl FnOnce()) {
+    let foreign_stack_bounds = crate::runtime_value::current_task_stack_floor()
+        .is_none()
+        .then(|| {
+            crate::runtime_value::enter_thread_stack_bounds(FOREIGN_THREAD_CALLBACK_STACK_SIZE)
+        });
     let previous = super::with_direct_task_runtime_state(|state| {
         if state.foreign_callback_failure.is_some() {
             return None;
+        }
+        if foreign_stack_bounds.is_some() {
+            state.refresh_stack_limit();
+        }
+        if !state.owned_values().tracking() {
+            state.owned_values_mut().set_tracking(true);
         }
         Some(
             state
@@ -731,11 +747,14 @@ fn with_callback_guard(body: impl FnOnce()) {
         )
     });
     let Some(previous) = previous else {
+        drop(foreign_stack_bounds);
         return;
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+    drop(foreign_stack_bounds);
     super::with_direct_task_runtime_state(|state| {
         state.foreign_callback_cleanup_base = previous;
+        state.refresh_stack_limit();
         if let Err(payload) = outcome {
             state.foreign_callback_failure = Some(payload);
             MAY_HAVE_CALLBACK_FAILURE.set(true);

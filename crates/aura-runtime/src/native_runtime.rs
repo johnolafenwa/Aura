@@ -728,9 +728,31 @@ impl Default for DirectTaskRuntimeState {
 
 impl Drop for DirectTaskRuntimeState {
     fn drop(&mut self) {
+        let owned_values = self.owned_values_mut().take_all();
+        if let Some(payload) = self.foreign_callback_failure.take() {
+            if let Some(signal) = payload.downcast_ref::<LightweightTaskFailureSignal>() {
+                eprintln!(
+                    "unhandled Aura callback failure on foreign thread: {}",
+                    signal.0.message
+                );
+            } else {
+                eprintln!("unhandled Aura callback panic on foreign thread");
+            }
+        }
         // SAFETY: the state owns its stack, and generated code of this task
         // no longer runs once the state is gone.
         unsafe { DirectFrameStack::free(self.frames) };
+        if !owned_values.is_empty() {
+            without_generator_drop_close(|| {
+                for (address, count) in owned_values {
+                    for _ in 0..count {
+                        unsafe {
+                            release_untracked_value(address as *mut OpaqueValue);
+                        }
+                    }
+                }
+            });
+        }
     }
 }
 

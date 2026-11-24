@@ -220,6 +220,9 @@ pub struct CCallback {
 /// back through the pointer. The result word starts as zero.
 pub type CallbackHandler = Box<dyn Fn(&mut [u64])>;
 
+/// A thread-safe handler for a [`ScopedCallback`].
+pub type SharedCallbackHandler = Box<dyn Fn(&mut [u64]) + Send + Sync>;
+
 struct CallbackState {
     signature: CCallback,
     handler: CallbackHandler,
@@ -231,44 +234,53 @@ unsafe extern "C" fn callback_entry(
     args: *const *const c_void,
     state: &CallbackState,
 ) {
-    let params = &state.signature.params;
-    let mut frame = vec![0_u64; params.len() + 1];
-    let mut pointees = Vec::with_capacity(params.len());
-    for (index, param) in params.iter().enumerate() {
-        // SAFETY: libffi passes one pointer for each parameter of the
-        // signature the closure was made for, to storage of that type.
-        let argument = unsafe { *args.add(index) } as *mut u8;
-        let source = match param.pointer {
-            true => unsafe { *(argument as *const *mut u8) },
-            false => argument,
-        };
-        pointees.push(source);
-        if !source.is_null() {
-            // SAFETY: the storage holds a scalar of this size. A pointer
-            // parameter's pointee is the caller's to keep valid.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    source,
-                    frame.as_mut_ptr().add(index).cast::<u8>(),
-                    param.scalar.size(),
-                );
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let params = &state.signature.params;
+        let mut frame = vec![0_u64; params.len() + 1];
+        let mut pointees = Vec::with_capacity(params.len());
+        for (index, param) in params.iter().enumerate() {
+            // SAFETY: libffi passes one pointer for each parameter of the
+            // signature the closure was made for, to storage of that type.
+            let argument = unsafe { *args.add(index) } as *mut u8;
+            let source = match param.pointer {
+                true => unsafe { *(argument as *const *mut u8) },
+                false => argument,
+            };
+            pointees.push(source);
+            if !source.is_null() {
+                // SAFETY: the storage holds a scalar of this size. A pointer
+                // parameter's pointee is the caller's to keep valid.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        source,
+                        frame.as_mut_ptr().add(index).cast::<u8>(),
+                        param.scalar.size(),
+                    );
+                }
             }
         }
-    }
-    (state.handler)(&mut frame);
-    for ((index, param), target) in params.iter().enumerate().zip(pointees) {
-        if param.pointer && !target.is_null() {
-            // SAFETY: as for the read above.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    frame.as_ptr().add(index).cast::<u8>(),
-                    target,
-                    param.scalar.size(),
-                );
+        (state.handler)(&mut frame);
+        for ((index, param), target) in params.iter().enumerate().zip(pointees) {
+            if param.pointer && !target.is_null() {
+                // SAFETY: as for the read above.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        frame.as_ptr().add(index).cast::<u8>(),
+                        target,
+                        param.scalar.size(),
+                    );
+                }
             }
         }
-    }
-    let word = frame[params.len()];
+        frame[params.len()]
+    }));
+    let Ok(word) = outcome else {
+        // Never unwind across an `extern "C"` boundary; return zero on panic.
+        if state.signature.result.is_some() {
+            *result = 0;
+        }
+        return;
+    };
     // libffi reads an integer result narrower than a register as a whole
     // register, extended as its type says, and a float in its own size.
     match state.signature.result {
@@ -306,18 +318,76 @@ pub(crate) unsafe fn checked_callback_text<'a>(address: usize) -> Result<&'a str
         .map_err(|_| FfiError::InvalidUtf8CallbackText)
 }
 
-/// The address of new code with the C signature `signature` that runs
-/// `handler`. The code lives until the process ends, so foreign code may
-/// keep the address.
-pub fn callback_code(signature: CCallback, handler: CallbackHandler) -> usize {
+/// A libffi C-callable trampoline whose executable closure and Rust callback
+/// state stay alive until this handle is dropped.
+pub struct ScopedCallback {
+    // Dropped before `state` is freed in `Drop`.
+    closure: Option<libffi::middle::Closure<'static>>,
+    state: *mut CallbackState,
+    code: usize,
+}
+
+// SAFETY: `ScopedCallback` is constructed only from a `Send + Sync` handler,
+// and its `CallbackState` is immutable once created until `Drop`.
+unsafe impl Send for ScopedCallback {}
+unsafe impl Sync for ScopedCallback {}
+
+impl ScopedCallback {
+    /// The C-callable function pointer address for this trampoline.
+    pub fn code(&self) -> usize {
+        self.code
+    }
+}
+
+impl Drop for ScopedCallback {
+    fn drop(&mut self) {
+        // Drop the libffi closure before freeing `CallbackState` so the
+        // closure's userdata pointer is never dangling while the closure exists.
+        self.closure.take();
+        // SAFETY: `state` was allocated with `Box::into_raw` in
+        // `callback_code_scoped` and is freed exactly once here.
+        unsafe {
+            drop(Box::from_raw(self.state));
+        }
+    }
+}
+
+fn callback_cif(signature: &CCallback) -> Cif {
     let scalar = |param: &CCallbackParam| match param.pointer {
         true => Type::pointer(),
         false => scalar_type(param.scalar),
     };
-    let cif = Cif::new(
+    Cif::new(
         signature.params.iter().map(scalar).collect::<Vec<_>>(),
         signature.result.map_or_else(Type::void, scalar_type),
-    );
+    )
+}
+
+/// Builds a scoped libffi trampoline whose closure and state are freed when
+/// the returned [`ScopedCallback`] drops.
+pub fn callback_code_scoped(
+    signature: CCallback,
+    handler: SharedCallbackHandler,
+) -> ScopedCallback {
+    let cif = callback_cif(&signature);
+    let state = Box::into_raw(Box::new(CallbackState { signature, handler }));
+    // SAFETY: `state` remains valid and immovable until `ScopedCallback::drop`
+    // drops `closure` first.
+    let state_ref: &'static CallbackState = unsafe { &*state };
+    let closure = libffi::middle::Closure::new(cif, callback_entry, state_ref);
+    let code = *closure.code_ptr() as usize;
+    ScopedCallback {
+        closure: Some(closure),
+        state,
+        code,
+    }
+}
+
+/// The address of new code with the C signature `signature` that runs
+/// `handler`. The code lives until the process ends, so foreign code may
+/// keep the address.
+pub fn callback_code(signature: CCallback, handler: CallbackHandler) -> usize {
+    let cif = callback_cif(&signature);
     let state: &'static CallbackState = Box::leak(Box::new(CallbackState { signature, handler }));
     let closure = libffi::middle::Closure::new(cif, callback_entry, state);
     let code = *closure.code_ptr() as usize;
@@ -2219,6 +2289,44 @@ mod tests {
                 actual: FfiType::U64,
             })
         );
+    }
+
+    #[test]
+    fn callback_entry_catches_rust_panic_without_unwinding_across_c() {
+        extern "C" fn invoke_i32(f: extern "C" fn(i32) -> i32, x: i32) -> i32 {
+            f(x)
+        }
+        let sig = CCallback {
+            params: vec![CCallbackParam {
+                scalar: FfiScalar::I32,
+                pointer: false,
+                text: false,
+            }],
+            result: Some(FfiScalar::I32),
+        };
+        let scoped = callback_code_scoped(
+            sig.clone(),
+            Box::new(|frame| {
+                if frame[0] == 1 {
+                    panic!("contained callback panic");
+                }
+                frame[1] = frame[0] + 10;
+            }),
+        );
+        let ok = call(
+            invoke_i32 as *const (),
+            FfiSignature::new(vec![FfiType::Callback, FfiType::I32], FfiType::I32),
+            &mut [FfiValue::Callback(scoped.code()), FfiValue::I32(5)],
+        );
+        assert_eq!(ok, Ok(FfiValue::I32(15)));
+
+        let panicked = call(
+            invoke_i32 as *const (),
+            FfiSignature::new(vec![FfiType::Callback, FfiType::I32], FfiType::I32),
+            &mut [FfiValue::Callback(scoped.code()), FfiValue::I32(1)],
+        );
+        assert_eq!(panicked, Ok(FfiValue::I32(0)));
+        drop(scoped);
     }
 
     #[test]
