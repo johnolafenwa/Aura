@@ -257,7 +257,7 @@ pub(super) fn access(
 
 pub(super) fn permission_error() -> Diagnostic {
     Diagnostic::coded(
-        "AU2084",
+        "AU4032",
         "raw memory operations require a manifest-checked path with allow_ffi = true",
     )
 }
@@ -282,13 +282,13 @@ mod tests {
                 format!("def main() -> None:\n    p = {addr} as ptr[int32]\n    {operation}\n");
             assert_eq!(
                 crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
-                "AU2084"
+                "AU4032"
             );
         }
         let source = format!("extern \"C\" class Item:\n    value: int32\n\ndef main() -> None:\n    p = {addr} as ptr[Item]\n    p.read()\n");
         assert_eq!(
             crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
-            "AU2084"
+            "AU4032"
         );
         assert_eq!(cell, 1);
     }
