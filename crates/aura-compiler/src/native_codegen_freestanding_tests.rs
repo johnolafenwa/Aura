@@ -281,6 +281,7 @@ fn hosted_constructs_in_helpers_are_reported() {
         (
             r#"
 def seed() -> int64:
+    print("loading")
     return 41
 START: int64 = seed() + 1
 export "C" def get() -> int64:
@@ -888,7 +889,11 @@ export "C" def lookup(index: int64) -> int64:
         let file = object::File::parse(bytes.as_slice()).unwrap();
         assert!(file.sections().any(|section| {
             section.kind() == object::SectionKind::ReadOnlyData
-                && section.data().unwrap().windows(words.len()).any(|window| window == words)
+                && section
+                    .data()
+                    .unwrap()
+                    .windows(words.len())
+                    .any(|window| window == words)
         }));
         let (globals, _, undefined) = symbols(&bytes);
         assert_eq!(globals, ["lookup"]);
