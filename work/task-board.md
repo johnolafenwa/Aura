@@ -11,9 +11,20 @@ Last updated: 2026-11-24
   the dict and make no list. `dict_remove` went from 9.9 to 2.6 times
   Rust's instructions and one entry of an `items()` loop from 4,046
   instructions to 252.
-- Done in the second pull request: a `str` key read from a list is looked
+- Done: a `str` key read from a list is looked
   up where the list holds it (`keys[i] in table` 4.2 to 1.4 times Rust).
 - Next: one probe and no copy for the counting idiom on a viewed key.
+
+## Verification in the documentation (complete)
+
+- Target: John's 2026-11-24 request that `aura verify` be prominent across
+  the documentation and the book. Details are in
+  `2026-11-24-verification-in-docs.md`.
+- Done: the README, the site landing page, the install guides, the Manual
+  and chapters 1 to 21 of the book present contracts and proofs, and
+  `docs/manual/verification.md` lists what the verifier does not model.
+- Follow-up: update that list and the book passages that state a limit as
+  each verifier gap closes.
 
 ## Release 0.17.0-preview (complete)
 

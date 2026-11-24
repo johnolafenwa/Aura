@@ -226,6 +226,105 @@ build. That makes assertions trustworthy for checking your own program's logic,
 and it also means they are the wrong tool for checking input from the outside
 world, as we'll see in [To trap or not to trap](/book/ch09-03-to-trap-or-not).
 
+## Proving a trap cannot happen
+
+Every trap so far has had the same cause: the program reached a line with
+values that line can't handle. A trap tells you so after the fact, in a run
+that happens to get there. Aura also lets you ask ahead of time. `aura verify`
+uses an SMT solver, a program that answers logic questions, to prove that the
+checks in a program can never fail, whatever the input, and it reports each
+check it can't prove. [Section 11.4](/book/ch11-04-contracts-and-proofs)
+covers it in full. Let's point it at the first version of `share`, the one
+with no assertion:
+
+```aura
+def share(budget: int64, workers: int64) -> int64:
+    return budget // workers
+
+def main():
+    print(share(1000, 4))
+    print(share(1000, 0))
+```
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:2:12
+  |
+2 |     return budget // workers
+  |            ^
+  = note: in `share` (overflow check)
+  = note: counterexample: budget = -9223372036854775808, workers = -1
+error[AU5101]: cannot prove divisor is not zero
+ --> src/main.au:2:12
+  |
+2 |     return budget // workers
+  |            ^
+  = note: in `share` (division by zero check)
+  = note: counterexample: budget = 0, workers = 0
+verified src/main.au: 0 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The program didn't run. The verifier read `share` and found two ways it can
+trap, each with a *counterexample*: inputs that make the check fail. The
+second is the trap we already know, a divisor of zero. The first is one we
+never thought to try. An `int64` has one more negative value than positive
+ones, so dividing the lowest `int64` by `-1` gives a number that doesn't fit,
+and `//` traps with `AU4002`. No run of ours would have found that.
+
+Both failures come from worker counts that make no sense, so the fix is to
+say what a worker count is. A `requires` clause at the top of a function body
+states a condition every caller must meet:
+
+*Filename: src/main.au*
+
+```aura
+def share(budget: int64, workers: int64) -> int64:
+    requires workers > 0
+    return budget // workers
+
+def main():
+    print(share(1000, 4))
+    print(share(1000, 0))
+```
+
+<span class="caption">Listing 9-2: `share` states what it needs from its caller</span>
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `requires` of `share` holds: `workers > 0`
+ --> src/main.au:7:5
+  |
+7 |     print(share(1000, 0))
+  |     ^
+  = note: in `main` (requires check)
+verified src/main.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Inside `share`, both checks are now proved, because a function may assume its
+own `requires`: with `workers` above zero there is no zero divisor and no
+`-1`. The one failure left is in `main`, at the call that passes zero. The
+bug has moved from the division to the caller that causes it, which is where
+we'd want to read about it. Delete that call and the report is clean:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 3 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+A `requires` clause is also checked when the program runs. A caller the
+verifier never saw, in another program that imports `share`, stops with
+`AU4009` at the clause instead of `AU4004` inside the division. Compare this
+with the `assert` version above. The assertion finds a bad call when it
+happens. The proof shows there is no bad call to find.
+
+That is how to think about traps for the rest of this chapter. A trap means
+the program has a bug, and a proof is how you show the bug isn't there. The
+verifier treats every operation in [What traps](#what-traps) as a check to
+prove, so it reports the `retries += 1` overflow above as well. It doesn't
+model every library call, and where it knows nothing about a value it says the
+check is unproved, so an unproved check is a place to look, not always a bug.
+
 ## What happens when a task traps
 
 By default a trap stops the task it happens in. It doesn't stop instantly, though: before
@@ -337,6 +436,11 @@ pair, we receive `Ok(pair)`. When the missing equals sign leads it past the
 end of the list, cleanup runs inside the call and we receive `Err(trap)`.
 Our loop can inspect the code, message, location and call chain before
 moving on to the next line. An earlier print or write still happened.
+
+A recovered call is also where `aura verify` stops following. It proves the
+`requires` clauses of the function we pass, but it knows nothing about the
+`Result` that comes back, so the `Ok` arm can't rely on what that function
+promises.
 
 If we own the parser, a line without an equals sign is something we can
 detect and explain to the person who wrote the file. In the next section

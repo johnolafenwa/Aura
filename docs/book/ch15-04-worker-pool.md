@@ -70,7 +70,7 @@ def main():
     print(f"total: {total} words")
 ```
 
-<span class="caption">Listing 15-7: A worker pool with a producer, three workers, and a results queue</span>
+<span class="caption">Listing 15-8: A worker pool with a producer, three workers, and a results queue</span>
 
 ```console
 $ aura run src/main.au
@@ -280,7 +280,7 @@ def main():
     print("pool closed")
 ```
 
-<span class="caption">Listing 15-8: A worker pool that cancels itself when it stops making progress</span>
+<span class="caption">Listing 15-9: A worker pool that cancels itself when it stops making progress</span>
 
 ```console
 $ time aura run src/main.au
@@ -297,7 +297,7 @@ user	0m0.209s
 sys	0m0.016s
 ```
 
-Three things changed from Listing 15-7.
+Three things changed from Listing 15-8.
 
 The collecting loop moved into a function, `collect`, and uses
 `results.get(timeout=1s)` instead of a `for` loop, so that it can tell "the
@@ -340,7 +340,10 @@ escaping that block, and a failure in a task always reaches either the code that
 reads its result or the block that owns it. Arguments and results move into and out of tasks. Queues move owned values
 between workers, and handles from `sync` give workers coordinated access to
 shared state. The compiler checks that everything crossing those boundaries
-is `Transfer`.
+is `Transfer`. Contracts cross the task boundary too: `aura verify` proves a
+task function's `requires` at `start` and carries its `ensures` to the value
+in `Ready`, while a value from a queue or a `sync` handle is unknown to it
+until your code checks it.
 
 You can now start tasks with `start` and `start_soon`, wait for them with
 `result`, `wait_all`, and `wait_any`, pass work through bounded and unbounded

@@ -36,7 +36,7 @@ def main():
     print(scores.get([5, 1]))
 ```
 
-<span class="caption">Listing 8-19: Building a 3-by-3 array and reading from it</span>
+<span class="caption">Listing 8-22: Building a 3-by-3 array and reading from it</span>
 
 ```console
 $ aura run src/main.au
@@ -124,6 +124,9 @@ might be bad, `get` takes them as a list and returns `T | None`, so
 `scores.get([5, 1])` is `None` instead of a trap. An array element is always
 a number, never `None`, so a plain optional is enough here; there's no need
 for the `Lookup` type that lists and dictionaries use.
+
+Shape and coordinate checks stay run-time checks. `aura verify` doesn't model
+arrays today, so it neither proves nor reports them.
 
 ## Changing an array
 
@@ -226,7 +229,7 @@ def main():
     print(sum(scores))
 ```
 
-<span class="caption">Listing 8-20: Elementwise arithmetic, `map`, and reductions</span>
+<span class="caption">Listing 8-23: Elementwise arithmetic, `map`, and reductions</span>
 
 ```console
 $ aura run src/main.au
@@ -481,7 +484,7 @@ def main():
     print(f"class mean {overall:.2f}, from {spread.min():.2f} to {spread.max():+.2f}")
 ```
 
-<span class="caption">Listing 8-21: The gradebook as an array</span>
+<span class="caption">Listing 8-24: The gradebook as an array</span>
 
 ```console
 $ aura run src/main.au
@@ -528,7 +531,7 @@ def main():
     print(before)
 ```
 
-<span class="caption">Listing 8-22: Writing to rows and columns</span>
+<span class="caption">Listing 8-25: Writing to rows and columns</span>
 
 ```console
 $ aura run src/main.au
@@ -612,7 +615,7 @@ def main():
     print(weights.dot(weights))
 ```
 
-<span class="caption">Listing 8-23: A weighted grade with `matmul`</span>
+<span class="caption">Listing 8-26: A weighted grade with `matmul`</span>
 
 ```console
 $ aura run src/main.au
@@ -672,7 +675,7 @@ def main():
     print(dot(xs, ys))
 ```
 
-<span class="caption">Listing 8-24: A dot product four elements at a time</span>
+<span class="caption">Listing 8-27: A dot product four elements at a time</span>
 
 ```console
 $ aura run src/main.au
@@ -715,7 +718,7 @@ def main():
     print(scores / scores.sum(1).reshape([2, 1]))
 ```
 
-<span class="caption">Listing 8-25: Reductions along one axis</span>
+<span class="caption">Listing 8-28: Reductions along one axis</span>
 
 ```console
 $ aura run src/main.au
@@ -752,7 +755,7 @@ def main():
     print((scores as Array[int64]).sum(0))
 ```
 
-<span class="caption">Listing 8-26: A mask, a choice, and elementwise math</span>
+<span class="caption">Listing 8-29: A mask, a choice, and elementwise math</span>
 
 ```console
 $ aura run src/main.au

@@ -15,8 +15,9 @@ out of a list. We'll turn each line of text into a typed `Record` with an
 `enum` for its level, which means deciding what to do with lines that don't
 fit. We'll count records in dictionaries and print an aligned report. Then,
 once the program works, we'll do what you would do with real code: split it
-into modules, write tests for each part, and replace the raw error values with
-messages a person can act on.
+into modules, write tests for each part, replace the raw error values with
+messages a person can act on, and run `aura verify` to prove that no command
+line and no log line can make the parsers trap.
 
 Here is the log we'll analyze. Save it as `app.log` next to `Aura.toml` when
 you create the project in the next section:

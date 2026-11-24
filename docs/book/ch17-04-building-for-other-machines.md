@@ -33,7 +33,7 @@ def main():
         print(f"hello, {args[0]}")
 ```
 
-<span class="caption">Listing 17-3: A program to build four ways</span>
+<span class="caption">Listing 17-4: A program to build four ways</span>
 
 ## A fully static program
 

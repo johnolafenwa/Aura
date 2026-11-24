@@ -742,7 +742,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 18-7: Handing an Aura function to C's `qsort`</span>
+<span class="caption">Listing 18-9: Handing an Aura function to C's `qsort`</span>
 
 ```console
 $ aura run src/sorting.au
@@ -829,6 +829,145 @@ foreign call is synchronous: it runs on the current scheduler worker until it
 returns, without a scheduling point, so a C function that blocks for a second
 stalls every task on that worker for a second. Keep foreign calls short, or
 keep blocking work in a process you start with the `process` module.
+
+## Stating what a C function needs
+
+Some of what lies outside Aura's reach can be pulled back in. Take `div`
+from Listing 18-6. Its C manual page says the result is undefined when the
+denominator is zero, and on Linux x86-64 "undefined" looks like this:
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+
+def main() -> int32:
+    parts = div(17, 0)
+    print(parts.quot)
+    return 0
+```
+
+```console
+$ aura run src/zero.au
+Floating point exception
+$ echo $?
+136
+```
+
+There is no `AU` code, no source position, and no call chain. The processor
+raised a fault inside the C library and the operating system ended the
+process. Aura's own `//` would have trapped with `AU4004` and told us where.
+
+We know something about `div` that the declaration does not say, and Aura
+lets us say it. An extern function has no body, but it may have an indented
+block of `requires` and `ensures` clauses, the same contracts as in
+[Chapter 11](/book/ch11-04-contracts-and-proofs). Here is `div` with what
+it needs and one thing it promises, and a function that uses it to name the
+day of the week for a count of days since January 1, 1970, which was a
+Thursday:
+
+*Filename: src/weekday.au*
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div:
+    requires numerator >= 0 and denominator > 0
+    ensures 0 <= result.rem and result.rem < denominator
+
+def weekday(days: int32) -> str:
+    names = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+    parts = div(days, 7)
+    return names[parts.rem].clone()
+
+def main() -> int32:
+    print(weekday(0))
+    print(weekday(20781))
+    return 0
+```
+
+<span class="caption">Listing 18-10: A C function with a trusted contract</span>
+
+`aura verify` does not link or call anything, so it works on a package that
+uses FFI like on any other file:
+
+```console
+$ aura verify src/weekday.au
+error[AU5101]: cannot prove `requires` of `div` holds: `numerator >= 0 and denominator > 0`
+ --> src/weekday.au:11:5
+   |
+11 |     parts = div(days, 7)
+   |     ^
+  = note: in `weekday` (requires check)
+  = note: counterexample: days = -1
+verified src/weekday.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier treats the contract as it would any function's: every call
+must meet the `requires`. `weekday` passes along whatever it is given, and a
+date before 1970 is a negative count. C's `div` rounds toward zero, so the
+remainder of a negative count is negative too, and the range we promised in
+`ensures` would not hold. We meant days since 1970, so let's say so by
+adding one line at the top of `weekday`:
+
+```aura fragment
+def weekday(days: int32) -> str:
+    requires days >= 0
+    names = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]
+    parts = div(days, 7)
+    return names[parts.rem].clone()
+```
+
+```console
+$ aura verify src/weekday.au
+verified src/weekday.au: 4 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ aura run src/weekday.au
+Thu
+Tue
+```
+
+Four checks: the `requires` of `div` at its call, the `requires` of
+`weekday` at both calls in `main`, and the index. The index is the
+interesting one. `names` has seven elements and the verifier proved that
+`parts.rem` is a valid position in it, using only the `ensures` clause of
+`div`. Delete that clause and the index is reported as unproved.
+
+That is also the catch, and the reason the Manual calls this a *trusted*
+contract. The verifier cannot read C. It proves each `requires` at the call
+and then assumes each `ensures`, without any way to check that `div` keeps
+the promise. A wrong `ensures` on an Aura function is caught, because the
+verifier proves it against the body. A wrong `ensures` on an extern
+function is believed, and every proof built on it is wrong with it. So write
+down only what the C documentation guarantees, and keep it short.
+
+Aura adds one safety net. Both clauses are also checked at run time, around
+the foreign call, so the call from the start of this section now stops
+before C sees the zero:
+
+```console
+$ aura run src/guard.au
+error[AU4009]: `requires` clause failed: `numerator >= 0 and denominator > 0`
+ --> src/guard.au:6:14
+  |
+6 |     requires numerator >= 0 and denominator > 0
+  |              ^
+  = note: Aura call chain (innermost first): div at 5:1 -> main at 9:1
+```
+
+(*src/guard.au* is the `div(17, 0)` program with the contract from Listing
+18-10 on the declaration.) A fault that killed the process is now a
+diagnostic with a line number. These boundary checks stay in the binary
+even under `aura build --remove-proved-checks`.
+
+One limit to know about today: a contract clause that uses an `as` cast,
+such as `count as int64 <= len(buffer)`, is checked at run time but is not
+something the verifier can reason about yet, and it reports the call as
+`AU5104`. Contracts over parameters of one integer type, and over `len` of
+a list parameter, are proved as shown here.
 
 ## Linking a library
 
@@ -943,7 +1082,10 @@ callbacks, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
-boundary of the C code itself, and why FFI keeps that boundary small.
+boundary of the C code itself, and why FFI keeps that boundary small. A
+`requires` and `ensures` block on a declaration moves part of that boundary
+back: `aura verify` proves that every caller gives the C function what it
+needs, and the program checks it again at run time.
 
 The next section goes one step further down:
 [a program with no operating system under it](/book/ch18-01-without-an-operating-system).

@@ -23,3 +23,8 @@ instance, changes it, or consumes it, using the ownership rules from
 [Chapter 4](/book/ch04-00-understanding-ownership). And Aura classes have no
 inheritance. We'll talk about why, and what to use instead, at the end of the
 chapter.
+
+A class can also say what is always true of its instances, such as "a book
+never has more pages read than it has pages", in an `invariant` line. Aura
+checks invariants while the program runs, and `aura verify` proves that the
+class's methods keep them. We'll add them to the tracker's `Book` as we go.

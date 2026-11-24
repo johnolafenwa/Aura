@@ -41,7 +41,7 @@ Nine operation probes were added (`benchmarks/operation_probes`, plan step
   the dict. The fixture `dict_entry_loops_walk_a_snapshot.au` writes to
   and removes from the dict inside each kind of loop.
 
-- `str` keys read from a list (second pull request): `keys[i] in table`,
+- `str` keys read from a list: `keys[i] in table`,
   `keys[i] in seen` and `table.get(keys[i])` copied the element into a new
   box for the lookup and released it after. Native code now reads the
   element's bytes where the list holds them and the runtime hashes and

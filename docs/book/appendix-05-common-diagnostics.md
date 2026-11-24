@@ -3,7 +3,8 @@
 Every message `aura` prints starts with a stable code such as `AU3001`. The
 first digit after `AU` tells you which part of the compiler is talking: `1`
 for reading the text of your program, `2` for names and types, `3` for
-ownership and borrowing, and `4` for traps at run time. The code stays the
+ownership and borrowing, `4` for traps at run time, and `5` for what
+`aura verify` could not prove. The code stays the
 same from release to release even when the wording improves, so it is the
 thing to search for.
 
@@ -582,3 +583,153 @@ the values on each side of a comparison (Appendix D has an example from
 negative timeout: Chapter 19 runs into exactly that with
 `get(timeout=...) must be non-negative`, and fixes it by clamping the value
 to zero.
+
+### `AU4009`: a contract that did not hold
+
+```aura
+def share(part: int64, whole: int64) -> int64:
+    requires whole > 0
+    return part * 100 // whole
+
+
+def main():
+    print(share(3, 4))
+    print(share(3, 0))
+```
+
+```console
+$ aura run share.au
+75
+error[AU4009]: `requires` clause failed: `whole > 0`
+ --> share.au:2:14
+  |
+2 |     requires whole > 0
+  |              ^
+  = note: left = 0
+  = note: right = 0
+  = note: Aura call chain (innermost first): share at 1:1 -> main at 6:1
+```
+
+A `requires`, `ensures`, or `invariant` clause was false, or a `decreases`
+measure did not get smaller. The message quotes the clause, and which kind
+it is tells you whose mistake it was. A failed `requires` is the caller's:
+follow the call chain to the call and fix the argument, or test the value
+there before calling. A failed `ensures` or `invariant` is a bug in the
+function or the loop that states it. Without the contract, this program
+would have stopped one line later with `AU4004`, division by zero, which
+says what went wrong but not who was supposed to prevent it.
+
+You do not have to wait for a run to find these. `aura verify share.au`
+reports the second call in `main` as a `requires` it cannot prove, which
+brings us to the last group.
+
+## Proofs
+
+`aura verify` proves that the checks behind the `AU40xx` traps cannot fail,
+and reports each one it cannot prove with an `AU51xx` code. These are not
+compile errors: `aura check`, `aura run`, and `aura build` do not report
+them, and the program still runs with every check in place.
+[Section 11.4](/book/ch11-04-contracts-and-proofs) introduces the verifier
+and [Appendix D](/book/appendix-04-tools#proving-with-aura-verify) describes
+the command.
+
+### `AU5101`: a check that can fail
+
+```aura
+def midpoint(low: int64, high: int64) -> int64:
+    return (low + high) // 2
+
+
+def main():
+    print(midpoint(10, 20))
+```
+
+```console
+$ aura verify midpoint.au
+error[AU5101]: cannot prove integer result in range
+ --> midpoint.au:2:13
+  |
+2 |     return (low + high) // 2
+  |             ^
+  = note: in `midpoint` (overflow check)
+  = note: counterexample: low = 9223372036854775807, high = 1
+verified midpoint.au: 2 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The first note names the function and the kind of check: overflow, division
+by zero, index in range, `requires`, `ensures`, and so on. The second gives
+values for the function's parameters that make the check fail. Start by
+asking whether the counterexample is a call you mean to allow. If it is,
+the code has a bug: here, `low + (high - low) // 2` avoids the large sum.
+If it is not, the function is missing a `requires` that rules the input
+out, such as `requires 0 <= low and low <= high`, and every caller will
+then have to prove it.
+
+Sometimes the check cannot fail and the verifier still reports it, because
+it lacks a fact. It proves each function from the contracts of the
+functions it calls, never from their bodies, and it proves a loop from its
+`invariant` clauses. So the fix is to state the fact where it becomes true:
+an `ensures` on the callee, or an `invariant` on the loop. A value that
+came from a library call the verifier does not model, such as `str.split`
+or anything read from a file, is unknown to it, and a check that depends on
+one is reported under this code too. Test the value in your own code before
+you use it, and the proof goes through.
+
+### `AU5102`: the solver gave up
+
+The solver ran out of time on a check, which happens most often with
+nonlinear arithmetic such as the product of two unknown values. Nothing is
+known about
+the check either way. `--timeout` takes a larger limit in milliseconds, and
+the default is 10000. More often the lasting fix is to give the solver less
+to search: bound the operands in a `requires`, or add an `assert` or an
+`invariant` that states an intermediate fact, which it then proves once and
+uses afterwards.
+
+### `AU5103`: no solver
+
+```console
+$ aura verify midpoint.au
+error[AU5103]: no SMT solver found; install Z3 or cvc5 on PATH, or set AURA_SMT_SOLVER to its path
+ --> midpoint.au
+```
+
+`aura verify` runs Z3 or cvc5 as a separate program and found neither.
+Install one, with `brew install z3`, `apt install z3`, or
+`pip install z3-solver`, or point at one with `--solver path` or the
+`AURA_SMT_SOLVER` environment variable. The same code is reported when the
+path you gave does not exist. `aura build --remove-proved-checks` needs the
+solver too.
+
+### `AU5104`: outside what the verifier models
+
+```aura
+def flag(bit: int64) -> int64:
+    requires 0 <= bit and bit < 16
+    return 1 << bit
+
+
+def main():
+    print(flag(3))
+```
+
+```console
+$ aura verify flags.au
+error[AU5104]: cannot check operation outside the verified subset: `Shl` is not modeled yet
+ --> flags.au:3:12
+  |
+3 |     return 1 << bit
+  |            ^
+  = note: in `flag` (overflow check)
+verified flags.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The check depends on an operation the verifier does not reason about, here
+a left shift. This is not a claim that the code is wrong. The check is
+neither proved nor refuted, it stays in the program as a run-time check,
+and `aura run flags.au` prints `8`. You can leave it, or rewrite the step
+with operations the verifier models, such as a multiplication for a shift.
+The same code is reported for a contract clause the verifier cannot read,
+such as one that uses an `as` cast. The
+[Verification](/manual/verification) page of the Manual lists what is
+modeled.

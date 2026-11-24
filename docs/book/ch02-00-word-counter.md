@@ -711,4 +711,7 @@ the moment it happened.
 
 The rest of the book takes those ideas one at a time. The next chapter starts
 with the building blocks that almost every program uses: bindings, the basic
-data types, functions, comments, and control flow.
+data types, functions, comments, and control flow. It is also where we start
+writing down what a function needs and what it promises, so that
+`aura verify` can prove a mistake like that last one cannot happen, instead
+of leaving a run to find it.
