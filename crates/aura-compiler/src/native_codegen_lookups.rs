@@ -38,7 +38,8 @@ pub(super) fn is_dict_get(value: &Rvalue) -> bool {
 enum SlotKind {
     /// A `Lookup` from a `dict` `get`.
     Lookup,
-    /// A lookup in a shared map whose key and value are both int64.
+    /// A lookup in a shared map whose key and value are both int64, or a
+    /// `dict` `get` that finds an int64.
     MapWord,
     /// A `QueueReceive` from a queue receive that waits for an item.
     Receive,
@@ -171,7 +172,31 @@ fn is_temporary(place: &str) -> bool {
 /// otherwise only matched on the variants its slot tells apart, unpacked
 /// in one place at most once per lookup, and released.
 pub(super) fn lookup_slots(function: &MirFunction) -> (HashSet<String>, HashSet<String>) {
-    payload_slots(function, slot_kind)
+    // A `Lookup` of an int64 is kept as the int64 and whether it was found.
+    let words = function
+        .local_types
+        .iter()
+        .filter(|local| is_int64_lookup(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    payload_slots(function, |target, value| match slot_kind(value) {
+        Some(SlotKind::Lookup) if words.contains(target) => Some(SlotKind::MapWord),
+        kind => kind,
+    })
+}
+
+/// Whether `ty` is `Lookup[int64]`.
+fn is_int64_lookup(ty: &crate::sema::Type) -> bool {
+    matches!(
+        ty,
+        crate::sema::Type::Named(name, args)
+            if name == "Lookup"
+                && matches!(
+                    args.as_slice(),
+                    [crate::sema::Type::Named(value, value_args)]
+                        if value == "int64" && value_args.is_empty()
+                )
+    )
 }
 
 /// Match-only temporaries holding eligible scalar recovery results. The error
@@ -196,7 +221,7 @@ pub(super) fn recovery_payload_slots(
     if !has_recovery {
         return HashSet::new();
     }
-    payload_slots(function, |value| {
+    payload_slots(function, |_, value| {
         supports(value).then_some(SlotKind::Recovery)
     })
     .0
@@ -204,7 +229,7 @@ pub(super) fn recovery_payload_slots(
 
 fn payload_slots(
     function: &MirFunction,
-    origin: impl Fn(&Rvalue) -> Option<SlotKind>,
+    origin: impl Fn(&str, &Rvalue) -> Option<SlotKind>,
 ) -> (HashSet<String>, HashSet<String>) {
     let mut candidates = HashMap::<&str, Candidate>::new();
     let mut rejected = HashSet::<&str>::new();
@@ -217,7 +242,7 @@ fn payload_slots(
                     moves.push((target, source, &block.label));
                     continue;
                 }
-                let kind = origin(value).filter(|_| is_temporary(target));
+                let kind = origin(target, value).filter(|_| is_temporary(target));
                 if let Some(kind) = kind {
                     let candidate = candidates.entry(target).or_default();
                     if candidate

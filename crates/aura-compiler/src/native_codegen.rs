@@ -2618,6 +2618,8 @@ impl<'a> NativeCodegen<'a> {
             json_nests,
             lent_element_flag: None,
             lookup_payload: None,
+            lookup_word: None,
+            lookup_word_found: None,
             emptied_store_root: None,
             str_append_root: None,
             lent_temps: HashMap::new(),
@@ -4127,6 +4129,11 @@ struct FunctionCompiler<'a> {
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
     lookup_payload: Option<bool>,
+    /// Set while a `get` for a slot that keeps a found int64 as a word
+    /// compiles: where the `get` writes the int64.
+    lookup_word: Option<Val>,
+    /// Whether the `get` that took `lookup_word` found its key, as a flag.
+    lookup_word_found: Option<Val>,
     /// A tracked root the current instruction assigns. The MIR released its
     /// old value, so the store adds no release.
     emptied_store_root: Option<String>,
@@ -5781,6 +5788,8 @@ impl<'a> FunctionCompiler<'a> {
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
             Instruction::Release { place } if self.release_result_slot(place)? => {}
+            // A found int64 kept as a word is in no box.
+            Instruction::Release { place } if self.map_word_slots.contains_key(place) => {}
             Instruction::Release { place } => self.release_root(place)?,
             // A part of a lent element is copied, since the element's box
             // belongs to its list, and the copy is released at the end.
@@ -15423,6 +15432,9 @@ impl<'a> FunctionCompiler<'a> {
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
         if let Some(&address) = self.map_word_slots.get(target) {
+            if lookups::is_dict_get(value) {
+                return self.compile_dict_word_lookup(target, value, address);
+            }
             return self.compile_map_word_lookup(value, address);
         }
         let target_ty = self.type_of_place(target)?;
@@ -17925,6 +17937,11 @@ impl<'a> FunctionCompiler<'a> {
                         ty: DirectType::Scalar(ScalarKind::Bool),
                     });
                 }
+                if let Some(found) =
+                    self.dict_lookup_words(RuntimeFn::MapGetInt64Word, &[map, key.values[0]])
+                {
+                    return Ok(found);
+                }
                 let function = self.lookup_function(
                     function,
                     RuntimeFn::MapGetInt64Payload,
@@ -17953,6 +17970,11 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 };
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                if let Some(found) =
+                    self.dict_lookup_words(RuntimeFn::MapGetStrWord, &[map, key_ptr, key_len])
+                {
+                    return Ok(found);
+                }
                 let function = self.lookup_function(
                     function,
                     RuntimeFn::MapGetStrPayload,
@@ -17964,6 +17986,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                if op == DictOp::Get {
+                    if let Some(found) =
+                        self.dict_lookup_words(RuntimeFn::MapGetWord, &[map, key.values[0]])
+                    {
+                        return Ok(found);
+                    }
+                }
                 let function = if op == DictOp::Get {
                     self.lookup_function(
                         function,

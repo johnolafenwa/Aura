@@ -27845,6 +27845,72 @@ fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
 }
 
 #[test]
+fn direct_lookup_word_gets_write_the_found_int64() {
+    let names = super::aura_direct_map_empty();
+    let codes = super::aura_direct_map_empty();
+    for (name, code, value) in [
+        ("zero", -4_i64, 0_i64),
+        ("low", 9, i64::MIN),
+        ("high", 0, i64::MAX),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            names,
+            string_value(name),
+            int_value(value),
+        ));
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            codes,
+            int_value(code),
+            int_value(value),
+        ));
+    }
+    for (name, code, expected) in [
+        ("zero", -4_i64, Some(0_i64)),
+        ("low", 9, Some(i64::MIN)),
+        ("high", 0, Some(i64::MAX)),
+        ("missing", 5, None),
+    ] {
+        let found = i64::from(expected.is_some());
+        let value = expected.unwrap_or(0);
+        let boxed_name = string_value(name);
+        let boxed_code = int_value(code);
+        // Each call overwrites the word, a missing key with zero.
+        let mut word = 77_i64;
+        assert_eq!(
+            unsafe {
+                super::aura_direct_map_get_str_word(names, name.as_ptr(), name.len(), &mut word)
+            },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(names, boxed_name, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_int64_word(codes, code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(codes, boxed_code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        for value in [boxed_name, boxed_code] {
+            unsafe { release_value(value) };
+        }
+    }
+    for value in [names, codes] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn direct_lookup_payload_gets_agree_with_lookup_gets() {
     let map = string_map(&[("age", "41"), ("city", "Lagos")]);
     let groups = super::aura_direct_vec_empty();
