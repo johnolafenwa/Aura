@@ -3245,3 +3245,16 @@ def main() -> int32:
         );
     }
 }
+
+#[test]
+fn packed_bit_fields_match_c_and_union_writes_preserve_tail_bytes() {
+    let package = TempPackage::new(true);
+    package.c_library("layout", include_str!("fixtures/systems_layout/layout.c"));
+    package.manifest("\n[ffi]\nlibraries = [\"layout\"]\nlibrary_paths = [\"native\"]\n");
+    let source = package.source(include_str!("fixtures/systems_layout/layout.au"));
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    for output in [mir, direct] {
+        assert_success(&output, "checking C layout controls");
+        assert_eq!(output.stdout, b"true\ntrue\ntrue\ntrue\n17\n5\ntrue\n");
+    }
+}

@@ -1,0 +1,29 @@
+import mem
+
+extern "C" packed align(8) class Header:
+    kind: uint8
+    serial: uint32
+    count: uint16 bits(5)
+    mode: uint16 bits(3)
+
+extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+extern "C" def header_size() -> uint64
+extern "C" def header_alignment() -> uint64
+extern "C" def serial_offset() -> uint64
+extern "C" def update_header(h: mut Header) -> uint8
+
+def main() -> int32:
+    print(mem.size_of(Header) == header_size())
+    print(mem.align_of(Header) == header_alignment())
+    print(mem.offset_of(Header, serial) == serial_offset())
+    mut h = Header(kind=7, serial=123456, count=3, mode=6)
+    print(update_header(h) == 1)
+    print(h.count)
+    print(h.mode)
+    mut w = Word.from_whole(305419896)
+    w.low = 10
+    print(w.whole == 305419786)
+    return 0

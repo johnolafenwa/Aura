@@ -869,3 +869,13 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn c_layout_queries_are_target_constants_in_freestanding_objects() {
+    let source = "import mem\nextern \"C\" packed align(8) class Header:\n    flag: uint8 bits(3)\n    count: uint32\n\nexport \"C\" def layout() -> uint64:\n    return mem.size_of(Header) + mem.align_of(Header) + mem.offset_of(Header, count)\n";
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|symbol| symbol == "layout"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}

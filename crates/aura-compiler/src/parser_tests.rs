@@ -6198,3 +6198,16 @@ fn byte_strings_parse_to_a_byte_list_expression() {
     parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
     parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
 }
+
+#[test]
+fn parses_extern_layout_controls_and_diagnoses_invalid_sizes() {
+    let source = include_str!("../tests/fixtures/parse-pass/extern_layout_controls.au");
+    crate::parse_source(source).unwrap();
+    for source in [
+        source.replace("align(16)", "align(3)"),
+        source.replace("bits(3)", "bits(17)"),
+        source.replace("uint16", "float32"),
+    ] {
+        assert_eq!(crate::parse_source(&source).unwrap_err().code, "AU2085");
+    }
+}
