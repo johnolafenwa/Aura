@@ -455,19 +455,28 @@ pub(crate) fn generated_call<'a>(
     if span.column < GENERATED_COLUMN_STRIDE {
         return None;
     }
-    implementations.filter(|implementation| implementation.module_name == module && implementation.decl.delegation.is_some())
-        .find_map(|implementation| {
-            implementation.methods.values().find(|method| {
-                if method.decl.span.column < GENERATED_COLUMN_STRIDE { return false }
-                let call = match method.decl.body.as_slice() {
-                    [Stmt::Return(stmt)] => stmt.value.as_ref(),
-                    [Stmt::Expr(stmt)] => Some(&stmt.expr),
-                    _ => None,
-                };
-                call.is_some_and(|value| value.span == span || matches!(&value.kind, ExprKind::Call { callee, .. } if callee.span == span))
-
-            }).map(|method| (implementation, method))
-        })
+    for implementation in implementations {
+        if implementation.module_name != module || implementation.decl.delegation.is_none() {
+            continue;
+        }
+        for method in implementation.methods.values() {
+            if method.decl.span.column < GENERATED_COLUMN_STRIDE {
+                continue;
+            }
+            let call = match method.decl.body.as_slice() {
+                [Stmt::Return(stmt)] => stmt.value.as_ref(),
+                [Stmt::Expr(stmt)] => Some(&stmt.expr),
+                _ => None,
+            };
+            let Some(call) = call else { continue };
+            if call.span == span
+                || matches!(&call.kind, ExprKind::Call { callee, .. } if callee.span == span)
+            {
+                return Some((implementation, method));
+            }
+        }
+    }
+    None
 }
 
 pub(crate) fn forwarded_receiver(callee: &Expr) -> Option<&Expr> {
