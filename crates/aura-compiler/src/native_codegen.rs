@@ -737,6 +737,10 @@ struct NativeCodegen<'a> {
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
     instance_keepers: HashSet<String>,
+    /// The `mut self` methods that keep their receiver's layout, with the
+    /// fields whose lists each may store elements into (see
+    /// `list_snapshots::layout_keepers`).
+    layout_keepers: HashMap<String, HashSet<String>>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -1064,7 +1068,35 @@ impl<'a> NativeCodegen<'a> {
                     && leaf_body_calling(function, &classes, Some(&total_leaves))
             })
             .map(|function| function.name.clone())
-            .collect();
+            .collect::<HashSet<_>>();
+        let receiver_field = |function: &MirFunction, place: &str| {
+            receiver_class(function, &classes)
+                .into_iter()
+                .flat_map(|class| &class.fields)
+                .find(|field| place.strip_prefix("self.") == Some(field.name.as_str()))
+                .map(|field| field.ty.clone())
+        };
+        let words = |ty: &Type| {
+            matches!(
+                direct_type(ty, &classes),
+                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+            )
+        };
+        let layout_keepers = list_snapshots::layout_keepers(
+            &module.functions,
+            |function| {
+                function.receiver == Some(MirReceiverKind::BorrowMut)
+                    && receiver_class(function, &classes).is_some()
+            },
+            |function, place| receiver_field(function, place).is_some_and(|ty| words(&ty)),
+            |function, place| {
+                receiver_field(function, place).is_some_and(|ty| {
+                    matches!(&ty, Type::Named(name, args)
+                        if name == "list" && matches!(args.as_slice(), [element] if words(element)))
+                })
+            },
+            &|callee| instance_keepers.contains(callee),
+        );
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1273,6 +1305,7 @@ impl<'a> NativeCodegen<'a> {
             recursive_functions,
             total_leaves,
             instance_keepers,
+            layout_keepers,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
@@ -2635,6 +2668,7 @@ impl<'a> NativeCodegen<'a> {
                     })
                 },
                 keeps_instances: &|callee| self.instance_keepers.contains(callee),
+                keeps_receiver: &|callee| self.layout_keepers.get(callee),
             },
         );
         for region in field_regions {
@@ -19866,13 +19900,13 @@ fn sinkless_closure(function: &MirFunction) -> bool {
     function.name.contains("::__lambda_") && takes_mutable(function) && small_leaf(function)
 }
 
-/// The scalar fields of the receiver of a method of a class kept in a
-/// box, by name, or `None` when `function` has no such receiver. A generic
-/// class keeps a symbolic layout, so it has none here.
-fn boxed_receiver_fields<'c>(
+/// The class of the receiver of a method of a class kept in a box, or
+/// `None` when `function` has no such receiver. A generic class keeps a
+/// symbolic layout, so it has none here.
+fn receiver_class<'c>(
     function: &MirFunction,
     classes: &'c HashMap<String, MirClass>,
-) -> Option<HashSet<&'c str>> {
+) -> Option<&'c MirClass> {
     function.receiver?;
     let receiver = function
         .local_types
@@ -19886,6 +19920,17 @@ fn boxed_receiver_fields<'c>(
     if !arguments.is_empty() || !class.type_params.is_empty() {
         return None;
     }
+    Some(class)
+}
+
+/// The scalar fields of the receiver of a method of a class kept in a
+/// box, by name, or `None` when `function` has no such receiver. A generic
+/// class keeps a symbolic layout, so it has none here.
+fn boxed_receiver_fields<'c>(
+    function: &MirFunction,
+    classes: &'c HashMap<String, MirClass>,
+) -> Option<HashSet<&'c str>> {
+    let class = receiver_class(function, classes)?;
     Some(
         class
             .fields

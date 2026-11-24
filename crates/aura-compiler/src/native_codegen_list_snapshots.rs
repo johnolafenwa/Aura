@@ -510,6 +510,193 @@ pub(super) struct FieldListRules<'a> {
     /// Whether a direct call of the function only reads scalar fields of
     /// an instance it is passed.
     pub(super) keeps_instances: &'a dyn Fn(&str) -> bool,
+    /// The fields whose lists a call of the method may store elements
+    /// into, when the method keeps its receiver (see `layout_keepers`).
+    pub(super) keeps_receiver: &'a dyn Fn(&str) -> Option<&'a HashSet<String>>,
+}
+
+/// The fields whose lists `instruction` may store elements into, when it
+/// is a call of a method that keeps its receiver (see `layout_keepers`)
+/// on the instance `root_name`, which it names nowhere else.
+fn receiver_keeper_call<'r>(
+    instruction: &Instruction,
+    root_name: &str,
+    rules: &FieldListRules<'r>,
+) -> Option<&'r HashSet<String>> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(object),
+                        receiver_place: Some(receiver),
+                        dispatch: Some(crate::mir::MethodDispatch::Static { function }),
+                        ..
+                    },
+                args,
+                type_args,
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    let mut mentions = Vec::new();
+    instruction_place_mentions(instruction, &mut mentions);
+    let passes = object == root_name
+        && receiver == root_name
+        && type_args.is_empty()
+        && args.iter().all(|arg| arg.writeback_place.is_none())
+        && mentions
+            .into_iter()
+            .filter(|place| root(place) == root_name)
+            .all(|place| place == root_name);
+    passes.then(|| (rules.keeps_receiver)(function)).flatten()
+}
+
+/// Whether `instruction` stores a scalar or plain record element into a
+/// list, which keeps the list's storage, form, and length while nothing
+/// else shares the storage.
+fn stores_scalar(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::SetIndexScalar(_)),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )
+}
+
+/// The `mut self` methods of `functions` whose every call keeps the
+/// receiver in its layout, each field's box in its field, and each field
+/// list's storage, form, and length, with the fields whose lists each may
+/// store elements into. `candidate` says which methods have a receiver
+/// that keeps its fields in a block, `scalar_field` and `list_field` which
+/// of a method's places are fields of its receiver that hold a scalar and
+/// a list of scalars or plain records, and `keeps_instances` which
+/// functions only read scalar fields of an instance they are passed.
+///
+/// Such a method names its receiver only to read or write scalar fields,
+/// to lend a field's list to one operation that reads it or stores one of
+/// its elements, to call a method of this kind on it, or to pass it to a
+/// function that only reads scalar fields. It never appends to a list or
+/// stores another list in a field, never hands the receiver to a closure,
+/// a task, a loan, or a call that may write it back, and calls nothing
+/// that does. A store into a list keeps its storage while nothing else
+/// shares the storage, which a loop that reads the list's view once checks
+/// where it is entered when a call may store into it.
+pub(super) fn layout_keepers(
+    functions: &[MirFunction],
+    candidate: impl Fn(&MirFunction) -> bool,
+    scalar_field: impl Fn(&MirFunction, &str) -> bool,
+    list_field: impl Fn(&MirFunction, &str) -> bool,
+    keeps_instances: &dyn Fn(&str) -> bool,
+) -> HashMap<String, HashSet<String>> {
+    const RECEIVER: &str = "self";
+    // From every candidate, with no stores, down to the methods whose
+    // bodies keep the receiver given the others.
+    let mut keepers = functions
+        .iter()
+        .filter(|function| function.receiver.is_some() && candidate(function))
+        .map(|function| (function.name.clone(), HashSet::new()))
+        .collect::<HashMap<_, _>>();
+    loop {
+        let mut next = HashMap::new();
+        for function in functions {
+            if !keepers.contains_key(&function.name) {
+                continue;
+            }
+            let lend_temps = super::classes::field_lend_temps(function);
+            let scalar = |place: &str| scalar_field(function, place);
+            let rules = FieldListRules {
+                lend_temps: &lend_temps,
+                candidate: &|_, _| false,
+                pure_index: &|_| true,
+                scalar_field: &scalar,
+                keeps_instances,
+                keeps_receiver: &|callee| keepers.get(callee),
+            };
+            if let Some(stores) = keeps_receiver_body(function, RECEIVER, &rules, &|place| {
+                list_field(function, place)
+            }) {
+                next.insert(function.name.clone(), stores);
+            }
+        }
+        if next == keepers {
+            return keepers;
+        }
+        keepers = next;
+    }
+}
+
+/// The fields whose lists the body of `function` may store elements into,
+/// when it keeps its receiver `receiver` (see `layout_keepers`).
+/// `list_field` says which places are fields of the receiver that hold
+/// lists of scalars or plain records.
+fn keeps_receiver_body(
+    function: &MirFunction,
+    receiver: &str,
+    rules: &FieldListRules<'_>,
+    list_field: &dyn Fn(&str) -> bool,
+) -> Option<HashSet<String>> {
+    let mut stores = HashSet::new();
+    let mut keeps = true;
+    for block in &function.blocks {
+        let mut lent = None::<(&str, &str)>;
+        for instruction in &block.instructions {
+            if reaches_list(instruction, receiver)
+                || matches!(instruction, Instruction::BeginElementLoan { source, .. } if root(source) == receiver)
+            {
+                return None;
+            }
+            match instruction {
+                // A field of the receiver itself, as `self.items`.
+                Instruction::Lend { place, temp, .. }
+                    if list_field(place) && rules.lend_temps.contains(temp) =>
+                {
+                    lent = Some((temp, &place[receiver.len() + 1..]));
+                }
+                Instruction::EndLend { temp, .. } if lent.is_some_and(|(lent, _)| lent == temp) => {
+                    lent = None;
+                }
+                _ if lent.is_some_and(|(temp, _)| mentioned_roots(instruction).contains(temp)) => {
+                    let (temp, field) = lent.expect("checked above");
+                    match view_use(instruction, temp, true) {
+                        Some(ViewUse::Reads) => {}
+                        Some(ViewUse::Writes) if stores_scalar(instruction) => {
+                            stores.insert(field.to_string());
+                        }
+                        _ => return None,
+                    }
+                }
+                _ if mentioned_roots(instruction).contains(receiver) => {
+                    match receiver_keeper_call(instruction, receiver, rules) {
+                        Some(called) => stores.extend(called.iter().cloned()),
+                        None if keeps_field_list(instruction, receiver, "", rules)
+                            && !matches!(
+                                instruction,
+                                Instruction::Lend { .. } | Instruction::EndLend { .. }
+                            ) => {}
+                        None => return None,
+                    }
+                }
+                _ => {}
+            }
+        }
+        // A branch on a scalar field, or a return of one, reads it where
+        // it lies.
+        keeps &= terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .filter(|place| root(place) == receiver)
+            .all(|place| (rules.scalar_field)(place));
+    }
+    keeps.then_some(stores)
 }
 
 /// Whether `instruction`, which names the instance `root`, leaves the
@@ -561,10 +748,11 @@ fn keeps_field_list(
                 },
             ..
         } => {
-            (rules.keeps_instances)(function)
-                && type_args.is_empty()
-                && args.iter().all(|arg| arg.writeback_place.is_none())
-                && of_root().all(|place| place == root_name || (rules.scalar_field)(place))
+            receiver_keeper_call(instruction, root_name, rules).is_some()
+                || (rules.keeps_instances)(function)
+                    && type_args.is_empty()
+                    && args.iter().all(|arg| arg.writeback_place.is_none())
+                    && of_root().all(|place| place == root_name || (rules.scalar_field)(place))
         }
         _ => false,
     }
@@ -633,9 +821,11 @@ pub(super) fn field_list_snapshot_regions(
         }
         // The blocks that keep the instance and the list, with the
         // temporaries each lends the list to.
-        let mut clean = HashMap::<&str, Vec<&str>>::new();
+        let field = list.split_once('.').map_or("", |(_, field)| field);
+        let mut clean = HashMap::<&str, (Vec<&str>, bool)>::new();
         'blocks: for block in &function.blocks {
             let mut temps = Vec::new();
+            let mut writes = false;
             let mut lent = None::<&str>;
             for instruction in &block.instructions {
                 match instruction {
@@ -654,16 +844,21 @@ pub(super) fn field_list_snapshot_regions(
                     // about its index.
                     _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
                         let temp = lent.expect("checked above");
-                        if view_use(instruction, temp, (rules.pure_index)(temp))
-                            != Some(ViewUse::Reads)
-                        {
-                            continue 'blocks;
+                        match view_use(instruction, temp, (rules.pure_index)(temp)) {
+                            Some(ViewUse::Reads) => {}
+                            // A store of an element of the list's own kind.
+                            Some(ViewUse::Writes) if stores_scalar(instruction) => writes = true,
+                            _ => continue 'blocks,
                         }
                     }
                     _ if mentioned_roots(instruction).contains(instance)
                         && !keeps_field_list(instruction, instance, list, rules) =>
                     {
                         continue 'blocks;
+                    }
+                    _ if mentioned_roots(instruction).contains(instance) => {
+                        writes |= receiver_keeper_call(instruction, instance, rules)
+                            .is_some_and(|stores| stores.contains(field));
                     }
                     _ => {}
                 }
@@ -674,7 +869,7 @@ pub(super) fn field_list_snapshot_regions(
             {
                 continue;
             }
-            clean.insert(block.label.as_str(), temps);
+            clean.insert(block.label.as_str(), (temps, writes));
         }
         for component in strongly_connected(&clean, &successors) {
             let cyclic = component.len() > 1
@@ -688,7 +883,7 @@ pub(super) fn field_list_snapshot_regions(
             }
             let temps = component
                 .iter()
-                .flat_map(|label| clean[label].iter().map(|temp| temp.to_string()))
+                .flat_map(|label| clean[label].0.iter().map(|temp| temp.to_string()))
                 .collect::<HashSet<_>>();
             if temps.is_empty() {
                 continue;
@@ -714,7 +909,7 @@ pub(super) fn field_list_snapshot_regions(
                 list: list.to_string(),
                 blocks: component.iter().map(|label| label.to_string()).collect(),
                 entries,
-                writes: false,
+                writes: component.iter().any(|label| clean[label].1),
                 temps,
                 method: false,
                 carry: None,
