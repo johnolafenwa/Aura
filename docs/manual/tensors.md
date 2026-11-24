@@ -82,9 +82,9 @@ result of a comparison, is a `Tensor[bool]`.
 
 `tensor.float16` names the dtype of a `Tensor[float16]`: IEEE
 half-precision floats, 16 bits each, with about three decimal digits and
-a largest value of 65,504. A half tensor takes half the memory of a
-`float32` one, and a matrix product of halves is faster on a GPU that
-has half-precision hardware.
+a largest value of 65,504. On a GPU a half tensor takes half the memory of a
+`float32` one, and its matrix products are faster: GPT-2 runs 2.8 times
+faster in half precision on an NVIDIA A40.
 
 Aura has no `float16` number. A `Tensor[float16]` takes and gives
 `float32` numbers and arrays, and keeps each element as the nearest
@@ -112,8 +112,11 @@ Every operation rounds its result to the nearest half, ties to the even
 one, so `2048.0 + 1.0` is `2048.0`, and a result past 65,504 is an
 infinity. A `float16` tensor and a `float32` tensor do not mix in one
 operation: convert one with `to_float16()` or `to_float32()`. A sum, a
-mean, a softmax or a layer norm of halves adds in `float32` and rounds
-once at the end, on every device.
+mean, a softmax or a matrix product of halves adds in `float32` and
+rounds once at the end, on every device. `layer_norm` computes in
+`float32` throughout, because the square of an element overflows a half
+long before the result does. Keep that in mind when writing your own
+arithmetic on halves: `x * x` is an infinity for an element past 255.
 
 A gradient of a `float16` tensor is a `float16` tensor. The layers and
 optimizers of this module hold `float32` parameters, so training stays
@@ -635,7 +638,7 @@ The directory can be deleted at any time.
 | `slice`, `index_select`, `cat`, `expand`, `argmax`, `argmin`, `rand` | Equal. |
 | `+`, `-`, `*`, `/`, `sqrt` and the conversions on `float16` | Equal. |
 | `sum`, `mean` and the functions on `float16` | Within a few half-precision steps. |
-| `matmul` on `float16` | Within about one part in a hundred of the largest element. cuBLAS adds the terms of a half product in half precision, where the CPU device adds them in `float32` and rounds once. |
+| `matmul` on `float16` | Close. Both devices add the terms of a product in `float32` and round the sum once. |
 | `index_add` | Within a few units in the last place. The GPU adds in a different order. |
 
 The test suite checks these on a machine with a GPU. The hosted CI

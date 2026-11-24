@@ -29,7 +29,28 @@ shows the public API, under Half Precision.
 - GPT-2 in Aura and in PyTorch name the same tokens on the CPU, in
   `float32` and in `float16`.
 
+## On an NVIDIA A40
+
+Run on 2026-11-24 against PyTorch 2.8.0. The tables are in
+`benchmarks/tensor/README.md`.
+
+- All runtime tensor tests pass on the CUDA device.
+- GPT-2 names the same tokens as PyTorch in both dtypes. A batch is
+  1.3 times faster than PyTorch, text one token at a time is about
+  twice as slow, and nanoGPT training is 1.2 times slower.
+- Reading heads in place did not change `gpt_infer` measurably.
+- The run found two defects, both fixed. A layer norm of halves
+  overflowed at GPT-2's depth, so `layer_norm` computes in `float32`.
+  `cublasHgemm` adds in half precision and changed one token of a
+  batch, so half products call `cublasGemmEx` with a `float32` compute
+  type.
+
 ## Not covered
+
+- The first run of a program that changes its shapes, such as text
+  generation, compiles kernels for tens of seconds.
+- `transformer_train` and `cnn_train` were behind PyTorch on this day
+  and level on 2026-11-14. Not investigated.
 
 - Metal keeps `float16` tensors in host memory.
 - Layers and optimizers are `float32`. There is no mixed precision
