@@ -164,8 +164,7 @@ architecture of the machine that runs the compiler.
 
 Every target writes an ELF object, on every host.
 
-- Code is position independent and uses no thread-local or global state,
-  so every function is reentrant.
+- The default build emits position-independent code.
 - There are no unwind tables and no stack probes.
 - Floats use the hardware float registers. Startup code must enable them
   before the first Aura function runs: SSE on x86-64, FP and NEON on
@@ -173,6 +172,30 @@ Every target writes an ELF object, on every host.
 - A C struct passed or returned by value is not supported on RISC-V. Pass a
   `mut` parameter.
 - `--debug` and `--target-cpu` are refused.
+
+## x86-64 Kernel Code
+
+Build every Aura object that can run on an interruptible kernel stack with
+`--kernel`. Pass the same profile to `aura check`.
+
+```sh
+aura check --freestanding --target x86_64-unknown-none --kernel kernel.au
+aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au
+```
+
+| x86-64 setting | Ordinary freestanding build | With `--kernel` |
+| --- | --- | --- |
+| Code placement | Position independent, default code model | Static relocations, kernel code model for addresses in the high 2 GiB |
+| Floating point | SSE2, System V float ABI | Software floating point, integer-register float ABI |
+| Stack | A leaf can use the 128 bytes below the stack pointer, the red zone | Each function reserves the stack space it needs |
+
+Kernel mode disables MMX, SSE, SSE2 and x87 in compiler-generated code.
+Use the same register and stack conventions for foreign code and assembly.
+Floating-point parameters and results cross a call as IEEE bit patterns
+in general-purpose registers. Arithmetic may call compiler-runtime helpers
+such as `__adddf3`. A square root can call `sqrtf` or `sqrt`. Supply those
+routines with the kernel's soft-float ABI. Run `llvm-nm -u kernel.o` to
+see which symbols one object needs.
 
 ## What The Object Needs
 
@@ -182,6 +205,7 @@ The object refers to these symbols and no others:
 | --- | --- |
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
+| Soft-float helpers | An x86-64 kernel object needs software arithmetic or square root. |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
 `memset`, or `memcmp`. The object carries a small weak definition of each,
