@@ -206,12 +206,47 @@ fn bind_pattern(pattern: &Pattern, locals: &mut BTreeSet<String>) {
     }
 }
 
-fn has_guard_name(module: &Module, resolver: &Resolver, _tokens: &[Token]) -> bool {
-    module.constants.iter().any(|c| c.required)
-        || module
-            .imports
-            .iter()
-            .any(|import| resolver.potential(import))
+/// An ordinary function guard cannot be selected unless it references a marked
+/// binding or a name imported from a possible provider of marked bindings.
+/// Check that necessary condition before cloning a module and walking its bodies.
+fn has_guard_name(module: &Module, resolver: &Resolver, tokens: &[Token]) -> bool {
+    let mut names: BTreeSet<&String> = module
+        .constants
+        .iter()
+        .filter(|constant| constant.required)
+        .map(|constant| &constant.name)
+        .collect();
+    for import in module
+        .imports
+        .iter()
+        .filter(|import| resolver.potential(import))
+    {
+        match &import.kind {
+            ImportKind::Module { path, alias } => names.extend(alias.as_ref().or(path.first())),
+            ImportKind::From { names: symbols, .. } => {
+                names.extend(
+                    symbols
+                        .iter()
+                        .map(|symbol| symbol.alias.as_ref().unwrap_or(&symbol.name)),
+                );
+            }
+        }
+    }
+    if names.is_empty() {
+        return false;
+    }
+    // Newline is a logical line break. A continued parenthesized condition
+    // has no Newline token until after its closing colon.
+    let mut in_guard = false;
+    for token in tokens {
+        match &token.kind {
+            TokenKind::KwIf | TokenKind::KwElif => in_guard = true,
+            TokenKind::Newline => in_guard = false,
+            TokenKind::Identifier(name) if in_guard && names.contains(name) => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
