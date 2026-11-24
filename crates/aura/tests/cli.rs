@@ -8041,7 +8041,7 @@ fn help_flags_exit_successfully() {
         );
         assert!(
             stdout.contains(
-                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]"
+                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]"
             ),
             "help must advertise every maintained test-runner option, stdout was:\n{}",
             stdout
