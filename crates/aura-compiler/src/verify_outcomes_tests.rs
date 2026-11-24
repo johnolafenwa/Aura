@@ -113,13 +113,12 @@ def main():
                 "total: {}",
                 not_modeled("a comprehension or built-in loop", 35)
             ),
-            format!("next: {}", not_modeled("`saturating_add`", 39)),
         ],
         "{report:#?}"
     );
     assert_eq!(
         (report.failed(), report.not_modeled(), report.undecided()),
-        (0, 9, 0)
+        (0, 8, 0)
     );
     let diagnostics = report.diagnostics();
     assert!(diagnostics

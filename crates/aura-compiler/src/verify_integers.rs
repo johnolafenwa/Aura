@@ -19,10 +19,12 @@
 //! because one such fact in scope makes unrelated arithmetic checks time
 //! out.
 
-use super::exec::{and, lit, Exec, Goal, IntTy, Val};
+use super::exec::{and, lit, Exec, FloatTy, Goal, IntTy, Val};
 use super::ObligationKind;
-use crate::ast::BinaryOp;
+use crate::ast::{BinaryOp, TypeRef, TypeRefKind};
 use crate::diag::Span;
+use crate::runtime_ops::ScalarOp;
+use crate::sema::Type;
 
 /// The `&` of two integers that are not literals.
 const BITAND: &str = "bitand!";
@@ -35,6 +37,30 @@ impl IntTy {
     pub(super) fn width(self) -> u32 {
         (self.hi - self.lo + 1).trailing_zeros()
     }
+}
+
+/// The `**` of two integers that are not literals.
+const INTPOW: &str = "intpow!";
+
+/// The largest literal exponent a power is written out for.
+const MAX_EXPONENT: i128 = 63;
+
+/// The operator a fixed-width method computes, and whether a result
+/// outside the type wraps around; otherwise it stops at the nearest end.
+pub(super) fn fixed_width(op: ScalarOp) -> Option<(BinaryOp, bool)> {
+    Some(match op {
+        ScalarOp::WrappingAdd => (BinaryOp::Add, true),
+        ScalarOp::WrappingSub => (BinaryOp::Sub, true),
+        ScalarOp::WrappingMul => (BinaryOp::Mul, true),
+        ScalarOp::WrappingShl => (BinaryOp::Shl, true),
+        ScalarOp::WrappingShr => (BinaryOp::Shr, true),
+        ScalarOp::SaturatingAdd => (BinaryOp::Add, false),
+        ScalarOp::SaturatingSub => (BinaryOp::Sub, false),
+        ScalarOp::SaturatingMul => (BinaryOp::Mul, false),
+        ScalarOp::SaturatingShl => (BinaryOp::Shl, false),
+        ScalarOp::SaturatingShr => (BinaryOp::Shr, false),
+        _ => return None,
+    })
 }
 
 /// The value of an SMT integer literal.
@@ -88,6 +114,42 @@ pub(super) fn bitnot(a: &str, ty: IntTy) -> String {
     match literal(a) {
         Some(value) => lit(top - value),
         None => format!("(- {} {a})", lit(top)),
+    }
+}
+
+/// An `as` cast between numbers in a contract, with the checks the run
+/// time makes of one in a function body: an integer must be a value of
+/// the integer type it converts to and must convert to a float exactly,
+/// and a float must be finite with its whole part in the integer type.
+pub(super) fn spec_cast(value: Val, ty: &TypeRef, wd: &mut Vec<String>) -> Result<Val, String> {
+    let TypeRefKind::Named { name, .. } = &ty.kind else {
+        return Err("a cast to this type is not modeled in contracts yet".into());
+    };
+    let target = Type::Named(name.clone(), Vec::new());
+    match (value, IntTy::of(&target), FloatTy::of(&target)) {
+        (Val::Int(term, _), Some(int), _) => {
+            wd.push(int.contains(&term));
+            Ok(Val::Int(term, int))
+        }
+        (Val::Float(term, from), Some(int), _) => {
+            wd.push(format!(
+                "(and {} {})",
+                from.above(&term, int.lo - 1),
+                from.below(&term, int.hi + 1)
+            ));
+            let truncated = format!("(to_int (fp.to_real (fp.roundToIntegral RTZ {term})))");
+            Ok(Val::Int(truncated, int))
+        }
+        (Val::Int(term, _), _, Some(to)) => {
+            let result = to.round_int(&term);
+            let exact = to.exact_ints();
+            wd.push(format!(
+                "(or (and (<= (- {exact}) {term}) (<= {term} {exact})) (= (fp.to_real {result}) (to_real {term})))"
+            ));
+            Ok(Val::Float(result, to))
+        }
+        (Val::Float(term, from), _, Some(to)) => Ok(Val::Float(to.convert(&term, from), to)),
+        _ => Err("this cast is not modeled in contracts yet".into()),
     }
 }
 
@@ -255,6 +317,192 @@ impl Exec<'_> {
         if op == BinaryOp::Shl {
             wd.push(ty.contains(&term));
         }
+        Ok(Val::Int(term, ty))
+    }
+
+    /// The term of a `wrapping_` or `saturating_` method, and the
+    /// condition a shift count must meet. Nothing else stops the program.
+    pub(super) fn width_term(
+        &mut self,
+        (op, wraps): (BinaryOp, bool),
+        a: &str,
+        b: &str,
+        ty: IntTy,
+    ) -> (String, String) {
+        let (exact, in_range) = match op {
+            BinaryOp::Add => (format!("(+ {a} {b})"), "true".to_string()),
+            BinaryOp::Sub => (format!("(- {a} {b})"), "true".to_string()),
+            BinaryOp::Mul => (format!("(* {a} {b})"), "true".to_string()),
+            // A right shift stays in the type.
+            BinaryOp::Shr => return self.shift(op, a, b, ty),
+            _ => self.shift(op, a, b, ty),
+        };
+        let (lo, hi) = (lit(ty.lo), lit(ty.hi));
+        let size = ty.hi - ty.lo + 1;
+        let body = match (wraps, op) {
+            // A sum or a difference is off by at most one whole range.
+            (true, BinaryOp::Add | BinaryOp::Sub) => {
+                format!("(ite (> e {hi}) (- e {size}) (ite (< e {lo}) (+ e {size}) e))")
+            }
+            (true, _) => format!("(+ {lo} (mod (- e {lo}) {size}))"),
+            (false, _) => format!("(ite (> e {hi}) {hi} (ite (< e {lo}) {lo} e))"),
+        };
+        (format!("(let ((e {exact})) {body})"), in_range)
+    }
+
+    /// A `wrapping_` or `saturating_` method call in a function body.
+    pub(super) fn int_method(
+        &mut self,
+        pc: &str,
+        kind: (BinaryOp, bool),
+        receiver: Option<Val>,
+        rhs: Val,
+    ) -> Option<Val> {
+        let (Some(Val::Int(a, ty)), Val::Int(b, _)) = (receiver, rhs) else {
+            return None;
+        };
+        let (term, in_range) = self.width_term(kind, &a, &b, ty);
+        if in_range != "true" {
+            let span = self.span;
+            self.oblige(
+                ObligationKind::Overflow,
+                span,
+                "shift amount in range",
+                pc,
+                Goal::Holds(in_range),
+            );
+        }
+        Some(Val::Int(self.define("Int", "width", term), ty))
+    }
+
+    /// The term of `a ** b`, the condition that the exponent is not
+    /// negative, and the condition that the result is a value of the
+    /// type when that is known. `None` when the power is not modeled.
+    fn pow_term(&mut self, a: &str, b: &str, ty: IntTy) -> Option<(String, String, String)> {
+        if let Some(power) = literal(b) {
+            if !(0..=MAX_EXPONENT).contains(&power) {
+                // A negative exponent stops the program. A large one is
+                // left to the general case.
+                return (power < 0).then(|| ("1".into(), "false".into(), "true".into()));
+            }
+            let term = match power {
+                0 => "1".to_string(),
+                1 => a.to_string(),
+                _ => format!("(* {})", vec![a; power as usize].join(" ")),
+            };
+            return Some((term.clone(), "true".to_string(), ty.contains(&term)));
+        }
+        let base = literal(a)?;
+        let (table, in_type) = match base {
+            // These never leave the type: 0, 1, and -1 repeat.
+            0 => (format!("(ite (= {b} 0) 1 0)"), "true".to_string()),
+            1 => ("1".to_string(), "true".to_string()),
+            -1 => (
+                format!("(ite (= (mod {b} 2) 0) 1 (- 1))"),
+                "true".to_string(),
+            ),
+            _ => {
+                // The powers that are values of the type, by exponent. A
+                // larger base leaves the type sooner, and for good.
+                let mut powers = vec![1i128];
+                while let Some(next) = powers[powers.len() - 1]
+                    .checked_mul(base)
+                    .filter(|next| (ty.lo..=ty.hi).contains(next))
+                {
+                    powers.push(next);
+                }
+                let mut table = "0".to_string();
+                for (exponent, power) in powers.iter().enumerate().rev() {
+                    table = format!("(ite (= {b} {exponent}) {} {table})", lit(*power));
+                }
+                (table, format!("(< {b} {})", powers.len()))
+            }
+        };
+        Some((table, format!("(<= 0 {b})"), in_type))
+    }
+
+    /// An integer `**` in a function body. The run time stops on a
+    /// negative exponent and on a result outside the type.
+    pub(super) fn int_pow(&mut self, pc: &str, a: &str, b: &str, ty: IntTy, span: Span) -> Val {
+        let Some((term, exponent, in_type)) = self.pow_term(a, b, ty) else {
+            return self.pow_unknown(pc, a, b, ty, span);
+        };
+        if exponent != "true" {
+            self.oblige(
+                ObligationKind::Overflow,
+                span,
+                "exponent is not negative",
+                pc,
+                Goal::Holds(exponent.clone()),
+            );
+        }
+        let result = self.define("Int", "pow", term);
+        self.oblige(
+            ObligationKind::Overflow,
+            span,
+            "integer result in range",
+            &and(pc, &exponent),
+            Goal::Holds(in_type),
+        );
+        Val::Int(result, ty)
+    }
+
+    /// `a ** b` where the exponent is not a literal, nor the base: an
+    /// unknown function of the two, with what holds of every power.
+    fn pow_unknown(&mut self, pc: &str, a: &str, b: &str, ty: IntTy, span: Span) -> Val {
+        let exponent = format!("(<= 0 {b})");
+        self.oblige(
+            ObligationKind::Overflow,
+            span,
+            "exponent is not negative",
+            pc,
+            Goal::Holds(exponent.clone()),
+        );
+        let pc = and(pc, &exponent);
+        self.oblige(
+            ObligationKind::Overflow,
+            span,
+            "integer result in range",
+            &pc,
+            Goal::Unsupported(
+                "`**` of two values that are not constants is not modeled yet".into(),
+            ),
+        );
+        let decl = format!("(declare-fun {INTPOW} (Int Int) Int)");
+        if !self.decls.contains(&decl) {
+            self.decls.push(decl);
+        }
+        let result = self.unmodeled("`**` of two values that are not constants", |exec| {
+            exec.define_with("Int", "pow", format!("({INTPOW} {a} {b})"), |r| {
+                format!(
+                    "(=> (>= {b} 0) (and (=> (= {b} 0) (= {r} 1)) (=> (= {b} 1) (= {r} {a})) (=> (>= {a} 0) (>= {r} 0)) (=> (>= {a} 1) (>= {r} 1)) (=> (>= {a} 2) (> {r} {b})) (=> (and (>= {a} 1) (>= {b} 1)) (>= {r} {a})) (=> (and (= {a} 0) (>= {b} 1)) (= {r} 0)) (=> (= {a} 1) (= {r} 1))))"
+                )
+            })
+        });
+        // Past this point the program did not stop, so the power is a
+        // value of the type.
+        self.assume(&pc, ty.contains(&result));
+        Val::Int(result, ty)
+    }
+
+    /// An integer `**` in a contract.
+    pub(super) fn spec_pow(
+        &mut self,
+        lhs: &Val,
+        rhs: &Val,
+        literal_left: bool,
+        wd: &mut Vec<String>,
+    ) -> Result<Val, String> {
+        let (Val::Int(a, aty), Val::Int(b, bty)) = (lhs, rhs) else {
+            return Err("`**` on these operands is not modeled in contracts yet".into());
+        };
+        let ty = if literal_left { *bty } else { *aty };
+        let Some((term, exponent, in_type)) = self.pow_term(a, b, ty) else {
+            return Err(
+                "`**` of two values that are not constants is not modeled in contracts yet".into(),
+            );
+        };
+        wd.extend([exponent, in_type]);
         Ok(Val::Int(term, ty))
     }
 }

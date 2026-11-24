@@ -1194,14 +1194,10 @@ def main():
     assert_eq!(
         open_checks(&report),
         [
-            "3 overflow failed",
             "27 overflow failed",
-            "27 overflow failed",
-            "31 requires unsupported",
             "32 requires unsupported",
             "33 requires unsupported",
             "34 requires unsupported",
-            "37 requires unsupported",
         ],
         "{report:#?}"
     );
@@ -2941,15 +2937,12 @@ def main():
     print(apply_twice(odd, 3))
 "#,
         &[
-            "20 overflow failed",
-            "21 overflow failed",
             "38 requires unsupported",
             "46 requires failed",
             "46 ensures failed",
             "48 requires unsupported",
             "48 overflow failed",
-            "51 requires unsupported",
-            "51 ensures unsupported",
+            "51 ensures failed",
         ],
     );
     for (source, message) in [
@@ -3048,11 +3041,7 @@ def main():
     ) else {
         return;
     };
-    assert_eq!(
-        open_checks(&report),
-        ["25 ensures unsupported"],
-        "{report:#?}"
-    );
+    assert_eq!(open_checks(&report), Vec::<String>::new(), "{report:#?}");
 }
 
 #[test]
@@ -3302,6 +3291,7 @@ def main():
             "6 overflow unsupported",
             "9 overflow failed",
             "9 overflow failed",
+            "12 overflow failed",
             "12 overflow unsupported"
         ],
         "{first:#?}"

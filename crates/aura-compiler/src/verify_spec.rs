@@ -661,6 +661,10 @@ impl Exec<'_> {
             ExprKind::Binary { op, left, right } => {
                 self.spec_binary(*op, left, right, env, wd, depth)
             }
+            ExprKind::Cast { expr: inner, ty } => {
+                let value = self.spec(inner, env, wd, depth)?;
+                super::integers::spec_cast(value, ty, wd)
+            }
             ExprKind::CompareChain { first, links } => {
                 let mut previous = self.spec(first, env, wd, depth)?;
                 let mut parts = Vec::new();
@@ -1186,6 +1190,10 @@ impl Exec<'_> {
                 };
                 wd.push(ty.contains(&term));
                 Ok(Val::Int(term, ty))
+            }
+            BinaryOp::Pow => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_pow(&lhs, &rhs, literal_left, wd)
             }
             BinaryOp::BitAnd
             | BinaryOp::BitOr

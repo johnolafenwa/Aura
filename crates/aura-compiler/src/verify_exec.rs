@@ -196,7 +196,7 @@ impl FloatTy {
 
     /// The largest integer below which every integer has an exact value
     /// of this type.
-    fn exact_ints(self) -> u64 {
+    pub(super) fn exact_ints(self) -> u64 {
         match self {
             Self::F32 => 1 << 24,
             Self::F64 => 1 << 53,
@@ -228,7 +228,7 @@ impl FloatTy {
     }
 
     /// `term > value`, for an integer `value` this type may not hold.
-    fn above(self, term: &str, value: i128) -> String {
+    pub(super) fn above(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             // No value of the type lies between `value` and a nearest one
             // above it.
@@ -238,7 +238,7 @@ impl FloatTy {
     }
 
     /// `term < value`, for an integer `value` this type may not hold.
-    fn below(self, term: &str, value: i128) -> String {
+    pub(super) fn below(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             (near, std::cmp::Ordering::Less) => format!("(fp.leq {term} {near})"),
             (near, _) => format!("(fp.lt {term} {near})"),
@@ -3300,17 +3300,7 @@ impl<'a> Exec<'a> {
                         self.int_bitwise(op, a, b, ty)
                     }
                     BinaryOp::Shl | BinaryOp::Shr => self.int_shift(&pc, op, (a, b), ty, span),
-                    BinaryOp::Pow if b.parse::<u32>().is_ok_and(|power| power <= 4) => {
-                        let power: u32 = b.parse().expect("matched above");
-                        let term = match power {
-                            0 => "1".to_string(),
-                            1 => a.clone(),
-                            _ => format!("(* {})", vec![a.as_str(); power as usize].join(" ")),
-                        };
-                        let result = self.define("Int", "pow", term);
-                        self.oblige_range_at(&pc, span, &result, ty);
-                        Val::Int(result, ty)
-                    }
+                    BinaryOp::Pow => self.int_pow(&pc, a, b, ty, span),
                     _ => {
                         if trap == ArithmeticTrap::Runtime {
                             self.oblige(
@@ -4812,6 +4802,15 @@ impl<'a> Exec<'a> {
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
                 }
+            }
+            RuntimeOp::Scalar(op) if super::integers::fixed_width(op).is_some() => {
+                let kind = super::integers::fixed_width(op)?;
+                let hint = match &receiver {
+                    Some(Val::Int(_, ty)) => Some(*ty),
+                    _ => None,
+                };
+                let rhs = arg(self, state, 0, hint);
+                self.int_method(&pc, kind, receiver, rhs)
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {

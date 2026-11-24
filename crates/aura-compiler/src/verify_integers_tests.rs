@@ -639,90 +639,146 @@ fn operations_with_a_literal_match_the_interpreter() {
     }
 }
 
-/// The same for a shift by a count that is not a literal, which reads the
-/// table of powers of two.
-#[test]
-fn shifts_by_a_variable_match_the_interpreter() {
-    for (name, lo, hi) in TYPES {
-        let counts = [0, 1, width(lo, hi) / 2, width(lo, hi) - 1];
-        let mut source = String::new();
-        let mut main = String::from("def main():\n");
-        let mut index = 0;
-        for a in edges(lo, hi) {
-            for count in counts {
-                source.push_str(&format!(
-                    "def check_{index}(a: {name}, c: {name}) -> {name}:\n    requires a == {} and c == {count}\n",
-                    au(a)
-                ));
-                let right = oracle_shr(a, count, lo, hi).expect("the count is in range");
-                source.push_str(&format!("    assert a >> c == {}\n", au(right)));
-                if let Some(left) = oracle_shl(a, count, lo, hi) {
-                    source.push_str(&format!("    assert a << c == {}\n", au(left)));
-                }
-                source.push_str("    return a\n\n");
-                main.push_str(&format!("    check_{index}({}, {count})\n", au(a)));
-                index += 1;
-            }
+/// One statement on pinned inputs: the parameters, the `requires` that
+/// pins them, the statement, and the arguments of a call. Each `$` stands
+/// for the item's number, which keeps the names of the items that share a
+/// function apart.
+struct Item {
+    params: String,
+    pinned: String,
+    statement: String,
+    args: String,
+}
+
+/// Adds functions to `source` that each pin the inputs of up to 16 items
+/// and run their statements. Gives the calls of those functions and the
+/// last line of each statement.
+fn groups(source: &mut String, prefix: &str, items: &[Item]) -> (String, Vec<usize>) {
+    let mut calls = String::new();
+    let mut lines = Vec::new();
+    let mut line = source.lines().count() + 1;
+    for (group, chunk) in items.chunks(16).enumerate() {
+        let numbered = |part: fn(&Item) -> &str| -> Vec<String> {
+            chunk
+                .iter()
+                .enumerate()
+                .map(|(at, item)| part(item).replace('$', &at.to_string()))
+                .collect()
+        };
+        source.push_str(&format!(
+            "def {prefix}_{group}({}) -> int64:\n",
+            numbered(|item| &item.params).join(", ")
+        ));
+        for pinned in numbered(|item| &item.pinned) {
+            source.push_str(&format!("    requires {pinned}\n"));
         }
-        source.push_str(&main);
-        assert_proved(&source);
+        line += 1 + chunk.len();
+        for statement in numbered(|item| &item.statement) {
+            source.push_str(&format!("    {statement}\n"));
+            line += statement.lines().count();
+            lines.push(line - 1);
+        }
+        source.push_str("    return 0\n\n");
+        line += 2;
+        calls.push_str(&format!(
+            "    {prefix}_{group}({})\n",
+            numbered(|item| &item.args).join(", ")
+        ));
+    }
+    (calls, lines)
+}
+
+/// One operation on pinned inputs, written like an `Item`, and what the
+/// oracle says the run time gives: `None` where it stops the program.
+struct Case {
+    params: String,
+    pinned: String,
+    expr: String,
+    args: String,
+    expected: Option<i128>,
+}
+
+/// Checks each case against the verifier and the interpreter. A case with
+/// a value must prove `assert expr == value`, and the assert must hold
+/// when run. A case that stops must have exactly one failed check, on the
+/// operation, and must stop in the interpreter.
+fn check_cases(cases: &[Case]) {
+    let item = |case: &Case, statement: String| Item {
+        params: case.params.clone(),
+        pinned: case.pinned.clone(),
+        statement,
+        args: case.args.clone(),
+    };
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+    for case in cases {
+        match case.expected {
+            Some(value) => good.push(item(case, format!("assert {} == {}", case.expr, au(value)))),
+            None => bad.push(item(case, format!("print({})", case.expr))),
+        }
+    }
+    let mut source = String::new();
+    let (calls, _) = groups(&mut source, "good", &good);
+    let (_, lines) = groups(&mut source, "bad", &bad);
+    source.push_str(&format!("def main():\n    print(0)\n{calls}"));
+    crate::run_source(&source).expect("the oracle agrees with the interpreter");
+    let open: Vec<String> = lines
+        .iter()
+        .map(|line| format!("{line} overflow failed"))
+        .collect();
+    let open: Vec<&str> = open.iter().map(String::as_str).collect();
+    assert_open(&source, &open);
+    // Starting the interpreter costs more than a check, so it confirms a
+    // spread of the cases that stop, not each one.
+    let step = bad.len().div_ceil(8).max(1);
+    for case in bad.into_iter().step_by(step) {
+        let mut alone = String::new();
+        let (calls, _) = groups(&mut alone, "bad", &[case]);
+        alone.push_str(&format!("def main():\n{calls}"));
+        assert!(crate::run_source(&alone).is_err(), "{alone}");
     }
 }
 
-/// Each shift the oracle says stops the program: the verifier reports its
-/// check as failed, and the interpreter stops.
+/// Shifts by a count that is not a literal, which read the table of
+/// powers of two, and shifts the run time refuses: a count outside the
+/// width, or a `<<` that loses bits.
 #[test]
-fn shifts_that_stop_the_program_are_reported() {
+fn shifts_match_the_interpreter() {
     for (name, lo, hi) in TYPES {
         let bits = width(lo, hi);
-        // Value, count, and whether the shift is `<<`.
-        let mut cases = vec![
-            (1, bits, true),
-            (1, bits, false),
-            (0, bits + 1, false),
-            (hi, 1, true),
-            (hi / 2 + 1, 1, true),
-            (1, bits - 1, lo < 0),
-            (3, bits - 1, true),
-        ];
+        let mut counts = vec![0, 1, bits / 2, bits - 1, bits, bits + 1];
         if lo < 0 {
-            cases.extend([
-                (1, -1, true),
-                (1, -1, false),
-                (lo, 1, true),
-                (-2, bits - 1, true),
-            ]);
+            counts.push(-1);
         }
-        let mut source = String::new();
-        let mut expected = Vec::new();
-        for (index, &(a, count, left)) in cases.iter().enumerate() {
-            let symbol = if left { "<<" } else { ">>" };
-            let stops = if left {
-                oracle_shl(a, count, lo, hi).is_none()
-            } else {
-                oracle_shr(a, count, lo, hi).is_none()
-            };
-            let function = format!(
-                "def variable_{index}(a: {name}, c: {name}) -> {name}:\n    requires a == {a} and c == {count}\n    return a {symbol} c\n\ndef literal_{index}(a: {name}) -> {name}:\n    requires a == {a}\n    return a {symbol} {count}\n\n",
-                a = au(a),
-                count = au(count),
-            );
-            if stops {
-                expected.push(format!("{} overflow failed", index * 8 + 3));
-                expected.push(format!("{} overflow failed", index * 8 + 7));
-                for call in [
-                    format!("variable_{index}({}, {})", au(a), au(count)),
-                    format!("literal_{index}({})", au(a)),
-                ] {
-                    let run = format!("{function}def main():\n    print({call})\n");
-                    assert!(crate::run_source(&run).is_err(), "{run}");
+        let mut cases = Vec::new();
+        for a in edges(lo, hi) {
+            for &count in &counts {
+                let results = [
+                    ("<<", oracle_shl(a, count, lo, hi)),
+                    (">>", oracle_shr(a, count, lo, hi)),
+                ];
+                for (symbol, expected) in results {
+                    cases.push(Case {
+                        params: format!("a$: {name}, c$: {name}"),
+                        pinned: format!("a$ == {} and c$ == {}", au(a), au(count)),
+                        expr: format!("a$ {symbol} c$"),
+                        args: format!("{}, {}", au(a), au(count)),
+                        expected,
+                    });
+                    // A literal count in range is covered above.
+                    if expected.is_none() && a.abs() <= 1 {
+                        cases.push(Case {
+                            params: format!("a$: {name}"),
+                            pinned: format!("a$ == {}", au(a)),
+                            expr: format!("a$ {symbol} {}", au(count)),
+                            args: au(a),
+                            expected,
+                        });
+                    }
                 }
             }
-            source.push_str(&function);
         }
-        source.push_str("def main():\n    print(1)\n");
-        let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
-        assert_open(&source, &expected);
+        check_cases(&cases);
     }
 }
 
@@ -737,35 +793,613 @@ fn bounds_of_unknown_bit_operations_allow_the_interpreter_results() {
         if lo < 0 {
             values.extend([-1, -pattern, lo]);
         }
-        let mut source = String::new();
-        let mut run = String::from("def main():\n");
-        let mut expected = Vec::new();
-        let mut index = 0;
+        let mut wrong = Vec::new();
+        let mut right = Vec::new();
         for &a in &values {
             for &b in &values {
                 if a == b {
                     continue;
                 }
                 let results = format!(
-                    "a & b == {} and a | b == {} and a ^ b == {}",
+                    "a$ & b$ == {} and a$ | b$ == {} and a$ ^ b$ == {}",
                     au(a & b),
                     au(a | b),
                     au(a ^ b)
                 );
-                source.push_str(&format!(
-                    "def wrong_{index}(a: {name}, b: {name}) -> {name}:\n    requires a == {} and b == {}\n    assert not ({results})\n    return a\n\ndef right_{index}(a: {name}, b: {name}) -> {name}:\n    assert {results}\n    return a\n\n",
-                    au(a),
-                    au(b),
-                ));
-                expected.push(format!("{} assert unsupported", index * 9 + 3));
-                expected.push(format!("{} assert unsupported", index * 9 + 7));
-                run.push_str(&format!("    right_{index}({}, {})\n", au(a), au(b)));
-                index += 1;
+                // Each wrong claim is behind a flag of its own: a claim
+                // the bounds refute would leave no path to the next one.
+                for (items, statement) in [
+                    (
+                        &mut wrong,
+                        format!("if g$:\n        assert not ({results})"),
+                    ),
+                    (&mut right, format!("assert g$ and {results}")),
+                ] {
+                    items.push(Item {
+                        params: format!("a$: {name}, b$: {name}, g$: bool"),
+                        pinned: format!("a$ == {} and b$ == {}", au(a), au(b)),
+                        statement,
+                        args: format!("{}, {}, true", au(a), au(b)),
+                    });
+                }
             }
         }
-        source.push_str(&run);
-        crate::run_source(&source).expect("the oracle agrees with the interpreter");
-        let expected: Vec<&str> = expected.iter().map(String::as_str).collect();
-        assert_open(&source, &expected);
+        let mut run = String::new();
+        let (calls, _) = groups(&mut run, "right", &right);
+        run.push_str(&format!("def main():\n{calls}"));
+        crate::run_source(&run).expect("the oracle agrees with the interpreter");
+        let mut source = String::new();
+        let (_, lines) = groups(&mut source, "wrong", &wrong);
+        source.push_str("def main():\n    print(0)\n");
+        let open: Vec<String> = lines
+            .iter()
+            .map(|line| format!("{line} assert unsupported"))
+            .collect();
+        let open: Vec<&str> = open.iter().map(String::as_str).collect();
+        assert_open(&source, &open);
     }
+}
+
+// ----- Wrapping and saturating methods, and powers -----------------------
+
+/// A value outside the type, brought back by whole ranges.
+fn oracle_wrap(value: i128, lo: i128, hi: i128) -> i128 {
+    (value - lo).rem_euclid(hi - lo + 1) + lo
+}
+
+/// What the run time gives for `a ** exponent`, or `None` where it stops:
+/// a negative exponent, or a result outside the type.
+fn oracle_pow(a: i128, exponent: i128, lo: i128, hi: i128) -> Option<i128> {
+    if exponent < 0 {
+        return None;
+    }
+    // 0, 1, and -1 repeat, whatever the exponent.
+    if exponent > 0 && (-1..=1).contains(&a) {
+        return Some(if exponent % 2 == 0 { a * a } else { a });
+    }
+    let mut value = 1i128;
+    for _ in 0..exponent {
+        // Past the type, a larger power never comes back into it.
+        value = value
+            .checked_mul(a)
+            .filter(|value| (lo..=hi).contains(value))?;
+    }
+    Some(value)
+}
+
+#[test]
+fn a_saturating_sum_does_not_fall() {
+    assert_proved(
+        r#"
+def next(x: int64) -> int64:
+    ensures result >= x
+    return x.saturating_add(1)
+
+def below(x: uint8, y: uint8) -> uint8:
+    ensures result <= x
+    return x.saturating_sub(y)
+
+def scaled(x: int32) -> int32:
+    requires x >= 0
+    ensures result >= x
+    return x.saturating_mul(3)
+
+def main():
+    print(next(3))
+    print(below(3 as uint8, 5 as uint8))
+    print(scaled(1000000000))
+"#,
+    );
+    // It stays at the largest value, so it does not always grow.
+    assert_open(
+        r#"
+def next(x: int64) -> int64:
+    ensures result > x
+    return x.saturating_add(1)
+
+def main():
+    print(next(3))
+"#,
+        &["3 ensures failed"],
+    );
+}
+
+#[test]
+fn a_wrapping_sum_has_no_overflow_check_and_its_exact_value() {
+    let source = r#"
+def next(x: int64) -> int64:
+    ensures result == (x + 1 if x < 9223372036854775807 else -9223372036854775808)
+    return x.wrapping_add(1)
+
+def product(x: uint8, y: uint8) -> uint8:
+    ensures result as int64 == (x as int64 * y as int64) % 256
+    return x.wrapping_mul(y)
+
+def back(x: int8, y: int8) -> int8:
+    ensures result == x
+    return x.wrapping_sub(y).wrapping_add(y)
+
+def main():
+    print(next(9223372036854775807))
+    print(product(200 as uint8, 3 as uint8))
+    print(back(100 as int8, -100 as int8))
+"#;
+    assert_proved(source);
+    let Some(report) = verify(source) else {
+        return;
+    };
+    // The only overflow checks are the contracts' own arithmetic.
+    let on_calls: Vec<usize> = report
+        .obligations
+        .iter()
+        .filter(|obligation| obligation.kind == ObligationKind::Overflow)
+        .map(|obligation| obligation.span.line)
+        .filter(|line| [4, 8, 12].contains(line))
+        .collect();
+    assert_eq!(on_calls, Vec::<usize>::new(), "{report:#?}");
+    // A wrapped sum is not always larger.
+    assert_open(
+        r#"
+def next(x: int64) -> int64:
+    ensures result > x
+    return x.wrapping_add(1)
+
+def main():
+    print(next(3))
+"#,
+        &["3 ensures failed"],
+    );
+}
+
+#[test]
+fn shift_methods_check_their_count() {
+    assert_proved(
+        r#"
+def top(x: int8) -> int8:
+    requires x > 0
+    ensures result == 127
+    return x.saturating_shl(7)
+
+def low(x: uint8, c: uint8) -> uint8:
+    requires c < 8
+    ensures result <= x
+    return x.wrapping_shr(c)
+
+def main():
+    print(top(3 as int8))
+    print(low(200 as uint8, 3 as uint8))
+"#,
+    );
+    assert_open(
+        r#"
+def shifted(x: int8, c: int8) -> int8:
+    return x.saturating_shr(c)
+
+def lost(x: uint8) -> uint8:
+    ensures result >= x
+    return x.wrapping_shl(1)
+
+def main():
+    print(shifted(3 as int8, 1 as int8))
+    print(lost(3 as uint8))
+"#,
+        &["3 overflow failed", "6 ensures failed"],
+    );
+}
+
+/// Every `wrapping_` and `saturating_` sum, difference, and product of
+/// two edge values, against the oracle and the interpreter.
+#[test]
+fn width_methods_match_the_interpreter() {
+    for (name, lo, hi) in TYPES {
+        let values = edges(lo, hi);
+        let mut source = String::new();
+        let mut main = String::from("def main():\n");
+        for (index, &a) in values.iter().enumerate() {
+            let params: Vec<String> = (0..values.len())
+                .map(|at| format!("b{at}: {name}"))
+                .collect();
+            let pinned: Vec<String> = values
+                .iter()
+                .enumerate()
+                .map(|(at, b)| format!("b{at} == {}", au(*b)))
+                .collect();
+            source.push_str(&format!(
+                "def check_{index}(a: {name}, {}) -> {name}:\n    requires a == {} and {}\n",
+                params.join(", "),
+                au(a),
+                pinned.join(" and ")
+            ));
+            for (at, &b) in values.iter().enumerate() {
+                let clamp = |value: i128| value.clamp(lo, hi);
+                // The product of two 64-bit values can pass 127 bits.
+                let product = a.checked_mul(b).unwrap_or(hi);
+                source.push_str(&format!(
+                    "    assert a.wrapping_add(b{at}) == {} and a.wrapping_sub(b{at}) == {} and a.wrapping_mul(b{at}) == {}\n    assert a.saturating_add(b{at}) == {} and a.saturating_sub(b{at}) == {} and a.saturating_mul(b{at}) == {}\n",
+                    au(oracle_wrap(a + b, lo, hi)),
+                    au(oracle_wrap(a - b, lo, hi)),
+                    au(oracle_wrap(a.wrapping_mul(b), lo, hi)),
+                    au(clamp(a + b)),
+                    au(clamp(a - b)),
+                    au(clamp(product)),
+                ));
+            }
+            source.push_str("    return a\n\n");
+            let args: Vec<String> = values.iter().map(|b| au(*b)).collect();
+            main.push_str(&format!(
+                "    check_{index}({}, {})\n",
+                au(a),
+                args.join(", ")
+            ));
+        }
+        source.push_str(&main);
+        assert_proved(&source);
+    }
+}
+
+/// The shift methods on edge values and counts, among them counts the
+/// run time refuses.
+#[test]
+fn shift_methods_match_the_interpreter() {
+    for (name, lo, hi) in TYPES {
+        let bits = width(lo, hi);
+        let pattern = 0x5555_5555_5555_5555 & hi;
+        let mut values = vec![0, 1, pattern, hi];
+        let mut counts = vec![0, 1, bits / 2, bits - 1, bits];
+        if lo < 0 {
+            values.extend([-1, lo]);
+            counts.push(-1);
+        }
+        let mut cases = Vec::new();
+        for &a in &values {
+            for &count in &counts {
+                let valid = (0..bits).contains(&count);
+                let scaled = a.checked_shl(count.clamp(0, 64) as u32).expect("it fits");
+                let results = [
+                    ("wrapping_shl", oracle_wrap(scaled, lo, hi)),
+                    ("saturating_shl", scaled.clamp(lo, hi)),
+                    ("wrapping_shr", a >> count.clamp(0, 64)),
+                    ("saturating_shr", a >> count.clamp(0, 64)),
+                ];
+                for (method, value) in results {
+                    cases.push(Case {
+                        params: format!("a$: {name}, c$: {name}"),
+                        pinned: format!("a$ == {} and c$ == {}", au(a), au(count)),
+                        expr: format!("a$.{method}(c$)"),
+                        args: format!("{}, {}", au(a), au(count)),
+                        expected: valid.then_some(value),
+                    });
+                }
+            }
+        }
+        check_cases(&cases);
+    }
+}
+
+#[test]
+fn powers_with_a_literal_prove() {
+    assert_proved(
+        r#"
+def fifth(x: int64) -> int64:
+    requires -100 <= x and x <= 100
+    ensures result == x * x * x * x * x
+    return x ** 5
+
+def bit(k: int64) -> int64:
+    requires 0 <= k and k < 63
+    ensures result > 0 and result > k
+    return 2 ** k
+
+def sign(k: int64) -> int64:
+    requires k >= 0
+    ensures result == 1 or result == -1
+    ensures (k % 2 == 0) == (result == 1)
+    return (-1) ** k
+
+def flat(k: uint8) -> uint8:
+    ensures result <= 1
+    return 0 ** k + 1 ** k - 1
+
+def exponent(k: int64) -> int64:
+    requires 0 <= k and k <= 10
+    requires 2 ** k == 8 and k ** 2 == 9
+    ensures result == 3
+    return k
+
+def main():
+    print(fifth(3))
+    print(bit(10))
+    print(sign(3))
+    print(flat(0 as uint8))
+    print(exponent(3))
+"#,
+    );
+    // `2 ** 63` is outside `int64`, a negative exponent stops the
+    // program, and `x ** 5` is not always above `x`.
+    assert_open(
+        r#"
+def bit(k: int64) -> int64:
+    requires 0 <= k
+    return 2 ** k
+
+def ten(k: int64) -> int64:
+    requires k < 5
+    return 10 ** k
+
+def fifth(x: int64) -> int64:
+    requires -100 <= x and x <= 100
+    ensures result >= x
+    return x ** 5
+
+def main():
+    print(bit(3))
+    print(ten(3))
+    print(fifth(3))
+"#,
+        &[
+            "4 overflow failed",
+            "8 overflow failed",
+            "12 ensures failed",
+        ],
+    );
+}
+
+#[test]
+fn a_power_of_two_unknowns_has_its_bounds() {
+    assert_open(
+        r#"
+def power(a: int64, k: int64) -> int64:
+    requires a >= 1 and k >= 1
+    ensures result >= a and result >= 1
+    return a ** k
+
+def large(a: int64, k: int64) -> int64:
+    requires a >= 0 and k >= 0
+    ensures result >= 5
+    return a ** k
+
+def negative(a: int64, k: int64) -> int64:
+    return a ** k
+
+def huge(a: int64) -> int64:
+    return a ** 100
+
+def after(a: int64, k: int64) -> int64:
+    requires k >= 0
+    r = a ** k
+    return r // 2 + 1
+
+def main():
+    print(power(2, 3))
+    print(large(2, 3))
+    print(negative(2, 3))
+    print(huge(1))
+    print(after(2, 3))
+"#,
+        &[
+            "5 overflow unsupported",
+            "9 ensures unsupported",
+            "10 overflow unsupported",
+            "13 overflow failed",
+            "13 overflow unsupported",
+            "16 overflow unsupported",
+            "20 overflow unsupported",
+        ],
+    );
+}
+
+/// Powers with a literal exponent or a literal base on edge values,
+/// against the oracle and the interpreter.
+#[test]
+fn powers_match_the_interpreter() {
+    for (name, lo, hi) in TYPES {
+        let bits = width(lo, hi);
+        let mut bases = vec![0, 1, 2, 3, 10, hi];
+        if lo < 0 {
+            bases.extend([-1, -2, -3, lo]);
+        }
+        let mut cases = Vec::new();
+        for &a in &bases {
+            // A literal exponent above 63 is not written out.
+            for exponent in [0, 1, 2, 3, 5, bits - 2, bits - 1, bits.min(62), 63] {
+                cases.push(Case {
+                    params: format!("a$: {name}"),
+                    pinned: format!("a$ == {}", au(a)),
+                    expr: format!("a$ ** {exponent}"),
+                    args: au(a),
+                    expected: oracle_pow(a, exponent, lo, hi),
+                });
+            }
+        }
+        let mut exponents = vec![0, 1, 2, bits / 2, bits - 2, bits - 1, bits, hi];
+        if lo < 0 {
+            exponents.push(-1);
+        }
+        for &a in &bases {
+            // A literal on the left is read as an `int64` first, and the
+            // least value of a type is not a literal by itself.
+            if (a == lo && lo < 0) || a > i64::MAX as i128 {
+                continue;
+            }
+            for &exponent in &exponents {
+                cases.push(Case {
+                    params: format!("k$: {name}"),
+                    pinned: format!("k$ == {}", au(exponent)),
+                    expr: format!("{} ** k$", au(a)),
+                    args: au(exponent),
+                    expected: oracle_pow(a, exponent, lo, hi),
+                });
+            }
+        }
+        check_cases(&cases);
+    }
+}
+
+/// The bounds stated for `a ** k` of two unknowns must allow what the run
+/// time computes: with both pinned, the claim that the power differs from
+/// the oracle's is not proved.
+#[test]
+fn bounds_of_unknown_powers_allow_the_interpreter_results() {
+    for (name, lo, hi) in TYPES {
+        let bits = width(lo, hi);
+        let mut bases = vec![0, 1, 2, 3, hi];
+        if lo < 0 {
+            bases.extend([-1, -2, lo]);
+        }
+        let mut wrong = Vec::new();
+        let mut right = Vec::new();
+        for &a in &bases {
+            for exponent in [0, 1, 2, bits - 2, bits - 1] {
+                let Some(value) = oracle_pow(a, exponent, lo, hi) else {
+                    continue;
+                };
+                for (items, statement) in [
+                    (
+                        &mut wrong,
+                        format!("if g$:\n        assert a$ ** k$ != {}", au(value)),
+                    ),
+                    (
+                        &mut right,
+                        format!("assert g$ and a$ ** k$ == {}", au(value)),
+                    ),
+                ] {
+                    items.push(Item {
+                        params: format!("a$: {name}, k$: {name}, g$: bool"),
+                        pinned: format!("a$ == {} and k$ == {exponent}", au(a)),
+                        statement,
+                        args: format!("{}, {exponent}, true", au(a)),
+                    });
+                }
+            }
+        }
+        let mut run = String::new();
+        let (calls, _) = groups(&mut run, "right", &right);
+        run.push_str(&format!("def main():\n{calls}"));
+        crate::run_source(&run).expect("the oracle agrees with the interpreter");
+        let mut source = String::new();
+        let (_, lines) = groups(&mut source, "wrong", &wrong);
+        source.push_str("def main():\n    print(0)\n");
+        let mut open = Vec::new();
+        for line in lines {
+            open.push(format!("{line} assert unsupported"));
+            open.push(format!("{line} overflow unsupported"));
+        }
+        let open: Vec<&str> = open.iter().map(String::as_str).collect();
+        assert_open(&source, &open);
+    }
+}
+
+// ----- Casts in contracts ------------------------------------------------
+
+#[test]
+fn contracts_read_casts_between_numbers() {
+    assert_proved(
+        r#"
+def widen(x: uint8) -> int64:
+    ensures result == x as int64
+    return x as int64
+
+def use_widen(x: uint8) -> int64:
+    ensures 0 <= result and result <= 255
+    return widen(x)
+
+def narrow(x: int64) -> int8:
+    requires x as int8 > 0
+    ensures result as int64 == x
+    return x as int8
+
+def use_narrow() -> int8:
+    ensures result == 5
+    return narrow(5)
+
+def ratio(n: int64) -> float64:
+    requires 0 <= n and n <= 1000
+    ensures result == n as float64
+    return n as float64
+
+def use_ratio() -> float64:
+    ensures result == 3.0
+    return ratio(3)
+
+def whole(x: float64) -> int64:
+    requires 0.0 <= x and x <= 100.0
+    ensures result == x as int64
+    return x as int64
+
+def use_whole() -> int64:
+    ensures result == 3
+    return whole(3.75)
+
+def single(x: float64) -> float32:
+    requires -1.0 <= x and x <= 1.0
+    ensures result == x as float32
+    return x as float32
+
+def use_single() -> float32:
+    ensures result as float64 == 0.5
+    return single(0.5)
+
+def main():
+    print(use_widen(3 as uint8))
+    print(use_narrow())
+    print(use_ratio())
+    print(use_whole())
+    print(use_single())
+"#,
+    );
+}
+
+#[test]
+fn a_cast_in_a_contract_has_the_run_time_checks() {
+    // The caller must show each cast in a `requires` is one the run time
+    // accepts: 128 is not an `int8`, a float outside `int64` has no
+    // integer value, and 2^53 + 1 is not a `float64`.
+    assert_open(
+        r#"
+def narrow(x: int64) -> int8:
+    requires x as int8 > 0
+    return x as int8
+
+def use_narrow(x: int64) -> int8:
+    requires 0 < x and x <= 128
+    return narrow(x)
+
+def whole(x: float64) -> int64:
+    requires x as int64 >= 0
+    return 1
+
+def use_whole(x: float64) -> int64:
+    requires x >= 0.0
+    return whole(x)
+
+def exact(n: int64) -> float64:
+    requires 9007199254740990 <= n and n <= 9007199254740993
+    requires n as float64 >= 0.0
+    return 1.0
+
+def use_exact(n: int64) -> float64:
+    requires n == 9007199254740992 or n == 9007199254740993
+    if n == 9007199254740992:
+        return exact(n)
+    return exact(n)
+
+def wide(x: int128) -> int64:
+    requires x as int64 > 0
+    return 1
+
+def use_wide() -> int64:
+    return wide(5)
+
+def main():
+    print(use_narrow(5))
+    print(use_whole(1.5))
+    print(use_wide())
+"#,
+        &[
+            "8 requires failed",
+            "16 requires failed",
+            "27 requires failed",
+            "30 overflow unsupported",
+        ],
+    );
 }
