@@ -18799,7 +18799,15 @@ impl<'a> FunctionCompiler<'a> {
         // receiver, such as a shared instance, an enum, or a scalar, takes
         // the tests by type name below.
         let mut codes = Vec::new();
+        let needs_owner = candidates
+            .iter()
+            .any(|candidate| candidate.owner_type.is_some());
         for (index, candidate) in candidates.iter().enumerate() {
+            // A less specific unguarded candidate must not bypass a more
+            // specific one when the receiver type selects both.
+            if needs_owner {
+                break;
+            }
             let Type::Named(name, args) = &candidate.ty else {
                 continue;
             };
@@ -18828,6 +18836,15 @@ impl<'a> FunctionCompiler<'a> {
         for (candidate, then_block) in candidates.iter().zip(&then_blocks) {
             self.layout_scratch = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
+            let matched = if let Some(owner_ty) = &candidate.owner_type {
+                let owner = self.load_place("self")?;
+                let owner = self.ensure_opaque(owner)?;
+                let owner_matches = self.value_matches_runtime_type(owner.values[0], owner_ty)?;
+                self.release_temporary_owned_since(&caller_owned);
+                self.builder.band(matched, owner_matches)
+            } else {
+                matched
+            };
             let else_block = self.builder.create_block();
             self.builder
                 .brif(matched, *then_block, &[], else_block, &[]);

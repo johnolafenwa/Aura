@@ -1404,6 +1404,10 @@ pub enum MethodDispatch {
 /// function it runs for a value of that type.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MethodCandidate {
+    /// A generic forwarder can select different implementations on the
+    /// same field type. Its enclosing receiver carries the trait arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_type: Option<Type>,
     pub ty: Type,
     pub function: String,
 }
@@ -27177,7 +27181,8 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: match trait_name {
                             Some(trait_name) => CallTarget::TraitMember {
-                                trait_args: Vec::new(),
+                                trait_args: self
+                                    .trait_object_call_args(receiver_type.as_ref(), field),
                                 object: lowered_object,
                                 trait_name,
                                 field: field.clone(),
