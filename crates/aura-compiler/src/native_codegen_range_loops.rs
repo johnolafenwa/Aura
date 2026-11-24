@@ -12,12 +12,15 @@
 //! This pass finds, in the blocks of a loop that reads a list's view once:
 //!
 //! - **Counters.** A local `int64` that the loop only advances by a
-//!   positive constant or sets to a constant, compared against a bound in a
-//!   block that branches on `counter < bound`. On the branch's true edge
-//!   the counter is in `[least, bound)`, where `least` is the smaller of
-//!   its value when the loop is entered and the constants it is set to.
+//!   positive constant, sets to a constant, or sets to a place in range
+//!   plus a constant (the start of an inner `range(i + 1, n)`), compared
+//!   against a bound in a block that branches on `counter < bound`. On the
+//!   branch's true edge the counter is in `[least, bound)`, where `least`
+//!   is the least of its value when the loop is entered, the constants it
+//!   is set to, and the least value of each place it is set to.
 //! - **Bounds.** A local the loop does not assign, or an integer constant,
-//!   or a local the loop assigns only the length of the list itself.
+//!   or a local the loop assigns only the length of the list itself, or a
+//!   local the loop assigns only constants.
 //! - **Places in range.** The counter on that edge, a copy of such a
 //!   place, and such a place plus or minus a constant, until an
 //!   instruction assigns the place. A place is known at the start of a
@@ -306,6 +309,10 @@ enum Limit {
         sources: Vec<String>,
         list: String,
     },
+    /// A local that, inside the loop, only ever takes constants, of which
+    /// `greatest` is the greatest: the bound of an inner `range` loop with
+    /// a literal stop, which the outer loop sets on every round.
+    Constants { place: String, greatest: i64 },
 }
 
 /// A counter and the edge on which it is below its limit.
@@ -314,6 +321,10 @@ struct Counter {
     name: String,
     /// The least constant the loop sets the counter to, when it sets it.
     least_reset: Option<i64>,
+    /// Where the loop sets the counter to another local plus a constant:
+    /// each block and position. The counter is one only while that local
+    /// is in range there (see `range_proof`).
+    derived: Vec<(String, usize)>,
     limit: Limit,
     header: String,
     then_label: String,
@@ -414,6 +425,7 @@ fn counters(
         }
         // The loop only advances the counter or sets it to a constant.
         let mut least_reset = None;
+        let mut derived = Vec::new();
         let steady = in_region().all(|block| {
             block
                 .instructions
@@ -433,7 +445,13 @@ fn counters(
                             );
                             true
                         }
-                        Some((Some(base), step)) => base == counter && step > 0,
+                        Some((Some(base), step)) if base == counter => step > 0,
+                        // The start of an inner loop, such as
+                        // `range(i + 1, n)`.
+                        Some((Some(_), _)) => {
+                            derived.push((block.label.clone(), position));
+                            true
+                        }
                         None => false,
                     }
                 })
@@ -447,9 +465,31 @@ fn counters(
                 if later.iter().any(|instruction| changes(instruction, bound)) {
                     continue;
                 }
+                let constants = in_region()
+                    .flat_map(|block| {
+                        block
+                            .instructions
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, instruction)| changes(instruction, bound))
+                            .map(move |(position, instruction)| {
+                                let (_, value) = assigned(instruction)
+                                    .filter(|(target, _)| *target == bound)?;
+                                match affine_value(block, position, value, MAX_CHAIN) {
+                                    Some((None, constant)) => Some(constant),
+                                    _ => None,
+                                }
+                            })
+                    })
+                    .collect::<Option<Vec<i64>>>()
+                    .and_then(|constants| constants.into_iter().max());
                 let mut writers = instructions().filter(|instruction| changes(instruction, bound));
                 match writers.next() {
                     None => Limit::Fixed(RangeBound::Place(bound.to_string())),
+                    Some(_) if constants.is_some() => Limit::Constants {
+                        place: bound.to_string(),
+                        greatest: constants.unwrap_or_default(),
+                    },
                     Some(first) => {
                         // Every assignment in the loop gives the bound the
                         // length of one list, directly or through a
@@ -504,6 +544,7 @@ fn counters(
         found.push(Counter {
             name: counter.to_string(),
             least_reset,
+            derived,
             limit,
             header: block.label.clone(),
             then_label: then_label.clone(),
@@ -577,9 +618,64 @@ pub(super) fn range_proof(
     region: &ListSnapshotRegion,
     is_index: impl Fn(&str) -> bool,
 ) -> Option<RangeProof> {
-    let counters = counters(function, region, &is_index);
+    let mut counters = counters(function, region, &is_index);
+    loop {
+        match proof_with(function, region, &is_index, &counters) {
+            Ok(proof) => return proof,
+            // The counter is set to a local that is not in range there,
+            // so nothing bounds it from below.
+            Err(unbounded) => {
+                counters.remove(unbounded);
+            }
+        }
+    }
+}
+
+/// The greatest number of counters a lower bound is followed through.
+const MAX_DERIVED: u8 = 4;
+
+/// The guards that keep counter `of` plus `distance` at or above 0, added
+/// to `needed`, or `false` when something the loop sets the counter to
+/// cannot be guarded. `starts` holds, for each counter, what the loop sets
+/// it to besides constants, as places in range.
+fn lower_guards(
+    counters: &[Counter],
+    starts: &[Vec<(Source, i64)>],
+    of: usize,
+    distance: i64,
+    depth: u8,
+    needed: &mut Vec<RangeGuard>,
+) -> bool {
+    let counter = &counters[of];
+    needed.push(RangeGuard::AtLeast {
+        place: counter.name.clone(),
+        least: -distance,
+    });
+    if counter
+        .least_reset
+        .is_some_and(|least| least.saturating_add(distance) < 0)
+    {
+        return false;
+    }
+    starts[of].iter().all(|&(source, start)| {
+        let (Source::Test(from) | Source::Entry(from)) = source;
+        depth > 0
+            && start.checked_add(distance).is_some_and(|distance| {
+                lower_guards(counters, starts, from, distance, depth - 1, needed)
+            })
+    })
+}
+
+/// The proof of `range_proof` for `counters`, or the index of a counter
+/// the loop sets to something that is not in range.
+fn proof_with(
+    function: &MirFunction,
+    region: &ListSnapshotRegion,
+    is_index: &impl Fn(&str) -> bool,
+    counters: &[Counter],
+) -> std::result::Result<Option<RangeProof>, usize> {
     if counters.is_empty() {
-        return None;
+        return Ok(None);
     }
     let checked = std::cell::RefCell::new(HashMap::<String, bool>::new());
     let usable = |name: &str| {
@@ -657,7 +753,7 @@ pub(super) fn range_proof(
             let Some(slot) = at_start.get_mut(next) else {
                 continue;
             };
-            let arriving = leave(&counters, &successors(label), label, next, known.clone());
+            let arriving = leave(counters, &successors(label), label, next, known.clone());
             let merged = match slot.as_ref() {
                 None => arriving,
                 Some(existing) => existing
@@ -673,6 +769,40 @@ pub(super) fn range_proof(
                     pending.push(next);
                 }
             }
+        }
+    }
+
+    // What the loop sets each counter to besides constants.
+    let mut starts = vec![Vec::new(); counters.len()];
+    for block in &blocks {
+        let Some(Some(start)) = at_start.get(block.label.as_str()) else {
+            continue;
+        };
+        let mut known = start.clone();
+        for position in 0..block.instructions.len() {
+            for (index, counter) in counters.iter().enumerate() {
+                if !counter
+                    .derived
+                    .iter()
+                    .any(|(label, at)| *label == block.label && *at == position)
+                {
+                    continue;
+                }
+                let facts = assigned(&block.instructions[position])
+                    .and_then(|(_, value)| affine_value(block, position, value, MAX_CHAIN))
+                    .and_then(|(source, distance)| {
+                        known
+                            .get(source?)?
+                            .iter()
+                            .map(|(source, base)| Some((*source, base.checked_add(distance)?)))
+                            .collect::<Option<Vec<_>>>()
+                    });
+                match facts {
+                    Some(facts) => starts[index].extend(facts),
+                    None => return Err(index),
+                }
+            }
+            step(&mut known, block, position, &usable);
         }
     }
 
@@ -705,10 +835,27 @@ pub(super) fn range_proof(
                     for &(source, distance) in facts {
                         let (Source::Test(of) | Source::Entry(of)) = source;
                         let counter = &counters[of];
-                        needed.push(RangeGuard::AtLeast {
-                            place: counter.name.clone(),
-                            least: -distance,
-                        });
+                        match source {
+                            Source::Entry(_) => needed.push(RangeGuard::AtLeast {
+                                place: counter.name.clone(),
+                                least: -distance,
+                            }),
+                            // The counter is never below what the loop
+                            // sets it to, and the guards cover its value
+                            // at the entry.
+                            Source::Test(_) => {
+                                if !lower_guards(
+                                    counters,
+                                    &starts,
+                                    of,
+                                    distance,
+                                    MAX_DERIVED,
+                                    &mut needed,
+                                ) {
+                                    return None;
+                                }
+                            }
+                        }
                         match (source, &counter.limit) {
                             // The index is the counter's value at the
                             // entry plus the distance.
@@ -716,15 +863,17 @@ pub(super) fn range_proof(
                                 bound: RangeBound::Place(counter.name.clone()),
                                 distance: distance.checked_add(1)?,
                             }),
-                            // The counter is never below the constants it
-                            // is set to, and the guard covers its value at
-                            // the entry.
-                            (Source::Test(_), _)
-                                if counter
-                                    .least_reset
-                                    .is_some_and(|least| least.saturating_add(distance) < 0) =>
-                            {
-                                return None;
+                            // The bound holds one of the constants, or
+                            // what it held at the entry.
+                            (Source::Test(_), Limit::Constants { place, greatest }) => {
+                                needed.push(RangeGuard::Within {
+                                    bound: RangeBound::Int(*greatest),
+                                    distance,
+                                });
+                                needed.push(RangeGuard::Within {
+                                    bound: RangeBound::Place(place.clone()),
+                                    distance,
+                                });
                             }
                             (Source::Test(_), Limit::Fixed(bound)) => {
                                 needed.push(RangeGuard::Within {
@@ -800,12 +949,12 @@ pub(super) fn range_proof(
         .filter(|(sources, _, _)| sources.iter().all(|source| bounded.contains(source)))
         .map(|(_, label, position)| (label, position))
         .collect();
-    Some(RangeProof {
-        element: element?,
+    Ok(element.map(|element| RangeProof {
+        element,
         guards: strongest(guards),
         covered,
         exact,
-    })
+    }))
 }
 
 #[cfg(test)]
