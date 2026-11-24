@@ -702,3 +702,24 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn module_state_keeps_its_value_between_calls() {
+    let workspace = Workspace::new();
+    workspace.write("state.au", include_str!("../../aura-compiler/tests/fixtures/freestanding/module_state/counter.au"));
+    let output = workspace.aura(&["build", "--freestanding", "-o", "state.o", "state.au"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    if cfg!(target_os = "linux") {
+        workspace.write("state.c", r#"
+#include <stdint.h>
+#include <stdlib.h>
+extern uint32_t advance(uint32_t n);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) { abort(); }
+int main(void) { return advance(1) == 12 && advance(3) == 17 ? 0 : 1; }
+"#);
+        let cc = Command::new("cc").current_dir(&workspace.path)
+            .args(["state.c", "state.o", "-o", "test-state"]).output().unwrap();
+        assert!(cc.status.success(), "{}", stderr(&cc));
+        assert!(Command::new(workspace.path.join("test-state")).status().unwrap().success());
+    }
+}
