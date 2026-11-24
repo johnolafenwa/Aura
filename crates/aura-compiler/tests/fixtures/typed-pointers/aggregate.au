@@ -1,0 +1,13 @@
+import mem
+
+extern "C" class Point:
+    x: int32
+    y: int32
+
+export "C" def shift(block: uint64) -> int32:
+    p = block as ptr[Point]
+    p.offset(1).write(Point(x=10, y=20))
+    mut point = p.offset(1).read()
+    member = mem.address_of(point.y)
+    member.write(30)
+    return point.x + point.y

@@ -869,3 +869,23 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn typed_pointer_objects_use_target_memory_operations() {
+    for source in [
+        include_str!("../tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+        }
+    }
+}
+
+#[test]
+fn a_pointer_cast_requires_ffi_without_a_mem_import() {
+    let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
+    let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
+    assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
+}
