@@ -72,3 +72,16 @@ def main():
     let unchanged = rewrite_module(&mut module, &BTreeSet::from([(99, 1)]));
     assert!(unchanged.is_empty());
 }
+
+#[test]
+fn property_setter_reads_and_writes_evaluate_in_source_order() {
+    let source = include_str!("../../tests/fixtures/run-pass/property_setter.au");
+    let expected = include_str!("../../tests/fixtures/run-pass/property_setter.stdout");
+    assert_eq!(crate::run_source(source).unwrap().stdout, expected);
+}
+
+#[test]
+fn property_setter_signature_matches_the_getter() {
+    let source = include_str!("../../tests/fixtures/check-fail/property_setter_signature.au");
+    assert_eq!(crate::check_source(source).unwrap_err().code, "AU2064");
+}
