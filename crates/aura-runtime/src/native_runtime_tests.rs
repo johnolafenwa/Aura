@@ -13384,6 +13384,35 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     0,
                 );
             }
+            "map-index-scalar-missing" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    float_value(1.5),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("missing"), 2, 7);
+            }
+            "map-index-scalar-missing-no-span" => {
+                super::aura_direct_map_index_int64(
+                    super::aura_direct_map_empty(),
+                    string_value("missing"),
+                    0,
+                    0,
+                );
+            }
+            "map-index-int64-pair-missing" => {
+                super::aura_direct_map_index_int64_pair(super::aura_direct_map_empty(), -3, 2, 7);
+            }
+            "map-index-scalar-type" => {
+                let map = super::aura_direct_map_empty();
+                expect_lookup_missing(super::aura_direct_map_set_in_place(
+                    map,
+                    string_value("name"),
+                    string_value("text"),
+                ));
+                super::aura_direct_map_index_f64(map, string_value("name"), 2, 7);
+            }
             "vec-extend-type" => {
                 super::aura_direct_vec_extend_in_place(
                     super::aura_direct_vec_empty(),
@@ -14669,6 +14698,22 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "map-index-missing-no-span",
             "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-scalar-missing-no-span",
+            "dict key `missing` was not present",
+        ),
+        (
+            "map-index-int64-pair-missing",
+            "dict key `-3` was not present",
+        ),
+        (
+            "map-index-scalar-type",
+            "direct backend expected `float64`, found `str`",
         ),
         (
             "vec-extend-type",
@@ -27842,6 +27887,148 @@ fn lookup_debug(lookup: *mut OpaqueValue) -> Option<String> {
 /// A payload box as debug text, or `None` for null.
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_map_index_reads_scalars_without_a_box() {
+    let map = super::aura_direct_map_empty();
+    for (name, value) in [
+        ("int", int_value(-41)),
+        ("float", float_value(2.5)),
+        ("yes", bool_value(true)),
+        ("no", bool_value(false)),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            map,
+            string_value(name),
+            value,
+        ));
+    }
+    let index = |read: &dyn Fn(*mut OpaqueValue) -> i64, name: &str| {
+        let key = string_value(name);
+        let found = read(key);
+        unsafe { release_value(key) };
+        found
+    };
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_int64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_i64(map, key, 1, 1),
+            "int"
+        ),
+        -41
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "yes"
+        ),
+        1
+    );
+    assert_eq!(
+        index(
+            &|key| super::aura_direct_map_index_bool(map, key, 1, 1),
+            "no"
+        ),
+        0
+    );
+    let key = string_value("float");
+    assert_eq!(super::aura_direct_map_index_f64(map, key, 1, 1), 2.5);
+    unsafe { release_value(key) };
+
+    let wide = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(wide, 7, i64::MIN);
+    super::aura_direct_map_set_index_int64_pair(wide, -7, 0);
+    assert_eq!(
+        super::aura_direct_map_index_int64_pair(wide, 7, 1, 1),
+        i64::MIN
+    );
+    assert_eq!(super::aura_direct_map_index_int64_pair(wide, -7, 1, 1), 0);
+    let key = int_value(7);
+    assert_eq!(
+        super::aura_direct_map_index_u64(wide, int_value(-7), 1, 1),
+        0
+    );
+    assert_eq!(
+        super::aura_direct_map_index_int64(wide, key, 1, 1),
+        i64::MIN
+    );
+    unsafe { release_value(key) };
+    for value in [map, wide] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_lookup_word_gets_write_the_found_int64() {
+    let names = super::aura_direct_map_empty();
+    let codes = super::aura_direct_map_empty();
+    for (name, code, value) in [
+        ("zero", -4_i64, 0_i64),
+        ("low", 9, i64::MIN),
+        ("high", 0, i64::MAX),
+    ] {
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            names,
+            string_value(name),
+            int_value(value),
+        ));
+        expect_lookup_missing(super::aura_direct_map_set_in_place(
+            codes,
+            int_value(code),
+            int_value(value),
+        ));
+    }
+    for (name, code, expected) in [
+        ("zero", -4_i64, Some(0_i64)),
+        ("low", 9, Some(i64::MIN)),
+        ("high", 0, Some(i64::MAX)),
+        ("missing", 5, None),
+    ] {
+        let found = i64::from(expected.is_some());
+        let value = expected.unwrap_or(0);
+        let boxed_name = string_value(name);
+        let boxed_code = int_value(code);
+        // Each call overwrites the word, a missing key with zero.
+        let mut word = 77_i64;
+        assert_eq!(
+            unsafe {
+                super::aura_direct_map_get_str_word(names, name.as_ptr(), name.len(), &mut word)
+            },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(names, boxed_name, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_int64_word(codes, code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        word = 77;
+        assert_eq!(
+            unsafe { super::aura_direct_map_get_word(codes, boxed_code, &mut word) },
+            found
+        );
+        assert_eq!(word, value);
+        for value in [boxed_name, boxed_code] {
+            unsafe { release_value(value) };
+        }
+    }
+    for value in [names, codes] {
+        unsafe { release_value(value) };
+    }
 }
 
 #[test]

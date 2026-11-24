@@ -753,6 +753,10 @@ struct NativeCodegen<'a> {
     /// Scalar bodies whose only failure is an explicit check. Their
     /// recovered entry returns the scalar and an optional error.
     recovery_functions: HashMap<String, FuncHandle>,
+    /// The second body of each function that returns its `Result` as words
+    /// (see `result_slots`).
+    result_twins: HashMap<String, FuncHandle>,
+    result_slot_plan: result_slots::ResultSlotPlan,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -1026,6 +1030,12 @@ impl<'a> NativeCodegen<'a> {
         let mut function_thunks = HashMap::new();
         let mut sinkless_functions = HashMap::new();
         let mut recovery_functions = HashMap::new();
+        let mut result_twins = HashMap::new();
+        let explicit_locals = crate::mir::ownership::explicit_locals(module);
+        let result_slot_plan = match freestanding {
+            Some(_) => result_slots::ResultSlotPlan::default(),
+            None => result_slots::plan(module, &classes, &explicit_locals),
+        };
         let recovered_targets = module
             .functions
             .iter()
@@ -1128,6 +1138,14 @@ impl<'a> NativeCodegen<'a> {
                     .map_err(|error| format!("failed to declare recovered function: {error}"))?;
                 object.mark_inline(id);
                 recovery_functions.insert(function.name.clone(), id);
+            }
+            if result_slot_plan.twins.contains(&function.name) {
+                let signature = result_twin_signature(function, &classes)?;
+                let symbol = format!("aura_result_{}", mangle_symbol(&function.name));
+                let id = object
+                    .declare_function(&symbol, Linkage::Local, &signature)
+                    .map_err(|error| format!("failed to declare result function: {error}"))?;
+                result_twins.insert(function.name.clone(), id);
             }
             let thunk_signature = thunk_signature();
             if freestanding.is_none() {
@@ -1249,7 +1267,7 @@ impl<'a> NativeCodegen<'a> {
         Ok(Self {
             module,
             freestanding,
-            explicit_locals: crate::mir::ownership::explicit_locals(module),
+            explicit_locals,
             reachable_blocks,
             safepoints_enabled,
             recursive_functions,
@@ -1262,6 +1280,8 @@ impl<'a> NativeCodegen<'a> {
             functions,
             sinkless_functions,
             recovery_functions,
+            result_twins,
+            result_slot_plan,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1438,6 +1458,15 @@ impl<'a> NativeCodegen<'a> {
                 &signature,
                 "a recovered scalar function",
                 |codegen, builder| codegen.emit_function(builder, function, id, true, None),
+            )?;
+        }
+        if let Some(id) = self.result_twins.get(&function.name).copied() {
+            let signature = result_twin_signature(function, &self.classes)?;
+            self.define_body(
+                id,
+                &signature,
+                &format!("the result body of `{}`", function.name),
+                |codegen, builder| codegen.emit_function(builder, function, id, false, None),
             )?;
         }
         let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
@@ -1984,6 +2013,15 @@ impl<'a> NativeCodegen<'a> {
         for (name, id) in functions {
             recovery_refs.insert(name.clone(), builder.import_function(*id));
         }
+        let mut result_twin_refs = HashMap::new();
+        let mut twins = self.result_twins.iter().collect::<Vec<_>>();
+        twins.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in twins {
+            result_twin_refs.insert(name.clone(), builder.import_function(*func_id));
+        }
+        let result_twin_body = (self.result_twins.get(&function.name) == Some(&func_id))
+            .then(|| result_slots::slot_parts(&function.return_type, &self.classes))
+            .flatten();
         let mut sinkless_refs = HashMap::new();
         let mut sinkless_functions = self.sinkless_functions.iter().collect::<Vec<_>>();
         sinkless_functions.sort_by(|left, right| left.0.cmp(right.0));
@@ -2012,7 +2050,7 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let explicit_locals = self
+        let mut explicit_locals = self
             .explicit_locals
             .get(&function.name)
             .cloned()
@@ -2081,6 +2119,19 @@ impl<'a> NativeCodegen<'a> {
             builder.def_var(variable, zero);
             recovery_slots.insert(name, (variable, kind));
         }
+
+        let result_slots = match self.result_slot_plan.slots.get(&function.name) {
+            Some(names) => result_slots::declare_slots(
+                builder,
+                names,
+                &self.classes,
+                &mut variable_index,
+                &mut variables,
+                &mut variable_types,
+                &mut explicit_locals.tracked,
+            ),
+            None => HashMap::new(),
+        };
 
         let (lookup_slots, map_word_slots) = lookups::lookup_slots(function);
         let lookup_slots = lookup_slots
@@ -2624,6 +2675,12 @@ impl<'a> NativeCodegen<'a> {
             function_refs,
             sinkless_refs,
             recovery_refs,
+            result_twin_refs,
+            result_twin_body,
+            result_slots,
+            result_twin_request: None,
+            result_twin_called: false,
+            result_twin_words: None,
             checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
@@ -2679,6 +2736,8 @@ impl<'a> NativeCodegen<'a> {
             json_nests,
             lent_element_flag: None,
             lookup_payload: None,
+            lookup_word: None,
+            lookup_word_found: None,
             emptied_store_root: None,
             str_append_root: None,
             lent_temps: HashMap::new(),
@@ -4038,6 +4097,19 @@ struct FunctionCompiler<'a> {
     /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
     sinkless_refs: HashMap<String, FuncRef>,
+    /// The twin of each function that has one (see `result_slots`).
+    result_twin_refs: HashMap<String, FuncRef>,
+    /// The payload types of the `Result` this body returns as words, when
+    /// it is a twin.
+    result_twin_body: Option<(DirectType, DirectType)>,
+    /// The locals kept as result slots.
+    result_slots: HashMap<String, result_slots::ResultSlot>,
+    /// The function whose call, now compiling, enters its twin.
+    result_twin_request: Option<String>,
+    /// Set between the call of a twin and the read of its results.
+    result_twin_called: bool,
+    /// The words the last call of a twin returned.
+    result_twin_words: Option<Vec<Val>>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -4180,6 +4252,11 @@ struct FunctionCompiler<'a> {
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
     lookup_payload: Option<bool>,
+    /// Set while a `get` for a slot that keeps a found int64 as a word
+    /// compiles: where the `get` writes the int64.
+    lookup_word: Option<Val>,
+    /// Whether the `get` that took `lookup_word` found its key, as a flag.
+    lookup_word_found: Option<Val>,
     /// A tracked root the current instruction assigns. The MIR released its
     /// old value, so the store adds no release.
     emptied_store_root: Option<String>,
@@ -5833,6 +5910,9 @@ impl<'a> FunctionCompiler<'a> {
             }
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
+            Instruction::Release { place } if self.release_result_slot(place)? => {}
+            // A found int64 kept as a word is in no box.
+            Instruction::Release { place } if self.map_word_slots.contains_key(place) => {}
             Instruction::Release { place } => self.release_root(place)?,
             // A part of a lent element is copied, since the element's box
             // belongs to its list, and the copy is released at the end.
@@ -6268,7 +6348,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 self.mark_emptied_store_root(target);
-                if let Rvalue::Try {
+                if self.result_slots.contains_key(target.as_str()) {
+                    self.compile_result_slot_assign(target, value)?;
+                } else if let Rvalue::Try {
                     value: try_value,
                     releases_on_error,
                     from,
@@ -6313,6 +6395,13 @@ impl<'a> FunctionCompiler<'a> {
                     self.store_place(target, coerced)?;
                 }
             }
+            // A discarded result slot is released where the module says.
+            Instruction::Eval {
+                value: Operand::Place(place),
+            } if self.result_slots.contains_key(place.as_str()) => {}
+            Instruction::Eval {
+                value: Operand::MovePlace(place),
+            } if self.release_result_slot(place)? => {}
             Instruction::Eval { value } => {
                 let baseline = self.layout_scratch.clone();
                 let _ = self.load_operand(value)?;
@@ -6354,6 +6443,12 @@ impl<'a> FunctionCompiler<'a> {
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
         match terminator {
+            Terminator::Return(operand) if self.compile_result_slot_return(operand)? => {}
+            Terminator::Match {
+                scrutinee,
+                arms,
+                otherwise,
+            } if self.compile_result_slot_match(block_label, scrutinee, arms, otherwise)? => {}
             Terminator::Return(operand) => {
                 self.flush_deferred_traps();
                 let value = self.load_operand_for_target(operand, return_ty)?;
@@ -6655,6 +6750,13 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         releases: &[String],
     ) -> std::result::Result<(), String> {
+        self.release_union_read_buffers();
+        let return_values = self.transfer_values(&value);
+        self.emit_return_words(return_values, releases)
+    }
+
+    /// Releases the buffers C read unions through, before a return.
+    fn release_union_read_buffers(&mut self) {
         for buffer in self
             .union_read_buffers
             .values()
@@ -6663,7 +6765,15 @@ impl<'a> FunctionCompiler<'a> {
         {
             self.release_union_buffer(buffer);
         }
-        let mut return_values = self.transfer_values(&value);
+    }
+
+    /// Returns `return_values`, the words of the function's result, after
+    /// the cleanups, the writebacks and the releases a return makes.
+    fn emit_return_words(
+        &mut self,
+        mut return_values: Vec<Val>,
+        releases: &[String],
+    ) -> std::result::Result<(), String> {
         self.emit_pending_cleanups_for(true, false)?;
         self.append_writeback_return_values(&mut return_values)?;
         self.release_all_temporary_owned();
@@ -7245,6 +7355,9 @@ impl<'a> FunctionCompiler<'a> {
                 variant_name,
                 index,
             } => {
+                if let Some(payload) = self.compile_result_slot_payload(scrutinee, variant_name)? {
+                    return Ok(payload);
+                }
                 if let Operand::Place(place) | Operand::MovePlace(place) = scrutinee {
                     if variant_name == "Ok" && *index == 0 {
                         if let Some(&(variable, kind)) = self.recovery_slots.get(place.as_str()) {
@@ -7422,7 +7535,12 @@ impl<'a> FunctionCompiler<'a> {
         // calls `append` falls back to.
         let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
         let record = self.plain_record(&element_direct_ty)?;
-        for element in elements {
+        for (position, element) in elements.iter().enumerate() {
+            // The first element's call gives the list its storage, which
+            // has room for the next few, so those go in place as an
+            // `append` does. A long literal keeps the calls, which take
+            // less code.
+            let in_place = (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
             if let Some(kind) = scalar {
                 let loaded =
                     self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
@@ -7435,7 +7553,12 @@ impl<'a> FunctionCompiler<'a> {
                 let call = RuntimeOp::List(ListOp::PushScalar(kind)).runtime_call();
                 let mut words = vec![vector.values[0], bits];
                 self.push_runtime_call_words(call, &mut words);
-                self.builder.call(self.runtime[call.function], &words);
+                let function = self.runtime[call.function];
+                if in_place {
+                    self.emit_scalar_list_push(vector.values[0], bits, kind, function, &words);
+                } else {
+                    self.builder.call(function, &words);
+                }
                 continue;
             }
             if let (Operand::String(text), false) = (element, wildcard) {
@@ -7451,7 +7574,11 @@ impl<'a> FunctionCompiler<'a> {
             if let Some(record) = &record {
                 let value = self.load_operand_for_target(element, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
-                self.push_plain_record_by_call(record, vector.values[0], &value);
+                if in_place {
+                    self.emit_plain_list_push(record, vector.values[0], &value);
+                } else {
+                    self.push_plain_record_by_call(record, vector.values[0], &value);
+                }
                 continue;
             }
             let value = self.load_operand_as_opaque_direct(element, &element_direct_ty)?;
@@ -10205,8 +10332,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
+        let func_ref = self.result_twin_callee(name, func_ref);
         let inst = self.builder.call(func_ref, &lowered_args);
-        let results = inst.results;
+        let results = self.take_result_twin_words(name, inst.results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, writebacks) = self.split_call_results(name, results)?;
         for (writeback, tagged) in writebacks.iter().zip(&writeback_tagged) {
@@ -14282,8 +14410,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(wrap);
         let from_end = self.builder.iadd(len, index);
         let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
-        self.builder
-            .brif(counted, in_range, &[from_end], slow, &[]);
+        self.builder.brif(counted, in_range, &[from_end], slow, &[]);
         self.builder.switch_to_block(in_range);
         self.builder.seal_block(in_range);
         self.builder.block_params(in_range)[0]
@@ -15340,8 +15467,10 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         let lent = self.lent_places.contains(place.as_str());
-        if self.recovery_slots.contains_key(place.as_str()) {
-            // The rvalue reads Ok directly from its scalar variable.
+        if self.recovery_slots.contains_key(place.as_str())
+            || self.result_slots.contains_key(place.as_str())
+        {
+            // The rvalue reads the payload directly from its variable.
             return Ok(None);
         }
         if self.lookup_slots.contains(place.as_str()) {
@@ -15455,6 +15584,9 @@ impl<'a> FunctionCompiler<'a> {
         value: &Rvalue,
     ) -> std::result::Result<(), String> {
         if let Some(&address) = self.map_word_slots.get(target) {
+            if lookups::is_dict_get(value) {
+                return self.compile_dict_word_lookup(target, value, address);
+            }
             return self.compile_map_word_lookup(value, address);
         }
         let target_ty = self.type_of_place(target)?;
@@ -15476,16 +15608,8 @@ impl<'a> FunctionCompiler<'a> {
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_lookup = false;
         let payload_form = self.lookup_payload.take() == Some(true);
-        let compiled = self.ensure_opaque(compiled?)?;
-        let payload = if payload_form {
-            compiled
-        } else {
-            let lookup = self.transfer_owned_opaque_value(&compiled);
-            let inst = self
-                .builder
-                .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
-            self.owned_opaque_result(inst.results, direct_type_to_type(&target_ty))
-        };
+        let payload =
+            self.lookup_payload_box(compiled?, payload_form, direct_type_to_type(&target_ty))?;
         self.store_place(
             target,
             ValueRef {
@@ -15700,6 +15824,9 @@ impl<'a> FunctionCompiler<'a> {
                 from,
             );
         }
+        if self.compile_result_slot_try(target, &target_ty, try_value, releases_on_error, from)? {
+            return Ok(());
+        }
         let loaded = self.load_operand(try_value)?;
         let (source_error_ty, target_error_ty) = self.try_error_types(target, &loaded.ty)?;
         let value = self.ensure_opaque(loaded)?;
@@ -15790,6 +15917,16 @@ impl<'a> FunctionCompiler<'a> {
         releases_on_error: &[String],
         from: Option<&str>,
     ) -> std::result::Result<(), String> {
+        if self.result_twin_body.is_some() {
+            return self.compile_twin_try_error_return(
+                value,
+                source_is_owned,
+                source_error_ty,
+                target_error_ty,
+                releases_on_error,
+                from,
+            );
+        }
         if source_is_owned {
             self.mark_temporary_opaque_owned(value);
         }
@@ -16917,8 +17054,10 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
+        let func_ref = self.result_twin_callee(&method_function_name, func_ref);
         let results =
             self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
+        let results = self.take_result_twin_words(&method_function_name, results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
         if keeps_shape {
@@ -17634,11 +17773,10 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let mut words = vec![list, bits];
                 self.push_runtime_call_words(call, &mut words);
-                if self.holds_field_box() {
-                    self.builder.call(function, &words);
-                } else {
-                    self.emit_scalar_list_push(list, bits, kind, function, &words);
-                }
+                // A field's or an element's own box takes the scalar in
+                // place too: the runtime takes it in when it next reaches
+                // the box through its holder.
+                self.emit_scalar_list_push(list, bits, kind, function, &words);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -17648,13 +17786,7 @@ impl<'a> FunctionCompiler<'a> {
                     .expect("checked above");
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
-                // A field's or an element's own box takes the record by
-                // call, which keeps the list's records in place.
-                if self.holds_field_box() {
-                    self.push_plain_record_by_call(&record, list, &value);
-                } else {
-                    self.emit_plain_list_push(&record, list, &value);
-                }
+                self.emit_plain_list_push(&record, list, &value);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -17844,6 +17976,8 @@ impl<'a> FunctionCompiler<'a> {
                 let second = self.load_word(args[1], int64, false)?;
                 if let Some(kind) = ScalarElement::of(&element_ty) {
                     self.emit_scalar_list_swap(list, first, second, kind, function);
+                } else if let Some(record) = self.plain_record(&element_direct_ty)? {
+                    self.emit_plain_list_swap(&record, list, first, second, function);
                 } else {
                     self.builder.call(function, &[list, first, second]);
                 }
@@ -17945,6 +18079,11 @@ impl<'a> FunctionCompiler<'a> {
                         ty: DirectType::Scalar(ScalarKind::Bool),
                     });
                 }
+                if let Some(found) =
+                    self.dict_lookup_words(RuntimeFn::MapGetInt64Word, &[map, key.values[0]])
+                {
+                    return Ok(found);
+                }
                 let function = self.lookup_function(
                     function,
                     RuntimeFn::MapGetInt64Payload,
@@ -17973,6 +18112,11 @@ impl<'a> FunctionCompiler<'a> {
                     ));
                 };
                 let (key_ptr, key_len) = self.string_constant(text.as_bytes())?;
+                if let Some(found) =
+                    self.dict_lookup_words(RuntimeFn::MapGetStrWord, &[map, key_ptr, key_len])
+                {
+                    return Ok(found);
+                }
                 let function = self.lookup_function(
                     function,
                     RuntimeFn::MapGetStrPayload,
@@ -17984,6 +18128,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                if op == DictOp::Get {
+                    if let Some(found) =
+                        self.dict_lookup_words(RuntimeFn::MapGetWord, &[map, key.values[0]])
+                    {
+                        return Ok(found);
+                    }
+                }
                 let function = if op == DictOp::Get {
                     self.lookup_function(
                         function,
@@ -17999,6 +18150,29 @@ impl<'a> FunctionCompiler<'a> {
                     self.store_receiver_back(receiver_place, &object)?;
                 }
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Index if dict_index_scalar(&value_direct_ty).is_some() => {
+                // A scalar comes back as itself, with no box made for it.
+                let int64 = DirectType::Scalar(ScalarKind::Int64);
+                let (key, entry) = match dict_index_scalar(&value_direct_ty) {
+                    Some(RuntimeFn::MapIndexInt64) if key_direct_ty == int64 => (
+                        self.load_word(args[0], ScalarKind::Int64, true)?,
+                        RuntimeFn::MapIndexInt64Pair,
+                    ),
+                    entry => {
+                        let key =
+                            self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                        (key.values[0], entry.unwrap_or(RuntimeFn::MapIndexInt64))
+                    }
+                };
+                let line = self.load_word(args[1], int32, false)?;
+                let column = self.load_word(args[2], int32, false)?;
+                let values =
+                    self.runtime_call_results(self.runtime[entry], &[map, key, line, column]);
+                self.normalize_scalar_value(ValueRef {
+                    values,
+                    ty: value_direct_ty,
+                })
             }
             DictOp::Index => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
@@ -20087,8 +20261,7 @@ fn leaf_body_calling(
                         callee.is_some_and(|name| total.is_some_and(|total| total.contains(name)))
                             && type_args.is_empty()
                             && args.iter().all(|argument| {
-                                argument.writeback_place.is_none()
-                                    && plain_operand(&argument.value)
+                                argument.writeback_place.is_none() && plain_operand(&argument.value)
                             })
                     }
                     Rvalue::Unary { value, .. } => plain_operand(value),
@@ -20662,6 +20835,27 @@ fn declare_frame_descriptor_table(
     Ok(id)
 }
 
+/// The helper that reads `map[key]` as the scalar `value`, with no box:
+/// none for `None`, which has no word to read.
+fn dict_index_scalar(value: &DirectType) -> Option<RuntimeFn> {
+    let DirectType::Scalar(kind) = value else {
+        return None;
+    };
+    Some(match kind {
+        ScalarKind::Int64 => RuntimeFn::MapIndexInt64,
+        ScalarKind::Uint64 => RuntimeFn::MapIndexU64,
+        ScalarKind::Float32 | ScalarKind::Float64 => RuntimeFn::MapIndexF64,
+        ScalarKind::Bool => RuntimeFn::MapIndexBool,
+        ScalarKind::Unit => return None,
+        ScalarKind::Int8
+        | ScalarKind::Int16
+        | ScalarKind::Int32
+        | ScalarKind::Uint8
+        | ScalarKind::Uint16
+        | ScalarKind::Uint32 => RuntimeFn::MapIndexI64,
+    })
+}
+
 fn signature_for(
     function: &MirFunction,
     classes: &HashMap<String, MirClass>,
@@ -20703,6 +20897,21 @@ fn signature_for(
             signature.returns.push(abi);
         }
     }
+    Ok(signature)
+}
+
+/// The signature of the twin of `function` (see `result_slots`): the
+/// function's own, with the words of its `Result` in place of the box.
+fn result_twin_signature(
+    function: &MirFunction,
+    classes: &HashMap<String, MirClass>,
+) -> std::result::Result<Signature, String> {
+    let mut signature = signature_for(function, classes)?;
+    let (ok, err) = result_slots::slot_parts(&function.return_type, classes)
+        .expect("a function with a twin returns a `Result` a slot can hold");
+    signature
+        .returns
+        .splice(0..1, result_slots::twin_results(&ok, &err));
     Ok(signature)
 }
 
@@ -21829,6 +22038,11 @@ fn infer_operand_type(
     }
 }
 
+/// How many leading elements of a list literal of scalars or plain records
+/// are built with the in-place append: the first by its call, and the rest
+/// up to this position where the list has room.
+const LITERAL_ELEMENTS_IN_PLACE: usize = 8;
+
 /// How a list that keeps `kind` scalars unboxed holds them: the view's
 /// access code and each element's width in bytes.
 fn scalar_list_slot(kind: ScalarElement) -> (aura_runtime::native_runtime::DirectListAccess, i64) {
@@ -22568,6 +22782,8 @@ fn collect_task_start_targets(
 
 #[path = "native_codegen_reachability.rs"]
 mod reachability;
+#[path = "native_codegen_result_slots.rs"]
+mod result_slots;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;

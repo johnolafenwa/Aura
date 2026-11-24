@@ -129,16 +129,17 @@ fn program_defines_enum(enum_name: &str) -> bool {
 }
 
 /// Whether a payload of type `ty` lies in its variant's block rather than
-/// in a box of its own: a scalar.
+/// in a box of its own: a scalar, or `None`, which takes no room there.
 fn payload_lies_inline(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Named(name, args) if args.is_empty() && matches!(
-            name.as_str(),
-            "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
-                | "float32" | "float64" | "bool"
+    matches!(ty, Type::Unit)
+        || matches!(
+            ty,
+            Type::Named(name, args) if args.is_empty() && matches!(
+                name.as_str(),
+                "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64"
+                    | "float32" | "float64" | "bool"
+            )
         )
-    )
 }
 
 impl PlainRecords {

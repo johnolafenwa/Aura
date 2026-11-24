@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+- Speed: a `Result` that a function returns and its caller matches or
+  unwraps with `try` no longer allocates. `bank_ledger` runs half the
+  instructions it did in 0.17.0.
+- Speed: `swap` on a list of a copy class, and an append to a list held
+  in a field or in a list of lists, are compiled in place. `graph_paths`
+  runs half the instructions it did in 0.17.0, and `order_book` two
+  thirds.
+- Speed: a loop written `for j in range(i + 1, n)` reads and writes list
+  elements without bounds checks when the outer loop proves the range, and
+  a function that only calls small leaves keeps no frame record. `nbody`
+  runs 40% fewer instructions than in 0.17.0, and `image_filters` and
+  `bytecode_vm` about a quarter fewer.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.

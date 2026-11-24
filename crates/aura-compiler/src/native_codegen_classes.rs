@@ -773,9 +773,9 @@ impl FunctionCompiler<'_> {
 
     /// Whether the receiver of the runtime operation being compiled is a
     /// temporary that holds a field's own box, which generated code never
-    /// appends to or pops from in place: a field box never runs its list
-    /// view ahead of its list. The operation sees no receiver place, since
-    /// it changes a lent receiver in place.
+    /// pops from in place: the runtime takes in what generated code
+    /// appended to a field box, but not what it popped. The operation sees
+    /// no receiver place, since it changes a lent receiver in place.
     pub(super) fn holds_field_box(&self) -> bool {
         self.field_box_receiver
     }

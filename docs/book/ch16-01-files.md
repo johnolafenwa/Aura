@@ -590,6 +590,17 @@ bad.txt:2: unknown kind `ftp`
 (Here *bad.txt* holds a valid `config` line followed by `web ftp
 ftp://example.com`.)
 
+`parse_line` takes three things out of `parts` with `pop(0)`, and a `pop`
+from an empty list is a trap. The `parts.len() < 3` test at the top is what
+rules that out, and `aura verify`, the prover from
+[Chapter 11](/book/ch11-04-contracts-and-proofs), confirms it: it knows
+nothing about what `split_whitespace` returns except that it is a list, and
+the length test is enough for it to prove every one of those pops. Run
+`aura verify src/main.au` and it proves every check in the file but one, the
+`number += 1` that counts lines, because nothing it can see bounds a counter
+kept by hand beside a `for` loop. We will deal with a counter like that when
+`checkup` moves to JSON.
+
 ## A few more filesystem tools
 
 `checkup` does not need them, but you will reach for a few other `fs`

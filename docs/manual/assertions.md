@@ -104,6 +104,30 @@ Each rendered value is bounded to 4,096 UTF-8 bytes. A longer value ends with `.
 
 Structured diagnostic schema 1 includes `assertion_operands` only for an introspected failure. Its two entries contain `label`, `type`, `value`, and `truncated`. Other diagnostics omit the field.
 
+## Verification
+
+`aura verify` proves that an `assert` condition holds on every path that
+reaches it, for every input. After the statement, the proof of the rest of
+the function uses the condition as a fact.
+
+```aura
+def midpoint(low: int64, high: int64) -> int64:
+    requires 0 <= low and low <= high
+    mid = low + (high - low) // 2
+    assert low <= mid and mid <= high
+    return mid
+
+
+def main():
+    print(midpoint(10, 20))
+```
+
+`aura verify` proves all 6 checks, including the `assert`. An `assert` it
+cannot prove is reported as `AU5101` with a counterexample.
+`aura build --remove-proved-checks` leaves out each `assert` that is proved;
+see [Trust](/manual/verification#trust).
+
+
 ## Backend Support
 
 The checker and MIR lowering are shared. `aura run`, directly emitted native programs, and auto-backend builds preserve the same:

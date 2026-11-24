@@ -189,7 +189,117 @@ building or launching a native binary is not possible on this machine, for
 example because there is no C compiler. `aura build` itself always produces a
 fresh executable and does not read the cache.
 
-Here is a reasonable routine for choosing between them:
+## Proving the trap away
+
+The trap in Listing 17-1 was reported well, but it was still reported by a
+running program, and in a shipped binary that means in front of a user. The
+best time to hear about it is before there is a binary. `aura verify`, from
+[Chapter 11](/book/ch11-04-contracts-and-proofs), reads every path through
+the program and tries to prove that no check on it can fail. It needs an SMT
+solver such as Z3 on your `PATH`, and it does not run the program:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:4:9
+  |
+4 |         total += value
+  |         ^
+  = note: in `average` (overflow check)
+  = note: counterexample: len(values) = 9223372036854775807
+error[AU5101]: cannot prove divisor is not zero
+ --> src/main.au:5:12
+  |
+5 |     return total // values.len()
+  |            ^
+  = note: in `average` (division by zero check)
+  = note: counterexample: len(values) = 0
+verified src/main.au: 1 of 3 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The second error is the bug we ran into, found without a run: an empty list
+makes the divisor zero. The first is one we had not thought about. Nothing
+in `average` says how large a score is or how many there are, so as far as
+the verifier can tell the total could pass the top of `int64`. Both go away
+when the function says what it accepts. A score here is from 0 to 100, there
+are at most ten thousand of them, and there is at least one:
+
+*Filename: src/main.au*
+
+```aura
+def average(values: list[int64]) -> int64:
+    requires 0 < len(values) and len(values) <= 10_000
+    requires forall(v in values, 0 <= v and v <= 100)
+    ensures 0 <= result and result <= 100
+    mut total: int64 = 0
+    for i in range(len(values)):
+        invariant 0 <= total and total <= i * 100
+        total += values[i]
+    return total // len(values)
+
+def summarize(name: str, values: list[int64]):
+    requires len(values) <= 10_000
+    requires forall(v in values, 0 <= v and v <= 100)
+    if len(values) == 0:
+        print(f"{name}: no scores")
+        return
+    print(f"{name}: {average(values)}")
+
+def main():
+    summarize("week 1", [70, 85, 90])
+    summarize("week 2", [])
+```
+
+<span class="caption">Listing 17-2: The scores program with contracts the verifier can prove</span>
+
+`average` no longer accepts an empty list, so `summarize` has to handle
+that case before the call, which is the fix the program needed all along.
+The loop walks an index so that its `invariant` can bound the running total
+by the number of scores added so far.
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 14 of 14 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ aura run src/main.au
+week 1: 81
+week 2: no scores
+```
+
+Fourteen checks, and none of them can fail for any input the contracts
+allow. That includes the calls in `main`: the verifier proved that both
+lists meet the `requires` clauses of `summarize`.
+
+`aura verify` removes nothing. Every check it proved is still in the
+program, and `aura build` still compiles each one into the binary. Once
+they are proved, you can ask the build to leave them out:
+
+```console
+$ aura build --remove-proved-checks -o scores src/main.au
+aura: 7 checks proved and removed (1 bounds, 4 arithmetic, 2 assertion)
+aura: built `scores` with direct backend
+$ ./scores
+week 1: 81
+week 2: no scores
+```
+
+The flag runs the verifier as part of the build and reports what it took
+out: the bounds check on `values[i]`, the overflow and zero-divisor checks
+on the arithmetic, and the run-time checks of the `ensures` clause and the
+loop `invariant`. Seven is fewer than fourteen because the `requires`
+clauses stay. A function's `requires` is checked on entry in every build,
+since some caller the verifier never saw might break it. A check that is not
+proved on every path that reaches it also stays, so a program that verifies
+only in part loses only the checks that were proved.
+
+Removing a check has a price, and it is why the flag is off by default.
+With the checks in, a mistake in the verifier or the solver costs nothing,
+because the program still traps. With them out, a wrong proof would turn a
+trap into an out-of-bounds read or a wrapped integer. The
+[Verification](/manual/verification#trust) page of the Manual states exactly
+what is removed and what the build then trusts. A `--debug` build keeps
+every check whatever you pass.
+
+Here is a reasonable routine for choosing between the commands:
 
 1. `aura check` while you type, or let the editor run it for you. It is the
    fastest way to find type and ownership errors.
@@ -198,7 +308,9 @@ Here is a reasonable routine for choosing between them:
 3. `aura run --backend direct` when the program does enough work that speed
    matters, or when you want to see native behavior without managing a
    binary.
-4. `aura build` for anything you will copy, deploy, or hand to someone else.
+4. `aura verify` before a build that matters. It is slower than
+   `aura check`, and it finds the traps that `aura check` cannot.
+5. `aura build` for anything you will copy, deploy, or hand to someone else.
 
 ## Before you ship
 
@@ -207,10 +319,14 @@ does I/O depends on its environment: which files exist, which commands are on
 `PATH`, which ports are open, what the working directory is. `checkup` reads
 `checks.json` relative to the directory it is started in, and runs whatever
 commands that file names. Those things change when the program moves to
-another machine, and no compiler can check them. Before a binary goes
-anywhere important, run `aura check` on the source, build it with
-`aura build`, and then run the built binary against the real files, services,
-and commands it will meet, not only against the ones on your laptop.
+another machine, and no compiler or prover can check them. `aura verify`
+proves what your own arithmetic and indexing do with the values they are
+given. It treats what a file or a command returns as unknown, so it cannot
+tell you that *checks.json* will be there. Before a binary goes anywhere
+important, run `aura check` and `aura verify` on the source, build it with
+`aura build`, and then run the built binary against the real files,
+services, and commands it will meet, not only against the ones on your
+laptop.
 
 The [CLI and Tooling](/manual/cli-and-tooling) page in the Manual documents
 every command and flag, the exit status rules, and the native cache. Next,

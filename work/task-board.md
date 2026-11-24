@@ -2,18 +2,41 @@
 
 Last updated: 2026-11-24
 
-## Release 0.17.0-preview (in progress)
+## Rust speed (in progress)
+
+- Target: John's 2026-11-24 goal that Aura programs run as fast as their
+  Rust versions in `benchmarks/cross_language/`. Round 1 is in
+  `2026-11-24-rust-speed-round-1.md`.
+- Done: `Result` values travel as words, list swaps of copy classes and
+  appends to held lists happen in place. `bank_ledger` runs 2.1 times
+  Rust's instructions (was 4.2) and `graph_paths` 2.6 (was 5.5).
+- Follow-up: scalar dictionary index results, other enums, list creation
+  and growth, and generated code in numeric loops.
+
+## Verification in the documentation (complete)
+
+- Target: John's 2026-11-24 request that `aura verify` be prominent across
+  the documentation and the book. Details are in
+  `2026-11-24-verification-in-docs.md`.
+- Done: the README, the site landing page, the install guides, the Manual
+  and chapters 1 to 21 of the book present contracts and proofs, and
+  `docs/manual/verification.md` lists what the verifier does not model.
+- Follow-up: update that list and the book passages that state a limit as
+  each verifier gap closes.
+
+## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and
   prepare the 0.17.0 preview. Details are in
   `2026-11-24-v0.17.0-preview-release.md`.
-- Done: everything from the integration and combined candidate branches
-  is on `main` (#310, `07337c84`). The release pull request holds the
-  version sweep, the changelog sections and the measurements against the
-  published 0.16.0 archive.
-- Next: merge the release pull request on a green run, push the
-  `v0.17.0-preview` tag from John's checkout after he approves it, and
-  check the Release run, the extension and the Linux archive.
+- Done: PR #311 merged as `6642a7c2`, tag `v0.17.0-preview` pushed on
+  2026-11-24, Release run `45367623676` green, five archives, four target
+  packs and extension 0.17.0 published. The packages are built and
+  attached but not published.
+- Follow-up: find why the command integration tests can hang on Windows
+  after they pass, find what `raytracer` and `order_book` run more of,
+  keep the set union test out of the plain dictionary lookup, and renew
+  the extension publishing token before 2026-12-01.
 
 ## Combined feature verification
 

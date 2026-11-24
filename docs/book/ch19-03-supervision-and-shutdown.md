@@ -601,6 +601,106 @@ them have finished. There is no list of process IDs to walk at exit and no
 cleanup handler to forget. If `run_all` returned early or a trap unwound
 through it, the same `with` block would still wait for the tasks.
 
+## Proving the arithmetic
+
+The negative timeout was a bug in our arithmetic, and we found it only
+because we happened to try a deadline of zero. A runner that is left alone
+for hours should not depend on what we happened to try. In
+[Chapter 11](/book/ch11-04-contracts-and-proofs) we used `aura verify` to
+prove that a function's checks hold for every input. Let's ask it about the
+whole runner. It prints a diagnostic on standard error for each check it
+cannot prove, so we drop those for a moment to see the count:
+
+```console
+$ aura verify src/main.au 2> /dev/null
+verified src/main.au: 13 of 22 checks proved in 11 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Nine checks are unproved, and every one is an addition, subtraction, or
+multiplication that the verifier cannot show stays inside its integer type.
+One of them is a trap any user can reach from the command line, on the line
+that computes `deadline`:
+
+```console
+$ aura run src/main.au -- long.txt --deadline 9999999999999999
+error[AU4002]: integer value `9999999999999999000` does not fit in `int64`
+ --> src/main.au:179:50
+    |
+179 |     deadline = sys.monotonic_time_ms() + options.deadline_s * 1000
+    |                                                  ^
+  = note: Aura call chain (innermost first): run_all at 175:1 -> main at 207:1
+```
+
+The nine fall into three groups, and each group has its own fix.
+
+The first group is numbers the user typed. `--deadline` and `retries=` are
+parsed into integers, and nothing limits them afterwards. For the deadline,
+`parse_options` should reject a value that makes no sense, so the user gets
+a message and not a trap:
+
+```aura fragment
+    if options.deadline_s < 0 or options.deadline_s > 86_400:
+        return Result.Err("--deadline must be from 0 to 86400 seconds")
+```
+
+That fixes the program, but the verifier cannot see that it does. The
+`Options` reach `run_all` out of a `Result`, and the verifier knows nothing
+about the payload of a `Result` that a function returned. A
+`requires 0 <= options.deadline_s` on `run_all` would be reported as
+unproved at the call in `main`. So the helper that does the multiplication
+does not rely on its caller. It clamps the value itself, and promises the
+range of what it returns:
+
+```aura
+def budget_ms(deadline_s: int64) -> int64:
+    ensures 0 <= result and result <= 86_400_000
+    return min(max(deadline_s, 0), 86_400) * 1000
+```
+
+`allowed_restarts` gets the same treatment, with a ceiling of ten restarts
+and an `ensures 0 <= result and result <= 10`. A job file that asks for
+`retries=500` now gets ten.
+
+The second group is the clock. `sys.monotonic_time_ms()` is a library call,
+so to the verifier its result could be any `int64`, and subtracting one
+unknown from another might overflow. A real monotonic clock never produces
+such a pair. We can make the program correct without assuming so, with a
+helper that has an answer for every pair of readings, and a second one that
+turns the answer into the time left:
+
+```aura
+def elapsed_ms(started: int64, now: int64) -> int64:
+    ensures result >= 0
+    if started < 0 or now < started:
+        return 0
+    return now - started
+
+
+def remaining_ms(budget: int64, elapsed: int64) -> int64:
+    requires 0 <= budget and 0 <= elapsed
+    ensures 0 <= result and result <= budget
+    if elapsed >= budget:
+        return 0
+    return budget - elapsed
+```
+
+Look at the `ensures` clause of `remaining_ms`. It says the result is never
+negative, which is exactly what `reports.get(timeout=...)` demanded of us
+with a trap earlier in this section. The `max(..., 0)` we added then was a
+patch at one call. This is a statement about every call, and the verifier
+proves it from the body. In `run_all`, the `deadline` binding becomes a
+`budget` and a `started` reading, and `run_job` computes its `elapsed` with
+`elapsed_ms` too.
+
+The third group is counters. In `parse_jobs`, `line_number += 1` runs
+beside a `for` loop over the lines, and nothing ties a counter kept by hand
+to the length of the list. `enumerate` hands us the index, which the
+verifier knows is below the length, so `index + 1` cannot overflow. The two
+`while` loops keep their counters, and each gets an `invariant` that says
+how far the counter can go: `attempts` never passes `limit`, which
+`allowed_restarts` now promises is at most ten, and `failed` never passes
+`finished`, which never passes `total`.
+
 ## The complete runner
 
 Here is the whole program, with every change from this section in place:
@@ -659,9 +759,8 @@ def parse_job(header: str, command: str) -> Result[Job, str]:
 
 def parse_jobs(text: str) -> Result[list[Job], str]:
     mut jobs: list[Job] = []
-    mut line_number = 0
-    for raw in text.lines():
-        line_number += 1
+    for index, raw in enumerate(text.lines()):
+        line_number = index + 1
         line = raw.trim()
         if line == "" or line.starts_with("#"):
             continue
@@ -693,11 +792,32 @@ def run_once(job: Job) -> Result[str, str]:
 
 
 def allowed_restarts(policy: Restart) -> int32:
+    ensures 0 <= result and result <= 10
     match policy:
         case Restart.Never:
             return 0
         case Restart.OnFailure(limit):
-            return limit
+            return min(max(limit, 0), 10)
+
+
+def elapsed_ms(started: int64, now: int64) -> int64:
+    ensures result >= 0
+    if started < 0 or now < started:
+        return 0
+    return now - started
+
+
+def budget_ms(deadline_s: int64) -> int64:
+    ensures 0 <= result and result <= 86_400_000
+    return min(max(deadline_s, 0), 86_400) * 1000
+
+
+def remaining_ms(budget: int64, elapsed: int64) -> int64:
+    requires 0 <= budget and 0 <= elapsed
+    ensures 0 <= result and result <= budget
+    if elapsed >= budget:
+        return 0
+    return budget - elapsed
 
 
 def run_job(job: Job) -> Report:
@@ -707,10 +827,11 @@ def run_job(job: Job) -> Report:
     mut backoff = 100ms
     mut last_error = ""
     while true:
+        invariant 0 <= attempts and attempts <= limit
         attempts += 1
         match own run_once(job):
             case Result.Ok(output):
-                elapsed = sys.monotonic_time_ms() - started
+                elapsed = elapsed_ms(started, sys.monotonic_time_ms())
                 return Report(
                     name=job.name.clone(),
                     ok=true,
@@ -727,7 +848,7 @@ def run_job(job: Job) -> Report:
         )
         sleep(backoff)
         backoff = backoff * 2
-    elapsed = sys.monotonic_time_ms() - started
+    elapsed = elapsed_ms(started, sys.monotonic_time_ms())
     return Report(
         name=job.name.clone(),
         ok=false,
@@ -779,6 +900,8 @@ def parse_options(args: list[str]) -> Result[Options, str]:
             index += 1
     if options.workers < 1:
         return Result.Err("--workers must be at least 1")
+    if options.deadline_s < 0 or options.deadline_s > 86_400:
+        return Result.Err("--deadline must be from 0 to 86400 seconds")
     return Result.Ok(options)
 
 
@@ -786,7 +909,8 @@ def run_all(jobs: own list[Job], options: Options) -> int32:
     total = len(jobs)
     queue = Queue[Job](capacity=options.workers)
     reports = Queue[Report]()
-    deadline = sys.monotonic_time_ms() + options.deadline_s * 1000
+    budget = budget_ms(options.deadline_s)
+    started = sys.monotonic_time_ms()
     mut finished = 0
     mut failed = 0
     with group = TaskGroup():
@@ -794,7 +918,9 @@ def run_all(jobs: own list[Job], options: Options) -> int32:
         for _ in range(options.workers):
             group.start_soon(work, queue, reports)
         while finished < total:
-            remaining = max(deadline - sys.monotonic_time_ms(), 0)
+            invariant 0 <= failed and failed <= finished and finished <= total
+            elapsed = elapsed_ms(started, sys.monotonic_time_ms())
+            remaining = remaining_ms(budget, elapsed)
             match reports.get(timeout=Duration.ms(remaining)):
                 case QueueReceive.Item(report):
                     print_report(report)
@@ -835,11 +961,32 @@ def main() -> int32:
 
 <span class="caption">Listing 19-9: The supervised job runner</span>
 
-The runner is also a perfectly ordinary candidate for `aura build`, which
-turns it into a standalone native binary that takes its arguments directly:
+Every check in it is now proved:
 
 ```console
-$ aura build -o target/jobrunner src/main.au
+$ aura verify src/main.au
+verified src/main.au: 28 of 28 checks proved in 14 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+It is worth being exact about what those 28 checks are. They are the
+arithmetic, the list indexes, the contracts on our four helpers, and the two
+loop invariants: the parts of the runner that are plain computation. The
+proof says that none of them can trap, whatever the job file, the command
+line, and the clock hand us. It does not say that the runner is correct.
+Queues, tasks, and child processes are values the verifier does not look
+inside, so the claims of this chapter that matter most, that every report is
+counted and no child outlives the run, rest on the structure of the `with`
+block and on the runs we watched. A program like this one is mostly waiting,
+and what the verifier gives it is an arithmetic core that will not be the
+thing that stops it at three in the morning.
+
+The runner is also a perfectly ordinary candidate for `aura build`, which
+turns it into a standalone native binary that takes its arguments directly.
+With every check proved, we can ask the build to leave the proved ones out:
+
+```console
+$ aura build --remove-proved-checks -o target/jobrunner src/main.au
+aura: 25 checks proved and removed (2 bounds, 17 arithmetic, 6 assertion)
 aura: built `target/jobrunner` with direct backend
 $ rm -f .flaky-count
 $ ./target/jobrunner --workers 2
@@ -984,7 +1131,10 @@ string we tried to take out of a borrowed job, a list we gave to a task and
 then tried to read, a `Result` we matched by sharing and then tried to
 consume. The runtime stopped us once, over a negative timeout. None of these
 was a matter of style. Each one would have been a crash, a data race, or a
-silently wrong answer in a language that let it through.
+silently wrong answer in a language that let it through. And when the
+program looked finished, `aura verify` found one more trap, an overflow one
+command-line flag away, and then proved that the runner's arithmetic has
+none left.
 
 That is the end of the main text. The appendices that follow are reference
 material to keep nearby as you write your own programs: the keywords and

@@ -327,6 +327,129 @@ mutable. A setter would hide an arbitrary method call behind something that
 looks like a field write. If changing a value takes logic, write a `mut self`
 method with a name that says what it does, such as `read`.
 
+## Invariants: what is always true of a book
+
+`pages_left` subtracts `pages_read` from `pages`, and the answer only makes
+sense if `pages_read` is somewhere from 0 to `pages`. Every method we've
+written assumes that, and none of them says it. Let's put `pages_left`
+together with the `read` method from Listing 5-11 and ask `aura verify`, the
+command that proves a file's run-time checks can't fail (see
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs)), what it makes of
+the class:
+
+```aura
+class Book:
+    title: str
+    pages: int64
+    pages_read: int64 = 0
+
+    @property
+    def pages_left(self) -> int64:
+        return self.pages - self.pages_read
+
+    def read(mut self, count: int64):
+        self.pages_read += count
+        if self.pages_read > self.pages:
+            self.pages_read = self.pages
+
+def main():
+    mut dune = Book(title="Dune", pages=412)
+    dune.read(103)
+    print(f"{dune.pages_left} pages to go in {dune.title}")
+```
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:8:21
+  |
+8 |         return self.pages - self.pages_read
+  |                     ^
+  = note: in `Book.pages_left` (overflow check)
+  = note: counterexample: self.title = "", self.pages = 9223372036854775807, self.pages_read = -1
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:11:9
+   |
+11 |         self.pages_read += count
+   |         ^
+  = note: in `Book.read` (overflow check)
+  = note: counterexample: self.title = "", self.pages = 0, self.pages_read = 9223372036854775807, count = 1
+verified src/main.au: 0 of 2 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Each method is checked for every `Book` it could be called on, and the
+counterexamples are books that should not exist: one with -1 pages read, and
+one with no pages and nine quintillion of them read. The types allow both,
+because the fields are plain `int64` values. What rules them out is a fact
+about books that we know and haven't written down. A class states such a
+fact with an `invariant` line in its body, as we did for the initializer in
+[Defining and building classes](/book/ch05-01-defining-classes):
+
+*Filename: src/main.au*
+
+```aura
+class Book:
+    title: str
+    pages: int64
+    pages_read: int64 = 0
+    invariant 0 <= self.pages_read and self.pages_read <= self.pages
+
+    @property
+    public def pages_left(self) -> int64:
+        ensures 0 <= result and result <= self.pages
+        return self.pages - self.pages_read
+
+    public def read(mut self, count: int64):
+        requires count >= 0
+        self.pages_read += min(count, self.pages - self.pages_read)
+
+def main():
+    mut dune = Book(title="Dune", pages=412)
+    dune.read(103)
+    print(f"{dune.pages_left} pages to go in {dune.title}")
+    dune.read(1000)
+    print(f"{dune.pages_left} pages to go in {dune.title}")
+```
+
+<span class="caption">Listing 5-14: A `Book` that states and keeps its invariant</span>
+
+```console
+$ aura run src/main.au
+309 pages to go in Dune
+0 pages to go in Dune
+$ aura verify src/main.au
+verified src/main.au: 13 of 13 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Three things changed. The first is the `invariant` line. The second is the
+word `public` on both methods. `public` is what lets code in other modules
+call a method, which is the subject of
+[Chapter 7](/book/ch07-00-modules-and-packages), and it also marks where the
+invariant applies. A public method may assume the invariant when it starts,
+and a public `mut self` method must leave it true when it returns. A method
+without `public` is a helper inside the class. It gets neither the
+assumption nor the duty, so it may pass through a state that breaks the rule
+as long as the public method that called it puts things right.
+
+The third change is to `read`. With the invariant stated, the verifier
+reported that the old body could break it: `read(-1)` on an unread book
+walks `pages_read` below zero, and a huge `count` overflows the addition
+before the `if` can cap it. So `read` now requires a count that isn't
+negative, and adds no more than the pages that are left. The verifier proves
+that this body keeps the invariant for every book and every allowed `count`,
+and that `pages_left` keeps its own promise, a result from 0 to `pages`.
+
+The invariant guards construction too. A book built as
+`Book(title="Torn", pages=90, pages_read=120)` stops the program with
+`AU4009` and the text of the invariant, and `aura verify` reports "cannot
+prove class invariant holds" on that line without running it.
+
+Two limits are worth knowing now. The verifier assumes the invariant in the
+class's own public methods, but not yet in the methods of an `impl` block,
+such as the `display` method below, and not for instances it reads out of a
+list. Calls made from those places are reported as unproved, and they stay
+checked when the program runs.
+
 ## Choosing how an instance prints
 
 So far, printing a `Book` has shown the default rendering:
@@ -388,7 +511,8 @@ being related.
 ## Putting it together
 
 Here is the reading tracker rewritten with methods, a factory, a property,
-and a `Display` implementation that does the report formatting:
+its invariants, and a `Display` implementation that does the report
+formatting:
 
 *Filename: src/main.au*
 
@@ -397,24 +521,27 @@ class Book:
     title: str
     pages: int64
     pages_read: int64 = 0
+    invariant self.pages > 0
+    invariant 0 <= self.pages_read and self.pages_read <= self.pages
 
     def unread(title: own str, pages: int64) -> Book:
+        requires pages > 0
         return Book(title=title, pages=pages)
 
-    def percent_read(self) -> float64:
+    public def percent_read(self) -> float64:
         return self.pages_read.to_float() / self.pages.to_float() * 100.0
 
-    def is_finished(self) -> bool:
+    public def is_finished(self) -> bool:
         return self.pages_read == self.pages
 
     @property
-    def pages_left(self) -> int64:
+    public def pages_left(self) -> int64:
+        ensures 0 <= result and result <= self.pages
         return self.pages - self.pages_read
 
-    def read(mut self, count: int64):
-        self.pages_read += count
-        if self.pages_read > self.pages:
-            self.pages_read = self.pages
+    public def read(mut self, count: int64):
+        requires count >= 0
+        self.pages_read += min(count, self.pages - self.pages_read)
 
 impl Display for Book:
     def display(self) -> str:
@@ -438,7 +565,7 @@ def main():
             print(f"Finished: {book.title}")
 ```
 
-<span class="caption">Listing 5-14: The reading tracker built around a `Book` class</span>
+<span class="caption">Listing 5-15: The reading tracker built around a `Book` class</span>
 
 ```console
 $ aura run src/main.au
@@ -452,9 +579,19 @@ Finished: Beloved
 `shelf[1].read(50)` calls a `mut self` method on a list element, and the
 change lands in the list, as it did when we passed `shelf[1]` to
 `read_pages`. The second loop no longer builds a list of finished titles, so
-it no longer needs to clone them: it reads each title in place. The
-[Manual](/manual/classes) has the full rules for methods, properties, and
-initializers.
+it no longer needs to clone them: it reads each title in place.
+
+The class now carries a second invariant, `self.pages > 0`, because
+`percent_read` divides by the page count. `aura verify` proves every check
+inside `Book` from the two invariants, the division included, and proves
+that `unread` and the two constructions in `main` build books that satisfy
+them. It reports the calls in `display` and the calls on `shelf` elements
+as unproved, for the two reasons given above, along with the running total,
+which has no bound yet. Those checks still run: build a book with no pages,
+or call `read` with a negative count, and the program stops with `AU4009`.
+The [Manual](/manual/classes) has the full rules for methods, properties, and
+initializers, and its [Contracts](/manual/contracts#class-invariants) page
+has the rules for invariants.
 
 ## Summary
 
@@ -466,7 +603,10 @@ functions for other ways of building one. Methods put a type's behavior next
 to its data, and their receivers say what each one does to the instance:
 `self` reads, `mut self` changes, and `own self` consumes. Properties give
 read-only computed values, `impl Display` controls printing, and composition
-and traits take the place of inheritance.
+and traits take the place of inheritance. An `invariant` line states what is
+true of every instance, Aura checks it at construction and around each
+public method that changes the instance, and `aura verify` proves that the
+methods keep it.
 
 Every field of a class is present at once: a book always has a title, a page
 count, and a position. Plenty of data isn't like that. A command is either

@@ -1,6 +1,6 @@
 # Trait objects
 
-Listing 10-6 put books and coffees in one list by naming both types:
+Listing 10-7 put books and coffees in one list by naming both types:
 `list[Book | Coffee]`. That works while we know every type that will ever go
 in the list. A shop's discounts are not like that. Today there is a percentage
 off and a coupon, next month marketing invents a loyalty reward, and a
@@ -61,7 +61,7 @@ def main():
     print(f"to pay: {checkout(2000, discounts)} cents")
 ```
 
-<span class="caption">Listing 10-10: One list holding two types of discount</span>
+<span class="caption">Listing 10-12: One list holding two types of discount</span>
 
 ```console
 $ aura run src/main.au
@@ -244,6 +244,98 @@ out. The trait can still declare such methods. They work on values whose type
 is known and through a type parameter, and the compiler tells you when you
 call one on a `dyn` value.
 
+## What a trait object keeps
+
+A trait object hides the type, but it doesn't hide the trait, and that
+includes the trait's contract. In [the traits
+section](/book/ch10-02-traits#contracts-on-trait-methods) a generic function
+relied on a promise that every implementation was proved to keep. A call
+through `dyn Discount` relies on it the same way, which matters more here,
+because `checkout` will run discounts that don't exist yet. Let's state what
+a discount may do: given a subtotal that isn't negative, it takes off
+something between nothing and the whole amount.
+
+*Filename: src/main.au*
+
+```aura
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64:
+        requires 0 <= subtotal and subtotal <= 1_000_000_000
+        ensures 0 <= result and result <= subtotal
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * min(max(self.percent, 0), 100) // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(max(self.cents, 0), subtotal)
+
+def checkout(subtotal: int64, discounts: list[dyn Discount]) -> int64:
+    requires 0 <= subtotal and subtotal <= 1_000_000_000
+    ensures 0 <= result and result <= subtotal
+    mut total = subtotal
+    for discount in discounts:
+        invariant 0 <= total and total <= subtotal
+        cut = discount.cut_cents(total)
+        print(f"{discount.name()}: -{cut} cents")
+        total -= cut
+    return total
+
+def main():
+    discounts: list[dyn Discount] = [
+        PercentOff(percent=10),
+        Coupon(code="WELCOME", cents=250, used=false),
+    ]
+    print(f"to pay: {checkout(2000, discounts)} cents")
+```
+
+<span class="caption">Listing 10-13: A checkout that is proved never to charge less than nothing</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 9 of 9 checks proved in 6 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The program prints the same receipt as Listing 10-12. What's new is what we
+know about every other receipt. `checkout` promises a total between zero and
+the subtotal it was given, and `aura verify` proves that for any list of
+discounts, of any length, holding any types. It can do so because of the two
+sides of the trait's contract. At each `discount.cut_cents(total)` the
+verifier proves the `requires`, using the loop `invariant` that keeps `total`
+in range, and then assumes the `ensures`, which is what keeps `total` in
+range for the next pass.
+
+The implementations had to change to earn that. The first version of
+`PercentOff` computed `subtotal * self.percent // 100`, and the verifier
+answered with a counterexample: a `percent` so large that the multiplication
+overflows. A `Coupon` with negative `cents` broke the promise from the other
+side, by adding to the bill. Both now clamp the field before using it. A
+`LoyaltyReward` written next year gets the same treatment, since its `impl`
+is proved against the trait's contract before `checkout` ever meets one.
+
+A trait object that a function receives or reads from a collection could
+hold any type, so the trait's contract is all the verifier uses for it. When
+a function builds the trait object itself from a value whose type it can
+see, the verifier uses that type's own contract.
+
 ## Getting the type back
 
 Sometimes one kind of value does need special treatment. A coupon has a code
@@ -355,7 +447,7 @@ def main():
     print(discounts[1].cut_cents(2000))
 ```
 
-<span class="caption">Listing 10-11: Matching on the type a trait object holds</span>
+<span class="caption">Listing 10-14: Matching on the type a trait object holds</span>
 
 ```console
 $ aura run src/main.au
@@ -418,6 +510,9 @@ ownership modes and operations in a generic body have to make sense for all of
 them: `own T` for values the body keeps, and a trait bound for any method or
 operator it calls. Traits name behavior, implementations promise it explicitly,
 and bounds put the requirement in the signature where callers can read it. A
+contract on a trait method goes further and says what the method's result
+must be. `aura verify` proves it for every implementation, and code that
+calls through a type parameter or a `dyn Trait` value relies on it. A
 few traits connect to the language itself: `Display` controls printing, `Add`,
 `Ord`, and friends give your types operators, `From` lets `try` convert
 errors, and `Iterator` and `IntoIterator` decide what a `for` loop does with

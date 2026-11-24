@@ -30,6 +30,16 @@ class Tally:
         self.count += by * self.step
 
 
+copy class Keyed:
+    key: int64
+    value: int64
+
+
+class Ledger:
+    ids: list[int64]
+    rows: list[list[int64]]
+
+
 enum Shape:
     Circle(float64)
     Rect(float64, float64)
@@ -429,6 +439,64 @@ def element_plain_mut_call(n: int64, run: bool) -> int64:
     return tallies[n - 1].count
 
 
+def dict_index_str(n: int64, run: bool) -> int64:
+    mut keys = list[str]()
+    mut table: dict[str, int64] = {}
+    for i in range(1000):
+        keys.append(f"key{i}")
+        table[f"key{i}"] = i
+    mut total = 0
+    if run:
+        for i in range(n):
+            total += table[keys[i % 1000]]
+    return total
+
+
+def checked_scale(i: int64) -> Result[int64, int64]:
+    if i % 16 == 15:
+        return Result.Err(i)
+    return Result.Ok(i * 3)
+
+
+def result_call(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in range(n):
+            match checked_scale(i):
+                case Result.Ok(scaled):
+                    total += scaled
+                case Result.Err(code):
+                    total -= code
+    else:
+        for i in range(n):
+            if i % 16 == 15:
+                total -= i
+            else:
+                total += i * 3
+    return total
+
+
+def record_swap(n: int64, run: bool) -> int64:
+    mut records = list[Keyed]()
+    for i in range(n):
+        records.append(Keyed(key=i, value=i * 2))
+    if run:
+        mut i = 0
+        while i + 1 < records.len():
+            records.swap(i, i + 1)
+            i += 1
+    return records[n - 1].key + records[0].value
+
+
+def field_list_push(n: int64, run: bool) -> int64:
+    mut ledger = Ledger(ids=[], rows=[list[int64](), list[int64]()])
+    if run:
+        for i in range(n):
+            ledger.ids.append(i)
+            ledger.rows[i % 2].append(i)
+    return ledger.ids.len() + ledger.rows[1].len()
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -484,6 +552,14 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return element_mut_call(n, run)
     elif operation == "element_plain_mut_call":
         return element_plain_mut_call(n, run)
+    elif operation == "dict_index_str":
+        return dict_index_str(n, run)
+    elif operation == "result_call":
+        return result_call(n, run)
+    elif operation == "record_swap":
+        return record_swap(n, run)
+    elif operation == "field_list_push":
+        return field_list_push(n, run)
     return -1
 
 

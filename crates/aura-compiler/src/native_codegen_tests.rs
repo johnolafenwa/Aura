@@ -10817,8 +10817,8 @@ fn direct_try_moves_noncopy_ok_payloads_through_the_destructive_runtime_path() {
 def produce() -> Result[str, str]:
     return Result.Ok("owned payload")
 
-def forward() -> Result[str, str]:
-    result = produce()
+def forward(results: mut list[Result[str, str]]) -> Result[str, str]:
+    result = results.pop()
     value = try result
     return Result.Ok(value)
 
@@ -16420,6 +16420,38 @@ def main():
     }
 }
 
+#[test]
+fn direct_record_list_swaps_exchange_the_records_in_place() {
+    let source = r#"
+copy class Entry:
+    dist: int64
+    node: int64
+
+copy class Pixel:
+    red: uint8
+    count: uint16
+
+def main():
+    mut heap: list[Entry] = [Entry(dist=3, node=1), Entry(dist=1, node=2)]
+    heap.swap(0, -1)
+    mut pixels: list[Pixel] = [Pixel(red=1, count=2), Pixel(red=3, count=4)]
+    pixels.swap(1, 0)
+    print(heap[0].dist + (pixels[0].count as int64))
+"#;
+    let mir = lower_source_to_mir(source).expect("record swap source should lower");
+    let object = emit_host_object(&mir).expect("record swap source should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // A shared list or an index out of range still takes the call.
+    assert!(
+        referenced.contains("aura_direct_vec_swap_in_place"),
+        "a record swap keeps the call for a shared list: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_collection_operation"),
+        "a record swap must not take the general operation: {referenced:?}"
+    );
+}
+
 const TEXT_SLICE_SOURCE: &str = r#"
 def text_of(data: list[uint8], start: int64, end: int64) -> str:
     match own str.from_bytes(data[start:end]):
@@ -18135,7 +18167,13 @@ fn a_function_that_only_calls_total_leaves_keeps_no_frame() {
     for name in ["Vec2.dot", "Vec2.scale", "twice"] {
         assert!(total.contains(name), "{name}: {total:?}");
     }
-    for name in ["next", "ratio", "Vec2.normalized", "Scene.brightness", "main"] {
+    for name in [
+        "next",
+        "ratio",
+        "Vec2.normalized",
+        "Scene.brightness",
+        "main",
+    ] {
         assert!(!total.contains(name), "{name}: {total:?}");
     }
     // A caller of total leaves is no leaf, and keeps no frame either. Its

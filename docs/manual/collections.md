@@ -740,6 +740,51 @@ The MIR and direct backends implement the same collection types, methods,
 ordering, ownership, evaluation, rendering, and diagnostics. The compiler's
 analysis and the language server use the same builtin signatures.
 
+## Verification
+
+`aura verify` proves that an element read is in range, that a `pop` has an
+element to remove, and that a `dict` read finds its key. It models the length
+and elements of a list, and the keys and values of a `dict` or `set` with
+integer or `str` keys. A quantifier states a fact about every element.
+
+```aura
+def last(values: list[int64]) -> int64:
+    requires len(values) > 0
+    return values[len(values) - 1]
+
+
+def stock(counts: dict[str, int64], item: str) -> int64:
+    requires item in counts
+    return counts[item]
+
+
+def largest(values: list[int64]) -> int64:
+    requires len(values) > 0
+    ensures forall(v in values, v <= result)
+    mut best = values[0]
+    for i in range(1, len(values)):
+        invariant forall(j in range(i), values[j] <= best)
+        if values[i] > best:
+            best = values[i]
+    return best
+
+
+def main():
+    print(last([1, 2, 3]))
+    print(stock({"pen": 4}, "pen"))
+    print(largest([3, 9, 4]))
+```
+
+`aura verify` proves all 14 checks of this file. The loop invariant in
+`largest` says that `best` is at least every element seen so far, which gives
+the `ensures` clause when the range runs out.
+
+The verifier does not model the result of a comprehension, a slice,
+`sorted`, `sum`, or `x in xs` on a list, or the inner lists of a nested
+list. [What It Does Not Model](/manual/verification#what-it-does-not-model)
+has the full list.
+
+
 ## Limits And Implementation-Defined Behavior
 
 These are not available:

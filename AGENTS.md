@@ -15,26 +15,20 @@ Before implementing a new feature or fixing a bug:
 
 Do not treat examples and the book as passive documentation. They are part of the maintained surface of the project.
 
-## Security-Sensitive Agent Delegation
+## Security Reviews
 
-For authorized defensive work that is likely to encounter cybersecurity
-safeguards, delegate the security-sensitive subtask to a Daybreak Blue
-sub-agent (`gpt-daybreak-blue-latest`) when that approved model is available.
-This is the user's standing preference for this repository across sessions.
+Security reviews, vulnerability hunts, and similar investigations of this
+repository are run as separate review sessions from prompts the repository
+owner supplies. They report findings with reproductions and do not change the
+repository.
 
-- Apply this to vulnerability investigation, security patch validation,
-  adversarial or malformed-input regression tests, resource-exhaustion
-  analysis, and related security-sensitive compiler/runtime review.
-- Give the sub-agent a concrete, bounded task, the authorized repository scope,
-  relevant findings, and explicit file ownership. Keep ordinary implementation,
-  documentation, release preparation, and coordination with the primary agent.
-- Preserve the test-first workflow, existing coverage gates, user changes, and
-  applicable security-skill requirements. Review the sub-agent's evidence and
-  changes before integrating them.
-- Use only approved access. Delegation does not broaden authorization, bypass
-  safeguards, or guarantee that a request will be accepted. If Daybreak Blue
-  is unavailable or the task is restricted, report the limitation rather than
-  silently substituting another model or attempting to evade the restriction.
+- Do not start a security review or a vulnerability investigation as part of
+  other work, and do not delegate one to a sub-agent.
+- If ordinary work turns up a suspected security problem, add a failing
+  regression test when that is in scope, and describe the problem in the pull
+  request and the work note so that the next review picks it up.
+- Fixes for reported findings are ordinary work: test first, existing coverage
+  gates, one regression test per finding.
 
 ## Persistence And Stop Conditions
 
