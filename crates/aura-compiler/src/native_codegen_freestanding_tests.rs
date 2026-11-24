@@ -1048,7 +1048,9 @@ export "C" def reset(code: uint16) -> uint32:
         let (global, _, undefined) = symbols(&object(source, target));
         assert!(global.iter().any(|name| name == "reset"));
         assert!(undefined.iter().any(|name| name == "advance"));
-        assert!(undefined.iter().all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+        assert!(undefined
+            .iter()
+            .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
     }
 }
 
