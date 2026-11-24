@@ -12850,6 +12850,38 @@ pub extern "C-unwind" fn aura_direct_map_remove_int64_payload(
     })
 }
 
+/// [`aura_direct_map_remove_payload`] for a `str` key generated code holds
+/// as `key_len` bytes at `key_ptr`, which is hashed and compared without a
+/// box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_remove_payload_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        boxed_removed_payload(with_map_entries_mut(map, |entries| {
+            entries.remove_str(key).map(|(_, value)| value)
+        }))
+    })
+}
+
+/// [`aura_direct_map_discard`] for a `str` key generated code holds as
+/// `key_len` bytes at `key_ptr`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_discard_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map_entries_mut(map, |entries| drop(entries.remove_str(key)));
+        std::ptr::null_mut()
+    })
+}
+
 /// `aura_direct_map_remove_in_place` for a `remove` whose result nothing
 /// reads: the entry is dropped where it is removed. It returns null, which
 /// releases as nothing.
@@ -13068,6 +13100,42 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64(
         with_map_mut(map, |map| {
             map.entries
                 .insert(key, Value::Int(IntegerValue::from_i64(value)));
+        });
+    })
+}
+
+/// `map[key] = value` for a `str` key generated code holds as `key_len`
+/// bytes at `key_ptr`. The key is copied only when the dict does not hold
+/// it yet.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        let value = unsafe { consume_owned_value(value) };
+        with_map_entries_mut(map, |entries| {
+            entries.insert_str(key, value);
+        });
+    })
+}
+
+/// [`aura_direct_map_set_index_view`] for an `int64` value, which
+/// generated code passes as its word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map_entries_mut(map, |entries| {
+            entries.insert_str(key, Value::Int(IntegerValue::from_i64(value)));
         });
     })
 }
@@ -13952,6 +14020,21 @@ pub extern "C-unwind" fn aura_direct_map_probe_slot_int64(
     task_runtime_boundary(|| map_probe_slot(map, mutable != 0, |entries| entries.position_i64(key)))
 }
 
+/// [`aura_direct_map_probe_slot`] for a `str` key generated code holds as
+/// `key_len` bytes at `key_ptr`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_probe_slot_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        map_probe_slot(map, mutable != 0, |entries| entries.position_str(key))
+    })
+}
+
 fn map_probe_slot(
     map: *mut OpaqueValue,
     mutable: bool,
@@ -14161,6 +14244,27 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
                 }
             }
             set.elements.insert(value)
+        });
+        i64::from(inserted)
+    })
+}
+
+/// `aura_direct_set_insert_in_place` for a `str` generated code holds as
+/// `len` bytes at `ptr`, which is copied only when the set does not hold
+/// it yet.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_insert_view(
+    set: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let element = literal_str(ptr, len);
+        let inserted = with_set_mut(set, |set| {
+            if is_unknown_runtime_type(&set.element_type) {
+                set.element_type = SharedType::named("str");
+            }
+            set.elements.insert_str(element)
         });
         i64::from(inserted)
     })

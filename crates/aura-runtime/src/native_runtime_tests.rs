@@ -27840,6 +27840,10 @@ fn lookup_debug(lookup: *mut OpaqueValue) -> Option<String> {
 }
 
 /// A payload box as debug text, or `None` for null.
+fn value_debug(value: *mut OpaqueValue) -> String {
+    unsafe { super::with_value(value, |value| format!("{value:?}")) }
+}
+
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
 }
@@ -27872,6 +27876,75 @@ fn direct_str_membership_agrees_with_boxed_membership() {
         super::aura_direct_set_contains_view(set, "clé".as_ptr(), 4),
         0
     );
+}
+
+#[test]
+fn direct_view_keyed_writes_agree_with_boxed_writes() {
+    let (viewed, boxed) = (
+        super::aura_direct_map_empty(),
+        super::aura_direct_map_empty(),
+    );
+    // Enough keys to pass from the scanned form to the indexed one.
+    let keys = (0..20)
+        .map(|index| format!("ключ{}", index % 12))
+        .collect::<Vec<_>>();
+    for (index, key) in keys.iter().enumerate() {
+        let value = index as i64;
+        if index % 2 == 0 {
+            super::aura_direct_map_set_index_int64_view(viewed, key.as_ptr(), key.len(), value);
+        } else {
+            super::aura_direct_map_set_index_view(
+                viewed,
+                key.as_ptr(),
+                key.len(),
+                int_value(value),
+            );
+        }
+        super::aura_direct_map_set_index_int64(boxed, string_value(key), value);
+        assert_eq!(value_debug(viewed), value_debug(boxed), "storing `{key}`");
+    }
+    assert_eq!(super::aura_direct_map_len(viewed), 12);
+
+    for key in ["ключ3", "missing", "ключ3", "ключ11", ""] {
+        let expected = payload_debug(super::aura_direct_map_remove_payload(
+            boxed,
+            string_value(key),
+        ));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_payload_view(
+                viewed,
+                key.as_ptr(),
+                key.len()
+            )),
+            expected,
+            "removing `{key}`"
+        );
+    }
+    for key in ["ключ0", "missing"] {
+        assert!(super::aura_direct_map_discard_view(viewed, key.as_ptr(), key.len()).is_null());
+        assert!(super::aura_direct_map_discard(boxed, string_value(key)).is_null());
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
+
+    for key in ["ключ1", "ключ0", "missing"] {
+        let by_view = super::aura_direct_map_probe_slot_view(viewed, key.as_ptr(), key.len(), 1);
+        let by_box = super::aura_direct_map_probe_slot(viewed, string_value(key), 1);
+        assert_eq!(by_view, by_box, "probing `{key}`");
+        assert_eq!(by_view.is_null(), key != "ключ1");
+    }
+
+    let (viewed, boxed) = (
+        super::aura_direct_set_empty(),
+        super::aura_direct_set_empty(),
+    );
+    for key in keys.iter().chain(&keys) {
+        assert_eq!(
+            super::aura_direct_set_insert_view(viewed, key.as_ptr(), key.len()),
+            super::aura_direct_set_insert_in_place(boxed, string_value(key)),
+            "adding `{key}`"
+        );
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
 }
 
 #[test]

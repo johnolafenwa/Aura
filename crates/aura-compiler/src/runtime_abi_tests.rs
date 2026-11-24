@@ -298,6 +298,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapRemoveInt64Payload,
             RuntimeFn::MapDiscard,
             RuntimeFn::MapDiscardInt64,
+            RuntimeFn::MapRemovePayloadView,
+            RuntimeFn::MapDiscardView,
             RuntimeFn::MapSnapshot,
             RuntimeFn::MapKeyAt,
             RuntimeFn::MapValueAt,
@@ -307,7 +309,11 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapSetIndexInt64,
             RuntimeFn::MapSetIndexInt64Key,
             RuntimeFn::MapSetIndexInt64Pair,
+            RuntimeFn::MapSetIndexView,
+            RuntimeFn::MapSetIndexInt64View,
+            RuntimeFn::MapProbeSlotView,
             RuntimeFn::SetContainsView,
+            RuntimeFn::SetInsertView,
         ]
     );
 }

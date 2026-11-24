@@ -49,6 +49,13 @@ Nine operation probes were added (`benchmarks/operation_probes`, plan step
   The recognizer for membership tests is `native_codegen_str_keys.rs`, and
   the fixture is `dict_str_keys_lent_from_a_list.au`.
 
+- Entry points keyed by a `str` held as bytes and a length, for the
+  unboxed local strings the thread on boxes is building: probe for
+  `match mut d.lookup(key)`, remove, discard, `d[key] = value` (the key is
+  copied only when it is new), and set add. They are named
+  `aura_direct_map_<op>_view` and `aura_direct_set_<op>_view`. Generated
+  code does not call these five yet.
+
 The loop recognizer is `native_codegen_entry_loops.rs`. It keeps the list
 when anything else uses it, or when a key or value could share storage
 with the dict (a list, a class, a tuple).

@@ -1414,6 +1414,12 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         Some(self.remove_slot(slot?, hash, false))
     }
 
+    /// [`Self::remove`] of a `str` key holding `text`, without building it.
+    pub fn remove_str(&mut self, text: &str) -> Option<T> {
+        let (slot, hash) = self.probe(|| hash_str(text), |candidate| key_is_str(candidate, text));
+        Some(self.remove_slot(slot?, hash, false))
+    }
+
     /// Removes the entry whose key equals `key` and keeps the order of the
     /// rest without leaving a hole, so [`Self::get`] stays constant time.
     /// It takes time proportional to the collection's size, unless the
@@ -1580,6 +1586,18 @@ impl DictEntries {
         }
     }
 
+    /// [`Self::insert`] under a `str` key holding `text`, which is hashed
+    /// once and copied into a value only when the key is new.
+    pub fn insert_str(&mut self, text: &str, value: Value) -> Option<Value> {
+        match self.probe(|| hash_str(text), |candidate| key_is_str(candidate, text)) {
+            (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
+            (None, hash) => {
+                self.push_new_hashed((Value::String(text.into()), value), hash);
+                None
+            }
+        }
+    }
+
     /// Stores `value` under `key`. An equal key keeps its slot and its
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
@@ -1690,6 +1708,18 @@ impl SetElements {
             (Some(_), _) => false,
             (None, hash) => {
                 self.push_new_hashed(element, hash);
+                true
+            }
+        }
+    }
+
+    /// [`Self::insert`] of a `str` holding `text`, which is hashed once
+    /// and copied into a value only when it is new.
+    pub fn insert_str(&mut self, text: &str) -> bool {
+        match self.probe(|| hash_str(text), |candidate| key_is_str(candidate, text)) {
+            (Some(_), _) => false,
+            (None, hash) => {
+                self.push_new_hashed(Value::String(text.into()), hash);
                 true
             }
         }
