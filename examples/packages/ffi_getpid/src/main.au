@@ -1,7 +1,7 @@
 import build
 
 if build.os == "windows":
-    public extern "C" def getpid() -> uint32 symbol "GetCurrentProcessId"
+    public extern "C" def getpid() -> int32 symbol "_getpid"
 else:
     public extern "C" def getpid() -> int32
 
