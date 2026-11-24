@@ -743,3 +743,7 @@ fn physical_storage(ty: &DirectType, bytes: u32, align: u8) -> Option<(u32, u16)
         _ => Some((bytes, u16::from(align))),
     }
 }
+
+#[cfg(test)]
+#[path = "native_codegen_fixed_arrays_tests.rs"]
+mod tests;
