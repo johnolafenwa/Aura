@@ -7366,7 +7366,9 @@ test("compiler bridge resolves delegated members, decorated methods, and propert
     const analysis = await analyzeWithCompiler(uri, source);
     assert.deepEqual(analysis?.diagnostics, []);
     for (const [line, word, definitionLine, hover] of [
+      [16, "count", 14, /property count: int64/],
       [19, "traced", 8, /traced/],
+      [22, "__drop__", 22, /method __drop__\(mut self\)/],
       [24, "engine", 11, /field engine/],
       [27, "count", 17, /@count\.setter/],
       [28, "count", 14, /property count: int64/],
