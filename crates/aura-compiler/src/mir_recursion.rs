@@ -100,18 +100,29 @@ pub fn recursive_functions(module: &MirModule) -> HashSet<String> {
     let escaping = (0..functions.len())
         .filter(|&position| escaping[position])
         .collect::<Vec<_>>();
-    for (position, callees) in edges.iter_mut().enumerate() {
-        if opaque[position] {
-            callees.extend(escaping.iter().copied());
-            callees.sort_unstable();
-            callees.dedup();
-        }
-    }
-
-    cyclic_nodes(&edges)
+    cyclic_functions(edges, &opaque, escaping)
         .into_iter()
         .map(|position| functions[position].name.clone())
         .collect()
+}
+
+fn cyclic_functions(
+    mut edges: Vec<Vec<usize>>,
+    opaque: &[bool],
+    escaping: Vec<usize>,
+) -> Vec<usize> {
+    // Every opaque call can call back into any escaping function. Route all
+    // such edges through one node to avoid expanding their Cartesian product.
+    let dispatch = edges.len();
+    for (callees, &calls_back) in edges.iter_mut().zip(opaque) {
+        if calls_back {
+            callees.push(dispatch);
+        }
+    }
+    edges.push(escaping);
+    let mut cyclic = cyclic_nodes(&edges);
+    cyclic.retain(|&node| node != dispatch);
+    cyclic
 }
 
 fn is_static_dispatch(dispatch: &MethodDispatch) -> bool {
