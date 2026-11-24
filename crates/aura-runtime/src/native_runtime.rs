@@ -9367,6 +9367,10 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 /// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
+    // SAFETY: generated code passes null or a live box.
+    if unsafe { grow_scalar_list(vec, bits, kind) } {
+        return;
+    }
     task_runtime_boundary(|| {
         let kind = DirectScalarKind::of_code(kind);
         // SAFETY: `with_vector_mut` checks the handle before anything else.
@@ -9400,6 +9404,83 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
             }
         }
     })
+}
+
+/// The whole of a scalar append for the list generated code's inline
+/// append found full: a confined list that keeps scalars of `kind` unboxed
+/// in storage no other list shares. It takes in what generated code
+/// appended or popped in place, appends `bits`, which grows the storage,
+/// and records where the elements now lie, and nothing else: the list
+/// keeps its form, its element type, and so its shape tag. `false`, with
+/// the list unchanged, for any other value, which takes the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_scalar_list(vec: *mut OpaqueValue, bits: i64, kind: i64) -> bool {
+    use DirectScalarKind as K;
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    // A shared or frozen value has a lock, and takes it on the general path.
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    let Some(kind) = K::from_code(kind) else {
+        return false;
+    };
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    // The length generated code left, when it appended or popped in place.
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    macro_rules! grow {
+        ($values:expr, $value:expr) => {{
+            let Some(values) = $values.unshared_mut() else {
+                return false;
+            };
+            if let Some(len) = left {
+                if len > values.len() && len <= values.capacity() {
+                    // SAFETY: generated code wrote each element up to
+                    // `len` before it raised the length.
+                    unsafe { values.set_len(len) };
+                } else {
+                    values.truncate(len);
+                }
+            }
+            values.push($value);
+            header.list_elements.set(values.as_ptr() as usize);
+            header.list_len.set(values.len());
+            header.list_capacity.store(
+                u32::try_from(values.capacity()).unwrap_or(u32::MAX),
+                Ordering::Relaxed,
+            );
+        }};
+    }
+    // Generated code passes an integer already in its type's range, so
+    // the narrowing casts keep its value.
+    match (&mut vector.elements, kind) {
+        (ListElements::Int64(values), K::Int64) => grow!(values, bits),
+        (ListElements::Float64(values), K::Float64) => grow!(values, f64::from_bits(bits as u64)),
+        (ListElements::Bool(values), K::Bool) => grow!(values, bits != 0),
+        (ListElements::Int8(values), K::Int8) => grow!(values, bits as i8),
+        (ListElements::Int16(values), K::Int16) => grow!(values, bits as i16),
+        (ListElements::Int32(values), K::Int32) => grow!(values, bits as i32),
+        (ListElements::Uint8(values), K::Uint8) => grow!(values, bits as u8),
+        (ListElements::Uint16(values), K::Uint16) => grow!(values, bits as u16),
+        (ListElements::Uint32(values), K::Uint32) => grow!(values, bits as u32),
+        (ListElements::Uint64(values), K::Uint64) => grow!(values, bits as u64),
+        (ListElements::Float32(values), K::Float32) => {
+            grow!(values, f64::from_bits(bits as u64) as f32)
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Appends `bits` to `elements` the way generated code's inline append
@@ -10414,6 +10495,10 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
     src: *const u8,
     cell: *const PlainLayoutCell,
 ) {
+    // SAFETY: the caller's contract.
+    if unsafe { grow_plain_list(list, src, cell) } {
+        return;
+    }
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
         let layout = unsafe { plain_layout_in(cell) };
@@ -10422,6 +10507,48 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
             vector.elements.push_plain(layout, src.cast())
         });
     })
+}
+
+/// [`grow_scalar_list`] for a list that keeps the plain records of `cell`
+/// in place.
+///
+/// # Safety
+///
+/// As for [`aura_direct_vec_push_plain`], and a confined `list` is confined
+/// to the calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_plain_list(
+    list: *mut OpaqueValue,
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { list.as_ref() }) else {
+        return false;
+    };
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    // SAFETY: as in `grow_scalar_list`.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    // SAFETY: the caller's contract.
+    let layout = unsafe { plain_layout_in(cell) };
+    // SAFETY: the caller's contract, and `left` is the length generated
+    // code left in the view.
+    let Some((elements, len, room)) =
+        (unsafe { vector.elements.grow_plain(layout, src.cast(), left) })
+    else {
+        return false;
+    };
+    header.list_elements.set(elements);
+    header.list_len.set(len);
+    header
+        .list_capacity
+        .store(u32::try_from(room).unwrap_or(u32::MAX), Ordering::Relaxed);
+    true
 }
 
 /// Replaces element `index` of `list` with the value whose bytes in the

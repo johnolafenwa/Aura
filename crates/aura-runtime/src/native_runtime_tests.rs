@@ -26936,6 +26936,67 @@ fn pop_like_generated_code(list: *mut OpaqueValue) -> (i64, bool) {
 }
 
 #[test]
+fn a_full_scalar_list_grows_from_what_generated_code_left() {
+    use super::DirectListAccess;
+    let header = |list: *mut OpaqueValue| unsafe { &*list };
+    let values = |list: *mut OpaqueValue| -> Vec<i64> {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| super::aura_direct_vec_index_scalar(list, index, 0))
+            .collect()
+    };
+    let list = super::aura_direct_vec_empty();
+    // The first append gives the list its form and its room.
+    assert!(!append_like_generated_code(list, 0, DirectListAccess::Int64));
+    let room = list_view_capacity(list);
+    for bits in 1..room as i64 {
+        assert!(append_like_generated_code(list, bits, DirectListAccess::Int64));
+    }
+    // The list is full, so the call grows it after taking in the appends.
+    let shape = header(list).shape_tag.load(Ordering::Relaxed);
+    assert!(!append_like_generated_code(list, room as i64, DirectListAccess::Int64));
+    assert_eq!(list_view_len(list), room + 1);
+    assert!(list_view_capacity(list) > room + 1);
+    assert_eq!(list_view_access(list), DirectListAccess::Int64 as u32);
+    assert_eq!(header(list).shape_tag.load(Ordering::Relaxed), shape);
+    // It left room, so the next append needs no call.
+    assert!(append_like_generated_code(list, 99, DirectListAccess::Int64));
+    let mut expected: Vec<i64> = (0..=room as i64).collect();
+    expected.push(99);
+    assert_eq!(values(list), expected);
+    // Elements popped in place are dropped before the next is added.
+    super::aura_direct_vec_push_scalar(list, 5, 0);
+    assert_eq!(pop_like_generated_code(list), (5, true));
+    assert_eq!(pop_like_generated_code(list), (99, true));
+    super::aura_direct_vec_push_scalar(list, 7, 0);
+    expected.pop();
+    expected.push(7);
+    assert_eq!(values(list), expected);
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    super::aura_direct_vec_push_scalar(list, 8, 0);
+    assert_eq!(values(copy), expected);
+    expected.push(8);
+    assert_eq!(values(list), expected);
+    // Every scalar kind grows the same way.
+    for (kind, bits) in [(1, 2.5f64.to_bits() as i64), (2, 1), (5, -7), (6, 200)] {
+        let other = super::aura_direct_vec_empty();
+        for _ in 0..40 {
+            super::aura_direct_vec_push_scalar(other, bits, kind);
+        }
+        assert_eq!(super::aura_direct_vec_len(other), 40);
+        assert_eq!(super::aura_direct_vec_index_scalar(other, 39, kind), bits);
+        unsafe { release_value(other) };
+    }
+    // A kind the list does not keep, and a value that is no list, take the
+    // general path.
+    super::aura_direct_vec_push_scalar(list, 1, 2);
+    assert_eq!(super::aura_direct_vec_len(list), expected.len() as i64 + 1);
+    for value in [list, copy] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn scalar_pops_in_place_are_dropped_at_the_next_access() {
     use super::DirectListAccess;
     let list = super::aura_direct_vec_empty();
