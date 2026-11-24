@@ -780,33 +780,43 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        // A list of scalars other than `str` views, of boxes, or of plain
-        // records.
-        let scalar_form = self
-            .builder
-            .iadd_imm(access, -(DirectListAccess::Int64 as i64));
-        let scalar = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            scalar_form,
-            DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
-        );
-        let not_str = self
-            .builder
-            .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
-        let scalar = self.builder.band(scalar, not_str);
-        let boxes = self
-            .builder
-            .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
-        let typed_form = self
-            .builder
-            .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
-        let typed = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            typed_form,
-            i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
-        );
-        let form = self.builder.bor(scalar, boxes);
-        let mut qualifies = self.builder.bor(form, typed);
+        let mut qualifies = match &snapshot.range {
+            // The range proof's loop runs its copy for one access code, a
+            // scalar form.
+            Some(proof) => {
+                let (code, _) = super::scalar_list_slot(proof.element);
+                self.builder.icmp_imm(IntCC::Equal, access, code as i64)
+            }
+            None => {
+                // A list of scalars other than `str` views, of boxes, or
+                // of plain records.
+                let scalar_form = self
+                    .builder
+                    .iadd_imm(access, -(DirectListAccess::Int64 as i64));
+                let scalar = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    scalar_form,
+                    DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
+                );
+                let not_str =
+                    self.builder
+                        .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
+                let scalar = self.builder.band(scalar, not_str);
+                let boxes =
+                    self.builder
+                        .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
+                let typed_form = self
+                    .builder
+                    .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
+                let typed = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    typed_form,
+                    i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
+                );
+                let form = self.builder.bor(scalar, boxes);
+                self.builder.bor(form, typed)
+            }
+        };
         if snapshot.region.writes {
             let room = self.builder.uload32(flags, handle, layout.capacity_offset);
             let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
@@ -820,9 +830,6 @@ impl FunctionCompiler<'_> {
             qualifies = self.builder.band(qualifies, direct);
         }
         if let Some(proof) = &snapshot.range {
-            let (code, _) = super::scalar_list_slot(proof.element);
-            let exact = self.builder.icmp_imm(IntCC::Equal, access, code as i64);
-            qualifies = self.builder.band(qualifies, exact);
             for guard in &proof.guards {
                 use super::range_loops::{RangeBound, RangeGuard};
                 let holds = match guard {
