@@ -774,12 +774,13 @@ fn linked_frozen_collections_use_aura_indexing_and_lookup_rules() {
 #include <stdlib.h>
 int64_t total(int64_t i, int64_t key);
 int64_t nested(int64_t i);
+int64_t details(int64_t i);
 void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) {
     exit(code);
 }
 int main(int argc, char **argv) {
     if (argc > 1) { total(-3, 10); return 1; }
-    return (total(-1, 40) == 126 && total(0, 30) == 111 && nested(0) == 47 && nested(1) == 52) ? 0 : 1;
+    return (total(-1, 40) == 126 && total(0, 30) == 111 && nested(0) == 47 && nested(1) == 52 && details(0) == 15) ? 0 : 1;
 }
 "#,
     );
