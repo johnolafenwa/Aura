@@ -2,9 +2,9 @@
 
 Last updated: 2026-11-24
 
-## Class items for 0.18 (in verification)
+## Class items for 0.18
 
-The combined branch contains field delegation, property setters, destructor hooks and method decorators. Focused interpreter, native, verification and editor tests passed in their feature worktrees. Track the combined checks and instruction counts in [the class items work note](2026-11-24-class-items.md).
+Field delegation, property setters, destructor hooks and method decorators passed 54 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
 
 ## Release 0.17.0-preview (complete)
 
