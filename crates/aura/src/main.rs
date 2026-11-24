@@ -4522,6 +4522,12 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// proved.
 fn handle_verify_command(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let (_target_scope, args) = if args.iter().any(|arg| arg == "--freestanding") {
+        let (target, args) = freestanding_args::take_target(args);
+        (Some(aura_compiler::enter_freestanding_target(target)), args)
+    } else {
+        (None, args)
+    };
     let mut options = aura_compiler::verify::Options {
         cache_dir: verify_cache_root(),
         ..aura_compiler::verify::Options::default()
@@ -6076,7 +6082,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
-       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
+       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

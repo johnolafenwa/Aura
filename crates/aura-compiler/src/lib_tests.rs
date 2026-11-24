@@ -4601,13 +4601,52 @@ fn verification_names_assembly_in_an_import_and_in_editor_source() {
     assert_eq!(imported.code, "AU4035");
     assert_eq!(imported.render_path.as_deref(), driver.to_str());
     assert_eq!(imported.span.unwrap().line, 1);
-    let direct = crate::verify_path_with_source(
-        &main,
-        "def f() -> None:\n    asm(\"nop\")\n",
-        &options,
-    ).unwrap_err();
+    let direct =
+        crate::verify_path_with_source(&main, "def f() -> None:\n    asm(\"nop\")\n", &options)
+            .unwrap_err();
     assert_eq!(direct.code, "AU4035");
     assert_eq!(direct.span.unwrap().line, 2);
+}
+
+#[test]
+fn machine_code_in_lowered_imports_stops_proof_before_solver_or_cache() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+    let program = check_source("def f() -> None:\n    pass\n").unwrap();
+    let mut mir = crate::mir::lower_for_verification(&program);
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-assembly-boundary".to_owned()),
+        ..Default::default()
+    };
+    mir.foreign_link.module_asm.push("nop".into());
+    assert_eq!(
+        crate::verify::verify_module(&program, &mir, &options)
+            .unwrap_err()
+            .code,
+        "AU4035"
+    );
+
+    mir.foreign_link.module_asm.clear();
+    let span = Span::new(3, 5);
+    mir.functions[0].blocks[0]
+        .instructions
+        .push(Instruction::InlineAsm {
+            asm: MachineAsm {
+                arch: "x86_64".into(),
+                noreturn: false,
+                template: "nop".into(),
+                constraints: "~{memory}".into(),
+                pure: false,
+                input_widths: vec![],
+                output_widths: vec![],
+            },
+            inputs: vec![],
+            outputs: vec![],
+            span,
+        });
+    let error = crate::verify::verify_module(&program, &mir, &options).unwrap_err();
+    assert_eq!(error.code, "AU4035");
+    assert_eq!(error.span, Some(span));
 }
 
 #[test]
@@ -4688,4 +4727,43 @@ fn disassembles_inline_assembly_in_the_export_on_each_target() {
             "{listing}"
         );
     }
+}
+
+#[test]
+fn unused_imported_machine_routines_do_not_block_proof() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+
+    let program = check_source("def entry() -> None:\n    assert true\n").unwrap();
+    let mut module = crate::mir::lower_for_verification(&program);
+    let mut routine = module.functions[0].clone();
+    routine.module_name = "mem".into();
+    routine.name = "mem::halt".into();
+    routine.blocks[0].instructions = vec![Instruction::InlineAsm {
+        asm: MachineAsm {
+            arch: "x86_64".into(),
+            noreturn: false,
+            template: "hlt".into(),
+            constraints: "~{memory}".into(),
+            pure: false,
+            input_widths: vec![],
+            output_widths: vec![],
+        },
+        inputs: vec![],
+        outputs: vec![],
+        span: Span::new(1, 1),
+    }];
+    module.functions.push(routine);
+
+    // Reaching the normal solver lookup proves the unused routine was ignored.
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-unused-routine".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::verify::verify_module(&program, &module, &options)
+            .unwrap_err()
+            .code,
+        "AU5103"
+    );
 }

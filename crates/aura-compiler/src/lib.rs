@@ -393,8 +393,7 @@ pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirMod
 /// Proves the checks of the program at `path` with an SMT solver
 /// (`aura verify`).
 pub fn verify_path(path: &Path, options: &verify::Options) -> Result<verify::Report> {
-    let program = check_path(path)?;
-    verify_program(&program, options)
+    verify_file(path, None, options)
 }
 
 /// `verify_path` for source text that stands in for the file at `path`.
@@ -403,7 +402,18 @@ pub fn verify_path_with_source(
     source: &str,
     options: &verify::Options,
 ) -> Result<verify::Report> {
-    let program = check_path_with_source(path, source)?;
+    verify_file(path, Some(source), options)
+}
+
+fn verify_file(
+    path: &Path,
+    source: Option<&str>,
+    options: &verify::Options,
+) -> Result<verify::Report> {
+    let mut loader = ModuleLoader::new_with_source(path, source)?;
+    loader.verifying = true;
+    let program = loader.load_program_internal(path, source)?;
+    loader.write_lockfile()?;
     verify_program(&program, options)
 }
 
@@ -427,7 +437,11 @@ pub fn lower_path_to_mir_with_proved_checks(
         ..options.clone()
     };
     mir::lower_with_proved_checks(&program, debug, |module| {
-        verify::verify_module(&program, module, &options).map(|report| report.proved_sites)
+        match verify::verify_module(&program, module, &options) {
+            Ok(report) => Ok(report.proved_sites),
+            Err(error) if error.code == "AU4035" => Ok(BTreeSet::new()),
+            Err(error) => Err(error),
+        }
     })
 }
 
@@ -627,6 +641,7 @@ struct LoadedModule {
 }
 
 struct ModuleLoader {
+    verifying: bool,
     package_root: PathBuf,
     package_graph: Option<PackageGraph>,
     cache: HashMap<PathBuf, LoadedModule>,
@@ -650,6 +665,7 @@ impl ModuleLoader {
             infer_package_root(&absolute_entry, source_override)?
         };
         Ok(Self {
+            verifying: false,
             package_root,
             package_graph,
             cache: HashMap::new(),
@@ -695,6 +711,13 @@ impl ModuleLoader {
         let display_path = path.display().to_string();
         let module = parse_source(&source)
             .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
+        if self.verifying {
+            if let Some(span) = module.asm_span {
+                return Err(
+                    verify::assembly_boundary(span).with_render_context(display_path, source)
+                );
+            }
+        }
         if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,

@@ -1901,7 +1901,9 @@ impl<'a> Exec<'a> {
 
     fn instruction(&mut self, state: &mut State, instruction: &Instruction) {
         match instruction {
-            Instruction::InlineAsm { .. } => self.unsupported = Some("verification cannot reason through assembly".into()),
+            Instruction::InlineAsm { span, .. } => {
+                self.unsupported = Some(super::assembly_boundary(*span).message);
+            }
             Instruction::SourceLocation { line, column } => {
                 self.span = Span {
                     line: *line as usize,
