@@ -241,6 +241,9 @@ impl FunctionCompiler<'_> {
         let Some(rank) = self.class_owners.ranks.get(place).copied() else {
             return Ok(());
         };
+        // Boxing an inline callable or union for this borrowed runtime call
+        // creates a temporary. Its lifetime ends with the rank update.
+        let baseline = self.layout_scratch.clone();
         let owner = self.load_root(place)?;
         let owner = self.ensure_opaque(owner)?;
         let previous = self.builder.use_var(rank);
@@ -253,6 +256,7 @@ impl FunctionCompiler<'_> {
         let stamp = self.builder.import_function(id);
         let result = self.builder.call(stamp, &[owner.values[0], previous]);
         self.builder.def_var(rank, result.results[0]);
+        self.release_temporary_owned_since(&baseline);
         Ok(())
     }
 
