@@ -466,6 +466,7 @@ struct Parser {
     tokens: Vec<Token>,
     declaration_ifs: Vec<conditional::Suite>,
     projected: bool,
+    in_declaration_arm: bool,
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
@@ -496,6 +497,7 @@ impl Parser {
             tokens,
             declaration_ifs: Vec::new(),
             projected: false,
+            in_declaration_arm: false,
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
@@ -1194,8 +1196,12 @@ impl Parser {
         methods: &mut Vec<FunctionDecl>,
         invariants: &mut Vec<ContractClause>,
     ) -> Result<()> {
+        let mut members_are_selected = !self.in_declaration_arm;
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
             if self.at_simple(&TokenKind::KwIf) {
+                // The syntax pass combines alternatives. Only the projected
+                // pass knows which preceding methods can name a setter.
+                members_are_selected = false;
                 self.parse_declaration_arms(true, |parser| {
                     parser.parse_class_members(fields, methods, invariants)
                 })?;
@@ -1266,8 +1272,10 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
-            if self.at_property_setter(&methods) {
-                methods.push(self.parse_property_setter(&methods)?);
+            let preceding: &[FunctionDecl] = if members_are_selected { methods } else { &[] };
+            if self.at_property_setter(preceding) {
+                let setter = self.parse_property_setter(preceding)?;
+                methods.push(setter);
                 continue;
             }
             if self.at_simple(&TokenKind::At)
