@@ -185,3 +185,21 @@ fn systems_data_editor_shows_declared_c_layout_in_field_order() {
     let sample = occurrence_at(&analysis, 4, 13);
     assert!(sample.hover.contains("extern \"C\" packed align(8) class Sample:\n    whole: uint32\n    flags: uint8 bits(3)\n    grid: array[array[int16, 3], 2]"), "{}", sample.hover);
 }
+
+#[test]
+fn systems_data_editor_shows_writable_union_members() {
+    let source = [
+        "extern \"C\" union Word:",
+        "    bits: uint32",
+        "def set_bits(word: mut Word, value: uint32):",
+        "    word.bits = value",
+    ]
+    .join("\n");
+    let (_temp, file) = ffi_editor_package(&source);
+    let completions = complete_path_source(&file, &source, 3, 9, Some('.')).unwrap();
+    assert!(completions.iter().any(|item| item.name == "bits"));
+    assert!(completions.iter().all(|item| !item.name.starts_with("__write_")));
+    let analysis = analyze_path_source(&file, &source);
+    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert!(occurrence_at(&analysis, 3, 9).hover.contains("property bits"));
+}
