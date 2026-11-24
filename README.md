@@ -2,31 +2,56 @@
 
 Aura is a compiled, statically typed programming language for reliable
 software. It pairs Python-inspired syntax with deterministic ownership,
-structured concurrency, typed failure, and native executables. It has no
-garbage collector.
+structured concurrency, typed failure, and native executables. Functions
+state what they need and what they promise, and `aura verify` proves those
+contracts for every input before the program runs. Aura has no garbage
+collector.
 
 ```aura
-def scale(values: mut list[int64], factor: int64):
-    for value in mut values:
-        value *= factor
+def average(scores: list[int64]) -> int64:
+    requires 0 < len(scores) and len(scores) <= 1000
+    requires forall(s in scores, 0 <= s and s <= 100)
+    ensures 0 <= result and result <= 100
+    mut total = 0
+    for i in range(len(scores)):
+        invariant 0 <= total and total <= i * 100
+        total += scores[i]
+    return total // len(scores)
 
-def total(values: list[int64]) -> int64:
-    mut sum = 0
-    for value in values:
-        sum += value
-    return sum
-
-mut scores = [10, 20, 30]
-scale(scores, 3)
-
-print(f"scores: {scores}")
-print(f"total: {total(scores)}")
+def main():
+    print(average([70, 85, 100]))
 ```
 
 Save this as `scores.au` and run it with `aura run scores.au`. It prints
-`scores: [30, 60, 90]` and `total: 180`. The signatures state what each
-function does to its argument: `scale` asks for `mut` access, and `total` only
-reads. The compiler enforces both.
+`85`. The `requires` lines say what a caller must pass, and the `ensures`
+line says what comes back. `aura run` checks them while the program runs.
+`aura verify` proves them, with an SMT solver, for every list a caller could
+pass:
+
+```console
+$ aura verify scores.au
+verified scores.au: 10 of 10 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The ten checks cover the contract and the traps the body could hit: the sum
+cannot overflow, the index stays in range, and the divisor is never zero.
+Delete the first `requires` line and the proof fails. Among the checks
+`aura verify` can no longer prove, it reports the input that breaks the
+division:
+
+```text
+error[AU5101]: cannot prove divisor is not zero
+ --> scores.au:8:12
+  |
+8 |     return total // len(scores)
+  |            ^
+  = note: in `average` (division by zero check)
+  = note: counterexample: len(scores) = 0
+```
+
+[Contracts](docs/manual/contracts.md) and
+[Verification](docs/manual/verification.md) are the reference, and
+[the book](docs/book/ch11-04-contracts-and-proofs.md) teaches both.
 
 ## Install
 
@@ -64,6 +89,8 @@ pinned tools.
 Aura 0.17 targets applications for agents, ML infrastructure, and the control
 planes around models. Before a program runs, the compiler checks types,
 access, mutation, ownership transfer, resource cleanup, and task boundaries.
+`aura verify` then proves what types cannot express: that contracts hold,
+arithmetic stays in range, and indexes and keys exist.
 
 The long-term goal is a general-purpose systems language for every kind of
 software: applications, services, databases, language runtimes, embedded
@@ -79,6 +106,10 @@ explains the project direction.
 
 - [The Aura Programming Language](docs/book/index.md): the book. It teaches
   Aura from installation to a concurrent job runner, one program at a time.
+- [Contracts](docs/manual/contracts.md) and
+  [Verification](docs/manual/verification.md): `requires`, `ensures`, and
+  invariants, checked at run time and proved for every input by
+  `aura verify`.
 - [Examples](examples/README.md): the categorized library of runnable
   programs.
 - [Language Specification](docs/manual/language-specification.md) and
@@ -91,9 +122,6 @@ explains the project direction.
 - [Tensors](docs/manual/tensors.md): `Tensor[T]` on the CPU, Metal, and CUDA,
   with gradients, layers, and optimizers.
 - [FFI](docs/manual/ffi.md): calling C libraries from an Aura package.
-- [Contracts](docs/manual/contracts.md) and
-  [Verification](docs/manual/verification.md): conditions checked at run time
-  and proved by `aura verify`.
 - [Performance](docs/manual/performance.md): current measurements and the
   optimization roadmap.
 - [ML systems design notes](docs/ml_systems_support_plan.md): the earlier

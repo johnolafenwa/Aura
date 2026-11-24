@@ -81,6 +81,71 @@ among others, and the rest is the position in your source. The hook must
 not return. This one hangs the machine. A real one prints the position
 first, as ours will.
 
+## Checks that cannot fail
+
+A trap on a board with no screen is a hang, or a line on a serial port
+nobody is watching. So freestanding code is where it pays most to know
+before boot that a check cannot fail, and `aura verify` from
+[Chapter 11](/book/ch11-04-contracts-and-proofs) works on this code as on
+any other. Let's ask it about `checksum`:
+
+```console
+$ aura verify sum.au
+error[AU5101]: cannot prove integer result in range
+ --> sum.au:5:18
+  |
+5 |         total = (total * 31 + i) % 65521
+  |                  ^
+  = note: in `checksum` (overflow check)
+  = note: counterexample: seed = 0, count = 1
+verified sum.au: 2 of 3 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+It found a way into `aura_trap`. The `% 65521` keeps `total` small after
+each step, but nothing keeps it small before the first one: a caller that
+passes a seed of four billion overflows `uint32` on the first
+multiplication. The counterexample looks odd because the verifier proves a
+loop one iteration at a time, so the `total` it has in mind is any `uint32`
+at all, and it prints only the parameters. The fix is to state the range of
+the seed, and to tell the verifier what the loop keeps true:
+
+```aura
+export "C" def checksum(seed: uint32, count: uint32) -> uint32:
+    requires seed < 65521
+    requires count <= 1_000_000
+    ensures result < 65521
+    mut total = seed
+    mut i: uint32 = 0
+    while i < count:
+        invariant total < 65521
+        total = (total * 31 + i) % 65521
+        i = i + 1
+    return total
+```
+
+```console
+$ aura verify sum.au
+verified sum.au: 5 of 5 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Now the arithmetic cannot trap for any seed the contract allows. A proved
+check is one the object file does not need to carry, and the same flag that
+removes proved checks from a hosted binary works here:
+
+```console
+$ aura build --freestanding --remove-proved-checks -o sum.o sum.au
+aura: 6 checks proved and removed (0 bounds, 4 arithmetic, 2 assertion)
+aura: built `sum.o` for `x86_64-unknown-none` (freestanding object, 1888 bytes)
+```
+
+The checks on the arithmetic in the loop are gone, along with the run-time
+checks of the `invariant` and the `ensures`. The two `requires` clauses
+stay. `checksum` is exported, so its
+callers are C code that no verifier has read, and a seed out of range still
+reaches `aura_trap` with code 4, the code for a failed contract. That is the
+shape to aim for in a kernel: checks at the edge where foreign code calls
+in, and proved arithmetic behind them.
+
 ## Touching hardware
 
 A serial port on most boards is a few bytes of memory at a fixed address:
@@ -103,6 +168,13 @@ here.
 `mem` is the sharpest tool in the language. Nothing checks the address, and
 a wrong one can corrupt anything. For that reason it needs the same
 permission as calling C: `allow_ffi = true` in *Aura.toml*.
+
+It is also where proofs end. To `aura verify`, a `mem` read returns an
+unknown value of its type, so a status register may hold anything on every
+read, which is the honest view of hardware. Writes are not modeled at all.
+The verifier cannot tell you that an address is right, and a write that
+lands on memory an Aura value occupies is outside anything a proof covers.
+Arithmetic on a value after you have read it is checked like any other.
 
 There are no strings in a freestanding program, so printing a number means
 producing its digits ourselves:
@@ -168,5 +240,6 @@ transcript and exit status 33.
 
 The kernel uses `--kernel` throughout so that interrupt entry can use the
 stack below the interrupted stack pointer. The board keeps persistent
-storage in C and accesses it through `mem`. The freestanding profile has
-no allocator. [Freestanding Builds](/manual/freestanding)
+storage in C and accesses it through `mem`. Verification stops at the
+assembly and cannot reason about the contents of raw memory. The
+freestanding profile has no allocator. [Freestanding Builds](/manual/freestanding)

@@ -48,7 +48,7 @@ def main():
     print(f"{best} takes {longest} steps")
 ```
 
-<span class="caption">Listing 17-2: An integer loop to time</span>
+<span class="caption">Listing 17-3: An integer loop to time</span>
 
 Build it and time it with the shell's `time`:
 
@@ -70,6 +70,20 @@ arbitrary-precision objects, while Aura's `int64` is a machine word with an
 overflow check on every operation. Aura checks arithmetic because silent
 wraparound is a common source of wrong answers, and as this run shows, the
 checks do not stop an integer loop from running at native speed.
+
+The checks are also not fixed costs. A check that `aura verify` proves can
+never fail does not have to be in the binary, and
+`aura build --remove-proved-checks` leaves those out, as we saw in the
+[first section](/book/ch17-01-run-and-build#proving-the-trap-away). For a
+proved addition or multiplication the build also tells LLVM that the result
+does not wrap, which lets the optimizer simplify the arithmetic around it.
+The checks that matter in `collatz` do not qualify as written. Run
+`aura verify collatz.au` and it proves four of the six checks, but not the
+two additions in the loop: it cannot prove that `3 * n + 1` or `count += 1`
+stays in range, and it is right to refuse, because nothing bounds `n`.
+Whether removing checks helps a program of yours is something to measure on
+that program, with its contracts in place, and this chapter has no numbers
+to offer for it.
 
 Do not time `aura run` for questions like this. It executes the program's
 MIR, which is meant for a fast edit-and-run loop, not for speed. Even with a
