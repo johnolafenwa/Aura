@@ -136,7 +136,7 @@ mod tests {
         ] {
             assert!(access(name, &args).unwrap().is_err(), "{name}");
         }
-        assert!(access("mem::noise_int32", &[address.clone()]).is_none());
+        assert!(access("mem::noise_int32", std::slice::from_ref(&address)).is_none());
         let offset = access(
             "mem::__pointer_offset",
             &[
