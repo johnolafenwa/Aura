@@ -1,0 +1,15 @@
+type Add = Callable[def(self: mut Counter, n: int64) -> None]
+
+def traced(f: own Add) -> Add:
+    return f
+
+class Counter:
+    total: int64
+
+    @traced
+    def add(mut self, n: int64):
+        self.total += n
+
+def main():
+    mut c = Counter(total=1)
+    c.add(3)

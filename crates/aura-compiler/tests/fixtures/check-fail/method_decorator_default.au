@@ -1,0 +1,4 @@
+class Counter:
+    @traced
+    def read(self, n: int64 = 1) -> int64:
+        return n
