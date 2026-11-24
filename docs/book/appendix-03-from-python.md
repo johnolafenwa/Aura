@@ -325,12 +325,7 @@ shared, which the compiler checks (Chapter 15).
 
 ## Module state
 
-Top-level bindings in a file with `main` are immutable module storage. A
-`mut` binding at the top level is rejected with `AU3003`, and moving a value
-out of one is `AU3001`. Mutable state belongs to an owner, which is usually `main`
-or an object it creates. This rules out the module-level caches and counters
-that Python code tends to accumulate, and with them a whole class of
-"who changed this?" bugs.
+Hosted modules can share a counter through an immutable binding such as `NEXT_ID = sync.AtomicInt(1)`. Each task calls `NEXT_ID.add(1)` on the same handle. A hosted `mut` module binding produces `AU3030`. A freestanding module can declare `mut ticks: uint64 = 0` to keep a counter between exported calls. The caller coordinates access across cores. [Freestanding builds](/manual/freestanding)
 
 ## Where to go next
 
