@@ -4433,3 +4433,32 @@ def main():
         );
     }
 }
+
+#[test]
+fn float32_literal_comparison_and_arithmetic_match_verifier_and_runtime() {
+    let source = r#"
+def check_all(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    x: float32 = 0.1
+    assert x <= 0.1
+    assert 0.1 <= x <= 0.1
+    y: float32 = -0.1
+    assert y + 0.1 == 0.0
+    assert y >= -0.1
+    if x > 0.1:
+        return xs[999]
+    return xs[0]
+
+def main():
+    print(check_all([42]))
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    assert!(
+        report.is_proved(),
+        "verifier should prove float32 literal checks: {report:#?}"
+    );
+    let output = crate::run_source(source).expect("runtime must agree with verifier on float32");
+    assert_eq!(output.stdout.trim(), "42");
+}
