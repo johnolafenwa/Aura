@@ -592,10 +592,10 @@ pub(super) fn field_list_snapshot_regions(
                             continue 'blocks;
                         }
                     }
-                    _ if mentioned_roots(instruction).contains(instance) => {
-                        if !keeps_field_list(instruction, instance, list, rules) {
-                            continue 'blocks;
-                        }
+                    _ if mentioned_roots(instruction).contains(instance)
+                        && !keeps_field_list(instruction, instance, list, rules) =>
+                    {
+                        continue 'blocks;
                     }
                     _ => {}
                 }
