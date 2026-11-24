@@ -98,29 +98,44 @@ impl Exec<'_> {
         // An object of a class with invariants passed to a function holds
         // them: the function's proof assumes they do.
         for (param, value) in pre.iter().filter(|(param, _)| param != "self") {
-            let Some((inv_module, clauses)) = self.record_invariant(value) else {
-                continue;
-            };
-            let erasing = self.erasing;
-            self.erasing = true;
-            let env: Env = [("self".to_string(), value.clone())].into();
-            for clause in clauses {
-                let message = format!(
-                    "class invariant holds for `{param}` passed to `{display}`: `{}`",
-                    clause.text
-                );
-                self.prove_clause_in(
-                    state,
-                    ObligationKind::ClassInvariant,
-                    span,
-                    message,
-                    &clause,
-                    &env,
-                    Some(&inv_module),
-                );
-            }
-            self.erasing = erasing;
+            self.prove_value_invariant(
+                state,
+                value,
+                span,
+                &format!("`{param}` passed to `{display}`"),
+            );
         }
+    }
+
+    /// Proves the class invariant of each object of a class with invariants
+    /// passed as an argument to an unfollowed call.
+    pub(super) fn prove_arg_invariants(&mut self, state: &State, values: &[Val], target: &str) {
+        let span = self.span;
+        for value in values {
+            self.prove_value_invariant(state, value, span, &format!("a value passed to {target}"));
+        }
+    }
+
+    fn prove_value_invariant(&mut self, state: &State, value: &Val, span: Span, label: &str) {
+        let Some((inv_module, clauses)) = self.record_invariant(value) else {
+            return;
+        };
+        let erasing = self.erasing;
+        self.erasing = true;
+        let env: Env = [("self".to_string(), value.clone())].into();
+        for clause in clauses {
+            let message = format!("class invariant holds for {label}: `{}`", clause.text);
+            self.prove_clause_in(
+                state,
+                ObligationKind::ClassInvariant,
+                span,
+                message,
+                &clause,
+                &env,
+                Some(&inv_module),
+            );
+        }
+        self.erasing = erasing;
     }
 
     /// The invariant clauses of the class of `value`, when it is an object
@@ -572,7 +587,7 @@ impl Exec<'_> {
     /// proves them, and a call on a trait object relies on the object
     /// holding them (see `verify_guard`). A call whose implementation is
     /// picked at run time names no class.
-    fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
+    pub(super) fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
         if self.dynamic_call {
             return None;
         }

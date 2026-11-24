@@ -24,8 +24,8 @@ use super::{ObligationKind, VerifyContext};
 use crate::ast::{BinaryOp, UnaryOp};
 use crate::diag::Span;
 use crate::mir::{
-    ArithmeticTrap, AssertKind, BasicBlock, CallTarget, Instruction, MethodDispatch, MirArg,
-    MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
+    ArithmeticTrap, AssertKind, BasicBlock, CallTarget, CleanupCallee, Instruction, MethodDispatch,
+    MirArg, MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::{
     ArrayOp, DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, SpanOp, StrOp, TaskOp,
@@ -491,6 +491,9 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    /// Class cleanup methods (`__exit__` / `close`) registered by `PushCleanup`
+    /// for each managed place.
+    cleanup_callees: BTreeMap<String, BTreeSet<String>>,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
     span_positions: BTreeSet<String>,
@@ -574,6 +577,7 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            cleanup_callees: collect_cleanup_callees(function),
             span_positions: BTreeSet::new(),
             rounded: Vec::new(),
             entry_facts: 0,
@@ -1242,6 +1246,34 @@ impl<'a> Exec<'a> {
                 );
                 self.erasing = erasing;
             }
+            Val::Record(class, fields) => {
+                for (field, field_value) in fields {
+                    // Fields typed as a contracted callable alias are checked at every
+                    // store by `fit_callable` and carry their alias contract forward.
+                    if self.cx.field_contract(class, field).is_some() {
+                        continue;
+                    }
+                    self.oblige_escape(field_value, pc);
+                }
+            }
+            Val::Tuple(items) => {
+                for item in items {
+                    self.oblige_escape(item, pc);
+                }
+            }
+            Val::Enum(_, _, variants) => {
+                for payloads in variants {
+                    for item in payloads {
+                        self.oblige_escape(item, pc);
+                    }
+                }
+            }
+            Val::Union(_, members) => {
+                for member in members {
+                    self.oblige_escape(member, pc);
+                }
+            }
+            Val::Held(_, inner) => self.oblige_escape(inner, pc),
             _ => {}
         }
     }
@@ -1371,6 +1403,31 @@ impl<'a> Exec<'a> {
                     "a call through a function value checks `requires` when it runs".into(),
                 ),
             );
+        }
+        let has_param_invariant = self.guarded_invariant(name).is_some()
+            || self.cx.function(name).is_some_and(|func| {
+                func.params.iter().any(|param| {
+                    matches!(&param.ty, Type::Named(class, _) if self.cx.class_invariant(class).is_some_and(|(_, clauses)| !clauses.is_empty()))
+                })
+            });
+        if has_param_invariant {
+            let span = self.span;
+            let erasing = self.erasing;
+            self.erasing = true;
+            self.oblige(
+                ObligationKind::ClassInvariant,
+                span,
+                format!(
+                    "class invariants assumed by `{}` hold where it is called through a value",
+                    crate::mir::public_function_name(name)
+                ),
+                pc,
+                Goal::Unsupported(
+                    "a call through a function value does not check parameter class invariants when it runs"
+                        .into(),
+                ),
+            );
+            self.erasing = erasing;
         }
     }
 
@@ -2578,9 +2635,52 @@ impl<'a> Exec<'a> {
             }
             Instruction::PopCleanup { place, run, .. } => {
                 if *run {
-                    self.unmodeled("the exit of a `with` block", |exec| {
-                        exec.havoc_root(state, root_of(place))
-                    });
+                    let callees: Vec<String> = self
+                        .cleanup_callees
+                        .get(place)
+                        .map(|set| set.iter().cloned().collect())
+                        .unwrap_or_default();
+                    if let [callee] = callees.as_slice() {
+                        if self.cx.function(callee).is_some() {
+                            let receiver = self.read_place(state, place);
+                            let _ = self.user_call(
+                                state,
+                                callee,
+                                Some((receiver, Some(place.clone()))),
+                                Vec::new(),
+                                None,
+                                None,
+                            );
+                        } else {
+                            let receiver = self.read_place(state, place);
+                            self.prove_arg_invariants(
+                                state,
+                                &[receiver],
+                                "the exit of a `with` block",
+                            );
+                            self.unmodeled("the exit of a `with` block", |exec| {
+                                exec.havoc_root(state, root_of(place))
+                            });
+                        }
+                    } else {
+                        let receiver = self.read_place(state, place);
+                        self.prove_arg_invariants(
+                            state,
+                            &[receiver],
+                            "the exit of a `with` block",
+                        );
+                        self.unmodeled("the exit of a `with` block", |exec| {
+                            exec.havoc_root(state, root_of(place))
+                        });
+                    }
+                    for root in self.captured.clone() {
+                        if !state.loans.contains_key(&root) {
+                            self.unmodeled(
+                                format!("a closure that may change `{root}`, which it captures"),
+                                |exec| exec.havoc_root(state, &root),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -3903,10 +4003,17 @@ impl<'a> Exec<'a> {
                     }
                     self.user_call(state, &name, None, actuals, target_type.as_ref(), target)
                 }
-                _ => self.unmodeled("a call through a function value", |exec| {
-                    exec.havoc_writebacks(state, args);
-                    fresh_target(exec)
-                }),
+                _ => {
+                    let mut arg_vals = Vec::with_capacity(args.len());
+                    for arg in args {
+                        arg_vals.push(self.operand(state, &arg.value, None));
+                    }
+                    self.prove_arg_invariants(state, &arg_vals, "a call through a function value");
+                    self.unmodeled("a call through a function value", |exec| {
+                        exec.havoc_writebacks(state, args);
+                        fresh_target(exec)
+                    })
+                }
             },
             CallTarget::Extern(call) if self.cx.extern_decl(&call.symbol).is_some() => {
                 let decl = self.cx.extern_decl(&call.symbol).expect("checked above");
@@ -5563,6 +5670,28 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
         }
     }
     captured
+}
+
+/// Maps each managed place in `function` to any class cleanup method (`__exit__`
+/// or `close`) registered for it by `PushCleanup`.
+fn collect_cleanup_callees(function: &MirFunction) -> BTreeMap<String, BTreeSet<String>> {
+    let mut callees: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::PushCleanup {
+                place,
+                callee: Some(CleanupCallee::Method { function: method }),
+                ..
+            } = instruction
+            {
+                callees
+                    .entry(place.clone())
+                    .or_default()
+                    .insert(method.clone());
+            }
+        }
+    }
+    callees
 }
 
 /// The root locals each loan of `blocks` can reach, following all reborrows

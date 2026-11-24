@@ -4905,3 +4905,138 @@ def main():
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn class_invariants_and_function_escapes_are_enforced() {
+    // 1. Escaping function whose parameter has a class invariant (and no `requires`)
+    //    called indirectly on a broken object.
+    let indirect_inv = r#"
+class Pos:
+    n: int64
+    invariant self.n >= 0 and self.n < 10
+
+def read_at(p: Pos) -> int64:
+    xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    return xs[p.n]
+
+def invoke(f: def(Pos) -> int64) -> int64:
+    mut p = Pos(n=0)
+    p.n = -10
+    return f(p)
+
+def main():
+    print(invoke(read_at))
+"#;
+    let Some(report) = verify(indirect_inv) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "indirect call to function assuming parameter class invariant must not prove: {report:#?}"
+    );
+    let program = crate::check_source(indirect_inv).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "indirect class-invariant escape must block bounds check removal: {removed:?}"
+    );
+
+    // 2. Function with `requires` escaping inside an uncontracted struct field (via field assignment).
+    let field_escape = r#"
+def needs_pos(x: int64) -> int64:
+    requires x > 0
+    return x
+
+def nop(x: int64) -> int64:
+    return x
+
+class Boxed:
+    cb: def(int64) -> int64
+
+def run_box(b: Boxed) -> int64:
+    return b.cb(-5)
+
+def main():
+    mut b = Boxed(cb=nop)
+    b.cb = needs_pos
+    print(run_box(b))
+"#;
+    let Some(report) = verify(field_escape) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "`requires` function escaping in struct field must not prove: {report:#?}"
+    );
+
+    // 3. Top-level code mutating a class field to break its invariant before calling a function.
+    let top_level_inv = r#"
+class Pos:
+    n: int64
+    invariant self.n >= 0 and self.n < 10
+
+def read_at(p: Pos, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    return xs[p.n]
+
+mut p = Pos(n=0)
+p.n = -10
+print(read_at(p, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(top_level_inv) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "top-level broken class invariant must not prove: {report:#?}"
+    );
+    let program = crate::check_source(top_level_inv).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "top-level broken invariant must block bounds check removal: {removed:?}"
+    );
+
+    // 4. `with` block cleanup (`PopCleanup`) must check `__exit__` contracts/invariants
+    //    and havoc captured locals.
+    let cleanup_contract = r#"
+class Guard:
+    n: int64
+    invariant self.n >= 0
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        requires self.n > 0
+        pass
+
+def f():
+    with g = Guard(n=0):
+        pass
+
+def main():
+    f()
+"#;
+    let Some(report) = verify(cleanup_contract) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "`PopCleanup` must prove `__exit__` requires: {report:#?}"
+    );
+}
