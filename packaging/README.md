@@ -25,14 +25,14 @@ anywhere.
 
 ```bash
 # Debian package and a signed apt repository, on Debian or Ubuntu.
-scripts/package-deb.sh aura-v0.16.0-preview-x86_64-unknown-linux-gnu.tar.gz
+scripts/package-deb.sh aura-v0.17.0-preview-x86_64-unknown-linux-gnu.tar.gz
 APT_SIGNING_KEY="$(gpg --armor --export-secret-keys)" \
   scripts/build-apt-repository.sh . /tmp/aura-apt
 
 # Homebrew formula for a published release.
-gh release download v0.16.0-preview --pattern SHA256SUMS
-python3 scripts/render-homebrew-formula.py --tag v0.16.0-preview --sha256sums SHA256SUMS
+gh release download v0.17.0-preview --pattern SHA256SUMS
+python3 scripts/render-homebrew-formula.py --tag v0.17.0-preview --sha256sums SHA256SUMS
 
 # Chocolatey package, from Git Bash on Windows.
-scripts/package-chocolatey.sh aura-v0.16.0-preview-x86_64-pc-windows-msvc.zip
+scripts/package-chocolatey.sh aura-v0.17.0-preview-x86_64-pc-windows-msvc.zip
 ```

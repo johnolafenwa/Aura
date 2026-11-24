@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Debian package from a Linux release archive.
 #
-#   scripts/package-deb.sh aura-v0.16.0-preview-x86_64-unknown-linux-gnu.tar.gz
+#   scripts/package-deb.sh aura-v0.17.0-preview-x86_64-unknown-linux-gnu.tar.gz
 #
-# writes aura-v0.16.0-preview-amd64.deb in the current directory. The package
+# writes aura-v0.17.0-preview-amd64.deb in the current directory. The package
 # installs the archive's files under /usr.
 set -euo pipefail
 
@@ -22,7 +22,7 @@ if [[ ! -f "$archive" ]]; then
   echo "archive does not exist: $archive" >&2
   exit 2
 fi
-# `0.16.0~preview` sorts before `0.16.0`, as a preview should.
+# `0.17.0~preview` sorts before `0.17.0`, as a preview should.
 deb_version="${BASH_REMATCH[1]}${BASH_REMATCH[3]:+~${BASH_REMATCH[3]}}"
 release_tag="v${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
 case "${BASH_REMATCH[4]}" in

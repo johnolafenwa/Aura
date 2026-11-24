@@ -56,7 +56,7 @@ def render(template, tag, base_url, sums):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument('--tag', required=True, help='release tag, such as v0.16.0-preview')
+    parser.add_argument('--tag', required=True, help='release tag, such as v0.17.0-preview')
     parser.add_argument('--sha256sums', required=True, type=Path,
                         help="the release's SHA256SUMS file")
     parser.add_argument('--base-url', default=None,

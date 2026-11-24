@@ -34,7 +34,7 @@ rejected.
 | --- | --- |
 | `name` | Must match `[A-Za-z_][A-Za-z0-9_]*`. It is also the dependency import identifier. Hyphenated names are invalid, even though `version` allows `-`. |
 | `version` | Must begin with an ASCII digit. The rest may contain only ASCII letters, digits, `.`, `-`, or `+`. |
-| `edition` | Must be exactly `"2026"` in Aura 0.16. |
+| `edition` | Must be exactly `"2026"` in Aura 0.17. |
 
 ### FFI Opt-In
 
@@ -100,7 +100,7 @@ traversal cannot escape that root, including through canonicalized filesystem
 paths. Cyclic source imports are rejected.
 
 Imported modules contribute declarations, not runtime initialization. Their
-top-level executable statements do not run on import in Aura 0.16.
+top-level executable statements do not run on import in Aura 0.17.
 [Names And Scopes](/manual/names-and-scopes#imports) specifies visibility and
 import binding.
 
@@ -122,7 +122,7 @@ Each dependency entry chooses exactly one source:
 
 Registry forms are not implemented. These include string-valued version
 dependencies such as `util = "1.2.0"` and detailed `version =` dependencies.
-Aura 0.16 has no registry resolution, publish, or install flow.
+Aura 0.17 has no registry resolution, publish, or install flow.
 
 The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
@@ -151,7 +151,7 @@ rules:
 - every package has a readable `src/` directory and a valid package manifest
 
 Two different paths cannot claim the same package name. The graph limits are
-observable Aura 0.16 limits. Raising them requires matching reference and
+observable Aura 0.17 limits. Raising them requires matching reference and
 conformance changes.
 
 ## Workspaces
@@ -474,4 +474,4 @@ No package semantics on this page are provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
 workspace globs, wildcard or relative imports, implicit re-exports, and
-import-time initialization are outside the Aura 0.16 language contract.
+import-time initialization are outside the Aura 0.17 language contract.

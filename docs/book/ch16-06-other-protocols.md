@@ -160,7 +160,7 @@ second reply, the server sees `None`, and reports that it handled two
 messages.
 
 One line of `serve` breaks our pattern. The listener is bound to a plain
-name, not with `with`. In Aura 0.16 a `net.WebSocketListener` has no
+name, not with `with`. In Aura 0.17 a `net.WebSocketListener` has no
 `close()` method, so it cannot be a `with` resource. It is released when
 its binding goes out of scope at the end of `serve`. The Manual lists this
 among the known gaps of the preview, along with one that matters more:

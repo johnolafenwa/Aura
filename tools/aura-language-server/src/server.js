@@ -113,7 +113,7 @@ connection.onInitialize((params) => {
   return {
     serverInfo: {
       name: "aura-language-server",
-      version: "0.16.0"
+      version: "0.17.0"
     },
     capabilities: {
       textDocumentSync: {

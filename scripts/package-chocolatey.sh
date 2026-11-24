@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Builds the Chocolatey package from the Windows release archive.
 #
-#   scripts/package-chocolatey.sh aura-v0.16.0-preview-x86_64-pc-windows-msvc.zip
+#   scripts/package-chocolatey.sh aura-v0.17.0-preview-x86_64-pc-windows-msvc.zip
 #
-# writes aura.0.16.0-preview.nupkg in the current directory. The package
+# writes aura.0.17.0-preview.nupkg in the current directory. The package
 # carries the archive's files, so installing it downloads nothing else.
 # Run it from Git Bash on Windows, where `choco pack` exists. Elsewhere, set
 # AURA_CHOCOLATEY_STAGE_ONLY=1 to stop after writing release/chocolatey.

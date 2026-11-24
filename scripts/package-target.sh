@@ -2,7 +2,7 @@
 # Packages the files `aura build --target <target>` reads from an
 # installation (ADR-0101) as a target pack:
 #
-#   scripts/package-target.sh aura-v0.16.0-preview-target-x86_64-unknown-linux-musl
+#   scripts/package-target.sh aura-v0.17.0-preview-target-x86_64-unknown-linux-musl
 #
 # The pack unpacks over an installation prefix: its one top-level
 # directory holds `lib/aura/targets/<target>`. A pack is built on a Linux

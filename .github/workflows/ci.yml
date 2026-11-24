@@ -48,8 +48,9 @@ jobs:
     # The repo gate runs the whole workspace twice (tests, then the
     # single-threaded instrumented coverage run); after Batch 1 phase 1 the
     # Ubuntu runner needs about two hours for it, so the limit leaves
-    # headroom.
-    timeout-minutes: 210
+    # headroom. With the 0.17 features the macOS runner takes a little over
+    # three hours, and one run was still making progress at 210 minutes.
+    timeout-minutes: 270
 
     steps:
       - name: Checkout
