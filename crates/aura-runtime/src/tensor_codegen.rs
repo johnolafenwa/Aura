@@ -578,7 +578,11 @@ impl<'a> Generator<'a> {
         let step = |slot: usize| match &plan.slots[slot] {
             Slot::Step {
                 operation, inputs, ..
-            } => Some((operation, inputs[0], slot_shape(&plan.slots[inputs[0]]).len())),
+            } => Some((
+                operation,
+                inputs[0],
+                slot_shape(&plan.slots[inputs[0]]).len(),
+            )),
             Slot::Leaf { .. } => None,
         };
         if materialized[slot] {
@@ -624,8 +628,15 @@ impl<'a> Generator<'a> {
                 }
             }
         }
-        let product =
-            |slot: usize| matches!(&plan.slots[slot], Slot::Step { operation: Operation::Matmul, .. });
+        let product = |slot: usize| {
+            matches!(
+                &plan.slots[slot],
+                Slot::Step {
+                    operation: Operation::Matmul,
+                    ..
+                }
+            )
+        };
         for index in 0..count {
             let Slot::Step {
                 operation, inputs, ..
@@ -634,7 +645,9 @@ impl<'a> Generator<'a> {
                 continue;
             };
             let rank = slot_shape(&plan.slots[inputs[0]]).len();
-            if !splits_heads(operation, rank) || plan.outputs.contains(&index) || users[index].is_empty()
+            if !splits_heads(operation, rank)
+                || plan.outputs.contains(&index)
+                || users[index].is_empty()
             {
                 continue;
             }
@@ -677,7 +690,7 @@ impl<'a> Generator<'a> {
             }
             let writes = matches!(&plan.slots[root], Slot::Step { operation, .. }
                 if fuses(operation) && !matches!(operation, Operation::Reshape(_)));
-            if !materialized[root] && !(writes && uses[root] == 1) {
+            if !(materialized[root] || writes && uses[root] == 1) {
                 continue;
             }
             materialized[root] = true;
@@ -1477,11 +1490,7 @@ impl<'a> Generator<'a> {
             };
             let dtype = self.dtype(reduction);
             let ty = value_type(dtype);
-            let suffix = if dtype == Kind::Float64 {
-                "d"
-            } else {
-                "f"
-            };
+            let suffix = if dtype == Kind::Float64 { "d" } else { "f" };
             let combine = |value: &str| match code {
                 1 => format!("aura_min_{suffix}(acc, {value})"),
                 2 => format!("aura_max_{suffix}(acc, {value})"),
@@ -1945,11 +1954,7 @@ impl<'a> Generator<'a> {
         // it, and the result is stored as `out_ty`.
         let (ty, out_ty) = (value_type(dtype), c_type(dtype));
         let part_bytes = value_bytes(dtype);
-        let suffix = if dtype == Kind::Float64 {
-            "d"
-        } else {
-            "f"
-        };
+        let suffix = if dtype == Kind::Float64 { "d" } else { "f" };
         let combine = |acc: &str, value: &str| match reduction {
             1 => format!("aura_min_{suffix}({acc}, {value})"),
             2 => format!("aura_max_{suffix}({acc}, {value})"),
@@ -2159,10 +2164,7 @@ impl<'a> Generator<'a> {
             }
             _ => (at * each, None),
         };
-        let wide = (
-            place(left_stored, 0, 0).1,
-            place(right_stored, 0, 0).1,
-        );
+        let wide = (place(left_stored, 0, 0).1, place(right_stored, 0, 0).1);
         let pairs = (0..len(lead))
             .map(|product| {
                 (
@@ -2279,11 +2281,7 @@ fn wrapping(dtype: Kind, left: &str, symbol: &str, right: &str) -> String {
 
 fn binary(code: i64, dtype: Kind, left: &str, right: &str) -> String {
     let float = is_float(dtype);
-    let suffix = if dtype == Kind::Float64 {
-        "d"
-    } else {
-        "f"
-    };
+    let suffix = if dtype == Kind::Float64 { "d" } else { "f" };
     match code {
         0..=2 => {
             let symbol = ["+", "-", "*"][code as usize];

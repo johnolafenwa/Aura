@@ -2519,10 +2519,14 @@ pub fn host_tensor_weights_load(args: Vec<Value>, _: Option<&[String]>) -> Resul
     }))
 }
 
+/// A tensor set aside for a file: its name, its elements, and whether
+/// they are a `float16` tensor's.
+type SavedTensor = (String, ArrayValue, bool);
+
 thread_local! {
     /// The tensors put aside for the file of each path, until the file is
     /// written.
-    static WEIGHTS_TO_SAVE: std::cell::RefCell<HashMap<String, Vec<(String, ArrayValue, bool)>>> =
+    static WEIGHTS_TO_SAVE: std::cell::RefCell<HashMap<String, Vec<SavedTensor>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 

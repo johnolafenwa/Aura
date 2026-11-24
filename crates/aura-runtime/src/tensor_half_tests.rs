@@ -83,7 +83,10 @@ fn a_half_is_the_nearest_one_to_a_float32() {
     assert_eq!(rounded_to_half(tiny * 0.75), tiny);
     assert_eq!(rounded_to_half(tiny / 1024.0), 0.0);
     assert_eq!(rounded_to_half(1.0e-30), 0.0);
-    assert_eq!(rounded_to_half(2.0_f32.powi(-14) - tiny / 2.0), 2.0_f32.powi(-14));
+    assert_eq!(
+        rounded_to_half(2.0_f32.powi(-14) - tiny / 2.0),
+        2.0_f32.powi(-14)
+    );
     assert!(rounded_to_half(f32::NAN).is_nan());
 
     let ints = int64(&[1], &[1]);
@@ -105,7 +108,10 @@ fn a_float16_tensor_rounds_every_result_to_half_precision() {
     let b = halves(&[1.0, 60000.0, 0.2, 2.0], &[4], cpu);
     assert!(node(&a).is_half() && node(&a).dtype() == ArrayDType::Float32);
     assert_eq!(node(&a).dtype_name(), "float16");
-    assert_eq!(node(&tensor(float32(&[1.0], &[1]), cpu)).dtype_name(), "float32");
+    assert_eq!(
+        node(&tensor(float32(&[1.0], &[1]), cpu)).dtype_name(),
+        "float32"
+    );
     let tenth = tensor_kernels::rounded_to_half(0.1);
     let fifth = tensor_kernels::rounded_to_half(0.2);
     assert_eq!(elements(&a), [2048.0, 60000.0, tenth, -3.0]);
@@ -122,9 +128,15 @@ fn a_float16_tensor_rounds_every_result_to_half_precision() {
         ]
     );
     let quotient = binary(&a, &b, 3).unwrap();
-    assert_eq!(elements(&quotient)[2], tensor_kernels::rounded_to_half(tenth / fifth));
+    assert_eq!(
+        elements(&quotient)[2],
+        tensor_kernels::rounded_to_half(tenth / fifth)
+    );
     let root = unary(&unary(&a, 0).unwrap(), 1).unwrap();
-    assert_eq!(elements(&root)[3], tensor_kernels::rounded_to_half(3.0_f32.sqrt()));
+    assert_eq!(
+        elements(&root)[3],
+        tensor_kernels::rounded_to_half(3.0_f32.sqrt())
+    );
     // A comparison gives a mask, and the place of a largest element an
     // integer.
     let mask = compare(&a, &b, 2).unwrap();
@@ -135,7 +147,10 @@ fn a_float16_tensor_rounds_every_result_to_half_precision() {
     // Reductions, reshapes and products keep the dtype.
     let total = reduce(&halves(&[0.1; 64], &[64], cpu), 0, None).unwrap();
     assert!(node(&total).is_half());
-    assert_eq!(elements(&total), [tensor_kernels::rounded_to_half(tenth * 64.0)]);
+    assert_eq!(
+        elements(&total),
+        [tensor_kernels::rounded_to_half(tenth * 64.0)]
+    );
     let grid = reshape(&a, &[2, 2]).unwrap();
     let squared = matmul(&grid, &grid).unwrap();
     assert!(node(&grid).is_half() && node(&squared).is_half());
@@ -143,7 +158,10 @@ fn a_float16_tensor_rounds_every_result_to_half_precision() {
 
     // The conversions: to itself, to wider floats exactly, and from
     // integers.
-    assert!(std::ptr::eq(node(&half(&a)).0.as_ref(), node(&a).0.as_ref()));
+    assert!(std::ptr::eq(
+        node(&half(&a)).0.as_ref(),
+        node(&a).0.as_ref()
+    ));
     let single = cast(&a, ArrayDType::Float32).unwrap();
     assert!(!node(&single).is_half());
     assert_eq!(elements(&single), elements(&a));
@@ -258,11 +276,7 @@ fn float16_tensors_are_saved_as_halves_and_loaded_from_any_float() {
     let small = halves(&[0.1, -2.0, 65504.0], &[3], cpu);
     let wide = tensor(float32(&[0.1, 100000.0], &[2]), cpu);
     for (name, value) in [("small", &small), ("wide", &wide)] {
-        host_tensor_weights_put(
-            vec![path_text.clone(), text(name), value.clone()],
-            None,
-        )
-        .unwrap();
+        host_tensor_weights_put(vec![path_text.clone(), text(name), value.clone()], None).unwrap();
     }
     outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap()).unwrap();
     let bytes = std::fs::read(&path).unwrap();
@@ -331,7 +345,11 @@ fn a_plan_of_float16_tensors_gives_what_each_operation_gives_at_once() {
             node(&eager).is_half(),
             "{name}: dtype"
         );
-        assert_eq!(node(&waiting).shape(), node(&eager).shape(), "{name}: shape");
+        assert_eq!(
+            node(&waiting).shape(),
+            node(&eager).shape(),
+            "{name}: shape"
+        );
         halves += usize::from(node(&eager).is_half());
         close(name, &array(&waiting), &array(&eager));
     }
@@ -387,7 +405,12 @@ fn float16_lanes_and_long_reductions_add_in_float32() {
             reduce(&binary(&wide, &wide, 2).unwrap(), 3, None).unwrap()
         }),
         ("split lane sum", || {
-            reduce(&half(&wave(4 * 300, &[4, 300], TensorDevice::Cpu)), 0, Some(1)).unwrap()
+            reduce(
+                &half(&wave(4 * 300, &[4, 300], TensorDevice::Cpu)),
+                0,
+                Some(1),
+            )
+            .unwrap()
         }),
         ("split lane argmax", || {
             node_op(&half(&wave(4 * 300, &[4, 300], TensorDevice::Cpu)), 2, &[1]).unwrap()
@@ -445,8 +468,8 @@ fn a_gpu_device_agrees_on_float16_tensors() {
             ("stacked product", |device| {
                 let left = half(&wave(6 * 32 * 48, &[6, 32, 48], device));
                 let right = half(&wave(6 * 48 * 16, &[6, 48, 16], device));
-                let scale = host_tensor_scalar_like(vec![left.clone(), Value::Float(0.01)], None)
-                    .unwrap();
+                let scale =
+                    host_tensor_scalar_like(vec![left.clone(), Value::Float(0.01)], None).unwrap();
                 matmul(&binary(&left, &scale, 2).unwrap(), &right).unwrap()
             }),
             ("mean of many", |device| {
@@ -454,7 +477,11 @@ fn a_gpu_device_agrees_on_float16_tensors() {
             }),
         ];
         for (name, made) in large {
-            close_halves(name, &array(&made(device)), &array(&made(TensorDevice::Cpu)));
+            close_halves(
+                name,
+                &array(&made(device)),
+                &array(&made(TensorDevice::Cpu)),
+            );
         }
         // A large float16 tensor lives on the device as halves and comes
         // back as itself.
@@ -462,7 +489,10 @@ fn a_gpu_device_agrees_on_float16_tensors() {
         let placed = host_tensor_to_device(vec![values.clone(), int(device as i64)], None).unwrap();
         assert!(node(&placed).is_half());
         assert_eq!(array(&placed), array(&values));
-        println!("RAN: {planned} float16 expressions on the {} device", device.name());
+        println!(
+            "RAN: {planned} float16 expressions on the {} device",
+            device.name()
+        );
     }
 }
 
@@ -483,15 +513,16 @@ fn attention(device: TensorDevice, narrow: bool) -> Value {
         let flat = binary(&matmul(&x, &weight).unwrap(), &bias, 0).unwrap();
         reshape(&flat, &[2, 8, 12]).unwrap()
     };
-    let split = |rows: &Value| {
-        permute(&reshape(rows, &[2, 8, 3, 4]).unwrap(), &[0, 2, 1, 3]).unwrap()
-    };
+    let split =
+        |rows: &Value| permute(&reshape(rows, &[2, 8, 3, 4]).unwrap(), &[0, 2, 1, 3]).unwrap();
     let (query, key, value) = (split(&linear(1)), split(&linear(2)), split(&linear(3)));
     let scores = matmul(&query, &permute(&key, &[0, 1, 3, 2]).unwrap()).unwrap();
     let weights = unary(&binary(&scores, &scale, 2).unwrap(), TANH_OPERATION).unwrap();
     let mixed = matmul(&weights, &value).unwrap();
     let merged = reshape(&permute(&mixed, &[0, 2, 1, 3]).unwrap(), &[16, 12]).unwrap();
-    let out: Vec<f32> = (0..60).map(|at| ((at * 7 % 23) as f32 - 11.0) / 32.0).collect();
+    let out: Vec<f32> = (0..60)
+        .map(|at| ((at * 7 % 23) as f32 - 11.0) / 32.0)
+        .collect();
     matmul(&merged, &dtype(tensor(float32(&out, &[12, 5]), device))).unwrap()
 }
 
@@ -546,10 +577,8 @@ fn products_read_the_heads_of_an_attention_in_place() {
                     whole,
                 ]
             );
-            let Some(Action::Matmul { pairs, .. }) = program
-                .actions
-                .iter()
-                .find(|action| action.is_tabled())
+            let Some(Action::Matmul { pairs, .. }) =
+                program.actions.iter().find(|action| action.is_tabled())
             else {
                 panic!("the scores take the address of each head")
             };
