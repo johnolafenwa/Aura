@@ -258,11 +258,15 @@ fn tagged_module_state_packs_fixed_leaves_as_little_endian_words() {
     let active = &checked.constants["packet"].state.as_ref().unwrap().bytes;
     assert_eq!(active.len(), 32);
     assert_eq!(&active[8..16], &(-2_i64).to_le_bytes());
-    assert_eq!(&active[16..], &[1,2,3,4,5,6,7,8,9,0,0,0,0,0,0,0]);
+    assert_eq!(
+        &active[16..],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0, 0]
+    );
     let empty = &checked.constants["empty"].state.as_ref().unwrap().bytes;
-    assert_eq!(empty.len(),32);
-    assert_eq!(&empty[8..], &[0;24]);
+    assert_eq!(empty.len(), 32);
+    assert_eq!(&empty[8..], &[0; 24]);
     for target in FreestandingTarget::ALL {
-        emit_freestanding_object(&lower_to_mir(&checked), "tagged_fixed.au",source,target).unwrap();
+        emit_freestanding_object(&lower_to_mir(&checked), "tagged_fixed.au", source, target)
+            .unwrap();
     }
 }

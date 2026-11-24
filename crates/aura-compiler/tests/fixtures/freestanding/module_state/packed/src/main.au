@@ -15,4 +15,4 @@ export "C" def update() -> uint32:
     header.serial += 1
     header.low = 6
     word.word = header.serial
-    return (header.high as uint32) + (header.low as uint32) + (word.low() as uint32)
+    return (header.high as uint32) + (header.low as uint32) + (word.low as uint32)

@@ -61,23 +61,26 @@ impl<'a> FunctionCompiler<'a> {
         let slots = &image.slots;
         let ty = ensure_direct_type(&ty, &self.classes, "module state")?;
         let mut values = Vec::with_capacity(slots.len());
-        for (offset, ty) in slots {
-            if ty.as_fixed_array().is_some() {
+        for slot in slots {
+            let ty = &slot.ty;
+            let offset = slot.offset;
+            if let Some(layout) = &slot.record {
+                let direct = ensure_direct_type(ty, &self.classes, "C record storage")?;
+                let base = self.builder.iadd_imm(address, i64::from(offset));
+                values.extend(
+                    self.load_controlled_struct(layout, base, direct, key)?
+                        .values,
+                );
+            } else if ty.as_fixed_array().is_some() {
                 let storage =
                     ensure_direct_type(ty, &self.classes, "fixed array storage")?.abi_types()[0];
                 values.push(
                     self.builder
-                        .load(storage, MemFlags::trusted(), address, *offset),
+                        .load(storage, MemFlags::trusted(), address, offset),
                 );
             } else {
                 let kind = state_scalar(ty)?;
-                values.push(self.load_leaf(
-                    plain::PlainLeaf {
-                        offset: *offset,
-                        kind,
-                    },
-                    address,
-                ));
+                values.push(self.load_leaf(plain::PlainLeaf { offset, kind }, address));
             }
         }
         Ok(ValueRef { ty, values })
@@ -89,24 +92,41 @@ impl<'a> FunctionCompiler<'a> {
         let ty = ensure_direct_type(&ty, &self.classes, "module state")?;
         let value = self.load_operand_for_target(operand, &ty)?;
         let value = self.coerce_value(value, &ty)?;
-        if value.values.len() != slots.len() {
-            return Err("module storage layout disagrees with its value".into());
-        }
-        for ((offset, ty), word) in slots.iter().zip(value.values) {
+        let mut words = value.values.as_slice();
+        for slot in slots {
+            let offset = slot.offset;
+            let ty = &slot.ty;
+            if let Some(layout) = &slot.record {
+                let direct = ensure_direct_type(ty, &self.classes, "C record storage")?;
+                let (value, rest) = words
+                    .split_at_checked(direct.value_count())
+                    .ok_or("module storage layout disagrees with its value")?;
+                let base = self.builder.iadd_imm(address, i64::from(offset));
+                self.store_controlled_struct(
+                    layout,
+                    &ValueRef {
+                        ty: direct,
+                        values: value.to_vec(),
+                    },
+                    base,
+                );
+                words = rest;
+                continue;
+            }
+            let (&word, rest) = words
+                .split_first()
+                .ok_or("missing module storage component")?;
+            words = rest;
             if ty.as_fixed_array().is_some() {
                 self.builder
-                    .store(MemFlags::trusted(), word, address, *offset);
+                    .store(MemFlags::trusted(), word, address, offset);
             } else {
                 let kind = state_scalar(ty)?;
-                self.store_leaf(
-                    plain::PlainLeaf {
-                        offset: *offset,
-                        kind,
-                    },
-                    word,
-                    address,
-                );
+                self.store_leaf(plain::PlainLeaf { offset, kind }, word, address);
             }
+        }
+        if !words.is_empty() {
+            return Err("extra module storage components".into());
         }
         Ok(unit_value(self.builder))
     }

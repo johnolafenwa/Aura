@@ -111,6 +111,7 @@ pub(crate) use type_param_calls::{
 pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
 pub(crate) mod c_layout_queries;
 mod c_union_writes;
+pub(crate) use c_union_writes::setter_statement as state_union_setter_statement;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -6077,6 +6078,9 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        if self.check_state_union_assignment(assign, locals)? {
+            return Ok(());
+        }
         self.reject_property_assignment(assign, locals)?;
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {

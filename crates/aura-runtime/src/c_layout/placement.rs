@@ -42,6 +42,12 @@ struct Cursor {
 }
 
 impl CStruct {
+    /// Byte offset and optional (starting bit, width) of each declared field.
+    pub fn field_locations(&self) -> impl Iterator<Item = (usize, Option<(u8, u8)>)> + '_ {
+        self.positions()
+            .map(|(_, position)| (position.byte, position.bits))
+    }
+
     pub(crate) fn positions(&self) -> impl Iterator<Item = (&CField, Position)> {
         self.positions_for(self.layout_controls.microsoft_bit_fields)
     }

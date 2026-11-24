@@ -52,6 +52,20 @@ impl Lowerer<'_> {
         }
     }
 
+    fn state_union_setter(&self, target: &AssignTarget) -> Option<(String, Type)> {
+        let AssignTarget::Member { object, field } = target else {
+            return None;
+        };
+        let Type::Named(name, _) = self.infer_expr_type(object)? else {
+            return None;
+        };
+        let class = self.resolve_class_info(&name)?;
+        class.decl.c_union.as_ref()?;
+        let method = format!("__write_{field}");
+        let input = class.methods.get(&method)?.signature.params.last()?.clone();
+        Some((method, input))
+    }
+
     pub(super) fn lower_state_assignment(&mut self, assign: &AssignStmt) -> bool {
         let kind = match &assign.target {
             AssignTarget::Name(name) => ExprKind::Name(name.clone()),
@@ -74,8 +88,11 @@ impl Lowerer<'_> {
         let constant = self.state_binding(root).unwrap().clone();
         let root_span = root.span;
         let whole = self.state_binding(&target).is_some();
-        let expected = self
-            .infer_expr_type(&target)
+        let setter = self.state_union_setter(&assign.target);
+        let expected = setter
+            .as_ref()
+            .map(|(_, ty)| ty.clone())
+            .or_else(|| self.infer_expr_type(&target))
             .unwrap_or_else(|| constant.ty.clone());
         self.capture_state_target(&mut target);
         let rhs = match assign.op {
@@ -122,7 +139,7 @@ impl Lowerer<'_> {
                 ExprKind::Member { object, field } => AssignTarget::Member { object, field },
                 _ => unreachable!("projected module store"),
             };
-            self.lower_assign(&AssignStmt {
+            let write = AssignStmt {
                 target,
                 value: Expr {
                     kind: ExprKind::Name(stored),
@@ -132,7 +149,16 @@ impl Lowerer<'_> {
                 op: None,
                 annotation: None,
                 span: assign.span,
-            });
+            };
+            if setter.is_some() {
+                let Some(Stmt::Expr(call)) = crate::sema::state_union_setter_statement(&write)
+                else {
+                    unreachable!()
+                };
+                self.lower_expr(&call.expr);
+            } else {
+                self.lower_assign(&write);
+            }
             Operand::Place(snapshot)
         };
         let unit = self.new_typed_temp(Type::Unit);
