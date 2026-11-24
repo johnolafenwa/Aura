@@ -376,7 +376,15 @@ pub(crate) struct SigRef(pub(crate) u32);
 /// The type of one value. A comparison yields an `I8` flag.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ScalarType {
-    Inline { bytes: u32, align: u8 },
+    Inline {
+        bytes: u32,
+        align: u8,
+    },
+    /// Byte aggregate whose C alignment exceeds the LLVM integer element widths.
+    OverAligned {
+        bytes: u32,
+        align: u16,
+    },
     I8,
     I16,
     I32,

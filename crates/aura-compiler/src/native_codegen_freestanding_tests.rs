@@ -1055,6 +1055,40 @@ export "C" def reset(code: uint16) -> uint32:
 }
 
 #[test]
+fn fixed_arrays_of_controlled_records_keep_the_target_stride() {
+    let source = r#"
+extern "C" packed class Row:
+    tag: uint8
+    word: uint32
+
+extern "C" align(256) class Line:
+    word: uint32
+
+extern "C" class Packet:
+    rows: fixed[Row, 2]
+    lines: fixed[Line, 2]
+
+extern "C" def touch(p: mut Packet) -> None
+
+def lane(lines: fixed[Line, 2]) -> uint32:
+    return lines[1].word
+
+export "C" def exercise() -> uint32:
+    mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
+    touch(p)
+    return p.rows[1].word + lane(p.lines)
+"#;
+    for target in TARGETS {
+        let (exports, _, imports) = symbols(&object(source, target));
+        assert!(exports.iter().any(|s| s == "exercise"));
+        assert!(imports.iter().any(|s| s == "touch"));
+        assert!(imports
+            .iter()
+            .all(|s| ["touch", TRAP_HOOK].contains(&s.as_str())));
+    }
+}
+
+#[test]
 fn typed_pointer_objects_use_target_memory_operations() {
     for source in [
         include_str!("../tests/fixtures/typed-pointers/scalars.au"),

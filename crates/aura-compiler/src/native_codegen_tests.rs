@@ -10384,6 +10384,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(stray_pop_cleanup_error.contains("does not know cleanup registration for `ghost`"));
 
     let pair_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -10983,6 +10984,7 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
 
         let pair_ty = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11019,6 +11021,7 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
         let raw_bool = builder.iconst(types::I64, 1);
         let opaque_string = DirectType::Opaque(Type::named("str"));
         let plain_pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11351,6 +11354,7 @@ fn infer_operand_types_track_plain_classes() {
     variable_types.insert(
         "point".to_string(),
         DirectType::PlainClass(super::PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![
                 super::PlainClassField {
@@ -11368,6 +11372,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Point".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Point".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11382,6 +11387,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11562,6 +11568,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     classes.insert(
         "Point".to_string(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "Point".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -11616,6 +11623,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     assert!(ScalarKind::Float64.is_float());
 
     let point_ty = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Point".to_string(),
         fields: vec![
             PlainClassField {
@@ -11645,6 +11653,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
 #[test]
 fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
     let resource_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Resource".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11655,6 +11664,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
         copy: false,
     };
     let holder_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Holder".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11750,6 +11760,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Entry".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Entry".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -11763,6 +11774,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12055,6 +12067,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     );
     assert_eq!(
         direct_type_to_type(&DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![PlainClassField {
                 name: "x".to_string(),
@@ -12098,6 +12111,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         vec![types::I64]
     );
     let flat_class = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Pair".to_string(),
         fields: vec![
             PlainClassField {
@@ -12194,6 +12208,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12207,6 +12222,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12243,6 +12259,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Pair".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Pair".to_string(),
                 type_params: Vec::new(),
                 fields: vec![
@@ -12262,6 +12279,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Wrapper".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Wrapper".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12692,6 +12710,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         constants: Vec::new(),
         functions: vec![main, close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int64"))],
@@ -12761,6 +12780,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
         constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Plain".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int32"))],
@@ -12803,6 +12823,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("closed", Type::named("bool"))],
@@ -12848,6 +12869,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Managed".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("handle", Type::named("str"))],
@@ -13384,6 +13406,7 @@ fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape(
         )));
         let text = DirectType::Opaque(Type::named("str"));
         let pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -18231,6 +18254,7 @@ fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
     let classes = HashMap::from([(
         "numbers.BigInt".into(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "numbers.BigInt".into(),
             type_params: vec![],
             fields: vec![class_field("storage", storage)],

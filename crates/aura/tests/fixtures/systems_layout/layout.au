@@ -25,6 +25,12 @@ extern "C" align(32) class Line:
 extern "C" def make_small(s: Small, delta: uint32) -> Small
 extern "C" def aligned_line(line: mut Line) -> uint8
 
+extern "C" class Packet:
+    rows: fixed[Small, 2]
+    lines: fixed[Line, 2]
+
+extern "C" def check_packet(p: mut Packet) -> uint8
+
 def main() -> int32:
     print(mem.size_of(Header) == header_size())
     print(mem.align_of(Header) == header_alignment())
@@ -40,4 +46,8 @@ def main() -> int32:
     print(small.tag == 3 and small.serial == 4223)
     mut line = Line(value=17)
     print(aligned_line(line) == 1)
+    mut p = Packet(rows=[Small(tag=1, serial=9), Small(tag=2, serial=7)], lines=[Line(value=17), Line(value=19)])
+    print(check_packet(p) == 1)
+    print(p.rows[1].serial)
+    print(p.lines[1].value)
     return 0

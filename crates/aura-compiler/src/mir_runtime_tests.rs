@@ -12471,6 +12471,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Widget".to_string(),
         MirClass {
+            c_layout: None,
             name: "Widget".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12989,6 +12990,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Empty".to_string(),
         MirClass {
+            c_layout: None,
             name: "Empty".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12999,6 +13001,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Broken".to_string(),
         MirClass {
+            c_layout: None,
             name: "Broken".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -13369,6 +13372,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Counter".to_string(),
         MirClass {
+            c_layout: None,
             name: "Counter".to_string(),
             type_params: Vec::new(),
             fields: vec![crate::mir::MirClassField {
@@ -14216,6 +14220,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18400,6 +18405,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Pair".to_string(),
                 type_params: vec!["T".to_string(), "U".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18819,6 +18825,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }],
     };
     let managed_class = MirClass {
+        c_layout: None,
         name: "Managed".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -18833,6 +18840,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let borrow_managed_class = MirClass {
+        c_layout: None,
         name: "BorrowManaged".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18844,6 +18852,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let worker_class = MirClass {
+        c_layout: None,
         name: "Worker".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18851,6 +18860,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let broken_class = MirClass {
+        c_layout: None,
         name: "Broken".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -19407,6 +19417,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -19452,6 +19463,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                 }],
             }],
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {

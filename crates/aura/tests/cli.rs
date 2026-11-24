@@ -1101,6 +1101,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
         enums: Vec::new(),
         functions: vec![main, update],
         classes: vec![MirClass {
+            c_layout: None,
             name: "Pair".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -1191,6 +1192,7 @@ fn adr0038_closure_main(blocks: Vec<BasicBlock>, local_types: Vec<MirLocalType>)
 #[cfg(unix)]
 fn adr0038_pair_class() -> MirClass {
     MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -17995,4 +17997,75 @@ fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
         !String::from_utf8_lossy(&bin_bytes).contains("native-rpath-probe"),
         "--no-rpath binary must not embed build-host library_paths in rpath"
     );
+}
+
+#[cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]
+#[test]
+fn c_record_queries_match_microsoft_bit_field_allocation_units() {
+    let temp = TempDir::new("c-bit-field-layout");
+    let c = r#"#include <stddef.h>
+#include <stdio.h>
+#pragma pack(push, 1)
+struct __declspec(align(16)) Header {
+    unsigned char tag;
+    unsigned short low : 3;
+    unsigned int high : 4;
+    unsigned short tail;
+};
+#pragma pack(pop)
+int main(void) {
+    printf("%zu %zu %zu\n", sizeof(struct Header), (size_t)__alignof(struct Header), offsetof(struct Header, tail));
+    return 0;
+}
+"#;
+    fs::write(temp.path().join("layout.c"), c).unwrap();
+    let build = find_msvc_tools::find("x86_64-pc-windows-msvc", "cl.exe")
+        .expect("the Windows ABI job has the Visual C compiler")
+        .current_dir(temp.path())
+        .args(["/nologo", "/TC", "layout.c", "/Fereference.exe"])
+        .output()
+        .unwrap();
+    assert!(build.status.success(), "{build:?}");
+    let reference = Command::new(temp.path().join("reference.exe"))
+        .output()
+        .unwrap();
+    assert!(reference.status.success(), "{reference:?}");
+    let expected = String::from_utf8(reference.stdout).unwrap();
+
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"layout\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    fs::create_dir(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("src/main.au"),
+        r#"import mem
+extern "C" packed align(16) class Header:
+    tag: uint8
+    low: uint16 bits(3)
+    high: uint32 bits(4)
+    tail: uint16
+
+def main() -> None:
+    print(mem.size_of(Header))
+    print(mem.align_of(Header))
+    print(mem.offset_of(Header, tail))
+"#,
+    )
+    .unwrap();
+    for backend in ["mir", "direct"] {
+        let run = Command::new(aura_bin())
+            .current_dir(temp.path())
+            .args(["run", "--backend", backend, "src/main.au"])
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{run:?}");
+        let actual = String::from_utf8(run.stdout).unwrap();
+        assert_eq!(
+            actual.split_whitespace().collect::<Vec<_>>(),
+            expected.split_whitespace().collect::<Vec<_>>(),
+            "{backend}"
+        );
+    }
 }

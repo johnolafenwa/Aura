@@ -36,3 +36,16 @@ struct __attribute__((aligned(32))) Line {
 uint8_t aligned_line(struct Line *line) {
     return (uintptr_t)line % _Alignof(struct Line) == 0 && line->value == 17;
 }
+
+struct Packet {
+    struct Small rows[2];
+    struct Line lines[2];
+};
+
+uint8_t check_packet(struct Packet *p) {
+    uint8_t ok = p->rows[0].serial == 9 && p->rows[1].serial == 7
+        && p->lines[0].value == 17 && p->lines[1].value == 19;
+    p->rows[1].serial = 55;
+    p->lines[1].value = 77;
+    return ok;
+}

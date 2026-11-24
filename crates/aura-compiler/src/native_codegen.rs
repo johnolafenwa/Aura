@@ -483,6 +483,7 @@ impl DirectUnionType {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PlainClassType {
+    c_layout: Option<std::sync::Arc<crate::c_layout::CStruct>>,
     class_name: String,
     fields: Vec<PlainClassField>,
 }
@@ -21540,6 +21541,7 @@ fn direct_type_inner(
                 }
                 visiting.remove(name);
                 return Some(DirectType::PlainClass(PlainClassType {
+                    c_layout: class.c_layout.clone().map(std::sync::Arc::new),
                     class_name: name.clone(),
                     fields,
                 }));
