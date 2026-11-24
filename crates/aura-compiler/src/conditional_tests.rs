@@ -16,8 +16,9 @@ fn computed_predicate_selects_one_definition() {
 
 #[test]
 fn malformed_inactive_body_keeps_its_source_location() {
-    let error = parse_source("import build\nif build.freestanding:\n    def broken(:\n        pass\n")
-        .unwrap_err();
+    let error =
+        parse_source("import build\nif build.freestanding:\n    def broken(:\n        pass\n")
+            .unwrap_err();
     assert_eq!(error.span.unwrap().line, 3);
 }
 

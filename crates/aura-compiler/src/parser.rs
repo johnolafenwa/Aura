@@ -1,3 +1,5 @@
+mod conditional;
+
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
     BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
@@ -315,10 +317,20 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 }
 
 pub fn parse(source: &str) -> Result<Module> {
+    parse_configured(source, true)
+}
+
+/// Validate every suite without resolving a build configuration or a package.
+pub fn parse_all_syntax(source: &str) -> Result<Module> {
+    parse_configured(source, false)
+}
+
+fn parse_configured(source: &str, select: bool) -> Result<Module> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
     parser.source_lines = source.lines().map(str::to_owned).collect();
     let mut module = parser.parse_module()?;
+    if select { parser.select_conditionals(&mut module)?; }
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
     Ok(module)
@@ -435,6 +447,7 @@ fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -
 
 struct Parser {
     tokens: Vec<Token>,
+    declaration_ifs: Vec<conditional::Suite>,
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
@@ -463,6 +476,7 @@ impl Parser {
     fn with_recursion_depth(tokens: Vec<Token>, recursion_depth: usize) -> Self {
         Self {
             tokens,
+            declaration_ifs: Vec::new(),
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
@@ -509,6 +523,10 @@ impl Parser {
     }
 
     fn parse_module(&mut self) -> Result<Module> {
+        self.parse_module_suite(false)
+    }
+
+    fn parse_module_suite(&mut self, nested: bool) -> Result<Module> {
         let mut imports = Vec::new();
         let mut constants = Vec::new();
         let mut items = Vec::new();
@@ -518,11 +536,18 @@ impl Parser {
         // immutable script local, so a script reads top to bottom.
         let mut seen_statement = false;
         self.skip_newlines();
-        let doc = self.take_docstring()?;
+        let doc = if nested { None } else { self.take_docstring()? };
         self.skip_newlines();
 
-        while !self.at_eof() {
-            if self.at_keyword_import() || self.at_from_import_start() {
+        while !self.at_eof() && !(nested && self.at_simple(&TokenKind::Dedent)) {
+            if self.at_simple(&TokenKind::KwIf) && self.is_declaration_if(&imports, &constants) {
+                for mut branch in self.parse_declaration_arms(|parser| parser.parse_module_suite(true))? {
+                    imports.append(&mut branch.imports);
+                    constants.append(&mut branch.constants);
+                    items.append(&mut branch.items);
+                    top_level_stmts.append(&mut branch.top_level_stmts);
+                }
+            } else if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
             } else if self.at_type_alias_start() {
                 items.push(self.parse_item()?);
@@ -560,8 +585,9 @@ impl Parser {
             self.skip_newlines();
         }
 
-        items.append(&mut self.generated_items);
+        if !nested { items.append(&mut self.generated_items); }
         Ok(Module {
+            inactive_lines: Vec::new(),
             doc,
             imports,
             constants,
@@ -1091,7 +1117,49 @@ impl Parser {
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
+        self.parse_class_members(&mut fields, &mut methods, &mut invariants)?;
+        self.expect_simple(TokenKind::Dedent)?;
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                method.span,
+                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
+            ));
+        }
+        if let Some(first) = invariants.first() {
+            methods.push(class_invariant_method(public, first.span, invariants));
+        }
+
+        Ok(ClassDecl {
+            public,
+            copy,
+            name,
+            type_params,
+            type_param_bounds,
+            fields,
+            methods,
+            span,
+            doc,
+            c_layout: false,
+            c_arrays: std::collections::BTreeMap::new(),
+            c_union: None,
+        })
+    }
+
+    fn parse_class_members(
+        &mut self,
+        fields: &mut Vec<FieldDecl>,
+        methods: &mut Vec<FunctionDecl>,
+        invariants: &mut Vec<ContractClause>,
+    ) -> Result<()> {
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::KwIf) {
+                self.parse_declaration_arms(|parser| parser.parse_class_members(fields, methods, invariants))?;
+                continue;
+            }
             if self.at_lemma_def_start() {
                 return Err(Diagnostic::coded_at(
                     "AU2048",
@@ -1175,35 +1243,7 @@ impl Parser {
             }
         }
 
-        self.expect_simple(TokenKind::Dedent)?;
-        if let Some(method) = methods
-            .iter()
-            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
-        {
-            return Err(Diagnostic::coded_at(
-                "AU2048",
-                method.span,
-                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
-            ));
-        }
-        if let Some(first) = invariants.first() {
-            methods.push(class_invariant_method(public, first.span, invariants));
-        }
-
-        Ok(ClassDecl {
-            public,
-            copy,
-            name,
-            type_params,
-            type_param_bounds,
-            fields,
-            methods,
-            span,
-            doc,
-            c_layout: false,
-            c_arrays: std::collections::BTreeMap::new(),
-            c_union: None,
-        })
+        Ok(())
     }
 
     /// Parses the class of an `extern "C" class` declaration: a `copy`

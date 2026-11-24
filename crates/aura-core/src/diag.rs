@@ -275,6 +275,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2071",
+        band: "names/types",
+        title: "invalid compile-time condition",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
