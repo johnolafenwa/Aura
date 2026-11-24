@@ -43,6 +43,13 @@ to specific causes:
   refuses an older runtime at start-up.
 - The leading elements of a list literal are stored in place, and a list
   of records gets room for four with its first element.
+- An inner loop that starts beside the outer counter, as in
+  `for j in range(i + 1, n)`, gets the range proof the outer loop has, so
+  its element accesses carry no bounds checks.
+- A function that only calls leaves that cannot fail keeps no frame
+  record, and small ones are inlined. A frameless leaf is now named in
+  the call chain of its float division by zero.
+- A scalar list index is checked with one compare on the forward path.
 - New operation probes: `result_call`, `record_swap`, `field_list_push`.
 
 ## Measurements
@@ -58,6 +65,11 @@ measured on its own branch against `6642a7c2`:
 | `lzw_compress` | 1,946.6 | 1,565.3 | 273.2 | 7.1x | 5.7x |
 | `raytracer` | 871.1 | 781.0 | 174.6 | 5.0x | 4.5x |
 | `sql_engine` | 2,100.5 | 1,985.8 | 437.4 | 4.8x | 4.5x |
+| `nbody` | 447.0 | 265.8 | 120.1 | 3.7x | 2.2x |
+| `image_filters` | 753.9 | 553.2 | 297.1 | 2.5x | 1.9x |
+| `bytecode_vm` | 868.1 | 636.0 | 457.1 | 1.9x | 1.4x |
+| `text_diff` | 1,123.7 | 950.0 | 497.7 | 2.3x | 1.9x |
+| `astar_pathfinding` | 901.7 | 734.0 | 300.4 | 3.0x | 2.4x |
 
 The `result_call` probe went from 561 to 46 instructions per call, and
 `dict_get_str` from 1,222 to 709.
@@ -68,5 +80,5 @@ The `result_call` probe went from 561 to 46 instructions per call, and
 - Enums other than `Result` are still boxed when built and matched.
 - List creation, growth through the runtime, and a `for` over a list
   literal (`regex_match`, `graph_paths`, `raytracer`).
-- Generated code in numeric loops (`nbody`, `raytracer`, `spreadsheet`,
-  `order_book`).
+- List fields of `self` indexed in loops are checked on every access
+  (`order_book`, `raytracer`).
