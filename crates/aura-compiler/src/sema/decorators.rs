@@ -491,9 +491,7 @@ mod method_tests {
                 "method definition",
             ),
         ] {
-            let error = check_source(source)
-                .err()
-                .expect("invalid decorated declaration");
+            let error = check_source(source).expect_err("invalid decorated declaration");
             assert_eq!(error.code, "AU2047");
             assert!(error.message.contains(reason), "{error}");
         }
