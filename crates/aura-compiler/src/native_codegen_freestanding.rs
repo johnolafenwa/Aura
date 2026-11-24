@@ -723,6 +723,7 @@ fn strip_assertion_text(function: &mut MirFunction) {
 fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
     fn words(ty: &DirectType) -> bool {
         match ty {
+            DirectType::Fixed(_) => true,
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
             DirectType::Union(union) => {
                 union.owning.is_empty() && union.members.iter().all(|member| words(&member.ty))
@@ -1018,6 +1019,7 @@ fn check_call(
     functions: &HashSet<&str>,
 ) -> Option<(String, &'static str)> {
     match callee {
+        CallTarget::Name(name) if crate::mir::fixed_arrays::is_operation(name) => None,
         CallTarget::Name(name) if functions.contains(name.as_str()) => None,
         CallTarget::Name(name) => {
             Some((format!("calls `{}`", public_direct_function_name(name)), ""))

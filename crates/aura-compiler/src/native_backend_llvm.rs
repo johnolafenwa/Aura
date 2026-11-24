@@ -823,6 +823,7 @@ enum Op {
     Load(LoadKind, MemFlags, Val, i32),
     Store(MemFlags, Val, Val, i32),
     Memory(MemoryAccess, ScalarType, Vec<Val>),
+    VarAddr(Var),
     StackAddr(Slot, i32),
     FuncAddr(FuncRef),
     SymbolValue(DataRef),
@@ -959,6 +960,7 @@ struct FunctionIr {
     blocks: Vec<BlockIr>,
     layout: Vec<u32>,
     insts: Vec<InstIr>,
+    addressable: HashSet<u32>,
     vars: BTreeMap<u32, ScalarType>,
     slots: Vec<(u32, u8)>,
     func_refs: Vec<FuncHandle>,
@@ -994,6 +996,7 @@ fn op_operands(op: &Op) -> Vec<Val> {
         Op::Nop
         | Op::Iconst(_)
         | Op::Fconst(_)
+        | Op::VarAddr(_)
         | Op::StackAddr(..)
         | Op::FuncAddr(_)
         | Op::SymbolValue(_)
@@ -1061,6 +1064,7 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
             Op::Store(*flags, value(*stored), value(*address), *offset)
         }
         Op::Memory(access, width, operands) => Op::Memory(*access, *width, values(operands)),
+        Op::VarAddr(var) => Op::VarAddr(*var),
         Op::StackAddr(slot, offset) => Op::StackAddr(*slot, *offset),
         Op::FuncAddr(function) => Op::FuncAddr(*function),
         Op::SymbolValue(data) => Op::SymbolValue(*data),
@@ -1092,6 +1096,7 @@ impl FunctionIr {
             blocks: Vec::new(),
             layout: Vec::new(),
             insts: Vec::new(),
+            addressable: HashSet::new(),
             vars: BTreeMap::new(),
             slots: Vec::new(),
             func_refs: Vec::new(),
@@ -1535,6 +1540,11 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.params_block = Some(block.0);
     }
 
+    fn var_addr(&mut self, var: Var) -> Val {
+        self.ir.addressable.insert(var.0);
+        self.ir.push_value(Op::VarAddr(var), ScalarType::I64)
+    }
+
     fn declare_var(&mut self, var: Var, ty: ScalarType) {
         self.ir.vars.insert(var.0, ty);
     }
@@ -1552,6 +1562,9 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn use_var(&mut self, var: Var) -> Val {
         let ty = self.ir.vars.get(&var.0).copied().unwrap_or(ScalarType::I64);
+        if self.ir.addressable.contains(&var.0) || matches!(ty, ScalarType::Inline { .. }) {
+            return self.ir.push_value(Op::UseVar(var), ty);
+        }
         match self.ir.var_source(var) {
             VarSource::Value(value) => value,
             VarSource::Zero => match ty {
@@ -1980,6 +1993,17 @@ fn built<T>(result: Result<T, BuilderError>) -> Result<T, String> {
 
 fn basic_type<'ctx>(context: &'ctx Context, ty: ScalarType) -> BasicTypeEnum<'ctx> {
     match ty {
+        ScalarType::Inline { bytes, align } => {
+            let element = match align {
+                1 => context.i8_type(),
+                2 => context.i16_type(),
+                4 => context.i32_type(),
+                8 => context.i64_type(),
+                16 => context.i128_type(),
+                _ => unreachable!("invalid inline array alignment"),
+            };
+            element.array_type(bytes / u32::from(align)).into()
+        }
         ScalarType::I8 => context.i8_type().into(),
         ScalarType::I16 => context.i16_type().into(),
         ScalarType::I32 => context.i32_type().into(),
@@ -2058,6 +2082,7 @@ fn access_alignment(ty: ScalarType, flags: MemFlags) -> u32 {
         ScalarType::I8 => 1,
         ScalarType::I16 => 2,
         ScalarType::I32 | ScalarType::F32 => 4,
+        ScalarType::Inline { align, .. } => u32::from(align),
         ScalarType::I64 | ScalarType::F64 => 8,
     }
 }
@@ -2360,6 +2385,7 @@ fn split_source_path(path: &str) -> (String, String) {
 /// The width of a word of `ty`.
 fn scalar_bits(ty: ScalarType) -> u64 {
     match ty {
+        ScalarType::Inline { bytes, .. } => u64::from(bytes) * 8,
         ScalarType::I8 => 8,
         ScalarType::I16 => 16,
         ScalarType::I32 | ScalarType::F32 => 32,
@@ -3179,6 +3205,17 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Copy(value) => {
                 let value = self.value(*value)?;
                 self.define(inst, value);
+            }
+            Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::Inline { .. }) => {
+                self.define(
+                    inst,
+                    basic_type(context, self.result_type(inst)).const_zero(),
+                );
+            }
+            Op::VarAddr(var) => {
+                let (slot, _) = self.vars[&var.0];
+                let address = self.pointer_to_int(slot)?;
+                self.define(inst, address);
             }
             Op::Iconst(constant) => {
                 let ty = self.int_type(self.result_type(inst));

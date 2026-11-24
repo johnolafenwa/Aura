@@ -373,6 +373,7 @@ pub(crate) struct SigRef(pub(crate) u32);
 /// The type of one value. A comparison yields an `I8` flag.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum ScalarType {
+    Inline { bytes: u32, align: u8 },
     I8,
     I16,
     I32,
@@ -760,6 +761,7 @@ pub(crate) trait FunctionBackend {
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;
     fn append_block_params_for_function_params(&mut self, block: Blk);
 
+    fn var_addr(&mut self, var: Var) -> Val;
     fn declare_var(&mut self, var: Var, ty: ScalarType);
     fn def_var(&mut self, var: Var, value: Val);
     fn use_var(&mut self, var: Var) -> Val;

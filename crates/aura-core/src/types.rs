@@ -141,6 +141,21 @@ impl<'de> Deserialize<'de> for UnionType {
 pub const TRAIT_OBJECT_TYPE_NAME: &str = "dyn";
 
 impl Type {
+    /// The element and length of the inline array type `fixed[T, N]`.
+    pub fn as_fixed_array(&self) -> Option<(&Type, usize)> {
+        let Type::Named(name, args) = self else {
+            return None;
+        };
+        let [element, Type::Named(count, params)] = args.as_slice() else {
+            return None;
+        };
+        if name != "fixed" || !params.is_empty() {
+            return None;
+        }
+        let count = count.parse().ok()?;
+        (1..=1_048_576).contains(&count).then_some((element, count))
+    }
+
     /// The trait object type `dyn trait_name[trait_args]`.
     pub fn trait_object(trait_name: impl Into<String>, trait_args: Vec<Type>) -> Type {
         Type::Named(
@@ -960,6 +975,7 @@ pub fn is_builtin_type(name: &str) -> bool {
             | "float64"
             | "str"
             | "Array"
+            | "fixed"
             | "list"
             | "set"
             | "dict"
