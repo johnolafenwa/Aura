@@ -1,0 +1,18 @@
+extern "C" packed align(16) class Header:
+    marker: uint8
+    serial: uint32
+    low: uint16 bits(3)
+    high: uint16 bits(6)
+
+extern "C" union Word:
+    word: uint32
+    low: uint16
+
+mut header: Header = Header(marker=5, serial=287454020, low=3, high=37)
+mut word: Word = Word()
+
+export "C" def update() -> uint32:
+    header.serial += 1
+    header.low = 6
+    word.word = header.serial
+    return (header.high as uint32) + (header.low as uint32) + (word.low() as uint32)

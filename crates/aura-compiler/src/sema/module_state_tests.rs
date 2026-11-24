@@ -195,3 +195,46 @@ fn fixed_module_elements_have_inline_storage_on_each_target() {
         emit_freestanding_object(&mir, "ring.au", source, target).unwrap();
     }
 }
+
+#[test]
+fn packed_module_record_uses_c_offsets_alignment_and_shared_bit_storage() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/main.au");
+    let source = std::fs::read_to_string(&path).unwrap();
+    let mir = lower_to_mir(&check_freestanding_path(&path, None).unwrap());
+    for target in FreestandingTarget::ALL {
+        let bytes = emit_freestanding_object(&mir, "main.au", &source, target).unwrap();
+        let obj = object::File::parse(&bytes[..]).unwrap();
+        let header = obj
+            .symbols()
+            .find(|s| {
+                s.name()
+                    .is_ok_and(|s| s.contains("__aura_state_") && s.ends_with("686561646572"))
+            })
+            .unwrap();
+        let section = obj
+            .section_by_index(header.section_index().unwrap())
+            .unwrap();
+        let offset = (header.address() - section.address()) as usize;
+        assert!(section.align() >= 16);
+        assert_eq!(header.size(), 16);
+        assert_eq!(
+            &section.data().unwrap()[offset..offset + 16],
+            &[5, 0x44, 0x33, 0x22, 0x11, 0x2b, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+        let word = obj
+            .symbols()
+            .find(|s| {
+                s.name()
+                    .is_ok_and(|s| s.contains("__aura_state_") && s.ends_with("776f7264"))
+            })
+            .unwrap();
+        assert_eq!(word.size(), 4);
+        assert_eq!(
+            obj.section_by_index(word.section_index().unwrap())
+                .unwrap()
+                .kind(),
+            object::SectionKind::UninitializedData
+        );
+    }
+}
