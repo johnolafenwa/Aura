@@ -14,4 +14,6 @@ Assignment to an `extern "C" union` member replaces exactly that member's bytes.
 
 A direct field store uses the field's actual alignment. Bit-fields use masks restricted to the bytes the field occupies. Pointers to a C record, record copies and indirect C call results require the aggregate's explicit alignment. On System V x86-64 an unaligned member makes a small struct a memory argument or result. The hosted interpreter must describe that class to libffi as well as providing the true size and alignment.
 
+System V x86-64 callers must realign the call stack when passing an over-aligned record by value. The interpreter caches an LLVM forwarding function for each such foreign signature and target address. Its libffi entry takes record pointers, and its outgoing call uses the true C stack alignment. AArch64 and Windows pass an aligned private copy by address when their ABI classifies the argument in memory.
+
 The C comparison fixture checks packed field offsets, bit-field contents, aligned arguments and unaligned by-value returns. Build tests exercise layout constants for all three bare-metal targets.

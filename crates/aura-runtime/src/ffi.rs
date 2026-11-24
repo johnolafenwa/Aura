@@ -366,6 +366,15 @@ pub struct FfiSignature {
 }
 
 impl FfiSignature {
+    /// SysV passes these records on a stack aligned beyond libffi's call area.
+    pub fn needs_aligned_stack(&self) -> bool {
+        crate::c_layout::CAbi::host() == Some(crate::c_layout::CAbi::SysV64)
+            && self
+                .parameters
+                .iter()
+                .any(|ty| matches!(ty, FfiType::Struct(layout) if layout.align() > 16))
+    }
+
     pub fn new(parameters: Vec<FfiType>, result: FfiType) -> Self {
         Self { parameters, result }
     }
@@ -468,6 +477,7 @@ impl HostFunction {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum FfiError {
+    CallAdapter(String),
     InvalidSymbolName,
     SymbolNotFound {
         symbol: String,
@@ -508,6 +518,7 @@ pub enum FfiError {
 impl fmt::Display for FfiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CallAdapter(detail) => write!(formatter, "C ABI call adapter: {detail}"),
             Self::InvalidSymbolName => {
                 formatter.write_str("FFI symbol names cannot contain a NUL byte")
             }
@@ -957,6 +968,19 @@ fn append_argument(
             // Moving the `Vec` keeps its heap buffer where it is.
             storage.elements.push((index, packed));
         }
+        (FfiType::Struct(layout), FfiValue::Struct(_, bytes))
+            if layout.align() > 16
+                && crate::c_layout::CAbi::host().is_some_and(|abi| {
+                    layout.passing(abi) == crate::c_layout::CPassing::Memory
+                }) =>
+        {
+            // AArch64 and Win64 pass an over-aligned memory argument as the
+            // address of a private copy. Its allocation must meet the C alignment.
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
+            types.push(Type::pointer());
+            values.push(AbiArgument::MutPointer(words.words().as_mut_ptr().cast()));
+            storage.structs.push((index, words));
+        }
         (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
             let mut words = AlignedWords::new(bytes, 1, layout.align());
             types.push(struct_type(layout));
@@ -1124,6 +1148,11 @@ pub unsafe fn call_host_function(
         });
     }
 
+    if signature.needs_aligned_stack() {
+        return Err(FfiError::CallAdapter(
+            "the System V signature requires an aligned stack adapter".into(),
+        ));
+    }
     // Reject an unsupported return before resolving or invoking the symbol.
     let result_type = result_type(signature.result)?;
     let mut mutable_byte_buffers: Vec<Option<Vec<u8>>> = signature
@@ -1274,7 +1303,8 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
     false
 }
 
-fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
+/// Resolves a symbol through the package libraries and the permitted host namespace.
+pub fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     let c_symbol = CString::new(symbol).map_err(|_| FfiError::InvalidSymbolName)?;
     let handles = loaded_libraries_registry()
         .lock()
