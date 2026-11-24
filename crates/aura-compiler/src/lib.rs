@@ -2177,3 +2177,6 @@ use aura_runtime::array_kernel_corpus;
 
 #[cfg(test)]
 mod inline_asm_tests;
+
+#[cfg(test)]
+mod hardware_tests;
