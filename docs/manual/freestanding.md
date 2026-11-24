@@ -112,6 +112,7 @@ void aura_trap(uint32_t code, const char *file, size_t file_length,
 | 6 | Shift count out of range |
 | 7 | A foreign `bool` that is neither 0 nor 1 |
 | 8 | Unreachable code was reached |
+| 9 | A frozen sequence index is out of range or a frozen dictionary key is absent |
 
 - `file` is the source file's path relative to the directory of the file
   that was built. It is not NUL-terminated. `file_length` is its length in

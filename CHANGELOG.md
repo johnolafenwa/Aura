@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
+- The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
+- The editor dims inactive suites and provides navigation for identifiable declarations in them.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.

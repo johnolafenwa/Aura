@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-24
 
+## Compile-Time Evaluation And Conditional Compilation
+
+The 0.18 integration branch is the delivery target. The compiler, command line, editor and examples are implemented on the feature branch. Combined verification and the integration pull request are pending. [Work note](2026-11-24-compile-time.md)
+
 ## Release 0.17.0-preview (in progress)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

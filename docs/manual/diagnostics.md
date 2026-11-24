@@ -102,6 +102,8 @@ String and format-specification diagnostics are described under
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2070` | invalid build configuration | A cfg name is invalid, an option is incomplete, or a manifest value has an unsupported type. | Use an identifier and a string or boolean manifest value. |
+| `AU2071` | invalid compile-time condition | A declaration guard depends on a runtime value or its result is not boolean. | Write a boolean condition over build properties or marked constants. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -456,6 +458,17 @@ owner's region.
 | `AU3002` | A non-repeatable Task does not arrive through owned access. `select` consumes all such observation rights at entry and abandons the losers. |
 | `AU2004` | A call-shape error, such as an empty call or a named source. |
 | `AU2002` | An invalid source kind, or an inconsistent Queue/Task category type. |
+
+### Compile-Time Evaluation Codes
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `AU3025` | A required initializer cannot produce a build-time value. | Remove the runtime dependency, or use an ordinary binding for startup initialization. |
+| `AU3026` | A pure initializer traps. | Follow the Aura call frames and fix the failing operation. |
+| `AU3027` | An initializer exceeds the evaluation step limit. | Reduce iteration or recursion. |
+| `AU3028` | An initializer exceeds the evaluation memory limit. | Reduce allocation and intermediate data. |
+
+[Compile-time evaluation limits](/manual/compile-time#module-bindings)
 
 ### Runtime Codes
 

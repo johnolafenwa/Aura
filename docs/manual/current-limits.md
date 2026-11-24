@@ -16,6 +16,14 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
 
+### Compile-Time Evaluation
+
+- Each initializer has 100,000 MIR steps and 8 MiB of cumulative logical allocation, shared with its callees.
+- A conditional declaration needs a boolean made from target properties and marked module constants. All arms must parse.
+- `check --all-targets` varies the target and keeps the chosen cfg values and profile. Supply different feature values to check other feature selections.
+
+[Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
+
 ### Numbers And Durations
 
 - Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)

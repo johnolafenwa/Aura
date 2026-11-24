@@ -141,3 +141,8 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
+135. [ADR-0135 Target Configuration](0135-build-configuration.md)
+136. [ADR-0136 Constant Evaluation](0136-constant-evaluation.md)
+137. [ADR-0137 Frozen Module Data](0137-frozen-module-data.md)
+138. [ADR-0138 Conditional Suites](0138-conditional-suites.md)
+139. [ADR-0139 Tooling For Conditional Programs](0139-conditional-tooling.md)
