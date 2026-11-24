@@ -227,6 +227,29 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             'echo "LLVM_SYS_SYSTEM_LIBRARY_DIRS=${static_dir}" >> "$GITHUB_ENV"', darwin
         )
 
+    def test_raylib_installer_pins_source_archive_and_avoids_root_install(self) -> None:
+        installer = (REPO_ROOT / "scripts" / "install-raylib.sh").read_text(encoding="utf-8")
+        self.assertNotIn("git clone", installer)
+        self.assertNotIn("sudo cmake --install", installer)
+        self.assertNotIn("sudo ldconfig", installer)
+        self.assertRegex(installer, r"(?m)^commit=[0-9a-f]{40}$")
+        self.assertRegex(installer, r"(?m)^sha256=[0-9a-f]{64}$")
+        self.assertIn("--proto '=https' --tlsv1.2", installer)
+        self.assertLess(
+            installer.index('if [ "$actual" != "$sha256" ]'),
+            installer.index("tar -xzf"),
+            "the checksum is checked before anything is extracted",
+        )
+        self.assertIn('-DCMAKE_INSTALL_PREFIX="$prefix"', installer)
+        self.assertIn('echo "LIBRARY_PATH=', installer)
+        self.assertIn('echo "LD_LIBRARY_PATH=', installer)
+        for formula in ("raylib", "sdl2", "glfw"):
+            with self.subTest(formula=formula):
+                self.assertIn(
+                    f"HOMEBREW_NO_AUTO_UPDATE=1 brew install {formula} </dev/null",
+                    installer,
+                )
+
     def test_linux_coverage_tests_export_process_ffi_symbols(self) -> None:
         self.assertTrue(AURA_COMPILER_BUILD.is_file())
         build_script = AURA_COMPILER_BUILD.read_text(encoding="utf-8")
