@@ -536,7 +536,7 @@ pub(super) struct Exec<'a> {
     origin: Option<usize>,
     /// The fact that defines each constant `define` made. A constant
     /// depends on its definition, and not the other way around.
-    definitions: BTreeMap<String, usize>,
+    pub(super) definitions: BTreeMap<String, usize>,
     /// Where the assumed term starts in each fact that holds only on some
     /// paths: the path condition before it is not what the fact is about.
     guarded: BTreeMap<usize, usize>,

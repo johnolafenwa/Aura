@@ -254,7 +254,7 @@ outcome: failed, not modeled, and undecided.
 | `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a slice, a comprehension, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
+| `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
 | `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
 
 A failure is reported only when the program can reach it. In this function
@@ -310,6 +310,18 @@ booleans, with each integer type's range as a check:
 - lists, with their lengths, and their elements when those are integers,
   `bool`, `str`, or tuples and classes of modeled values; the length of any
   other list
+- a list of lists: the length of each row, and the elements of each row
+  when those are integers, `bool`, or `str`. A write through a borrow of a
+  row, such as `grid[r][c] = v`, leaves the rows unknown
+- list slices `xs[a:b]`, `xs[a:]`, and `xs[:b]`: the length, each element,
+  and a check that the bounds are in order and inside the list. `reverse`,
+  and `sort` and `sorted`: the result holds the same elements, and for
+  integers sorted by their own order it is ordered. `k in xs` and
+  `xs.contains(k)` for integers, `bool`, and `str`
+- a comprehension over one list or `range`: its length, or with an `if`
+  filter a bound on it. The elements it builds are not modeled. `min(xs)`
+  and `max(xs)` of a list of integers: a bound of every element that is one
+  of them
 - `float32` and `float64` as IEEE-754 values, rounding each `+`, `-`, `*`,
   `/`, and `sqrt` to nearest, ties to even, with NaN, infinities, and signed
   zeros; comparisons, `abs`, `to_float`, and casts between floats and

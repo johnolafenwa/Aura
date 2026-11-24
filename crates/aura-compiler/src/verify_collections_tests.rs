@@ -1065,3 +1065,69 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn enumerate_zip_and_reversed_give_the_loop_its_elements() {
+    assert_proved(
+        r#"
+def numbered(xs: list[int64]) -> int64:
+    mut last = 0
+    for i, x in enumerate(xs):
+        assert 0 <= i and i < len(xs)
+        assert x == xs[i]
+        last = i
+    return last
+
+def paired(xs: list[int64], ys: list[int64]) -> int64:
+    requires forall(x in xs, x > 0) and forall(y in ys, y < 0)
+    mut seen = 0
+    for x, y in zip(xs, ys):
+        assert x > 0 and y < 0
+        seen = 1
+    return seen
+
+def backwards(xs: list[int64]) -> int64:
+    requires forall(x in xs, x > 0)
+    mut seen = 0
+    for x in reversed(xs):
+        assert x > 0
+        seen = 1
+    return seen
+
+def main():
+    print(numbered([1, 2]))
+    print(paired([1, 2], [-3]))
+    print(backwards([1, 2]))
+"#,
+    );
+    assert_open(
+        r#"
+def numbered(xs: list[int64]) -> int64:
+    mut last = 0
+    for i, x in enumerate(xs):
+        assert i + 1 < len(xs)
+        last = i
+    return last
+
+def paired(xs: list[int64], ys: list[int64]) -> int64:
+    requires forall(x in xs, x > 0)
+    mut seen = 0
+    for x, y in zip(xs, ys):
+        assert y > 0
+        seen = 1
+    return seen
+
+def backwards(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    mut seen = 0
+    for x in reversed(xs):
+        assert x == xs[0]
+        seen = 1
+    return seen
+
+def main():
+    print(numbered([1]))
+"#,
+        &["5 assert failed", "13 assert failed", "21 assert failed"],
+    );
+}

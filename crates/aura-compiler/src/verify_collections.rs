@@ -69,6 +69,15 @@ pub(super) fn row(
     }
 }
 
+/// The first array of a store.
+fn first_array(store: &Store) -> String {
+    match store {
+        Store::Leaf(array, _) | Store::Lists(array, _) => array.clone(),
+        Store::Items(items) => items.first().map(first_array).unwrap_or_default(),
+        Store::Shifted(base, _) | Store::Reversed(base, _) => first_array(base),
+    }
+}
+
 /// The sort of the elements of a store of scalars.
 fn scalar_sort(store: &Store) -> Option<&'static str> {
     match store {
@@ -460,36 +469,44 @@ impl Exec<'_> {
         };
         // A short list of a known length has each fact once for each
         // position: the solver then decides every question about it.
+        let mut facts = Vec::new();
         match len.parse::<u8>() {
             Ok(count) if count <= 16 => {
                 for position in 0..count {
                     let (here, next) = (position.to_string(), (position + 1).to_string());
-                    self.fact(moved(&here));
-                    self.fact(kept(&format!("(+ {low} {here})")));
+                    facts.push(moved(&here));
+                    facts.push(kept(&format!("(+ {low} {here})")));
                     if position + 1 < count {
-                        self.fact(in_order(&here, &next));
+                        facts.push(in_order(&here, &next));
                     }
                 }
             }
             _ => {
-                self.fact(format!(
+                facts.push(format!(
                     "(forall (({i} Int)) (=> {} {}))",
                     in_result(&i),
                     moved(&i)
                 ));
-                self.fact(format!(
+                facts.push(format!(
                     "(forall (({j} Int)) (=> {} {}))",
                     in_source(&j),
                     kept(&j)
                 ));
                 if ordered.is_some() {
-                    self.fact(format!(
+                    facts.push(format!(
                         "(forall (({i} Int) ({j} Int)) (=> (and (<= 0 {i}) (<= {i} {j}) (< {j} {len})) {}))",
                         in_order(&i, &j)
                     ));
                 }
             }
         }
+        // The facts are one, about the result: a check that reads only
+        // the list that was sorted does not depend on them.
+        let first = format!("(select {} 0)", first_array(&result));
+        self.definitions
+            .insert(first_array(&result), self.facts.len());
+        self.facts
+            .push(format!("(and (= {first} {first}) {})", facts.join(" ")));
         result
     }
 
@@ -680,7 +697,10 @@ impl Exec<'_> {
         } else {
             let pc = havoc.pc.clone();
             let (low, high) = (after(least), after(most));
-            self.assume(&pc, format!("(and (<= {low} {len}) (<= {len} {high}))"));
+            // The fact is about the length: a check that reads only the
+            // counter does not depend on it.
+            self.definitions.insert(len.clone(), self.facts.len());
+            self.assume(&pc, format!("(and (>= {len} {low}) (<= {len} {high}))"));
         }
     }
 

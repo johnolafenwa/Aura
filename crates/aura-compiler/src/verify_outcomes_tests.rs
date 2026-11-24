@@ -95,17 +95,11 @@ def main():
         [
             format!("parts: {}", not_modeled("`split`", 4)),
             format!("fmt: {}", not_modeled("an f-string", 8)),
-            format!(
-                "smallest: {}",
-                not_modeled("the order of the elements after `sort`", 13)
-            ),
-            format!("has: {}", not_modeled("`contains`", 18)),
             format!("low: {}", not_modeled("`&`", 22)),
             format!(
                 "positive: {}",
                 not_modeled("a comprehension or built-in loop", 25)
             ),
-            format!("middle: {}", not_modeled("`slice`", 30)),
             format!(
                 "total: {}",
                 not_modeled("a comprehension or built-in loop", 35)
@@ -120,7 +114,7 @@ def main():
     );
     assert_eq!(
         (report.failed(), report.not_modeled(), report.undecided()),
-        (0, 10, 0)
+        (0, 7, 0)
     );
     let diagnostics = report.diagnostics();
     assert!(diagnostics

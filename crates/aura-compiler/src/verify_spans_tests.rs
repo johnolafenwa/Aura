@@ -399,8 +399,9 @@ def main():
 "#,
         &[
             "9 requires failed",
-            "10 assert failed",
-            "10 index in range failed",
+            // What the write left in the row is not modeled.
+            "10 assert unsupported",
+            "10 index in range unsupported",
         ],
     );
     // A view a function returned, which the encoding does not follow.
@@ -426,7 +427,7 @@ def main():
             // are open without a counterexample.
             "14 assert unsupported",
             "14 index in range unsupported",
-            "14 index in range failed",
+            "14 index in range unsupported",
         ],
     );
 }
