@@ -34228,7 +34228,9 @@ fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
         "fixed[str, 2]",
         "fixed[Message, 2]",
     ] {
-        let source = format!("class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n");
+        let source = format!(
+            "class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n"
+        );
         let error = crate::check_source(&source).expect_err(ty);
         assert_eq!(error.code, "AU2081", "{ty}: {error}");
     }
@@ -34261,4 +34263,19 @@ fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements(
     ] {
         assert_eq!(crate::check_source(source).unwrap_err().code, code);
     }
+}
+
+#[test]
+fn fixed_array_size_accounts_for_explicit_c_alignment() {
+    let source = r#"
+extern "C" align(128) class Header:
+    byte: uint8
+
+def unused(rows: fixed[fixed[Header, 1024], 32768]):
+    pass
+"#;
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU2081"
+    );
 }

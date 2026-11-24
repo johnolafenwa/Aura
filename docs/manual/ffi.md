@@ -450,10 +450,7 @@ def main() -> int32:
 - **Booleans.** A `bool` field that comes back with a byte other than `0` or
   `1` fails with `AU4001`.
 
-`own Name` is `AU3004`, and `Name | None` is `AU2010`. C
-bit-fields, pointer fields, and packed or over-aligned structs have no
-spelling. Declare a pointer field as `uint64` only when the code never
-dereferences it.
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. Use `bits(N)` for a bit-field, `packed` for byte packing, and `align(N)` for explicit record alignment.
 
 Struct layout and passing follow the System V convention on x86-64 and the
 standard procedure call convention on AArch64, for Linux and macOS. A
@@ -978,8 +975,7 @@ still name the host's actual C symbol.
 
 FFI does not:
 
-- define C bit-fields, or pass enums
-- assign one member of a union in place
+- pass enums
 - pass a struct that holds a pointer Aura can follow
 - allocate foreign memory or expose pointer arithmetic
 - return views, or free a `cstr` result

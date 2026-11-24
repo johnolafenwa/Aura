@@ -1048,7 +1048,43 @@ export "C" def reset(code: uint16) -> uint32:
         let (global, _, undefined) = symbols(&object(source, target));
         assert!(global.iter().any(|name| name == "reset"));
         assert!(undefined.iter().any(|name| name == "advance"));
-        assert!(undefined.iter().all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+        assert!(undefined
+            .iter()
+            .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+    }
+}
+
+#[test]
+fn fixed_arrays_of_controlled_records_keep_the_target_stride() {
+    let source = r#"
+extern "C" packed class Row:
+    tag: uint8
+    word: uint32
+
+extern "C" align(256) class Line:
+    word: uint32
+
+extern "C" class Packet:
+    rows: fixed[Row, 2]
+    lines: fixed[Line, 2]
+
+extern "C" def touch(p: mut Packet) -> None
+
+def lane(lines: fixed[Line, 2]) -> uint32:
+    return lines[1].word
+
+export "C" def exercise() -> uint32:
+    mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
+    touch(p)
+    return p.rows[1].word + lane(p.lines)
+"#;
+    for target in TARGETS {
+        let (exports, _, imports) = symbols(&object(source, target));
+        assert!(exports.iter().any(|s| s == "exercise"));
+        assert!(imports.iter().any(|s| s == "touch"));
+        assert!(imports
+            .iter()
+            .all(|s| ["touch", TRAP_HOOK].contains(&s.as_str())));
     }
 }
 
@@ -1103,4 +1139,22 @@ fn fixed_array_updates_do_not_copy_the_entire_ring() {
     // The loop needs one indexed load and store. Copying every lane
     // into and out of scratch storage produced 814 bytes on x86-64.
     assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}
+
+#[test]
+fn fixed_array_union_members_store_every_word_and_partial_tail() {
+    let source = r#"
+def last(row: fixed[uint16, 9] | None) -> uint16:
+    if row is not None:
+        return row[8]
+    return 0
+
+export "C" def sample(value: uint16) -> uint16:
+    row: fixed[uint16, 9] = [value] * 9
+    return last(row)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
 }

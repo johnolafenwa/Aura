@@ -440,6 +440,12 @@ impl DirectUnionType {
             .map(DirectType::value_count)
             .max()
             .unwrap_or(0);
+        let payload_words = members
+            .iter()
+            .filter_map(fixed_arrays::union_member_words)
+            .max()
+            .unwrap_or(0)
+            .max(payload_words);
         let owning = members
             .iter()
             .enumerate()
@@ -477,6 +483,7 @@ impl DirectUnionType {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PlainClassType {
+    c_layout: Option<std::sync::Arc<crate::c_layout::CStruct>>,
     class_name: String,
     fields: Vec<PlainClassField>,
 }
@@ -574,6 +581,9 @@ impl DirectType {
             // the words are reinterpreted by `extract_field`/`replace_nested_field`.
             let index = crate::mir::union_payload_projection_index(field_name)?;
             let member = union.member(index).ok()?;
+            if let Some(words) = fixed_arrays::union_member_words(member) {
+                return Some((1, 1 + words, member.clone()));
+            }
             return Some((1, 1 + member.value_count(), member.clone()));
         }
         let DirectType::PlainClass(class) = self else {
@@ -14672,6 +14682,11 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<Vec<Val>, String> {
         let member_ty = union.member(index)?.clone();
         let member = self.coerce_value(member, &member_ty)?;
+        if let Some(words) =
+            fixed_arrays::pack_union_member(self.builder, union, index, &member_ty, &member.values)
+        {
+            return Ok(words);
+        }
         let mut words = vec![self.builder.iconst(types::I64, index as i64)];
         for (value, abi) in member.values.iter().zip(member_ty.abi_types()) {
             words.push(if abi == types::F64 {
@@ -14694,6 +14709,14 @@ impl<'a> FunctionCompiler<'a> {
         words: &[Val],
     ) -> std::result::Result<ValueRef, String> {
         let member_ty = union.member(index)?.clone();
+        if let Some(values) =
+            fixed_arrays::unpack_union_member(self.builder, &member_ty, &words[1..])
+        {
+            return Ok(ValueRef {
+                values,
+                ty: member_ty,
+            });
+        }
         let mut values = Vec::new();
         for (word, abi) in words[1..].iter().zip(member_ty.abi_types()) {
             values.push(if abi == types::F64 {
@@ -21518,6 +21541,7 @@ fn direct_type_inner(
                 }
                 visiting.remove(name);
                 return Some(DirectType::PlainClass(PlainClassType {
+                    c_layout: class.c_layout.clone().map(std::sync::Arc::new),
                     class_name: name.clone(),
                     fields,
                 }));
@@ -21857,6 +21881,17 @@ fn box_thunk_value(
                 &[types::I64],
                 |builder, index| {
                     let member_ty = &union.members[index].ty;
+                    if let Some(values) =
+                        fixed_arrays::unpack_union_member(builder, member_ty, &words)
+                    {
+                        let payload = box_thunk_value(codegen, builder, &values, member_ty)?;
+                        let index_value = builder.iconst(types::I64, index as i64);
+                        return Ok(vec![
+                            builder
+                                .call(union_inject, &[ptr, len, index_value, payload])
+                                .results[0],
+                        ]);
+                    }
                     let mut member_values = Vec::new();
                     for (word, abi) in words.iter().zip(member_ty.abi_types()) {
                         member_values.push(if abi == types::F64 {
@@ -21982,6 +22017,15 @@ fn unbox_thunk_value(
                     // is the copy itself and travels with the union words.
                     if !matches!(member_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
                         let _ = builder.call(release_value, &[payload]);
+                    }
+                    if let Some(words) = fixed_arrays::pack_union_member(
+                        builder,
+                        union,
+                        index,
+                        member_ty,
+                        &member_values,
+                    ) {
+                        return Ok(words);
                     }
                     let mut words = vec![builder.iconst(types::I64, index as i64)];
                     for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {

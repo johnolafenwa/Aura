@@ -3,9 +3,21 @@
 use super::*;
 
 impl FunctionChecker<'_> {
-    pub(super) fn c_layout_query(&self, callee: &Expr, args: &[Argument], locals: &HashMap<String, LocalBinding>) -> Option<Result<usize>> {
-        let (modules, classes) = self.current_module_namespace().map(|ns| (&ns.imported_modules, &ns.all_classes)).unwrap_or((self.imported_modules, self.classes));
-        evaluate(callee, args, modules, classes, |name| locals.get(name).is_some_and(|binding| !matches!(binding.ty, Type::Module(_))))
+    pub(super) fn c_layout_query(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Option<Result<usize>> {
+        let (modules, classes) = self
+            .current_module_namespace()
+            .map(|ns| (&ns.imported_modules, &ns.all_classes))
+            .unwrap_or((self.imported_modules, self.classes));
+        evaluate(callee, args, modules, classes, |name| {
+            locals
+                .get(name)
+                .is_some_and(|binding| !matches!(binding.ty, Type::Module(_)))
+        })
     }
 }
 
@@ -75,30 +87,82 @@ fn query_type(
     let (name, classes) = match &expr.kind {
         ExprKind::Name(name) => (name, classes),
         ExprKind::Member { object, field } => {
-            let ExprKind::Name(module) = &object.kind else { return None };
+            let ExprKind::Name(module) = &object.kind else {
+                return None;
+            };
             let namespace = modules.get(module).filter(|_| !shadowed(module))?;
             namespace.classes.get(field)?;
             (field, &namespace.all_classes)
         }
         ExprKind::Index { object, index } => {
-            let ExprKind::Name(name) = &object.kind else { return None };
+            let ExprKind::Name(name) = &object.kind else {
+                return None;
+            };
             if name == "ptr" {
                 query_type(index, modules, classes, shadowed)?;
                 return Some(CFieldKind::Scalar(crate::ffi::FfiScalar::U64));
             }
-            let ExprKind::Tuple(args) = &index.kind else { return None };
-            let [element, length] = args.as_slice() else { return None };
-            let ExprKind::Int(length @ 1..=1_048_576) = length.kind else { return None };
-            if name != "fixed" { return None; }
+            let ExprKind::Tuple(args) = &index.kind else {
+                return None;
+            };
+            let [element, length] = args.as_slice() else {
+                return None;
+            };
+            let ExprKind::Int(length @ 1..=1_048_576) = length.kind else {
+                return None;
+            };
+            if name != "fixed" {
+                return None;
+            }
             let element = query_type(element, modules, classes, shadowed)?;
             let count = length as usize;
-            element.size().checked_mul(count)?;
+            if element.size().checked_mul(count)? > i32::MAX as usize {
+                return None;
+            }
             return Some(CFieldKind::Array(Box::new(element), count));
         }
         _ => return None,
     };
     let ty = Type::named(name);
-    ffi_scalar(&ty).map(CFieldKind::Scalar).or_else(|| ffi_struct_layout(&ty, classes).map(CFieldKind::Struct))
+    ffi_scalar(&ty)
+        .map(CFieldKind::Scalar)
+        .or_else(|| ffi_struct_layout(&ty, classes).map(CFieldKind::Struct))
+}
+
+/// Replace layout queries in a checked initializer with their target integer values.
+pub(super) fn folded_binding(
+    decl: &crate::ast::ConstantDecl,
+    modules: &BTreeMap<String, ModuleNamespace>,
+    classes: &BTreeMap<String, ClassInfo>,
+) -> crate::ast::ConstantDecl {
+    fn fold(
+        expr: &mut Expr,
+        modules: &BTreeMap<String, ModuleNamespace>,
+        classes: &BTreeMap<String, ClassInfo>,
+    ) {
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
+                expr.kind = ExprKind::Int(value as u128);
+                return;
+            }
+        }
+        // These initializer forms introduce no names of their own.
+        if matches!(
+            expr.kind,
+            ExprKind::Call { .. }
+                | ExprKind::List(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Group(_)
+                | ExprKind::Unary { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Cast { .. }
+        ) {
+            expr.for_each_child_mut(&mut |child| fold(child, modules, classes));
+        }
+    }
+    let mut decl = decl.clone();
+    fold(&mut decl.value, modules, classes);
+    decl
 }
 
 #[cfg(test)]
@@ -142,20 +206,4 @@ mod tests {
             assert!(!format!("{mir:?}").contains("\"offset_of\""));
         }
     }
-}
-
-/// Fold a complete query in a module initializer after its original type
-/// has been checked. This gives freestanding storage an integer literal.
-pub(super) fn folded_binding(
-    decl: &crate::ast::ConstantDecl,
-    modules: &BTreeMap<String, ModuleNamespace>,
-    classes: &BTreeMap<String, ClassInfo>,
-) -> crate::ast::ConstantDecl {
-    let mut decl = decl.clone();
-    if let ExprKind::Call { callee, args } = &decl.value.kind {
-        if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
-            decl.value.kind = ExprKind::Int(value as u128);
-        }
-    }
-    decl
 }

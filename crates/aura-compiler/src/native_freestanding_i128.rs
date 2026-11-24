@@ -8,6 +8,7 @@ pub(crate) const SYMBOL: &str = "aura.systems.integer128";
 pub(super) fn install_layouts(module: &mut MirModule) {
     for name in ["int128", "uint128"] {
         module.classes.push(MirClass {
+            c_layout: None,
             name: name.into(),
             type_params: Vec::new(),
             fields: ["low", "high"]

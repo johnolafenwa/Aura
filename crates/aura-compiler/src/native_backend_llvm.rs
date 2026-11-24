@@ -1575,6 +1575,9 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn use_var(&mut self, var: Var) -> Val {
         let ty = self.ir.vars.get(&var.0).copied().unwrap_or(ScalarType::I64);
+        if matches!(ty, ScalarType::OverAligned { .. }) {
+            return self.ir.push_value(Op::UseVar(var), ty);
+        }
         if self.ir.addressable.contains(&var.0) || matches!(ty, ScalarType::Inline { .. }) {
             return self.ir.push_value(Op::UseVar(var), ty);
         }
@@ -2006,6 +2009,7 @@ fn built<T>(result: Result<T, BuilderError>) -> Result<T, String> {
 
 fn basic_type<'ctx>(context: &'ctx Context, ty: ScalarType) -> BasicTypeEnum<'ctx> {
     match ty {
+        ScalarType::OverAligned { bytes, .. } => context.i8_type().array_type(bytes).into(),
         ScalarType::Inline { bytes, align } => {
             let element = match align {
                 1 => context.i8_type(),
@@ -2032,6 +2036,9 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .iter()
         .enumerate()
         .map(|(index, ty)| {
+            if matches!(ty, ScalarType::OverAligned { .. }) {
+                return context.ptr_type(AddressSpace::default()).into();
+            }
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
             if matches!(ty, ScalarType::Inline { .. }) {
@@ -2098,6 +2105,7 @@ fn access_alignment(ty: ScalarType, flags: MemFlags) -> u32 {
         ScalarType::I8 => 1,
         ScalarType::I16 => 2,
         ScalarType::I32 | ScalarType::F32 => 4,
+        ScalarType::OverAligned { align, .. } => u32::from(align),
         ScalarType::Inline { align, .. } => u32::from(align),
         ScalarType::I64 | ScalarType::F64 => 8,
     }
@@ -2401,6 +2409,7 @@ fn split_source_path(path: &str) -> (String, String) {
 /// The width of a word of `ty`.
 fn scalar_bits(ty: ScalarType) -> u64 {
     match ty {
+        ScalarType::OverAligned { bytes, .. } => u64::from(bytes) * 8,
         ScalarType::Inline { bytes, .. } => u64::from(bytes) * 8,
         ScalarType::I8 => 8,
         ScalarType::I16 => 16,
@@ -2839,6 +2848,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 continue;
             }
             let slot = built(self.builder.build_alloca(llvm_ty, &format!("var{var}")))?;
+            if let ScalarType::OverAligned { align, .. } = ty {
+                slot.as_instruction_value()
+                    .expect("an alloca is an instruction")
+                    .set_alignment(u32::from(*align))
+                    .map_err(|_| "invalid fixed array variable alignment")?;
+            }
             built(self.builder.build_store(slot, llvm_ty.const_zero()))?;
             self.vars.insert(*var, (slot, llvm_ty));
         }
@@ -2924,6 +2939,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn args(&self, values: &[Val]) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, String> {
+        if values
+            .iter()
+            .any(|v| matches!(self.ir.ty(*v), ScalarType::OverAligned { .. }))
+        {
+            return self.array_arguments(values);
+        }
         if values
             .iter()
             .any(|v| matches!(self.ir.ty(*v), ScalarType::Inline { .. }))
@@ -3279,6 +3300,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             Op::Copy(value) => {
                 let value = self.value(*value)?;
                 self.define(inst, value);
+            }
+            Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::OverAligned { .. }) => {
+                self.define(
+                    inst,
+                    basic_type(context, self.result_type(inst)).const_zero(),
+                );
             }
             Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::Inline { .. }) => {
                 self.define(

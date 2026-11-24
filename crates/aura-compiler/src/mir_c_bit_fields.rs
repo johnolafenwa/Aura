@@ -2,10 +2,34 @@
 //! once, before its comparison and store.
 use super::*;
 
+/// Store target-specific inline placement only for classes that request it.
+pub(super) fn record_storage(
+    class: &crate::sema::ClassInfo,
+    instance_name: &str,
+    classes: &BTreeMap<String, crate::sema::ClassInfo>,
+) -> Option<crate::c_layout::CStruct> {
+    if !class.decl.c_layout {
+        return None;
+    }
+    let name = format!("{}.{}", class.module_name, class.decl.name);
+    let mut layout = crate::sema::ffi_struct_layout(&Type::named(name), classes)?;
+    layout.name = instance_name.to_owned();
+    layout.has_controlled_layout().then_some(layout)
+}
+
 impl Lowerer<'_> {
-    pub(super) fn c_layout_query(&self, callee: &Expr, args: &[Argument]) -> Option<crate::diag::Result<usize>> {
-        let (modules, classes) = self.current_module_namespace().map(|ns| (&ns.imported_modules, &ns.all_classes)).unwrap_or((&self.program.imported_modules, &self.program.classes));
-        crate::sema::c_layout_queries::evaluate(callee, args, modules, classes, |name| self.binding_is_visible(name))
+    pub(super) fn c_layout_query(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+    ) -> Option<crate::diag::Result<usize>> {
+        let (modules, classes) = self
+            .current_module_namespace()
+            .map(|ns| (&ns.imported_modules, &ns.all_classes))
+            .unwrap_or((&self.program.imported_modules, &self.program.classes));
+        crate::sema::c_layout_queries::evaluate(callee, args, modules, classes, |name| {
+            self.binding_is_visible(name)
+        })
     }
 
     pub(super) fn check_member_bit_store(&mut self, assign: &AssignStmt, value: &Operand) {
