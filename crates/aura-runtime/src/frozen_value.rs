@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::list_elements::ListElements;
 use crate::runtime_value::{
-    EnumVariantValue, InstanceValue, MapValue, SetValue, TupleValue, UnionValue, Value, VecValue,
+    EnumVariantValue, InstanceFields, InstanceValue, MapValue, SetValue, TupleValue, UnionValue,
+    Value, VecValue,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -77,6 +78,11 @@ impl FrozenValue {
                     .map(Self::freeze)
                     .collect::<Option<_>>()?,
             ),
+            // An armed destructor belongs to a live runtime owner. Recreating
+            // just its fields would silently discard the cleanup obligation.
+            Value::Instance(object) if matches!(object.fields, InstanceFields::Hooked(_)) => {
+                return None
+            }
             // These built-in wrappers store an index in the local pattern
             // registry. Transport only classes whose fields stand alone.
             Value::Instance(object)

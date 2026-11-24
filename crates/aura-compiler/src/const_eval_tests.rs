@@ -401,3 +401,76 @@ const folded = make()(40)
 
 #[path = "const_eval_transport_tests.rs"]
 mod compile_time_transport;
+
+#[test]
+fn constant_evaluation_checks_the_effects_of_local_class_drop_hooks() {
+    let source = r#"def validate(n: int32):
+    assert n > 0, "invalid guard"
+
+class Guard:
+    n: int32
+
+    def __drop__(mut self):
+        validate(self.n)
+
+def read(n: int32) -> int32:
+    guard = Guard(n)
+    return guard.n
+
+const answer = read(42)
+
+def main():
+    print(answer)
+"#;
+    assert!(check_source(source)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::answer"));
+    let error = check_source(&source.replace("read(42)", "read(0)")).unwrap_err();
+    assert_eq!(error.code, "AU3026");
+    assert!(error
+        .call_frames
+        .iter()
+        .any(|f| f.function.contains("__drop__")));
+
+    assert!(error.call_frames.iter().any(|f| f.function == "validate"));
+    let step_limited = source.replace(
+        "validate(self.n)",
+        "mut i: int32 = 0\n        while i < 100000:\n            i += 1",
+    );
+    assert_eq!(check_source(&step_limited).unwrap_err().code, "AU3027");
+    let memory_limited = source.replace("validate(self.n)", "text = \"x\".repeat(8388609)");
+    assert_eq!(check_source(&memory_limited).unwrap_err().code, "AU3028");
+    let effectful = source.replace("assert n > 0, \"invalid guard\"", "print(n)");
+    assert_eq!(check_source(&effectful).unwrap_err().code, "AU3025");
+    let ordinary = effectful.replace("const answer", "answer");
+    assert!(!check_source(&ordinary)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::answer"));
+    assert_eq!(run_source(&ordinary).unwrap().stdout, "42\n42\n");
+}
+
+#[test]
+fn values_with_a_live_drop_hook_keep_their_runtime_owner() {
+    let source = r#"class Guard:
+    n: int32
+
+    def __drop__(mut self):
+        assert self.n > 0, "invalid guard"
+
+class Holder:
+    guard: Guard
+
+    def __drop__(mut self):
+        assert false, "module owner must stay live"
+
+values = [Holder(Guard(42))]
+"#;
+    assert!(!check_source(source)
+        .unwrap()
+        .frozen_constants
+        .contains_key("<main>::values"));
+    let required = source.replace("values =", "const values =");
+    assert_eq!(check_source(&required).unwrap_err().code, "AU3025");
+}

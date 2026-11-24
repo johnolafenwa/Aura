@@ -14,7 +14,12 @@ pub(crate) fn evaluate_constants(module: MirModule) -> Result<BTreeMap<String, F
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
             with_kernel_level(KernelLevel::Baseline, || {
-                evaluate_on_stack(module, windows_paths)
+                let result = evaluate_on_stack(module, windows_paths);
+                // Rejected module values still own their hooks at the end of
+                // this speculative run. Release their scratch storage without
+                // executing module finalizers. A receiver can own more receivers.
+                while aura_runtime::runtime_value::class_drop::next_released_instance().is_some() {}
+                result
             })
         })
         .map_err(|err| {
@@ -125,7 +130,8 @@ impl MirRuntime {
                     Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
                         value
                     }
-                    Instruction::PushCleanup {
+                    Instruction::ArmDrop { function, .. }
+                    | Instruction::PushCleanup {
                         callee: Some(CleanupCallee::Method { function }),
                         ..
                     } => {
