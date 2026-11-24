@@ -22,6 +22,9 @@ in this file.
   with `match` and `try` on them. The compiler keeps each in machine words with no
   heap. An enum that holds a collection or a union is still reported as
   `AU2052`.
+- Freestanding builds compile unions of values that own heap memory,
+  such as `str | None` and `list[int64] | None`, as locals, parameters,
+  results, fields, and list elements, with `is None` and `match` on them.
 - Freestanding builds compile `str`: literals, values in locals, classes,
   tuples, and enums, `+`, the comparisons, `len`, `byte_len`,
   `starts_with`, `ends_with`, and `contains`. A `str` lives in a counted

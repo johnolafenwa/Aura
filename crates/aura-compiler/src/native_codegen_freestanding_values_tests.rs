@@ -390,24 +390,47 @@ export "C" def run(n: int64) -> int64:
     );
 }
 
-#[test]
-fn a_union_of_values_that_own_heap_memory_is_refused() {
-    let source = r#"
-enum Chain:
-    End
-    Link(int64, indirect Chain)
+/// Optional text, an optional list, a union of an enum and a number, and
+/// a list and a result of optional text.
+const UNIONS: &str = include_str!("../../aura/tests/freestanding_unions.au");
 
-def pick(n: int64) -> (Chain | int64, int64):
+#[test]
+fn a_union_of_values_that_own_heap_memory_becomes_a_class_on_every_target() {
+    let module = prepared(UNIONS);
+    for gone in [
+        "UnionInject",
+        "UnionTagTest",
+        "UnionTakePayload",
+        "__union_payload_",
+        "BeginLoan",
+        "ReadLoan",
+        "EndLoan",
+    ] {
+        assert!(!module.contains(gone), "{gone}");
+    }
+    assert!(module.contains("member_0"));
+    for target in FreestandingTarget::ALL {
+        object(UNIONS, target);
+    }
+}
+
+#[test]
+fn a_union_of_words_stays_a_union() {
+    let source = r#"
+def pick(n: int64) -> int64 | None:
     if n > 0:
-        return (Chain.Link(n, Chain.End), n)
-    return (n, n)
+        return n
+    return None
 
 export "C" def run(n: int64) -> int64:
-    both = pick(n)
-    return both[1]
+    found = pick(n)
+    if found is None:
+        return 0
+    return found
 "#;
-    let found = refusals(source);
-    assert!(!found.is_empty(), "{found:?}");
+    let module = prepared(source);
+    assert!(module.contains("UnionInject"));
+    assert!(!module.contains("member_0"));
 }
 
 #[test]

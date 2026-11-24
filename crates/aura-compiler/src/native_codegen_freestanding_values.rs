@@ -120,6 +120,81 @@ fn class_function(kind: &str, class: &str) -> String {
 const TAG_FIELD: &str = "tag";
 const TAG_TYPE: &str = "int64";
 
+/// The field of a union's class that holds the member `index`.
+fn member_field(index: usize) -> String {
+    format!("{MEMBER_FIELD_PREFIX}{index}")
+}
+
+const MEMBER_FIELD_PREFIX: &str = "member_";
+
+/// How a place in MIR names the payload of a union.
+const UNION_PAYLOAD_PREFIX: &str = "__union_payload_";
+
+/// Renames each payload of a union the pass rewrote, in every place of
+/// `function`, to the field of the union's class. The validators read the
+/// MIR name as a union's payload, which needs a tag test the pass turns
+/// into a comparison.
+fn rename_union_payloads(
+    function: &mut MirFunction,
+    types: &HashMap<String, Type>,
+    values: &mut Values,
+) {
+    fn rename(value: &mut serde_json::Value, types: &HashMap<String, Type>, values: &mut Values) {
+        match value {
+            serde_json::Value::String(text) if text.contains(UNION_PAYLOAD_PREFIX) => {
+                let mut parts = text.split('.');
+                let Some(root) = parts.next() else {
+                    return;
+                };
+                let mut renamed = root.to_string();
+                let mut ty = types.get(root).map(|ty| values.rewritten(ty));
+                for part in parts {
+                    let fields = match &ty {
+                        Some(Type::Named(class, _)) => values
+                            .classes
+                            .get(class)
+                            .map(|class| class.fields.clone())
+                            .unwrap_or_default(),
+                        _ => Vec::new(),
+                    };
+                    let field = part
+                        .strip_prefix(UNION_PAYLOAD_PREFIX)
+                        .map(|index| format!("{MEMBER_FIELD_PREFIX}{index}"))
+                        .filter(|field| fields.iter().any(|known| known.name == *field))
+                        .unwrap_or_else(|| part.to_string());
+                    ty = fields
+                        .iter()
+                        .find(|known| known.name == field)
+                        .map(|known| known.ty.clone());
+                    renamed.push('.');
+                    renamed.push_str(&field);
+                }
+                *text = renamed;
+            }
+            serde_json::Value::Array(items) => {
+                items
+                    .iter_mut()
+                    .for_each(|item| rename(item, types, values));
+            }
+            serde_json::Value::Object(fields) => {
+                fields
+                    .values_mut()
+                    .for_each(|item| rename(item, types, values));
+            }
+            _ => {}
+        }
+    }
+    let named = function.blocks.iter().any(|block| {
+        serde_json::to_string(block).is_ok_and(|text| text.contains(UNION_PAYLOAD_PREFIX))
+    });
+    if !named {
+        return;
+    }
+    let mut value = serde_json::to_value(&function.blocks).expect("MIR blocks are JSON values");
+    rename(&mut value, types, values);
+    function.blocks = serde_json::from_value(value).expect("renamed MIR blocks read back");
+}
+
 fn element_field(index: usize) -> String {
     format!("_{index}")
 }
@@ -196,6 +271,10 @@ impl Values {
                 None => ty.clone(),
             },
             Type::Named(name, _) if self.enums.contains_key(name) => match self.class_of(ty) {
+                Some(class) => Type::named(&class),
+                None => ty.clone(),
+            },
+            Type::Union(_) => match self.class_of(ty) {
                 Some(class) => Type::named(&class),
                 None => ty.clone(),
             },
@@ -408,6 +487,39 @@ impl Values {
                     variants.push((declared.name.clone(), payloads));
                 }
                 self.variants.insert(name.to_string(), variants);
+            }
+            // A union with a member the pass rewrites: a tag, the index of
+            // the member it holds, and a field for each member but `None`.
+            // A union of words stays with the emitter.
+            Type::Union(union) => {
+                fields.push(MirClassField {
+                    name: TAG_FIELD.to_string(),
+                    ty: Type::named(TAG_TYPE),
+                });
+                let mut changed = false;
+                for (index, member) in union.members.iter().enumerate() {
+                    if *member == Type::Unit {
+                        continue;
+                    }
+                    let (field, content) = self.part(member);
+                    changed |= field != *member;
+                    if !self.fits_a_field(&field) {
+                        return false;
+                    }
+                    if let Some(content) = content {
+                        boxes.push(BoxField {
+                            field: member_field(index),
+                            content,
+                        });
+                    }
+                    fields.push(MirClassField {
+                        name: member_field(index),
+                        ty: field,
+                    });
+                }
+                if !changed {
+                    return false;
+                }
             }
             _ => return false,
         }
@@ -893,6 +1005,7 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
     }
     let returns = function.return_type.clone();
     function.return_type = values.rewritten(&function.return_type);
+    rename_union_payloads(function, &types, values);
 
     // A temporary is named `%t` and a number, and the function's own end
     // at the largest in use.
@@ -931,6 +1044,23 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                     if values.lists.get(&class).cloned() == Some(values.rewritten(ty))
             );
             if listed && whole && projection.is_empty() {
+                loans.insert(loan.clone());
+            }
+        }
+        // A shared loan of the payload of a union the pass rewrote.
+        if let Instruction::BeginLoan {
+            loan,
+            source,
+            mutable: false,
+        } = instruction
+        {
+            let payload = source.rsplit_once('.').is_some_and(|(object, field)| {
+                field.starts_with(MEMBER_FIELD_PREFIX)
+                    && types
+                        .get(object)
+                        .is_some_and(|ty| values.rewritten(ty) != *ty)
+            });
+            if payload {
                 loans.insert(loan.clone());
             }
         }
@@ -1023,6 +1153,49 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         &mut fresh,
                         &mut current.instructions,
                     );
+                }
+                Instruction::BeginLoan { loan, source, .. } if loans.contains(&loan) => {
+                    let (object, field) = source.rsplit_once('.').unwrap_or((&source, ""));
+                    current.instructions.push(Instruction::Assign {
+                        target: loan.clone(),
+                        value: Rvalue::Member {
+                            object: Operand::Place(object.to_string()),
+                            field: field.to_string(),
+                        },
+                    });
+                    counted &= count_references(
+                        RETAIN,
+                        &loan,
+                        &types,
+                        values,
+                        &mut fresh,
+                        &mut current.instructions,
+                    );
+                }
+                // A read through the loan is one more reference.
+                Instruction::ReadLoan { target, loan } if loans.contains(&loan) => {
+                    counted &= count_references(
+                        RETAIN,
+                        &loan,
+                        &types,
+                        values,
+                        &mut fresh,
+                        &mut current.instructions,
+                    );
+                    let drops = matches!(
+                        types.get(&loan).map(|ty| values.rewritten(ty)),
+                        Some(Type::Named(class, _))
+                            if values.classes.get(&class).is_some_and(|class| !class.copy)
+                    );
+                    if drops {
+                        current.instructions.push(Instruction::Retain {
+                            place: loan.clone(),
+                        });
+                    }
+                    current.instructions.push(Instruction::Assign {
+                        target,
+                        value: Rvalue::Use(Operand::Place(loan)),
+                    });
                 }
                 Instruction::EndLoan { loan } if loans.contains(&loan) => {
                     counted &= count_references(
@@ -1136,6 +1309,7 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         Rvalue::TupleElement { .. }
                             | Rvalue::TupleTakeElement { .. }
                             | Rvalue::VariantPayload { .. }
+                            | Rvalue::UnionTakePayload { .. }
                             | Rvalue::Member { .. }
                             | Rvalue::Call {
                                 callee: CallTarget::Runtime {
@@ -2302,6 +2476,91 @@ fn lower_value(
                 payloads,
             })
         }
+        Rvalue::UnionInject {
+            value,
+            union_type,
+            member_type,
+            member_index,
+        } => match values.class_of(&union_type) {
+            Some(class_name) => {
+                let members = values.classes[&class_name]
+                    .fields
+                    .iter()
+                    .skip(1)
+                    .map(|field| (field.name.clone(), field.ty.clone()))
+                    .collect::<Vec<_>>();
+                let mut fields = vec![MirFieldInit {
+                    name: TAG_FIELD.to_string(),
+                    value: Operand::Int(member_index as u128),
+                }];
+                let chosen = member_field(member_index);
+                for (name, ty) in members {
+                    let value = if name == chosen {
+                        let value = owned_text(value.clone(), values, fresh, out);
+                        into_field(values, fresh, out, &class_name, &name, value)
+                    } else {
+                        zero(&ty, values, fresh, out)
+                    };
+                    fields.push(MirFieldInit { name, value });
+                }
+                Rvalue::Construct { class_name, fields }
+            }
+            None => Rvalue::UnionInject {
+                value,
+                union_type,
+                member_type,
+                member_index,
+            },
+        },
+        Rvalue::UnionTagTest {
+            place,
+            union_type,
+            member_index,
+        } => match values.class_of(&union_type) {
+            Some(_) => {
+                let tag = fresh.local(Type::named(TAG_TYPE));
+                out.push(Instruction::Assign {
+                    target: tag.clone(),
+                    value: Rvalue::Member {
+                        object: Operand::Place(place),
+                        field: TAG_FIELD.to_string(),
+                    },
+                });
+                Rvalue::Binary {
+                    op: BinaryOp::Eq,
+                    left: Operand::Place(tag),
+                    right: Operand::Int(member_index as u128),
+                    span: crate::diag::Span::new(0, 0),
+                    trap: Default::default(),
+                }
+            }
+            None => Rvalue::UnionTagTest {
+                place,
+                union_type,
+                member_index,
+            },
+        },
+        Rvalue::UnionTakePayload {
+            place,
+            union_type,
+            member_type,
+            member_index,
+        } => match values.class_of(&union_type) {
+            Some(class) => out_of_field(
+                values,
+                fresh,
+                out,
+                &class,
+                member_field(member_index),
+                Operand::Place(place),
+            ),
+            None => Rvalue::UnionTakePayload {
+                place,
+                union_type,
+                member_type,
+                member_index,
+            },
+        },
         Rvalue::VariantPayload {
             scrutinee,
             variant_name,

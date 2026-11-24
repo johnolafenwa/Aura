@@ -49,8 +49,7 @@ count, and a way to drop what the block holds.
   the `match` cover every variant. A chain of tag tests does not tell the
   ownership checker that, so the last arm is a jump.
 - **What the pass cannot count is refused as `AU2052`:** a write to a
-  part of a value that owns a block, and a union one of whose members
-  owns a block.
+  part of a value that owns a block.
 
 ## Text
 
@@ -112,8 +111,27 @@ count, and a way to drop what the block holds.
   end of the loan releases it. A write loads the old element, releases
   it, and stores the new one. `clear` stays with lists of elements that
   own nothing.
-- A list of a union, a `mut` loan of an element, a loan of a part of an
-  element, and every other list operation are still refused.
+- A list of a union of words alone, a `mut` loan of an element, a loan
+  of a part of an element, and every other list operation are still
+  refused.
+
+## Unions
+
+- **A union with a member the pass rewrites is a class:** a tag, the
+  index of the member the value holds, and a field for each member but
+  `None`. So `str | None`, `list[int64] | None`, and `Chain | int64` are
+  values of words like an enum. A union of words alone stays with the
+  emitter.
+- **The pass rewrites** the injection of a member to a construction, the
+  tag test to a comparison, and the payload taken out to a field read
+  with a reference.
+- **A place that names a union's payload is renamed** to the field of
+  the class, in every place of the function. The validators read the MIR
+  name as the payload of a union and ask for a tag proof, which the
+  comparison no longer is.
+- **A shared loan of a payload** is a read of the field with a
+  reference, released where the loan ends. A read through a loan is one
+  more reference.
 
 ## Consequences
 
@@ -131,8 +149,6 @@ count, and a way to drop what the block holds.
   code of its own is a later step.
 - Every literal that becomes a value is copied into a new block. A
   block the program's data holds, never counted, is a later step.
-- `str | None` is refused with the other unions of values that own a
-  block.
 - An f-string of n parts allocates up to 2n blocks and frees all but
   the last. One block sized in advance is a later step.
 - Float formatting, indexing, `bytes`, and `list` are the next steps.

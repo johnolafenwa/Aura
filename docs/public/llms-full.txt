@@ -14233,11 +14233,11 @@ def read(port: uint64) -> (Reading, uint64):
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `dict` or a `set` |
 | `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
-| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, or lists, with literals, `append`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops; `clear` on a list of numbers | Lists of unions, the other `list` methods, slices |
+| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops; `clear` on a list of numbers | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
 | `extern "C"` classes | `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
-| `T \| None` and other unions of available types | Unions that hold any other type |
+| `T \| None` and other unions of available types, `str \| None` among them | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
 | `if`, `while`, `for` over `range`, over a list, or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
@@ -14339,7 +14339,8 @@ Available: literals, `append`, `len`, `is_empty`, `items[i]`,
 `items[i] = value`, `view value = items[i]`, and `for value in items`. A
 negative index counts from the end. `clear` is available on a list of
 numbers. A write to an element releases the value it replaces. A list of
-a union, such as `list[int64 | None]`, is not available yet. A list may be a `mut` parameter, a result, or a field of a
+`str | None` is available. A list of a union of words alone, such as
+`list[int64 | None]`, is not available yet. A list may be a `mut` parameter, a result, or a field of a
 class, a tuple, or an enum.
 
 An index outside the list is a failed assertion in
@@ -14612,12 +14613,12 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 ## Current Limits
 
 - The heap values of the language are `str`, lists, and enums that hold
-  themselves: no `dict`, no `set`, and no list of a union yet. A program allocates other memory
+  themselves: no `dict` and no `set` yet. A program allocates other memory
   through the [`mem` module](/manual/mem).
 - Text has no indexing or slices, an f-string takes no float and no
-  format spec, and `str | None` is not available.
-- A value that holds such an enum cannot be a member of a union, and a
-  field that holds one cannot be assigned. Build a new value instead.
+  format spec.
+- A field that holds text, a list, or an enum that holds itself cannot
+  be assigned. Build a new value instead.
 - Releasing a long list calls itself once for each link, so a very long
   list needs stack to match.
 - No inline assembly and no port I/O instructions. Memory-mapped devices

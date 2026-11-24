@@ -584,6 +584,21 @@ fn lists_of_values_compute_what_the_hosted_program_prints_and_free_every_block()
     );
 }
 
+/// A union of values that own heap memory, such as `str | None`, counts
+/// its references like an enum.
+#[test]
+fn unions_of_heap_values_compute_what_the_hosted_program_prints_and_free_every_block() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_unions.au"),
+        "entry",
+        "43204124\n",
+    );
+}
+
 /// An index outside a list stops the program through the trap hook.
 #[test]
 fn a_list_index_out_of_range_calls_the_trap_hook() {
