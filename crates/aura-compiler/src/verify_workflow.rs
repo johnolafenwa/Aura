@@ -72,6 +72,7 @@ impl Report {
     /// verify did, and no check has an outcome `deny` names.
     pub fn passes(&self, deny: Deny) -> bool {
         self.failed() == 0
+            && self.disputes.is_empty()
             && self.unverified().next().is_none()
             && !(deny.not_modeled && self.not_modeled() > 0)
             && !(deny.undecided && self.undecided() > 0)

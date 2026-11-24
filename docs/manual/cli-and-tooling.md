@@ -45,7 +45,7 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [--verify] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. `--verify` proves the package's checks first. |
-| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--deny CLASS] [--must-verify NAME] [--no-cache] [--format json] [paths...]` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. One file is verified alone. A directory, several files, or no path verifies every module of the package. See [Verification](/manual/verification). |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--deny CLASS] [--must-verify NAME] [--cross-check] [--cross-solver PATH] [--no-cache] [--format json] [paths...]` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. One file is verified alone. A directory, several files, or no path verifies every module of the package. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |

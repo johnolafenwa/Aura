@@ -275,6 +275,7 @@ outcome: failed, not modeled, and undecided.
 | `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
 | `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
 | `AU5122` | A function named with `--must-verify` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
+| `AU5123` | With `--cross-check`, the first solver proved the check and the second solver found inputs that break it. One of them is wrong, so the check counts as undecided. See [Cross-Checking With a Second Solver](#cross-checking-with-a-second-solver). |
 
 A failure is reported only when the program can reach it. In this function
 the verifier does not model `split`, so it cannot tell that the result has
@@ -377,8 +378,10 @@ misspelled name cannot pass. Aura has no marker in the source for this.
 | `--function <name>` | Verify only the functions whose name contains `name`. |
 | `--deny <class>` | Make a package run fail on checks that are `not-modeled`, `undecided`, or `all` of both. See [Verifying a Package](#verifying-a-package). |
 | `--must-verify <name>` | Report `AU5122` when function `name` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
+| `--cross-check` | Ask a second solver about every check the first one proves. See [Cross-Checking With a Second Solver](#cross-checking-with-a-second-solver). |
+| `--cross-solver <path>` | The second solver of a cross-check. It turns on `--cross-check`. |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, `unsupported`, which is a check that is not modeled, or `disputed`, which is a check the solvers of a cross-check disagree about, with the second solver as its `detail`), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
 
 ### Proof Cache
 
@@ -391,6 +394,45 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+### Time Limits
+
+`--timeout` limits each check. With Z3, a check first gets one second in
+the solver process that holds the function's facts. Z3 gives up on some
+checks there that it decides at once as a problem of their own. So a check
+still open after that second is asked again in two fresh solver
+processes, one with the problem on its own and one like the first, both
+with the full limit. The first answer that decides the check wins, and the
+other process stops.
+
+A watchdog guards every answer. A solver that has not answered a little
+over two seconds past the limit is stopped, the check is reported as
+undecided (`AU5102`), and the next check starts a fresh solver. Z3 does
+not always keep to its own limit on string queries, and the watchdog keeps
+such a query from stopping the run.
+
+### Cross-Checking With a Second Solver
+
+`--cross-check` asks a second solver about every check the first one
+proves. The second solver is cvc5 when the first is Z3, and Z3 when the
+first is cvc5, found on `PATH`. `--cross-solver <path>` names another one.
+
+```bash
+aura verify --cross-check src/bank.au
+aura verify --cross-solver /opt/cvc5/bin/cvc5 src/bank.au
+```
+
+When the second solver finds inputs that break a proved check, the run
+reports `AU5123` and the check counts as undecided:
+
+```text
+error[AU5123]: solvers disagree about integer result in range
+```
+
+One of the two solvers is wrong about such a check. A check the second
+solver cannot decide in time keeps its proof. A cross-check fails a package
+run on any disagreement, and it asks the second solver even for a function
+the proof cache answers. Without the second solver, the run stops with
+`AU5103` and names the solver it looked for.
 
 In VS Code, the Aura extension runs `aura verify` each time an Aura file
 opens or is saved. Each check it cannot prove shows as a diagnostic at the

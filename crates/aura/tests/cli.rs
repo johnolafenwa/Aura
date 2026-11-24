@@ -18104,6 +18104,134 @@ fn verify_package_mode_reports_files_it_could_not_verify() {
     assert!(stderr.contains("no Aura source files found"), "{stderr}");
 }
 
+/// The solver program the `aura verify` tests run, by its full path.
+fn smt_solver_path() -> Option<PathBuf> {
+    if let Some(named) = std::env::var_os("AURA_SMT_SOLVER").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(named));
+    }
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths).find_map(|dir| {
+        ["z3", "cvc5"].iter().find_map(|name| {
+            let candidate = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+            candidate.is_file().then_some(candidate)
+        })
+    })
+}
+
+#[test]
+fn verify_cross_check_asks_a_second_solver_about_each_proved_check() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let solver = smt_solver_path().expect("a solver");
+    let solver = solver.to_str().expect("a UTF-8 path");
+    let temp = TempDir::new("aura-verify-cross-check");
+    let cache = temp.path().join("cache");
+    let empty = temp.path().join("empty");
+    fs::create_dir_all(&empty).expect("create the empty directory");
+    let program = temp.path().join("half.au");
+    fs::write(
+        &program,
+        "def half(x: int64) -> int64:\n    requires x >= 0\n    ensures result <= x\n    return x // 2\n\ndef main():\n    print(1)\n",
+    )
+    .expect("write the program");
+    let program = program.to_str().expect("a UTF-8 path");
+    // With no second solver on PATH, the run says which one it looked for.
+    let output = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", &cache)
+        .env("PATH", &empty)
+        .args(["verify", "--solver", solver, "--cross-check", program])
+        .output()
+        .expect("run aura verify");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("AU5103"), "{stderr}");
+    assert!(stderr.contains("was not found on PATH"), "{stderr}");
+    assert!(stderr.contains("--cross-solver"), "{stderr}");
+    // A second solver that agrees changes nothing.
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &[
+            "verify",
+            "--solver",
+            solver,
+            "--cross-solver",
+            solver,
+            program,
+        ],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(stdout.contains("3 of 3 checks proved"), "{stdout}");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // A second solver that finds a counterexample to every query
+        // disagrees about every proved check.
+        let wrong = temp.path().join("cvc5");
+        fs::write(
+            &wrong,
+            "#!/bin/sh\nwhile IFS= read -r line; do\n  case \"$line\" in\n    *check-sat*) echo sat ;;\n    *echo*) echo \"$line\" | sed 's/.*echo \"\\(.*\\)\".*/\\1/' ;;\n  esac\ndone\n",
+        )
+        .expect("write the stand-in solver");
+        fs::set_permissions(&wrong, fs::Permissions::from_mode(0o755))
+            .expect("make the stand-in solver executable");
+        let wrong = wrong.to_str().expect("a UTF-8 path");
+        let (stdout, stderr, code) = run_aura_verify_in(
+            temp.path(),
+            &cache,
+            &[
+                "verify",
+                "--solver",
+                solver,
+                "--cross-solver",
+                wrong,
+                program,
+            ],
+        );
+        assert_eq!(code, Some(1), "{stdout}{stderr}");
+        assert!(
+            stderr.contains("error[AU5123]: solvers disagree about `ensures` clause"),
+            "{stderr}"
+        );
+        assert!(stdout.contains("0 of 3 checks proved"), "{stdout}");
+        assert!(
+            stdout.contains("the solvers disagree about 3 of the undecided checks"),
+            "{stdout}"
+        );
+        let (stdout, _, code) = run_aura_verify_in(
+            temp.path(),
+            &cache,
+            &[
+                "verify",
+                "--format",
+                "json",
+                "--solver",
+                solver,
+                "--cross-solver",
+                wrong,
+                program,
+            ],
+        );
+        assert_eq!(code, Some(1));
+        let report: serde_json::Value = serde_json::from_str(&stdout).expect("a JSON report");
+        assert_eq!(report["obligations"][0]["status"], "disputed");
+        assert_eq!(report["obligations"][0]["detail"], wrong);
+        assert_eq!(report["undecided"], 3);
+        assert_eq!(report["diagnostics"][0]["code"], "AU5123");
+        // A package run fails on a disagreement.
+        let package = write_verify_package("aura-verify-cross-package", VERIFY_UTIL_HALF);
+        let (_, stderr, code) = run_aura_verify_in(
+            package.path(),
+            &cache,
+            &["verify", "--solver", solver, "--cross-solver", wrong],
+        );
+        assert_eq!(code, Some(1), "{stderr}");
+        assert!(stderr.contains("AU5123"), "{stderr}");
+    }
+}
+
 #[test]
 fn verify_reads_one_file_from_stdin_and_proves_the_module_body() {
     if !smt_solver_available() {

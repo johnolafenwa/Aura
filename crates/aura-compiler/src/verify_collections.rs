@@ -490,14 +490,13 @@ impl Exec<'_> {
         };
         // The arrays the list reads, and the positions of them it holds:
         // the facts read those arrays at a position itself, which a
-        // solver matches more readily than at a sum.
+        // solver matches more readily than at a sum. Any other store is
+        // read where it is: a quantified copy of it, over every position,
+        // makes the solver give up on checks that never read the result.
         let (source, low, high) = match leaf_range(store, "0".to_string(), len.to_string()) {
             Some((array, low, high)) => {
                 let sort = scalar_sort(store).expect("a store with one array is of scalars");
                 (Store::Leaf(array, sort), low, high)
-            }
-            None if matches!(store, Store::Shifted(..) | Store::Reversed(..)) => {
-                (self.copied_store(store), "0".to_string(), len.to_string())
             }
             None => (store.clone(), "0".to_string(), len.to_string()),
         };
@@ -547,7 +546,6 @@ impl Exec<'_> {
         // A short list of a known length has each fact once for each
         // position: the solver then decides every question about it.
         let mut facts = Vec::new();
-        let mut quantified = false;
         match len.parse::<u8>() {
             Ok(count) if count <= 16 => {
                 for position in 0..count {
@@ -560,7 +558,6 @@ impl Exec<'_> {
                 }
             }
             _ => {
-                quantified = true;
                 facts.push(format!(
                     "(forall (({i} Int)) (=> {} {}))",
                     in_result(&i),
@@ -587,13 +584,12 @@ impl Exec<'_> {
             "(and (= (select {first} 0) (select {first} 0)) {})",
             facts.join(" ")
         );
-        if quantified {
-            let mut made = leaf_arrays(&result);
-            made.extend([from, to]);
-            self.lazy_fact(&made.iter().map(String::as_str).collect::<Vec<_>>(), fact);
-        } else {
-            self.facts.push(fact);
-        }
+        // Some result and order satisfy them whatever the list holds, so
+        // they go only to the checks that read the result: every sort of a
+        // short list in each query makes a counterexample slow to find.
+        let mut made = leaf_arrays(&result);
+        made.extend([from, to]);
+        self.lazy_fact(&made.iter().map(String::as_str).collect::<Vec<_>>(), fact);
         result
     }
 

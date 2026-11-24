@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` decides more checks in time: with Z3, a check still open
+  after one second is asked again in two fresh solvers, as a problem on its
+  own and in a scope, and the first decisive answer wins. On the run-pass
+  fixtures this leaves about a third as many checks undecided.
+- `aura verify` stops a solver that has not answered a little past its time
+  limit, reports the check as undecided, and goes on with a fresh solver.
+  Before, a solver that ignored its own limit stopped the run.
+- `aura verify --cross-check` asks a second solver, cvc5 for Z3 and Z3 for
+  cvc5, about every check the first one proves, and reports a disagreement
+  as `AU5123`. `--cross-solver <path>` names the second solver.
 - `aura verify` no longer reports a made-up counterexample for a check that
   reads the result of a step it does not model, such as `split`, an
   f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
