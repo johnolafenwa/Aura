@@ -2167,3 +2167,6 @@ mod tests;
 
 #[cfg(test)]
 use aura_runtime::array_kernel_corpus;
+
+#[cfg(test)]
+mod conditional_tests;

@@ -144,6 +144,9 @@ pub fn docstring_summary(text: &str, limit: usize) -> Option<String> {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Module {
+    /// Zero-based, half-open line ranges of discarded conditional suites.
+    #[serde(skip)]
+    pub inactive_lines: Vec<std::ops::Range<usize>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
     pub imports: Vec<ImportDecl>,

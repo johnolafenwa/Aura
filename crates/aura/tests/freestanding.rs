@@ -732,3 +732,22 @@ else:
     let object = fs::read(workspace.path.join("table.o")).unwrap();
     assert_eq!(u16::from_le_bytes([object[18], object[19]]), 243);
 }
+
+#[test]
+fn target_selects_declarations_before_checking_and_building() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "main.au",
+        "import build\nif build.arch == \"riscv64\":\n    export \"C\" def answer() -> int64:\n        return 42\nelse:\n    import unavailable_elsewhere\n",
+    );
+    let build = workspace.aura(&[
+        "build", "main.au", "--freestanding", "--target", "riscv64gc-unknown-none-elf",
+        "-o", "target.o",
+    ]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let check = workspace.aura(&["check", "--all-targets", "main.au"]);
+    assert!(!check.status.success());
+    let diagnostic = stderr(&check);
+    assert!(diagnostic.contains("unavailable_elsewhere"), "{diagnostic}");
+    assert!(diagnostic.contains("x86_64"), "{diagnostic}");
+}

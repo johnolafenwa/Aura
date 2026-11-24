@@ -19,6 +19,8 @@ use aura_compiler::{
 };
 use serde_json::Value as JsonValue;
 
+mod check_all_targets;
+
 struct Input {
     path: String,
     source: String,
@@ -85,11 +87,16 @@ fn main() {
         "check" => {
             let (diagnostic_format, input_args) = parse_diagnostic_format(args.collect::<Vec<_>>());
             let freestanding = input_args.iter().any(|arg| arg == "--freestanding");
+            let all_targets = input_args.iter().any(|arg| arg == "--all-targets");
             let input_args = input_args
                 .into_iter()
-                .filter(|arg| arg != "--freestanding")
+                .filter(|arg| arg != "--freestanding" && arg != "--all-targets")
                 .collect::<Vec<_>>();
             let input = read_input(&mut input_args.into_iter());
+            if all_targets {
+                check_all_targets::check(&input, diagnostic_format);
+                return;
+            }
             let _target = freestanding.then(build_options::bare_host_scope);
             if freestanding {
                 report_freestanding_problems(&input, diagnostic_format);
