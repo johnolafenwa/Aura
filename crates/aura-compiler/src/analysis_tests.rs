@@ -11678,3 +11678,23 @@ fn systems_data_editor_completes_types_and_receiver_methods() {
         }
     }
 }
+
+#[test]
+fn systems_data_editor_profiles_restore_hosted_checking() {
+    let source = "mut ticks: uint64 = 0\nexport \"C\" def count() -> uint64:\n    return ticks\n";
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("kernel.au");
+    fs::write(&file, source).unwrap();
+    with_freestanding_analysis(true, || {
+        let result = analyze_path_source(&file, source);
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let binding = occurrence_at(&result, 2, 12);
+        assert!(binding.hover.contains("module binding ticks: uint64"));
+        assert_eq!(binding.definition.as_ref().unwrap().line, 0);
+        assert_eq!(result.symbols.iter().find(|s| s.name == "ticks").unwrap().kind, "variable");
+        with_freestanding_analysis(false, || {
+            assert!(analyze_path_source(&file, source).diagnostics.iter().any(|d| d.code == "AU3030"));
+        });
+    });
+    assert!(analyze_path_source(&file, source).diagnostics.iter().any(|d| d.code == "AU3030"));
+}
