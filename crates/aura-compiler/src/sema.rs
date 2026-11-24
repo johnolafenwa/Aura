@@ -3838,6 +3838,7 @@ impl<'a> FunctionChecker<'a> {
         function_info: &FunctionInfo,
         contracts_only: bool,
     ) -> Result<()> {
+        crate::machine_attributes::check_function(function_info)?;
         let function = &function_info.decl;
         self.validate_view_return_contract(function)?;
         let type_param_scope = type_param_scope(&function.type_params);
@@ -3924,6 +3925,13 @@ impl<'a> FunctionChecker<'a> {
             return Ok(());
         }
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
+        if function
+            .machine
+            .as_ref()
+            .is_some_and(|attrs| attrs.naked.is_some())
+        {
+            return Ok(());
+        }
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
                 function.span,
@@ -13623,6 +13631,7 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        crate::machine_attributes::check_callable(function, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
                                 ClosureArgumentPolicy::RepeatableParameter("worker")

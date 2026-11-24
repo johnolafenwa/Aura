@@ -870,6 +870,9 @@ fn an_emitter_fault_is_not_a_subset_report() {
     );
 }
 
+#[path = "machine_attributes_tests.rs"]
+mod machine_attributes_tests;
+
 #[test]
 fn kernel_float_operations_and_addresses_use_the_kernel_abi() {
     let source = include_str!("../tests/fixtures/check-pass/kernel_soft_float.au");

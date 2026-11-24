@@ -295,6 +295,21 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid assembly syntax or option",
     },
     DiagnosticCodeInfo {
+        code: "AU2094",
+        band: "names/types",
+        title: "machine attributes in a hosted build",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2095",
+        band: "names/types",
+        title: "invalid machine attribute or declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2096",
+        band: "names/types",
+        title: "invalid interrupt target or call",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

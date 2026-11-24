@@ -1885,6 +1885,7 @@ impl<'a> FunctionChecker<'a> {
         display_name: &str,
         free_function: bool,
     ) -> Result<Type> {
+        crate::machine_attributes::check_callable(function, span)?;
         reject_span_parameter_value(
             &function.signature.params,
             &function.signature.return_type,

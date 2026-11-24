@@ -172,6 +172,8 @@ impl Module {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConstantDecl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Box<crate::machine_data::DataPlacement>>,
     pub public: bool,
     pub name: String,
     pub annotation: Option<TypeRef>,
@@ -357,6 +359,8 @@ pub struct FunctionDecl {
     /// to bottom.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decorators: Vec<Decorator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine: Option<Box<crate::machine_attributes::MachineAttributes>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
     /// The `requires` and `ensures` clauses at the top of the body, in

@@ -11058,6 +11058,19 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     foreign_link.asm_externs.sort();
     foreign_link.asm_externs.dedup();
     foreign_link.exports = exported_functions(program);
+    if program.machine_target.is_some() {
+        foreign_link.machine = crate::machine_attributes::collect(program);
+        foreign_link.placed_data = crate::machine_data::collect(program);
+    }
+    for export in &mut foreign_link.exports {
+        if let Some(symbol) = foreign_link
+            .machine
+            .get(&export.function)
+            .and_then(|a| a.link_name.as_ref())
+        {
+            export.symbol.clone_from(symbol);
+        }
+    }
 
     MirModule {
         foreign_link,
@@ -11972,7 +11985,7 @@ fn lower_function_or_initializer(
         lowerer.emit_initializer_slot(class, return_type);
         lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
-    } else {
+    } else if !naked::lower_export(&mut lowerer, function, &params, return_type) {
         lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
@@ -12386,6 +12399,8 @@ struct ReturnedViewCallee {
 
 #[path = "mir_inline_asm.rs"]
 mod inline_asm;
+#[path = "mir_naked.rs"]
+mod naked;
 
 struct Lowerer<'a> {
     program: &'a Program,

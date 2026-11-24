@@ -329,6 +329,7 @@ fn callable_contract_decl(alias: &crate::ast::TypeAliasDecl) -> Result<FunctionD
         span: alias.span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: alias.contracts.clone(),
         spec: false,
@@ -1742,6 +1743,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     span: extern_decl.span,
                     property: None,
                     decorators: Vec::new(),
+                    machine: None,
                     doc: None,
                     contracts: extern_decl.contracts.clone(),
                     spec: false,
@@ -2322,6 +2324,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         .collect::<Vec<_>>();
     local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     constant_init_plan.extend(local_constants);
+    for constant in &constant_init_plan {
+        crate::machine_data::check(constant)?;
+    }
     let mut program = Program {
         machine_target: crate::freestanding_check_target(),
         aliases,

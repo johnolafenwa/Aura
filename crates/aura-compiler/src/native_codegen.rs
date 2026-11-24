@@ -22387,6 +22387,8 @@ mod key_loops;
 mod list_snapshots;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+#[path = "native_codegen_machine.rs"]
+mod machine;
 #[path = "native_codegen_math.rs"]
 mod math;
 #[path = "native_codegen_range_loops.rs"]

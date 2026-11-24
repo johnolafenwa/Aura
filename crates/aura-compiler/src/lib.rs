@@ -15,6 +15,8 @@ mod freestanding_mode;
 pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
+mod machine_attributes;
+mod machine_data;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;

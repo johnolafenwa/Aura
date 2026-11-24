@@ -1,0 +1,6 @@
+@machine.interrupt("aarch64")
+@machine.link_name("board_irq")
+@machine.section(".text.board_irq")
+@machine.used
+public export "C" def external_irq() -> None:
+    pass
