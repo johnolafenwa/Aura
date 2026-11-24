@@ -11682,13 +11682,13 @@ fn systems_data_editor_completes_types_and_receiver_methods() {
 #[test]
 fn systems_data_editor_profiles_restore_hosted_checking() {
     let source = "mut ticks: uint64 = 0\nexport \"C\" def count() -> uint64:\n    return ticks\n";
-    let dir = tempfile::tempdir().unwrap();
+    let dir = TempDir::new("systems-data-editor-profile");
     let file = dir.path().join("kernel.au");
     fs::write(&file, source).unwrap();
     with_freestanding_analysis(true, || {
         let result = analyze_path_source(&file, source);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
-        let binding = occurrence_at(&result, 2, 12);
+        let binding = occurrence_at(&result, 2, 11);
         assert!(binding.hover.contains("module binding ticks: uint64"));
         assert_eq!(binding.definition.as_ref().unwrap().line, 0);
         assert_eq!(result.symbols.iter().find(|s| s.name == "ticks").unwrap().kind, "variable");
@@ -11697,4 +11697,33 @@ fn systems_data_editor_profiles_restore_hosted_checking() {
         });
     });
     assert!(analyze_path_source(&file, source).diagnostics.iter().any(|d| d.code == "AU3030"));
+}
+
+#[test]
+fn systems_data_editor_infers_fixed_elements_and_pointer_access() {
+    let source = [
+        "import mem",
+        "def peek(data: fixed[uint16, 3], p: ptr[uint16]) -> uint16:",
+        "    first = data[0]",
+        "    for word in data:",
+        "        print(word)",
+        "    item = p.offset(1).read()",
+        "    return first + item",
+    ].join("\n");
+    let temp = TempDir::new("systems-data-editor-types");
+    let file = temp.path().join("src/main.au");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(temp.path().join("Aura.toml"), "[package]\nname = \"peek\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n").unwrap();
+    fs::write(&file, &source).unwrap();
+    let analysis = analyze_path_source(&file, &source);
+    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    for (line, start, expected) in [
+        (2, 4, "binding first: uint16"),
+        (4, 14, "local word: uint16"),
+        (5, 4, "binding item: uint16"),
+        (5, 23, "read() -> uint16"),
+    ] {
+        let hover = &occurrence_at(&analysis, line, start).hover;
+        assert!(hover.contains(expected), "{hover}");
+    }
 }
