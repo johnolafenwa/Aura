@@ -300,6 +300,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "raw pointer requires FFI permission",
     },
     DiagnosticCodeInfo {
+        code: "AU2085",
+        band: "names/types",
+        title: "invalid C layout declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2086",
+        band: "names/types",
+        title: "invalid C layout query",
+    },
+    DiagnosticCodeInfo {
         code: "AU2087",
         band: "names/types",
         title: "invalid atomic ordering",
@@ -390,6 +400,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "place has no writable stable address",
     },
     DiagnosticCodeInfo {
+        code: "AU3033",
+        band: "ownership",
+        title: "borrow of a C bit-field",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -453,6 +468,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4032",
         band: "runtime",
         title: "invalid raw pointer value",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4033",
+        band: "runtime",
+        title: "value exceeds C bit-field width",
     },
     DiagnosticCodeInfo {
         code: "AU4034",

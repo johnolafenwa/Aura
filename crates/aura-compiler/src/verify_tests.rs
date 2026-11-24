@@ -4165,7 +4165,13 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
         ..Options::default()
     };
     let report = crate::verify_path(&path, &options).expect("the pointer program checks");
-    for name in ["write_raw", "relay", "use_cell"] {
+    for name in [
+        "write_raw",
+        "relay",
+        "use_cell",
+        "replace_counter",
+        "use_counter",
+    ] {
         assert!(
             report.obligations.iter().any(|obligation| {
                 obligation.function == name
@@ -4197,4 +4203,11 @@ def bad() -> uint8:
 "#;
     let Some(report) = verify(source) else { return };
     assert_eq!(open_checks(&report), ["11 index in range failed"]);
+}
+
+#[test]
+fn wide_float_conversion_uses_finite_bounds() {
+    assert_proved(
+        "def signed(x: float64) -> int128:\n    requires -1.0 <= x and x <= 1.0\n    return x as int128\n\ndef unsigned(x: float64) -> uint128:\n    requires 0.0 <= x and x <= 1.0\n    return x as uint128\n\ndef main() -> None:\n    signed(-1.0)\n    unsigned(1.0)\n"
+    );
 }

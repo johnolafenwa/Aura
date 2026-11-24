@@ -96,11 +96,7 @@ impl FunctionChecker<'_> {
         let Type::Named(name, args) = ty else {
             return Err(literal_error(expr));
         };
-        if let ("fixed", [element, length]) = (name.as_str(), args.as_slice()) {
-            let length = length
-                .to_string()
-                .parse::<usize>()
-                .map_err(|_| literal_error(expr))?;
+        if let Some((element, length)) = ty.as_fixed_array() {
             return self.array_image(ty, element, length, expr);
         }
         let class = self
@@ -121,7 +117,8 @@ impl FunctionChecker<'_> {
         let constructor = match &callee.kind {
             ExprKind::Name(name) => self.resolve_class_info(name),
             ExprKind::Member { object, field } => self
-                .module_namespace(&self.infer_module_path(object).unwrap_or_default())
+                .infer_module_path(object)
+                .and_then(|path| self.module_namespace(&path))
                 .and_then(|module| module.classes.get(field)),
             _ => None,
         };
@@ -281,8 +278,9 @@ impl FunctionChecker<'_> {
         len: usize,
         expr: &Expr,
     ) -> Result<StateImage> {
-        let (bytes, alignment) = match &expr.kind {
-            ExprKind::List(items) if items.len() == len && len > 0 => {
+        use fixed_arrays::Initializer;
+        let (bytes, alignment) = match fixed_arrays::initializer(expr) {
+            Some(Initializer::Elements(items)) if items.len() == len && len > 0 => {
                 let mut items = items.iter();
                 let first = self.state_image(element, items.next().unwrap())?;
                 let mut bytes = first.bytes;
@@ -291,20 +289,7 @@ impl FunctionChecker<'_> {
                 }
                 (bytes, first.alignment)
             }
-            ExprKind::Binary {
-                op: BinaryOp::Mul,
-                left,
-                right,
-            } => {
-                let ExprKind::List(items) = &left.kind else {
-                    return Err(literal_error(expr));
-                };
-                let [item] = items.as_slice() else {
-                    return Err(literal_error(expr));
-                };
-                if !matches!(right.kind, ExprKind::Int(n) if n == len as u128 && n > 0) {
-                    return Err(literal_error(expr));
-                }
+            Some(Initializer::Repeat(item, count)) if count == len && len > 0 => {
                 let item = self.state_image(element, item)?;
                 if item
                     .bytes

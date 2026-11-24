@@ -995,6 +995,64 @@ export "C" def get(word: uint16) -> uint16:
 }
 
 #[test]
+fn c_layout_queries_are_target_constants_in_freestanding_objects() {
+    let source = "import mem\nextern \"C\" packed align(8) class Header:\n    flag: uint8 bits(3)\n    count: uint32\n\nSIZE = mem.size_of(Header)\n\nexport \"C\" def layout() -> uint64:\n    return SIZE + mem.align_of(Header) + mem.offset_of(Header, count)\n";
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|symbol| symbol == "layout"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn freestanding_union_member_write_keeps_runtime_out_of_every_object() {
+    let source = r#"
+extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+export "C" def replace_low(original: uint32, low: uint8) -> uint32:
+    mut w = Word.from_whole(original)
+    w.low = low
+    return w.whole
+"#;
+    let mut module = crate::parse_source(source).unwrap();
+    module.use_freestanding_c_layout();
+    let program = crate::check_module_with_builtin_imports(module).unwrap();
+    let mir = crate::mir::lower_with_source_locations(&program);
+    for target in TARGETS {
+        let bytes = emit_freestanding_object(&mir, "kernel.au", source, target).unwrap();
+        let (globals, _, undefined) = symbols(&bytes);
+        assert!(globals.iter().any(|s| s == "replace_low"));
+        assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+    }
+}
+
+#[test]
+fn packed_mut_parameter_uses_target_c_layout_on_every_freestanding_target() {
+    let source = r#"
+extern "C" packed align(16) class Header:
+    kind: uint8
+    serial: uint32
+    code: uint16 bits(3)
+
+extern "C" def advance(h: mut Header) -> None
+
+export "C" def reset(code: uint16) -> uint32:
+    mut h = Header(kind=4, serial=1234, code=code)
+    advance(h)
+    h.code = 1
+    return h.serial + (h.code as uint32)
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert!(global.iter().any(|name| name == "reset"));
+        assert!(undefined.iter().any(|name| name == "advance"));
+        assert!(undefined.iter().all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+    }
+}
+
+#[test]
 fn typed_pointer_objects_use_target_memory_operations() {
     for source in [
         include_str!("../tests/fixtures/typed-pointers/scalars.au"),

@@ -178,3 +178,20 @@ fn returned_views_cannot_borrow_module_state_through_calls() {
     let diagnostic = program(source).unwrap_err();
     assert_eq!(diagnostic.code, "AU3030", "{diagnostic:?}");
 }
+
+#[test]
+fn fixed_module_elements_have_inline_storage_on_each_target() {
+    let source = include_str!("../../tests/fixtures/freestanding/module_state/fixed.au");
+    let checked = program(source).unwrap();
+    let ring = checked.constants["ring"].state.as_ref().unwrap();
+    assert_eq!(ring.bytes, [0; 8]);
+    assert_eq!(ring.alignment, 2);
+    assert_eq!(
+        checked.constants["selectors"].state.as_ref().unwrap().bytes,
+        [1, 0, 0, 0, 3, 0, 0, 0]
+    );
+    let mir = lower_to_mir(&checked);
+    for target in FreestandingTarget::ALL {
+        emit_freestanding_object(&mir, "ring.au", source, target).unwrap();
+    }
+}

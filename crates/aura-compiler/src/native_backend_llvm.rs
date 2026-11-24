@@ -3465,6 +3465,24 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 for (index, indirect) in &signature.indirects {
                     let (name, size) = match indirect {
+                        Indirect::ByValueAligned { size, alignment } => {
+                            let location = AttributeLoc::Param(*index as u32);
+                            call.add_attribute(
+                                location,
+                                context.create_type_attribute(
+                                    Attribute::get_named_enum_kind_id("byval"),
+                                    context.i8_type().array_type(*size).as_any_type_enum(),
+                                ),
+                            );
+                            call.add_attribute(
+                                location,
+                                context.create_enum_attribute(
+                                    Attribute::get_named_enum_kind_id("align"),
+                                    u64::from(*alignment),
+                                ),
+                            );
+                            continue;
+                        }
                         Indirect::ByValue { size } => ("byval", *size),
                         Indirect::Result { size } => ("sret", *size),
                         Indirect::Aggregate { .. } => continue,
