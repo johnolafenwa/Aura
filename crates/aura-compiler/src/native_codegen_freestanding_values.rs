@@ -30,7 +30,7 @@ use crate::diag::Diagnostic;
 use crate::mir::{
     MethodDispatch, MirClassField, MirFieldInit, MirLocalType, MirParam, MirReceiverKind,
 };
-use crate::runtime_ops::{RuntimeOp, StrOp};
+use crate::runtime_ops::{ListOp, RuntimeOp, StrOp};
 
 /// What each class the pass makes is named. A source name holds no `:`.
 const CLASS_PREFIX: &str = "aura::values::";
@@ -80,6 +80,22 @@ const TEXT_CONTAINS: &str = "aura::values::value_text_contains";
 const TEXT_FROM_INT: &str = "aura::values::value_text_from_int";
 const TEXT_FROM_UINT: &str = "aura::values::value_text_from_uint";
 const TEXT_FROM_BOOL: &str = "aura::values::value_text_from_bool";
+
+/// The library of lists, in Aura.
+const LIST_SOURCE: &str = include_str!("../std/freestanding_list.au");
+const LIST_PATH: &str = "aura/freestanding_list.au";
+
+/// What the class of each list type is named, before its element type.
+const LIST_CLASS_PREFIX: &str = "aura::values::list::";
+
+/// The functions of the list library.
+const LIST_NEW: &str = "aura::values::value_list_new";
+const LIST_RELEASE: &str = "aura::values::value_list_release";
+const LIST_LENGTH: &str = "aura::values::value_list_length";
+const LIST_PUSH_SLOT: &str = "aura::values::value_list_push_slot";
+const LIST_SLOT: &str = "aura::values::value_list_slot";
+const LIST_SLOT_UNCHECKED: &str = "aura::values::value_list_slot_unchecked";
+const LIST_CLEAR: &str = "aura::values::value_list_clear";
 
 /// The functions the pass makes for a class, each named with its kind and
 /// the class. The emitter writes the code of a call of the first two.
@@ -147,6 +163,8 @@ struct Values {
     next: usize,
     /// Whether the program holds a `str`.
     text: bool,
+    /// The element type of each list class.
+    lists: HashMap<String, Type>,
     /// The functions whose shared parameters stay with the caller.
     borrowing: HashSet<String>,
     /// How each function takes its parameters, with their names.
@@ -160,6 +178,12 @@ impl Values {
         match ty {
             Type::Named(name, args) if name == "str" && args.is_empty() => {
                 Type::named(self.text_class())
+            }
+            Type::Named(name, args) if name == "list" && args.len() == 1 => {
+                match self.list_class(&args[0]) {
+                    Some(class) => Type::named(&class),
+                    None => ty.clone(),
+                }
             }
             Type::Tuple(_) => match self.class_of(ty) {
                 Some(class) => Type::named(&class),
@@ -199,6 +223,47 @@ impl Values {
             );
         }
         TEXT_CLASS
+    }
+
+    /// The class that stands for a list of `element`, made at its first
+    /// use: one field, the address of the list's header. Only a list of
+    /// scalars has one.
+    fn list_class(&mut self, element: &Type) -> Option<String> {
+        let scalar = matches!(
+            element,
+            Type::Named(name, args) if args.is_empty() && matches!(
+                name.as_str(),
+                "bool" | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
+                    | "uint64" | "float32" | "float64"
+            )
+        );
+        if !scalar {
+            return None;
+        }
+        let name = format!("{LIST_CLASS_PREFIX}{element}");
+        if !self.lists.contains_key(&name) {
+            self.lists.insert(name.clone(), element.clone());
+            let class = MirClass {
+                name: name.clone(),
+                type_params: Vec::new(),
+                fields: vec![MirClassField {
+                    name: TEXT_FIELD.to_string(),
+                    ty: Type::named("uint64"),
+                }],
+                methods: Vec::new(),
+                copy: false,
+            };
+            self.classes.insert(name.clone(), class.clone());
+            self.made.push(class);
+            self.boxes.insert(
+                name.clone(),
+                vec![BoxField {
+                    field: TEXT_FIELD.to_string(),
+                    content: Type::Named("list".to_string(), vec![element.clone()]),
+                }],
+            );
+        }
+        Some(name)
     }
 
     /// Whether a field of a class the pass makes can hold `ty`: a scalar
@@ -441,6 +506,7 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
         made: Vec::new(),
         next: 1,
         text: false,
+        lists: HashMap::new(),
         borrowing: module.borrowing.iter().cloned().collect(),
         passing: module
             .functions
@@ -468,8 +534,38 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
     for function in &mut module.functions {
         lower_function(function, &mut values, &mut problems);
     }
-    if !values.boxed.is_empty() || values.text {
+    if !values.boxed.is_empty() || values.text || !values.lists.is_empty() {
         let mut made = box_functions(&mut values);
+        // The store and the load of an element. The emitter writes each
+        // call, so the bodies only keep the module whole.
+        let mut elements = values.lists.values().cloned().collect::<Vec<_>>();
+        elements.sort_by_key(|element| element.to_string());
+        for element in elements {
+            let name = element.to_string();
+            made.push(made_function(
+                class_function(STORE, &name),
+                vec![
+                    ("address", MirReceiverKind::Borrow, Type::named("uint64")),
+                    ("value", MirReceiverKind::Borrow, element.clone()),
+                ],
+                Type::Unit,
+                Vec::new(),
+                one_block(Vec::new(), Terminator::Return(Operand::Unit)),
+            ));
+            let mut fresh = Fresh {
+                count: 0,
+                locals: Vec::new(),
+            };
+            let mut instructions = Vec::new();
+            let empty = zero(&element, &values, &mut fresh, &mut instructions);
+            made.push(made_function(
+                class_function(LOAD, &name),
+                vec![("address", MirReceiverKind::Borrow, Type::named("uint64"))],
+                element,
+                fresh.locals,
+                one_block(instructions, Terminator::Return(empty)),
+            ));
+        }
         if values.text {
             // The emitter writes each call, so the body only keeps the
             // module whole.
@@ -502,6 +598,16 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
                 FUNCTION_PREFIX,
                 BOX_PATH,
             ));
+        if !values.lists.is_empty() {
+            module
+                .functions
+                .extend(super::freestanding_heap::library_functions(
+                    LIST_SOURCE,
+                    "value_list_",
+                    FUNCTION_PREFIX,
+                    LIST_PATH,
+                ));
+        }
         if values.text {
             module
                 .functions
@@ -749,6 +855,8 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
     // Whether the pass counted every reference to a box.
     let mut counted = true;
     let excluded = excluded_variants(&function.blocks);
+    // The indexes whose range fact the pass drops.
+    let mut unproven = HashSet::new();
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for block in std::mem::take(&mut function.blocks) {
         let BasicBlock {
@@ -786,6 +894,16 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         &mut current.instructions,
                     );
                     current.instructions.push(Instruction::Release { place });
+                }
+                // The fact that an index is in range served the element
+                // read the pass replaces with a library call.
+                Instruction::IndexInRange { list, index }
+                    if matches!(
+                        place_type(&list, &types, values),
+                        Some(Type::Named(class, _)) if values.lists.contains_key(&class)
+                    ) =>
+                {
+                    unproven.insert(index);
                 }
                 // A lend moves a part out for one call and back after it.
                 // The hosted planner would not lend a class of words, so
@@ -928,6 +1046,21 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
             &mut fresh,
             &mut blocks,
         );
+    }
+    // The fact also showed that stepping the index cannot overflow, so
+    // without it the step is checked again.
+    if !unproven.is_empty() {
+        for instruction in blocks.iter_mut().flat_map(|block| &mut block.instructions) {
+            if let Instruction::Assign {
+                target,
+                value: Rvalue::Binary { trap, .. },
+            } = instruction
+            {
+                if unproven.contains(target) && *trap == crate::mir::ArithmeticTrap::None {
+                    *trap = crate::mir::ArithmeticTrap::Overflow;
+                }
+            }
+        }
     }
     function.blocks = blocks;
     if !counted {
@@ -1226,7 +1359,149 @@ fn lower_text(
     after: &mut Vec<Instruction>,
 ) -> Rvalue {
     let bool_type = || Type::named("bool");
+    let word = || Type::named("uint64");
+    let plain = |value| MirArg {
+        name: None,
+        value,
+        writeback_place: None,
+    };
     match value {
+        Rvalue::VecLiteral {
+            elements,
+            element_type,
+        } => {
+            let Some(class_name) = values.list_class(&element_type) else {
+                return Rvalue::VecLiteral {
+                    elements,
+                    element_type,
+                };
+            };
+            let address = call(
+                fresh,
+                out,
+                LIST_NEW.to_string(),
+                vec![Operand::Int(elements.len() as u128)],
+                word(),
+            );
+            for element in elements {
+                let slot = call(
+                    fresh,
+                    out,
+                    LIST_PUSH_SLOT.to_string(),
+                    vec![Operand::Place(address.clone())],
+                    word(),
+                );
+                call(
+                    fresh,
+                    out,
+                    class_function(STORE, &element_type.to_string()),
+                    vec![Operand::Place(slot), element],
+                    Type::Unit,
+                );
+            }
+            Rvalue::Construct {
+                class_name,
+                fields: vec![MirFieldInit {
+                    name: TEXT_FIELD.to_string(),
+                    value: Operand::Place(address),
+                }],
+            }
+        }
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(op),
+                    receiver: Some(Operand::Place(receiver)),
+                    receiver_place,
+                },
+            args,
+            type_args,
+        } => {
+            let element = match place_type(&receiver, types, values) {
+                Some(Type::Named(class, _)) => values.lists.get(&class).cloned(),
+                _ => None,
+            };
+            let known = matches!(
+                (op, args.len()),
+                (ListOp::Len | ListOp::IsEmpty | ListOp::Clear, 0)
+                    | (ListOp::PushScalar(_), 1)
+                    | (ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_), 3)
+                    | (ListOp::SetIndexScalar(_), 4)
+            );
+            let (Some(element), true) = (element, known) else {
+                return Rvalue::Call {
+                    callee: CallTarget::Runtime {
+                        op: RuntimeOp::List(op),
+                        receiver: Some(Operand::Place(receiver)),
+                        receiver_place,
+                    },
+                    args,
+                    type_args,
+                };
+            };
+            let address = fresh.local(word());
+            out.push(Instruction::Assign {
+                target: address.clone(),
+                value: Rvalue::Member {
+                    object: Operand::Place(receiver),
+                    field: TEXT_FIELD.to_string(),
+                },
+            });
+            let list = Operand::Place(address);
+            let mut args = args.into_iter().map(|arg| arg.value);
+            let named = |function: String, args: Vec<Operand>| Rvalue::Call {
+                callee: CallTarget::Name(function),
+                args: args.into_iter().map(plain).collect(),
+                type_args: Default::default(),
+            };
+            let store = class_function(STORE, &element.to_string());
+            let load = class_function(LOAD, &element.to_string());
+            match op {
+                ListOp::Len => named(LIST_LENGTH.to_string(), vec![list]),
+                ListOp::Clear => named(LIST_CLEAR.to_string(), vec![list]),
+                ListOp::IsEmpty => {
+                    let length = call(
+                        fresh,
+                        out,
+                        LIST_LENGTH.to_string(),
+                        vec![list],
+                        Type::named("int64"),
+                    );
+                    Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        left: Operand::Place(length),
+                        right: Operand::Int(0),
+                        span: crate::diag::Span::new(0, 0),
+                        trap: Default::default(),
+                    }
+                }
+                ListOp::PushScalar(_) => {
+                    let slot = call(fresh, out, LIST_PUSH_SLOT.to_string(), vec![list], word());
+                    named(
+                        store,
+                        vec![Operand::Place(slot), args.next().unwrap_or(Operand::Unit)],
+                    )
+                }
+                ListOp::SetIndexScalar(_) => {
+                    let index = args.next().unwrap_or(Operand::Unit);
+                    let slot = call(fresh, out, LIST_SLOT.to_string(), vec![list, index], word());
+                    named(
+                        store,
+                        vec![Operand::Place(slot), args.next().unwrap_or(Operand::Unit)],
+                    )
+                }
+                _ => {
+                    let function = if matches!(op, ListOp::IndexScalar(_)) {
+                        LIST_SLOT
+                    } else {
+                        LIST_SLOT_UNCHECKED
+                    };
+                    let index = args.next().unwrap_or(Operand::Unit);
+                    let slot = call(fresh, out, function.to_string(), vec![list, index], word());
+                    named(load, vec![Operand::Place(slot)])
+                }
+            }
+        }
         Rvalue::FormatString { parts } => match lower_format(&parts, types, values, fresh, out) {
             Some(text) => text,
             None => Rvalue::FormatString { parts },
@@ -2215,6 +2490,8 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                             BOX_RETAIN.to_string()
                         } else if class == TEXT_CLASS {
                             TEXT_RELEASE.to_string()
+                        } else if values.lists.contains_key(&class) {
+                            LIST_RELEASE.to_string()
                         } else {
                             match values.rewritten(&found.content) {
                                 Type::Named(content, _) => class_function(DROP_BOX, &content),

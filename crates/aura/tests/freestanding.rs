@@ -555,6 +555,75 @@ fn text_computes_what_the_hosted_program_prints_and_frees_every_block() {
     );
 }
 
+/// A list of numbers lives in a counted header and a buffer that grows.
+#[test]
+fn lists_of_numbers_compute_what_the_hosted_program_prints_and_free_every_block() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_list.au"),
+        "entry",
+        "1028420\n",
+    );
+}
+
+/// An index outside a list stops the program through the trap hook.
+#[test]
+fn a_list_index_out_of_range_calls_the_trap_hook() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    let workspace = Workspace::new();
+    workspace.write(
+        "range.au",
+        "export \"C\" def entry(n: int64) -> int64:\n    items = [1, 2, 3]\n    return items[n]\n",
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "range.o", "range.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let harness = workspace.write(
+        "range.c",
+        r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+int64_t entry(int64_t n);
+void *aura_alloc(uint64_t size, uint64_t align) { (void)align; return malloc(size); }
+void aura_free(void *block, uint64_t size, uint64_t align) { (void)size; (void)align; free(block); }
+void *aura_realloc(void *block, uint64_t old_size, uint64_t align, uint64_t new_size) {
+    (void)old_size;
+    (void)align;
+    return realloc(block, new_size);
+}
+void aura_trap(uint32_t code, const char *file, uint64_t file_len, uint32_t line, uint32_t column) {
+    (void)line;
+    (void)column;
+    printf("trap %u at %.*s\n", code, (int)file_len, file);
+    exit(0);
+}
+int main(void) {
+    printf("%lld %lld\n", (long long)entry(2), (long long)entry(-3));
+    printf("%lld\n", (long long)entry(3));
+    return 0;
+}
+"#,
+    );
+    let binary = workspace.path.join("range.bin");
+    let link = Command::new(compiler)
+        .arg(&harness)
+        .arg(workspace.path.join("range.o"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("the C compiler should start");
+    assert!(link.status.success(), "{}", stderr(&link));
+    let run = Command::new(&binary)
+        .output()
+        .expect("the linked program should start");
+    assert_eq!(stdout(&run), "3 1\ntrap 3 at aura/freestanding_list.au\n");
+}
+
 /// Runs `source` hosted and as a freestanding object linked with hooks
 /// that count: both print `expected`, and no block is left.
 fn blocks_are_all_freed(compiler: &str, source: &str, entry: &str, expected: &str) {

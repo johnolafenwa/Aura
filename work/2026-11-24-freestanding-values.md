@@ -72,8 +72,22 @@ values that need no heap (ADR-0129).
   test: `crates/aura/tests/freestanding_text.au` prints 812162342 hosted
   and freestanding with every block freed.
 
+## Lists (ADR-0160, section Lists)
+
+- `list[T]` for a scalar `T` is a class of one word, the address of a
+  header of a count, a length, a capacity, and a buffer address. The
+  library is `crates/aura-compiler/std/freestanding_list.au`.
+- The pass rewrites literals, `append`, `len`, `is_empty`, `clear`, and
+  element reads and writes, and drops the range facts they used.
+- 2 more compiler tests and 2 more command tests:
+  `crates/aura/tests/freestanding_list.au` prints 1028420 hosted and
+  freestanding with every block freed, and an index out of range calls
+  the trap hook.
+
 ## Follow-up
 
+- Lists of text, classes, and other values; the other list methods.
+- A trap code and the program's position for an index out of range.
 - Floats and format specs in f-strings, indexing, and slices of `str`.
 - `str | None`.
 - Literal blocks in the program's data.

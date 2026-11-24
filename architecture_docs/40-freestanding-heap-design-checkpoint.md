@@ -105,8 +105,11 @@ The owner chose D1 on 2026-11-24.
    count (ADR-0160). Done. A union that holds one and a write to a part
    of one are still refused.
 4. `str` with its first operations (ADR-0160, section Text). Done.
-5. Number formatting and indexing for `str`, `bytes`, and `list`. Then
-   `dict` and `set`. Then closures and trait objects.
+5. F-strings of integers and `bool`, and lists of scalars (ADR-0160,
+   section Lists). Done.
+6. Lists of other values, indexing of `str`, and the rest of the list
+   and text methods. Then `dict` and `set`. Then closures and trait
+   objects.
 
 ## Proof
 

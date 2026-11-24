@@ -139,7 +139,7 @@ export "C" def go(n: int64) -> int64:
 fn an_enum_that_holds_a_collection_is_still_refused() {
     let source = r#"
 enum Token:
-    Word(list[int64])
+    Word(list[str])
     End
 
 def length(token: Token) -> int64:
@@ -227,6 +227,49 @@ fn a_program_without_text_gets_no_text_library() {
         let module = prepared(source);
         assert!(!module.contains("value_text_"));
         assert!(!module.contains("aura::values::str"));
+        assert!(!module.contains("value_list_"));
+    }
+}
+
+/// Lists of integers, floats, and `bool`: literals, `append`, element
+/// reads and writes, loops, a `mut` parameter, and a class that holds one.
+const LISTS: &str = include_str!("../../aura/tests/freestanding_list.au");
+
+#[test]
+fn a_list_of_numbers_becomes_calls_of_the_list_library_on_every_target() {
+    let module = prepared(LISTS);
+    for made in [
+        "aura::values::list::int64",
+        "aura::values::list::float64",
+        "aura::values::list::bool",
+        "aura::values::list::uint8",
+        "aura::values::value_list_new",
+        "aura::values::value_list_push_slot",
+        "aura::values::value_list_slot",
+        "aura::values::value_list_slot_unchecked",
+        "aura::values::value_list_release",
+        "aura::values::box_store::float64",
+        "aura::values::box_load::uint8",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    for gone in ["VecLiteral", "IndexInRange", "\"List\""] {
+        assert!(!module.contains(gone), "{gone}");
+    }
+    for target in FreestandingTarget::ALL {
+        object(LISTS, target);
+    }
+}
+
+#[test]
+fn a_list_of_other_values_and_other_list_operations_are_still_refused() {
+    for body in [
+        "    names = [\"a\", \"b\"]\n    return names.len() + n\n",
+        "    mut items = [n, 2]\n    items.reverse()\n    return items[0]\n",
+    ] {
+        let source = format!("export \"C\" def run(n: int64) -> int64:\n{body}");
+        let found = refusals(&source);
+        assert!(!found.is_empty(), "{body}");
     }
 }
 

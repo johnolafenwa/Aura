@@ -62,9 +62,10 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Two kinds of value also own
-blocks on a heap: text, and an enum that holds itself. See
-[Text](#text) and [Enums That Hold Themselves](#enums-that-hold-themselves).
+Every value is one or more machine words. Three kinds of value also own
+blocks on a heap: text, lists of numbers, and an enum that holds itself.
+See [Text](#text), [Lists](#lists), and
+[Enums That Hold Themselves](#enums-that-hold-themselves).
 A program reaches other heap memory through addresses: see
 [The Heap](#the-heap).
 
@@ -87,14 +88,15 @@ def read(port: uint64) -> (Reading, uint64):
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a collection |
+| Classes whose fields are available types, with methods | Classes that hold a `dict` or a `set` |
 | `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
-| `extern "C"` classes | `bytes`, `list`, `dict`, `set`, `Array` |
+| `list` of integers, floats, or `bool`, with literals, `append`, `len`, `is_empty`, `clear`, element reads and writes, and `for` loops | Lists of any other type, the other `list` methods, slices |
+| `extern "C"` classes | `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
 | `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
+| `if`, `while`, `for` over `range`, over a list, or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
@@ -162,6 +164,37 @@ void uart_write(const char *text, size_t length);
 ```
 
 The program needs a heap, as in the next section.
+
+## Lists
+
+A freestanding program holds lists of integers, floats, and `bool`.
+
+```aura
+def squares(n: int64) -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(0, n):
+        out.append(i * i)
+    return out
+
+export "C" def sum_of_squares(n: int64) -> int64:
+    mut sum = 0
+    for value in squares(n):
+        sum = sum + value
+    return sum
+```
+
+A list is a header block from the allocation hooks, with a reference
+count, the length, and the capacity, and a buffer of one 8-byte word for
+each element. The buffer doubles when it is full, through
+`aura_realloc`. The compiler frees both with the list's last reference.
+
+Available: literals, `append`, `len`, `is_empty`, `clear`, `items[i]`,
+`items[i] = value`, and `for value in items`. A negative index counts
+from the end. A list may be a `mut` parameter, a result, or a field of a
+class, a tuple, or an enum.
+
+An index outside the list is a failed assertion in
+`aura/freestanding_list.au`, trap code 3.
 
 ## Enums That Hold Themselves
 
@@ -429,8 +462,9 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- The heap values of the language are `str` and enums that hold
-  themselves: no collection yet. A program allocates other memory
+- The heap values of the language are `str`, lists of numbers, and enums
+  that hold themselves: no `dict`, no `set`, and no list of any other
+  type yet. A program allocates other memory
   through the [`mem` module](/manual/mem).
 - Text has no indexing or slices, an f-string takes no float and no
   format spec, and `str | None` is not available.

@@ -304,17 +304,17 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             r#"
-def total(values: list[int64]) -> int64:
+def total(values: list[str]) -> int64:
     mut sum: int64 = 0
     for value in values:
-        sum = sum + value
+        sum = sum + value.len()
     return sum
 export "C" def run(a: int64) -> int64:
-    return total([a, a])
+    return total(["a", "b"]) + a
 "#,
             &[
                 "`run` builds a collection",
-                "`total` takes `values` of type `list[int64]`",
+                "`total` takes `values` of type `list[str]`",
                 "reads an element of a collection",
             ],
         ),
@@ -335,11 +335,11 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             r#"
-def parse(a: int64) -> Result[int64, list[int64]]:
+def parse(a: int64) -> Result[int64, list[str]]:
     if a > 0:
         return Ok(a)
-    return Err([a])
-def inner(a: int64) -> Result[int64, list[int64]]:
+    return Err(["no"])
+def inner(a: int64) -> Result[int64, list[str]]:
     value = try parse(a)
     return Ok(value + 1)
 export "C" def run(a: int64) -> int64:
@@ -351,7 +351,7 @@ export "C" def run(a: int64) -> int64:
 "#,
             &[
                 "`inner` uses `try`",
-                "`parse` returns `Result[int64, list[int64]]`",
+                "`parse` returns `Result[int64, list[str]]`",
                 "`run` matches on an enum value",
             ],
         ),
@@ -673,17 +673,17 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
     let prelude = "export \"C\" def entry(count: int64) -> int64:\n";
     for (body, expected) in [
         (
-            "    mut values: list[int64] = []\n    values.append(count)\n    return count\n",
+            "    mut values: list[str] = []\n    values.append(\"a\")\n    return count\n",
             "builds a collection",
         ),
         (
-            "    mut values: list[int64] = [count]\n    return values[0]\n",
+            "    values: list[int64] = [count]\n    part = values[0:1]\n    return count\n",
             "reads or changes a collection",
         ),
         ("    print(count)\n    return count\n", "calls `print`"),
         ("    return 2 ** count\n", "uses `**`"),
         (
-            "    pair = (count, [count])\n    return pair[0]\n",
+            "    pair = (count, [\"a\"])\n    return pair[0]\n",
             "uses a tuple",
         ),
         (
@@ -710,13 +710,13 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
 #[test]
 fn problems_name_the_function_and_the_line() {
     let source = r#"
-def describe(code: int64) -> list[int64]:
-    return [code]
+def describe(code: int64) -> list[str]:
+    return ["code"]
 
 enum Shape:
     Circle(radius: float64)
     Square(side: float64)
-    Named(name: list[int64])
+    Named(name: list[str])
 
 def area(shape: Shape) -> float64:
     match shape:
@@ -741,7 +741,7 @@ export "C" def entry(count: int64) -> int64:
             .map(|span| span.line)
     };
     assert_eq!(at("`describe` builds a collection"), Some(3));
-    assert_eq!(at("`describe` returns `list[int64]`"), Some(2));
+    assert_eq!(at("`describe` returns `list[str]`"), Some(2));
     assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(10));
     assert_eq!(at("`area` matches on an enum value"), Some(11));
     assert_eq!(at("`entry` calls `print`"), Some(20));

@@ -82,6 +82,28 @@ count, and a way to drop what the block holds.
 - **Assertion text is dropped before the pass**, so an `assert` with a
   message allocates nothing.
 
+## Lists
+
+- **A `list` of a scalar type is a class of one word, the address of a
+  header block:** a reference count, the length, the capacity, and the
+  address of a buffer of one 8-byte word for each element. The header
+  never moves, so a `mut` parameter and its caller name the same list.
+- **The list functions are Aura source** in `std/freestanding_list.au`.
+  A slot function checks the index and returns where the element lies,
+  and the emitter writes the store or the load of the element there, as
+  it does for a box.
+- **The pass rewrites** list literals, `append`, `len`, `is_empty`,
+  `clear`, and checked and unchecked element reads and writes. A `for`
+  loop over a list is already those in MIR.
+- **A fact that an index is in range is dropped with the read it
+  served.** The fact also showed that stepping the index cannot
+  overflow, so that step is checked again.
+- **An index out of range is a failed assertion in the library**, trap
+  code 3 with the library's file name. The position in the program and
+  a code of its own are a later step.
+- A list of any other type, and every other list operation, is still
+  refused.
+
 ## Consequences
 
 - A freestanding program builds lists and trees from enums, holds them in

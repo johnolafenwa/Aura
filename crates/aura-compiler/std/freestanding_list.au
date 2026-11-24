@@ -1,0 +1,86 @@
+# The lists of a freestanding program.
+#
+# A `list` value is the address of a header block from the allocation
+# hooks: a reference count, the length, the capacity, and the address of
+# the buffer, 8 bytes each. The buffer holds one 8-byte word for each
+# element. The compiler writes the store and the load of an element, at
+# the address a slot function returns plus 8. `aura build --freestanding`
+# adds these functions to a program that uses a list.
+
+import mem
+
+
+# A new empty list with room for `capacity` elements and one reference.
+def value_list_new(capacity: uint64) -> uint64:
+    address = mem.alloc(32, 8)
+    assert address != 0, "out of memory"
+    mut buffer: uint64 = 0
+    if capacity != 0:
+        buffer = mem.alloc(capacity * 8, 8)
+        assert buffer != 0, "out of memory"
+    mem.write_uint64(address, 1)
+    mem.write_uint64(address + 8, 0)
+    mem.write_uint64(address + 16, capacity)
+    mem.write_uint64(address + 24, buffer)
+    return address
+
+
+# One reference fewer to the list at `address`, which is freed with its
+# last one. Address 0 is no list.
+def value_list_release(address: uint64) -> None:
+    if address == 0:
+        return
+    count = mem.read_uint64(address)
+    if count > 1:
+        mem.write_uint64(address, count - 1)
+        return
+    capacity = mem.read_uint64(address + 16)
+    if capacity != 0:
+        mem.free(mem.read_uint64(address + 24), capacity * 8, 8)
+    mem.free(address, 32, 8)
+
+
+# The number of elements.
+def value_list_length(address: uint64) -> int64:
+    return mem.read_uint64(address + 8) as int64
+
+
+# Makes the list one element longer and returns the slot of the new last
+# element. The buffer doubles when it is full.
+def value_list_push_slot(address: uint64) -> uint64:
+    length = mem.read_uint64(address + 8)
+    capacity = mem.read_uint64(address + 16)
+    mut buffer = mem.read_uint64(address + 24)
+    if length == capacity:
+        if capacity == 0:
+            buffer = mem.alloc(32, 8)
+            mem.write_uint64(address + 16, 4)
+        else:
+            buffer = mem.realloc(buffer, capacity * 8, 8, capacity * 16)
+            mem.write_uint64(address + 16, capacity * 2)
+        assert buffer != 0, "out of memory"
+        mem.write_uint64(address + 24, buffer)
+    mem.write_uint64(address + 8, length + 1)
+    return buffer + length * 8 - 8
+
+
+# The slot of the element at `index`, which counts from the end when it
+# is negative.
+def value_list_slot(address: uint64, index: int64) -> uint64:
+    length = mem.read_uint64(address + 8) as int64
+    mut at = index
+    if at < 0:
+        at = at + length
+    assert at >= 0 and at < length, "list index out of range"
+    return mem.read_uint64(address + 24) + (at as uint64) * 8 - 8
+
+
+# The slot of the element at `index`, which the compiler has shown to be
+# in range.
+def value_list_slot_unchecked(address: uint64, index: int64) -> uint64:
+    return mem.read_uint64(address + 24) + (index as uint64) * 8 - 8
+
+
+# Removes every element and keeps the buffer.
+def value_list_clear(address: uint64) -> None:
+    mem.write_uint64(address + 8, 0)
