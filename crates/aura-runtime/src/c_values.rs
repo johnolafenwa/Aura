@@ -27,7 +27,10 @@ use crate::runtime_value::{InstanceValue, RuntimeName, Value, VecValue};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CValueError {
     /// The value is not the shape the C type needs.
-    Shape { expected: String, found: String },
+    Shape {
+        expected: String,
+        found: String,
+    },
     /// An array field holds a list of the wrong length.
     Length {
         field: String,
@@ -42,6 +45,10 @@ pub enum CValueError {
     },
     /// C left a byte other than 0 or 1 in a `bool`.
     BadBool(u8),
+    BitWidth {
+        field: String,
+        width: u8,
+    },
 }
 
 impl CValueError {
@@ -50,6 +57,7 @@ impl CValueError {
         match self {
             Self::Shape { .. } | Self::Length { .. } | Self::UnionLength { .. } => "AU4005",
             Self::BadBool(_) => "AU4001",
+            Self::BitWidth { .. } => "AU4033",
         }
     }
 }
@@ -77,6 +85,7 @@ impl fmt::Display for CValueError {
                 formatter,
                 "C union `{name}` is {expected} byte(s), but its `{UNION_BYTES_FIELD}` list has {found}"
             ),
+            Self::BitWidth { field, width } => write!(formatter, "value does not fit the {width}-bit C field `{field}`"),
             Self::BadBool(byte) => write!(
                 formatter,
                 "C left the byte {byte} in a `bool`, which holds only 0 or 1"
@@ -198,7 +207,7 @@ fn scalar_value(scalar: FfiScalar, word: u64) -> Result<Value, CValueError> {
 
 /// Writes `value`, of kind `kind`, at the start of `bytes`. `field` names
 /// the field for a message.
-fn pack_kind(
+pub(crate) fn pack_kind(
     value: &Value,
     kind: &CFieldKind,
     field: &str,
@@ -248,7 +257,7 @@ fn pack_kind(
 }
 
 /// The value of kind `kind` at the start of `bytes`.
-fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
+pub(crate) fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
     match kind {
         CFieldKind::Scalar(scalar) => {
             let size = scalar.size();
@@ -314,8 +323,25 @@ pub fn pack(value: &Value, layout: &CStruct, bytes: &mut [u8]) -> Result<(), CVa
             other => other,
         });
     }
-    for (field, offset) in layout.fields_with_offsets() {
+    for (field, position) in layout.positions() {
+        let offset = position.byte;
         let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
+        if let (Some((start, width)), CFieldKind::Scalar(scalar)) = (position.bits, &field.kind) {
+            let value = scalar_word(*scalar, &held)?;
+            if width < 64 && value >> width != 0 {
+                return Err(CValueError::BitWidth {
+                    field: field.name.clone(),
+                    width,
+                });
+            }
+            for (byte, (src, dst, mask)) in bytes[offset..]
+                .iter_mut()
+                .zip(crate::c_layout::bit_chunks(start, width))
+            {
+                *byte = (*byte & !mask) | (((value >> src) as u8) << dst & mask);
+            }
+            continue;
+        }
         pack_kind(&held, &field.kind, &field.name, &mut bytes[offset..])?;
     }
     Ok(())
@@ -331,11 +357,22 @@ pub fn unpack(layout: &CStruct, bytes: &[u8]) -> Result<Value, CValueError> {
             Value::Vec(VecValue::new(Type::named("uint8"), elements)),
         );
     } else {
-        for (field, offset) in layout.fields_with_offsets() {
-            fields.insert(
-                field.name.clone(),
-                unpack_kind(&field.kind, &bytes[offset..])?,
-            );
+        for (field, position) in layout.positions() {
+            let bytes = &bytes[position.byte..];
+            let value = if let (Some((start, width)), CFieldKind::Scalar(scalar)) =
+                (position.bits, &field.kind)
+            {
+                let value = bytes
+                    .iter()
+                    .zip(crate::c_layout::bit_chunks(start, width))
+                    .fold(0, |word, (byte, (dst, src, mask))| {
+                        word | (u64::from((byte & mask) >> src) << dst)
+                    });
+                scalar_value(*scalar, value)?
+            } else {
+                unpack_kind(&field.kind, bytes)?
+            };
+            fields.insert(field.name.clone(), value);
         }
     }
     Ok(Value::Instance(InstanceValue {

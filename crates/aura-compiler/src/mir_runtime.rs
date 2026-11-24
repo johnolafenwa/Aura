@@ -465,6 +465,8 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::ModuleStore { value, .. } => operand_is_process_run_function(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
         Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
     }
 }
@@ -2807,6 +2809,17 @@ impl MirRuntime {
     }
 
     fn initialize_module_constants(&mut self) -> Result<()> {
+        if self
+            .module
+            .constants
+            .iter()
+            .any(|cell| cell.state.is_some())
+        {
+            return Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            ));
+        }
         for constant in self.module.constants.clone() {
             let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
         }
@@ -4703,6 +4716,12 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::ModuleStore { .. }
+            | Rvalue::ModuleLoad { .. }
+            | Rvalue::ModuleAddress { .. } => Err(Diagnostic::coded(
+                "AU4030",
+                "mutable module storage requires freestanding execution",
+            )),
             Rvalue::ModuleConstant { key, initializer } => Ok(RvalueOutcome::SharedModuleConstant(
                 self.read_module_constant(key, initializer)?,
             )),
@@ -4971,6 +4990,13 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => self
+                .evaluate_fixed(op, args, type_args.get("array"), env)
+                .map(RvalueOutcome::Value),
             Rvalue::Call { callee, args, .. } => Ok(RvalueOutcome::Value(
                 self.evaluate_call_for_target(callee, args, env, expected_type)?,
             )),
@@ -6227,6 +6253,11 @@ impl MirRuntime {
             }
             receiver => receiver,
         };
+        if let (Value::Int(value), Some(method)) =
+            (&receiver, aura_core::integer_bits::BitMethod::of(field))
+        {
+            return integer_bits::evaluate(method, *value, receiver_static_ty.as_ref(), args, env);
+        }
         match &receiver {
             Value::Float(value) if field == "sqrt" => {
                 if !args.is_empty() {
@@ -13303,3 +13334,8 @@ mod tests;
 #[cfg(test)]
 #[path = "mir_runtime_task_stack_tests.rs"]
 mod task_stack_tests;
+
+#[path = "mir_runtime_fixed_arrays.rs"]
+mod fixed_arrays;
+#[path = "mir_integer_bits.rs"]
+mod integer_bits;

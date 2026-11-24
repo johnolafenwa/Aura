@@ -2330,8 +2330,8 @@ fn top_level_script_plain_and_compound_reassignment_share_the_mutable_local() {
 #[test]
 fn mutable_top_level_binding_cannot_be_module_storage_beside_main() {
     let error = check_source("mut counter: int32 = 0\ndef main():\n    print(counter)\n")
-        .expect_err("mutable module storage must remain rejected");
-    assert_eq!(error.code, "AU3003");
+        .expect_err("hosted mutable module bindings require a sharing diagnostic");
+    assert_eq!(error.code, "AU3030");
     assert_eq!(error.span, Some(crate::diag::Span::new(1, 5)));
     assert!(error.message.contains("module bindings are immutable"));
 }

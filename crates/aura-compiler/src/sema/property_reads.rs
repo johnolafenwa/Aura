@@ -210,6 +210,14 @@ impl Rewriter<'_> {
     fn stmt(&mut self, stmt: &mut Stmt) {
         match stmt {
             Stmt::Assign(assign) => {
+                let write_site = (assign.span.line, usize::MAX - assign.span.column);
+                if self.sites.contains(&write_site) {
+                    if let Some(setter) = super::c_union_writes::setter_statement(assign) {
+                        *stmt = setter;
+                        self.rewritten.insert(write_site);
+                        return;
+                    }
+                }
                 match &mut assign.target {
                     crate::ast::AssignTarget::Name(_) => {}
                     crate::ast::AssignTarget::Member { object, .. } => self.expr(object, false),
@@ -541,6 +549,22 @@ impl FunctionChecker<'_> {
         action: &str,
         locals: &mut std::collections::HashMap<String, super::LocalBinding>,
     ) -> Result<()> {
+        if let ExprKind::Member { object, field } = &super::grouped_expr(expr).kind {
+            if let Ok(ty) = self.type_of_expr_without_move_state(object, locals, None) {
+                if super::ffi_struct(&ty, self.classes)
+                    .is_some_and(|class| class.decl.layout_controls.bit_widths.contains_key(field))
+                {
+                    return Err(Diagnostic::coded_at(
+                        "AU3033",
+                        expr.span,
+                        format!("C bit-field `{field}` cannot be {action} through a reference"),
+                    )
+                    .with_help(
+                        "read the field into a local, then assign the result back to the field",
+                    ));
+                }
+            }
+        }
         match self.property_read_on_place_path(expr, locals) {
             Some((property, span)) => Err(property_use_error(span, &property, action)),
             None => Ok(()),
@@ -563,7 +587,23 @@ impl FunctionChecker<'_> {
             crate::ast::AssignTarget::Name(_) => Ok(()),
             crate::ast::AssignTarget::Member { object, field } => {
                 if let Ok(object_ty) = self.type_of_member_object_expr(object, locals) {
-                    if self.property_getter(&object_ty, field).is_some() {
+                    if let Some(getter) = self.property_getter(&object_ty, field) {
+                        if getter.class.decl.c_union.is_some()
+                            && assign.op.is_none()
+                            && !assign.mutable
+                            && assign.annotation.is_none()
+                        {
+                            PROPERTY_STATE.with(|state| {
+                                if let Some(state) = state.borrow_mut().last_mut() {
+                                    if state.module == self.module_name {
+                                        state.discovered.insert((
+                                            assign.span.line,
+                                            usize::MAX - assign.span.column,
+                                        ));
+                                    }
+                                }
+                            });
+                        }
                         return Err(property_use_error(assign.span, field, action));
                     }
                 }

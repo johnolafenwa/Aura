@@ -167,6 +167,8 @@ impl Module {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConstantDecl {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mutable: bool,
     pub public: bool,
     pub name: String,
     pub annotation: Option<TypeRef>,
@@ -269,6 +271,8 @@ pub struct ClassDecl {
     /// those fields in order.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c_layout: bool,
+    #[serde(skip_serializing_if = "crate::c_layout::LayoutControls::is_default")]
+    pub layout_controls: crate::c_layout::LayoutControls,
     /// The fields of an `extern "C"` class that are C arrays, each with
     /// its lengths, the outer array first. The type of such a field is a
     /// `list` nested once per length.
@@ -1660,5 +1664,21 @@ impl BindingTarget {
 impl Pattern {
     pub fn is_rest(&self) -> bool {
         matches!(self, Self::Rest(_))
+    }
+}
+
+impl Module {
+    /// Selects ELF record layout for a freestanding target, including on a
+    /// Windows host. Every C union uses an inline byte array in this profile.
+    pub fn use_freestanding_c_layout(&mut self) {
+        for item in &mut self.items {
+            if let Item::Class(class) = item {
+                class.layout_controls.microsoft_bit_fields = false;
+                class.layout_controls.inline_union = class.c_union.is_some();
+                if class.c_union.is_some() {
+                    class.copy = true;
+                }
+            }
+        }
     }
 }

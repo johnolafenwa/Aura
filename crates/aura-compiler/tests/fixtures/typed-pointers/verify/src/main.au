@@ -1,0 +1,26 @@
+import mem
+
+extern "C" class Counter:
+    count: int64
+
+def write_raw(address: uint64) -> None:
+    mem.write_int64(address, 5)
+
+def relay(address: uint64) -> None:
+    write_raw(address)
+
+def use_cell() -> None:
+    mut cell = Counter(count=0)
+    p = mem.address_of(cell.count)
+    relay(p as uint64)
+    assert cell.count == 0
+
+def replace_counter(p: ptr[Counter]) -> None:
+    p.write(Counter(count=9))
+
+def use_counter(address: uint64) -> None:
+    replace_counter(address as ptr[Counter])
+
+def untouched(value: int64) -> int64:
+    ensures result == value
+    return value

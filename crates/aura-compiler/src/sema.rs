@@ -1,7 +1,9 @@
 mod capabilities;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+mod atomic_order;
 mod callables;
+mod integer_bits;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
     ClosureOwner, FunctionParamContract,
@@ -18,6 +20,7 @@ use callables::{
 pub(crate) use loans::{synthetic_returned_view_decl, SYNTHETIC_CALLABLE_DECL};
 pub(crate) use types::closure_call_kind_for;
 mod display;
+pub(crate) mod fixed_arrays;
 mod generators;
 pub(crate) use display::{is_prelude_display, DISPLAY_METHOD, DISPLAY_TRAIT};
 mod iterator_loops;
@@ -66,6 +69,11 @@ mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
+mod module_state;
+#[cfg(test)]
+mod module_state_tests;
+pub use module_state::StateImage;
+pub(crate) use program::check_with_profile;
 mod program;
 mod tensor_derive;
 #[cfg(test)]
@@ -101,6 +109,8 @@ pub(crate) use type_param_calls::{
     collect_type_param_calls, lookup_type_param_call, specialized_functions,
 };
 pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
+pub(crate) mod c_layout_queries;
+mod c_union_writes;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -577,9 +587,17 @@ pub(crate) fn ffi_struct_layout(
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let mut layout_controls = holder.decl.layout_controls.clone();
+    layout_controls.inline_union = class.decl.layout_controls.inline_union;
+    for (field, info) in &holder.fields {
+        if matches!(&info.ty, Type::Named(name, _) if name == "fixed") {
+            layout_controls.inline_arrays.insert(field.clone());
+        }
+    }
     Some(CStruct {
         name: name.clone(),
         fields,
+        layout_controls,
         union: class.decl.c_union.is_some(),
     })
 }
@@ -604,6 +622,12 @@ fn ffi_field_kind(
         }
         let element = ffi_field_kind(element, inner, classes)?;
         return Some(CFieldKind::Array(Box::new(element), *length));
+    }
+    if let Some((element, length)) = ty.as_fixed_array() {
+        return Some(CFieldKind::Array(
+            Box::new(ffi_field_kind(element, &[], classes)?),
+            length,
+        ));
     }
     match ffi_scalar(ty) {
         Some(scalar) => Some(CFieldKind::Scalar(scalar)),
@@ -650,6 +674,9 @@ pub(crate) fn validate_ffi_struct_fields(
             if let Type::Named(_, args) = element {
                 element = args.first().unwrap_or(element);
             }
+        }
+        while let Some((inner, _)) = element.as_fixed_array() {
+            element = inner;
         }
         if ffi_scalar_type(element) || ffi_struct(element, classes).is_some() {
             continue;
@@ -3564,6 +3591,13 @@ impl<'a> FunctionChecker<'a> {
             let Some(binding) = locals.get_mut(&path.root) else {
                 continue;
             };
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module state `"))
+            {
+                continue;
+            }
             binding.stale_narrowing.remove(&path.projections);
             binding.narrowed.insert(
                 path.projections.clone(),
@@ -4978,6 +5012,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_state_loan(view_source, locals)?;
                     self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
@@ -5602,6 +5637,9 @@ impl<'a> FunctionChecker<'a> {
                     }
                     let (binding_ty, binding_passing, binding_mutable_place) =
                         match (&iterable_ty, for_stmt.borrow_mode) {
+                        (ty, None) if ty.as_fixed_array().is_some() => {
+                            (ty.as_fixed_array().unwrap().0.clone(), ReceiverKind::Borrow, false)
+                        }
                         (Type::Named(name, _), _) if name == "Range" => {
                             (Type::named("int64"), ReceiverKind::Value, false)
                         }
@@ -6116,7 +6154,10 @@ impl<'a> FunctionChecker<'a> {
             // `values[1:3] = ...` assigns an Array of the target's type, or
             // one element that fills the selection.
             let mut selection_element = None;
-            let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
+            let target_ty = if let Some((element, _)) = object_ty.as_fixed_array() {
+                self.check_vec_index_type(index, index.span, locals)?;
+                element.clone()
+            } else if let Some(target_ty) = array_element_type(&object_ty).cloned() {
                 if self.check_array_index_type(index, locals)? {
                     selection_element = Some(target_ty);
                     object_ty.clone()
@@ -6349,7 +6390,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
-            if !self.is_mutable_place(object, locals)? {
+            if self.imported_state(object, field).is_none()
+                && !self.is_mutable_place(object, locals)?
+            {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
                 }
@@ -6985,6 +7028,9 @@ impl<'a> FunctionChecker<'a> {
         expected: Option<&Type>,
     ) -> Result<Type> {
         self.reject_owned_view_value(expr, locals, "an owned aggregate")?;
+        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+            return Ok(array);
+        }
         match &expr.kind {
             ExprKind::Group(inner) => self.type_expr_consuming_result(inner, locals, expected),
             ExprKind::Cast { expr: inner, .. } => {
@@ -8524,6 +8570,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(array) = self.fixed_literal_type(expr, locals, expected)? {
+            return Ok(array);
+        }
         if let Some(Type::Union(union)) = expected {
             if !matches!(
                 expr.kind,
@@ -10261,7 +10310,10 @@ impl<'a> FunctionChecker<'a> {
                     // an Array that shares the source's elements.
                     return Ok(if selects { object_ty } else { element_ty });
                 }
-                if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
+                if let Some(element_ty) = vec_element_type(&object_ty)
+                    .or_else(|| object_ty.as_fixed_array().map(|(element, _)| element))
+                    .cloned()
+                {
                     self.check_vec_index_type(index, index.span, locals)?;
                     let retained_base = self
                         .retained_place_access(
@@ -11718,6 +11770,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(result) = self.c_layout_query(callee, args, locals) {
+            return result.map(|_| Type::named("uint64"));
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {
@@ -12754,7 +12809,9 @@ impl<'a> FunctionChecker<'a> {
                                 format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
                             ));
                         };
-                        if BuiltinMember::resolve(receiver_name, "len").is_none() {
+                        if value_ty.as_fixed_array().is_none()
+                            && BuiltinMember::resolve(receiver_name, "len").is_none()
+                        {
                             return Err(Diagnostic::coded_at(
                                 "AU2002",
                                 value_arg.span,
@@ -13617,6 +13674,7 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        atomic_order::check(function, args, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
                                 ClosureArgumentPolicy::RepeatableParameter("worker")
@@ -17369,6 +17427,11 @@ impl<'a> FunctionChecker<'a> {
                         expected,
                     );
                 }
+                if is_integer_type(&receiver_ty) {
+                    if let Some(method) = aura_core::integer_bits::BitMethod::of(field) {
+                        return self.check_bit_method(method, args, span, locals, receiver_ty);
+                    }
+                }
                 match (&receiver_ty, field.as_str()) {
                     (Type::Named(name, type_args), method_name)
                         if type_args.is_empty()
@@ -17952,6 +18015,9 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
+        if let Some(cell) = self.imported_state(object, field) {
+            return Ok(cell.ty.clone());
+        }
         let object_ty = self.type_of_member_object_expr(object, locals)?;
         self.resolve_member_type(&object_ty, field, span)
     }

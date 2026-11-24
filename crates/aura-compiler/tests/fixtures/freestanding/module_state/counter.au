@@ -1,0 +1,12 @@
+copy class Counts:
+    calls: uint32
+    total: uint32
+
+mut ticks: uint32 = 0
+mut counts: Counts = Counts(calls=2, total=7)
+
+export "C" def advance(amount: uint32) -> uint32:
+    ticks = ticks + 1
+    counts.calls = counts.calls + 1
+    counts.total = counts.total + amount
+    return ticks + counts.calls + counts.total
