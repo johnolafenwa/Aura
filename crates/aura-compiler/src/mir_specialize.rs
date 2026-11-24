@@ -689,6 +689,8 @@ impl Substitution<'_> {
                 }
             }
             Rvalue::CFieldAddress { .. } => {}
+            Rvalue::ModuleStore { value, .. } => self.operand(value),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
             Rvalue::ModuleConstant { .. } => {}
             Rvalue::Closure {
                 function,

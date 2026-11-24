@@ -331,14 +331,14 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
 fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
     let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
         .expect_err("module-level mutable state must be rejected before entrypoint checking");
-    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(mutable_module.code, "AU3030");
     assert_eq!(
         mutable_module.message,
-        "module bindings are immutable; `mut` module state is not supported"
+        "hosted module bindings are immutable"
     );
     assert_eq!(
         mutable_module.help,
-        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+        vec!["share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"]
     );
 
     let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
@@ -34209,4 +34209,26 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         error.message.contains("BigInt") && error.message.contains("int64"),
         "{error:?}"
     );
+}
+
+#[test]
+fn fixed_arrays_check_element_counts_and_iteration() {
+    let good = include_str!("../tests/fixtures/run-pass/fixed_arrays.au");
+    crate::check_source(good).expect("the inline array should type check");
+    let bad = include_str!("../tests/fixtures/check-fail/fixed_array_wrong_length.au");
+    assert_eq!(crate::check_source(bad).unwrap_err().code, "AU2082");
+}
+
+#[test]
+fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
+    for ty in [
+        "fixed[int32, 0]",
+        "fixed[fixed[uint64, 1048576], 1048576]",
+        "fixed[str, 2]",
+        "fixed[Message, 2]",
+    ] {
+        let source = format!("class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n");
+        let error = crate::check_source(&source).expect_err(ty);
+        assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
 }

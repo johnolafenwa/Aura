@@ -906,15 +906,12 @@ pub fn host_trace_event(args: Vec<Value>, _program_args: Option<&[String]>) -> R
 /// One `mem` operation at a raw address. The caller vouches for the
 /// address, as C code does for a pointer: a bad one has undefined behavior.
 fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
-    use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering::SeqCst};
     if let Some(value) = typed_memory::access(name, &args) {
         return value;
     }
     let operation = name.strip_prefix("mem::").unwrap_or(name);
-    if operation == "fence" {
-        host_expect_arity(name, &args, 0)?;
-        fence(SeqCst);
-        return Ok(Value::Unit);
+    if let Some(op) = aura_core::atomic_order::AtomicOperation::of(operation) {
+        return mem_atomic::execute(name, op, &args);
     }
     let (operation, width) = operation
         .rsplit_once("_uint")
@@ -1002,42 +999,7 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
                 (address as *mut u64).write_volatile(word(1)?);
                 Ok(Value::Unit)
             }
-            (_, IntegerKind::Uint32) => {
-                let cell = &*(address as *const AtomicU32);
-                match operation {
-                    "atomic_load" => result(u64::from(cell.load(SeqCst))),
-                    "atomic_store" => {
-                        cell.store(word(1)? as u32, SeqCst);
-                        Ok(Value::Unit)
-                    }
-                    "atomic_swap" => result(u64::from(cell.swap(word(1)? as u32, SeqCst))),
-                    "atomic_add" => result(u64::from(cell.fetch_add(word(1)? as u32, SeqCst))),
-                    _ => {
-                        let previous = cell
-                            .compare_exchange(word(1)? as u32, word(2)? as u32, SeqCst, SeqCst)
-                            .unwrap_or_else(|current| current);
-                        result(u64::from(previous))
-                    }
-                }
-            }
-            _ => {
-                let cell = &*(address as *const AtomicU64);
-                match operation {
-                    "atomic_load" => result(cell.load(SeqCst)),
-                    "atomic_store" => {
-                        cell.store(word(1)?, SeqCst);
-                        Ok(Value::Unit)
-                    }
-                    "atomic_swap" => result(cell.swap(word(1)?, SeqCst)),
-                    "atomic_add" => result(cell.fetch_add(word(1)?, SeqCst)),
-                    _ => {
-                        let previous = cell
-                            .compare_exchange(word(1)?, word(2)?, SeqCst, SeqCst)
-                            .unwrap_or_else(|current| current);
-                        result(previous)
-                    }
-                }
-            }
+            _ => unreachable!("registered plain memory operation"),
         }
     }
 }
@@ -1104,14 +1066,24 @@ host_mem_functions! {
     host_mem_volatile_write_uint16 => "mem::volatile_write_uint16";
     host_mem_volatile_write_uint32 => "mem::volatile_write_uint32";
     host_mem_volatile_write_uint64 => "mem::volatile_write_uint64";
+    host_mem_atomic_load_uint8 => "mem::atomic_load_uint8";
+    host_mem_atomic_load_uint16 => "mem::atomic_load_uint16";
     host_mem_atomic_load_uint32 => "mem::atomic_load_uint32";
     host_mem_atomic_load_uint64 => "mem::atomic_load_uint64";
+    host_mem_atomic_store_uint8 => "mem::atomic_store_uint8";
+    host_mem_atomic_store_uint16 => "mem::atomic_store_uint16";
     host_mem_atomic_store_uint32 => "mem::atomic_store_uint32";
     host_mem_atomic_store_uint64 => "mem::atomic_store_uint64";
+    host_mem_atomic_swap_uint8 => "mem::atomic_swap_uint8";
+    host_mem_atomic_swap_uint16 => "mem::atomic_swap_uint16";
     host_mem_atomic_swap_uint32 => "mem::atomic_swap_uint32";
     host_mem_atomic_swap_uint64 => "mem::atomic_swap_uint64";
+    host_mem_atomic_add_uint8 => "mem::atomic_add_uint8";
+    host_mem_atomic_add_uint16 => "mem::atomic_add_uint16";
     host_mem_atomic_add_uint32 => "mem::atomic_add_uint32";
     host_mem_atomic_add_uint64 => "mem::atomic_add_uint64";
+    host_mem_atomic_compare_exchange_uint8 => "mem::atomic_compare_exchange_uint8";
+    host_mem_atomic_compare_exchange_uint16 => "mem::atomic_compare_exchange_uint16";
     host_mem_atomic_compare_exchange_uint32 => "mem::atomic_compare_exchange_uint32";
     host_mem_atomic_compare_exchange_uint64 => "mem::atomic_compare_exchange_uint64";
     host_mem_pointer_offset => "mem::__pointer_offset";
@@ -1185,14 +1157,24 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "mem::volatile_write_uint16" => host_mem_volatile_write_uint16,
         "mem::volatile_write_uint32" => host_mem_volatile_write_uint32,
         "mem::volatile_write_uint64" => host_mem_volatile_write_uint64,
+        "mem::atomic_load_uint8" => host_mem_atomic_load_uint8,
+        "mem::atomic_load_uint16" => host_mem_atomic_load_uint16,
         "mem::atomic_load_uint32" => host_mem_atomic_load_uint32,
         "mem::atomic_load_uint64" => host_mem_atomic_load_uint64,
+        "mem::atomic_store_uint8" => host_mem_atomic_store_uint8,
+        "mem::atomic_store_uint16" => host_mem_atomic_store_uint16,
         "mem::atomic_store_uint32" => host_mem_atomic_store_uint32,
         "mem::atomic_store_uint64" => host_mem_atomic_store_uint64,
+        "mem::atomic_swap_uint8" => host_mem_atomic_swap_uint8,
+        "mem::atomic_swap_uint16" => host_mem_atomic_swap_uint16,
         "mem::atomic_swap_uint32" => host_mem_atomic_swap_uint32,
         "mem::atomic_swap_uint64" => host_mem_atomic_swap_uint64,
+        "mem::atomic_add_uint8" => host_mem_atomic_add_uint8,
+        "mem::atomic_add_uint16" => host_mem_atomic_add_uint16,
         "mem::atomic_add_uint32" => host_mem_atomic_add_uint32,
         "mem::atomic_add_uint64" => host_mem_atomic_add_uint64,
+        "mem::atomic_compare_exchange_uint8" => host_mem_atomic_compare_exchange_uint8,
+        "mem::atomic_compare_exchange_uint16" => host_mem_atomic_compare_exchange_uint16,
         "mem::atomic_compare_exchange_uint32" => host_mem_atomic_compare_exchange_uint32,
         "mem::atomic_compare_exchange_uint64" => host_mem_atomic_compare_exchange_uint64,
         "mem::__pointer_offset" => host_mem_pointer_offset,
@@ -1585,3 +1567,6 @@ mod mem_tests;
 #[cfg(test)]
 #[path = "host_builtins_math_tests.rs"]
 mod math_tests;
+
+#[path = "host_mem_atomic.rs"]
+mod mem_atomic;

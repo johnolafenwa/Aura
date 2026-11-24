@@ -1,0 +1,7 @@
+mut ticks: uint64 = seed()
+
+def seed() -> uint64:
+    return 9
+
+export "C" def read() -> uint64:
+    return ticks

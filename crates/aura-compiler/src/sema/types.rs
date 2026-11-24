@@ -15,6 +15,7 @@ pub struct TypeDefinitions {
     pub(crate) uses_raw_pointer: std::rc::Rc<std::cell::Cell<bool>>,
     pub(super) c_class_names: BTreeSet<String>,
     pub(super) module_name: String,
+    pub(super) fixed_arrays: std::rc::Rc<std::cell::RefCell<BTreeMap<(usize, usize), Type>>>,
     names: BTreeMap<String, crate::diag::Span>,
     pub(super) aliases: BTreeMap<String, crate::ast::TypeAliasDecl>,
     pub(super) checked_aliases: BTreeMap<String, super::AliasInfo>,
@@ -79,6 +80,7 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
             uses_raw_pointer: Default::default(),
             c_class_names: Default::default(),
             module_name: String::new(),
+            fixed_arrays: Default::default(),
             names,
             aliases: BTreeMap::new(),
             checked_aliases: BTreeMap::new(),
@@ -677,6 +679,22 @@ pub(super) fn lower_type_with_self(
         "int" => "int64",
         name => name,
     };
+
+    if type_name == "fixed" {
+        let (element, count) = super::fixed_arrays::type_parts(type_args, type_ref.span)?;
+        let element = lower_type_with_self(
+            element,
+            type_names,
+            type_arities,
+            canonical_type_names,
+            type_params,
+            self_type,
+        )?;
+        reject_nested_span_type(&element, type_ref.span)?;
+        let ty = Type::Named(name.clone(), vec![element, Type::named(&count.to_string())]);
+        type_names.fixed_arrays.borrow_mut().insert((type_ref.span.line, type_ref.span.column), ty.clone());
+        return Ok(ty);
+    }
 
     if type_name == "Self" {
         if !type_args.is_empty() {

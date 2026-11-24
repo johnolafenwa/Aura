@@ -1081,6 +1081,13 @@ fn only_fixed_width_integer_ops_name_integer_width_words() {
     for &op in ScalarOp::ALL {
         let words = op.integer_width_words();
         match op {
+            ScalarOp::Bits(_) => {
+                assert_eq!(words, None);
+                assert_eq!(
+                    RuntimeOp::Scalar(op).runtime_call().function,
+                    crate::runtime_abi::RuntimeFn::IntegerBits
+                );
+            }
             ScalarOp::ToFloat
             | ScalarOp::Sqrt
             | ScalarOp::DurationToMilliseconds

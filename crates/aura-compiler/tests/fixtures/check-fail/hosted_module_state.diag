@@ -1,0 +1,6 @@
+error[AU3030]: hosted module bindings are immutable
+ --> crates/aura-compiler/tests/fixtures/check-fail/hosted_module_state.au:1:5
+  |
+1 | mut ticks: uint64 = 0
+  |     ^
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task

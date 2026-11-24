@@ -1,0 +1,44 @@
+def unsigned_wide(high: uint64, low: uint64) -> uint128:
+    return ((high as uint128) << 64) | (low as uint128)
+
+def signed_wide(high: int64, low: uint64) -> int128:
+    return ((high as int128) << 64) | (low as int128)
+
+export "C" def check_vectors(top: uint64, low: uint64) -> uint32:
+    # The caller passes 2**63 and 3 to exercise both halves at runtime.
+    a = unsigned_wide(top, low)
+    assert a > (1 as uint128)
+    assert (a >> 127) == 1
+    assert a.rotate_left(1) == 7
+    assert a.rotate_right(127) == 7
+    assert a.count_ones() == 3
+    assert a.leading_zeros() == 0
+    assert a.trailing_zeros() == 0
+    assert a.swap_bytes().swap_bytes() == a
+    assert ((a - 1) + 1) == a
+    assert a // 3 == 56713727820156410577229101238628035243
+    assert a % 3 == 2
+    assert (a ^ (a & 3)) == (1 as uint128) << 127
+    neg = signed_wide(-2, low)
+    assert neg < (0 as int128)
+    assert -neg == 36893488147419103229
+    assert (~neg) == 36893488147419103228
+    assert neg // 3 == -12297829382473034410
+    assert neg % 3 == 1
+    assert (neg >> 64) == -2
+    assert (neg >> 127) == -1
+    assert ((neg >> 64) as int8) == -2
+    assert neg < min(neg + 1, neg + 2)
+    assert abs(neg) == -neg
+    assert (a.to_float() as uint128) == ((1 as uint128) << 127)
+    neg_as_float = (neg >> 64) as float32
+    assert (neg_as_float as int128) == -2
+    return 42
+
+export "C" def overflow_divide(value: int64) -> int64:
+    minimum = (value as int128) << 127
+    return (minimum // (value as int128)) as int64
+
+export "C" def signed_remainder_min(value: int64) -> int64:
+    minimum = (value as int128) << 127
+    return (minimum % (value as int128)) as int64

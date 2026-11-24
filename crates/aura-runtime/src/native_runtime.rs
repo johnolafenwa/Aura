@@ -16827,14 +16827,24 @@ host_builtin_entries! {
     owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
     owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
     owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
+    owned "mem::atomic_load_uint8" => aura_host_mem_atomic_load_uint8(host_builtins::host_mem_atomic_load_uint8);
+    owned "mem::atomic_load_uint16" => aura_host_mem_atomic_load_uint16(host_builtins::host_mem_atomic_load_uint16);
     owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
     owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
+    owned "mem::atomic_store_uint8" => aura_host_mem_atomic_store_uint8(host_builtins::host_mem_atomic_store_uint8);
+    owned "mem::atomic_store_uint16" => aura_host_mem_atomic_store_uint16(host_builtins::host_mem_atomic_store_uint16);
     owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
     owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
+    owned "mem::atomic_swap_uint8" => aura_host_mem_atomic_swap_uint8(host_builtins::host_mem_atomic_swap_uint8);
+    owned "mem::atomic_swap_uint16" => aura_host_mem_atomic_swap_uint16(host_builtins::host_mem_atomic_swap_uint16);
     owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
     owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
+    owned "mem::atomic_add_uint8" => aura_host_mem_atomic_add_uint8(host_builtins::host_mem_atomic_add_uint8);
+    owned "mem::atomic_add_uint16" => aura_host_mem_atomic_add_uint16(host_builtins::host_mem_atomic_add_uint16);
     owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
     owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
+    owned "mem::atomic_compare_exchange_uint8" => aura_host_mem_atomic_compare_exchange_uint8(host_builtins::host_mem_atomic_compare_exchange_uint8);
+    owned "mem::atomic_compare_exchange_uint16" => aura_host_mem_atomic_compare_exchange_uint16(host_builtins::host_mem_atomic_compare_exchange_uint16);
     owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
     owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
     owned "mem::__pointer_offset" => aura_host_mem_pointer_offset(host_builtins::host_mem_pointer_offset);
@@ -23326,3 +23336,31 @@ mod tests;
 #[cfg(test)]
 #[path = "native_union_injection_security_tests.rs"]
 mod union_injection_security_tests;
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_integer_bits(
+    value: *mut OpaqueValue,
+    count: i64,
+    opcode: i64,
+) -> *mut OpaqueValue {
+    use aura_core::integer_bits::BitMethod;
+    task_runtime_boundary(|| {
+        if count < 0 {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4034",
+                "rotation count must be nonnegative",
+            ));
+        }
+        let Some(method) = BitMethod::ALL.get(opcode as usize) else {
+            runtime_error("unknown integer bit method");
+        };
+        let Value::Int(integer) = (unsafe { value_ref(value) }) else {
+            runtime_error("integer bit method requires an integer");
+        };
+        let kind = integer.runtime_kind().unwrap_or(IntegerKind::Int64);
+        let result = method
+            .apply(integer, kind, count)
+            .unwrap_or_else(|msg| runtime_error(msg));
+        boxed_value(Value::Int(result))
+    })
+}
