@@ -5,8 +5,8 @@ use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
 use super::{
-    appended_copies, element_slots, literal_chunks, payload_clone_moves, plan_views,
-    receiver_view_read, ViewParam, ViewRead,
+    appended_copies, clone_moves, element_slots, literal_chunks, plan_views, receiver_view_read,
+    ViewParam, ViewRead,
 };
 
 const SOURCE: &str = r#"
@@ -288,13 +288,17 @@ def shouted(name: str, row: dict[str, str]) -> str:
         case Lookup.Missing:
             return ""
 
+def plain(text: str) -> str:
+    upper = text.to_upper()
+    return upper.clone()
+
 def main():
     row = {"a": "b"}
-    print(lookup("a", row) + shouted("a", row))
+    print(lookup("a", row) + shouted("a", row) + plain("c"))
 "#;
 
 #[test]
-fn a_copy_that_is_the_last_read_of_a_found_payload_may_move_its_box() {
+fn a_copy_that_is_the_last_read_of_a_str_local_may_move_its_reference() {
     let mir = lower_source_to_mir(LOOKUPS).expect("the source should lower");
     let module = validated_for_emission(&mir).expect("the source should validate");
     let function = |name: &str| {
@@ -304,9 +308,14 @@ fn a_copy_that_is_the_last_read_of_a_found_payload_may_move_its_box() {
             .find(|function| function.name == name)
             .expect("the module has the function")
     };
-    let moves = payload_clone_moves(function("lookup"));
+    // The found payload is released with its lookup.
+    let moves = clone_moves(function("lookup"));
     assert_eq!(moves.len(), 1, "{moves:?}");
+    assert!(moves.values().all(|(_, scrutinee)| scrutinee.is_some()));
+    let moves = clone_moves(function("plain"));
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    assert!(moves.values().all(|(_, scrutinee)| scrutinee.is_none()));
     // The payload is read again after the copy.
-    assert!(payload_clone_moves(function("shouted")).is_empty());
-    assert!(payload_clone_moves(function("main")).is_empty());
+    assert!(clone_moves(function("shouted")).is_empty());
+    assert!(clone_moves(function("main")).is_empty());
 }

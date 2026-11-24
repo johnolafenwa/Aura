@@ -1,6 +1,7 @@
-# A copy of a lookup's found `str` that is the lookup's last use takes the
-# box the lookup holds instead of copying it, whether the payload is lent
-# from the lookup or holds a reference of its own.
+# A copy of a `str` local that is the local's last read takes the local's
+# reference instead of copying the text: a lookup's found payload, whether
+# it is lent from the lookup or holds a reference of its own, or any local
+# that owns its reference.
 import control
 
 
@@ -43,6 +44,13 @@ def checked(key: str, limit: int64) -> str:
             return "?"
 
 
+def louder(text: str, times: int64) -> str:
+    mut loud = text.to_upper()
+    for _ in range(times):
+        loud = loud + "!"
+    return loud.clone()
+
+
 def main():
     row = {"name": "Ada", "note": "a note longer than any inline text", "x": "y"}
     context = {"title": "Page", "user": "root"}
@@ -53,6 +61,7 @@ def main():
             out.append(lookup(key, row, context))
     print(" ".join(out))
     print(first_long(row, keys))
+    print(f"{louder('hey', 2)} {louder('a longer text than any inline text', 1)}")
     print(f"{shouted(row, 'name')} {shouted(row, 'note')} {shouted(row, 'none')}")
     for limit in [5, 50]:
         match control.recover(checked, "note", limit):

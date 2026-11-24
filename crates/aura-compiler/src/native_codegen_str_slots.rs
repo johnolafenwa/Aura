@@ -664,12 +664,15 @@ pub(super) fn element_slots<'f>(
     ElementSlots { lists }
 }
 
-/// The `str` copies of `function` that may take the box they copy instead:
-/// each maps the local a `clone()` assigns to the payload it copies and the
-/// scrutinee whose payload that is. The payload is read once from the
-/// scrutinee, and nothing but the releases of the two follows the copy in
-/// its block, so neither is read again.
-pub(super) fn payload_clone_moves(function: &MirFunction) -> HashMap<String, (String, String)> {
+/// The `str` copies of `function` that may take the reference they copy
+/// instead: each maps the local a `clone()` of a `str` local assigns to
+/// that local, and to the scrutinee it was read from as a payload when the
+/// block releases that too. Nothing but releases, the copied local's among
+/// them, follows the copy in its block, and the terminator names neither,
+/// so the copied local is not read again. Every assignment of the copied
+/// local makes a new value (a call, an f-string or a binary operation), or
+/// it is that one payload read, so it holds no place another value owns.
+pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Option<String>)> {
     let strs = function
         .local_types
         .iter()
@@ -677,8 +680,19 @@ pub(super) fn payload_clone_moves(function: &MirFunction) -> HashMap<String, (St
         .map(|local| local.name.as_str())
         .collect::<HashSet<_>>();
     let mut payloads = HashMap::<&str, Option<&str>>::new();
+    let mut sources = HashMap::<&str, Vec<Option<Option<&str>>>>::new();
     for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
         if let Instruction::Assign { target, value } = instruction {
+            let made = match value {
+                Rvalue::Call { .. } | Rvalue::FormatString { .. } | Rvalue::Binary { .. } => {
+                    Some(None)
+                }
+                Rvalue::Use(Operand::MovePlace(source)) if !source.contains('.') => {
+                    Some(Some(source.as_str()))
+                }
+                _ => None,
+            };
+            sources.entry(target.as_str()).or_default().push(made);
             let scrutinee = match value {
                 Rvalue::VariantPayload {
                     scrutinee: Operand::Place(scrutinee),
@@ -692,6 +706,30 @@ pub(super) fn payload_clone_moves(function: &MirFunction) -> HashMap<String, (St
                 .or_insert(scrutinee);
         }
     }
+    // A local is fresh when each of its values is made new or moved from
+    // a fresh local.
+    let mut fresh = sources
+        .iter()
+        .filter(|(_, made)| made.iter().all(Option::is_some))
+        .map(|(local, _)| *local)
+        .collect::<HashSet<_>>();
+    loop {
+        let stale = fresh
+            .iter()
+            .copied()
+            .filter(|local| {
+                sources[local]
+                    .iter()
+                    .any(|made| matches!(made, Some(Some(source)) if !fresh.contains(source)))
+            })
+            .collect::<Vec<_>>();
+        if stale.is_empty() {
+            break;
+        }
+        for local in stale {
+            fresh.remove(local);
+        }
+    }
     let mut moves = HashMap::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
@@ -703,7 +741,7 @@ pub(super) fn payload_clone_moves(function: &MirFunction) -> HashMap<String, (St
             let Rvalue::Call {
                 callee:
                     CallTarget::Runtime {
-                        receiver: Some(Operand::Place(payload)),
+                        receiver: Some(Operand::Place(copied)),
                         ..
                     },
                 ..
@@ -711,28 +749,39 @@ pub(super) fn payload_clone_moves(function: &MirFunction) -> HashMap<String, (St
             else {
                 continue;
             };
-            let Some(Some(scrutinee)) = payloads.get(payload.as_str()) else {
-                continue;
-            };
-            let mut released = block.instructions[index + 1..]
+            let Some(released) = block.instructions[index + 1..]
                 .iter()
                 .map(|later| match later {
                     Instruction::Release { place } => Some(place.as_str()),
                     _ => None,
                 })
-                .collect::<Option<Vec<_>>>()
-                .unwrap_or_default();
-            released.sort_unstable();
-            let mut expected = vec![payload.as_str(), *scrutinee];
-            expected.sort_unstable();
+                .collect::<Option<HashSet<_>>>()
+            else {
+                continue;
+            };
+            let scrutinee = payloads
+                .get(copied.as_str())
+                .copied()
+                .flatten()
+                .filter(|scrutinee| released.contains(scrutinee));
             let named = terminator_place_mentions(&block.terminator)
                 .into_iter()
                 .any(|place| {
                     let root = place.split('.').next().unwrap_or(place);
-                    root == payload || root == *scrutinee
+                    root == copied || Some(root) == scrutinee
                 });
-            if strs.contains(target) && released == expected && !named {
-                moves.insert(target.to_string(), (payload.clone(), scrutinee.to_string()));
+            let defined = scrutinee.is_some() || fresh.contains(copied.as_str());
+            if strs.contains(target)
+                && strs.contains(copied.as_str())
+                && defined
+                && !function.params.iter().any(|param| param.name == *copied)
+                && released.contains(copied.as_str())
+                && !named
+            {
+                moves.insert(
+                    target.to_string(),
+                    (copied.clone(), scrutinee.map(str::to_string)),
+                );
             }
         }
     }
@@ -1543,46 +1592,54 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
-    /// Compiles the copy `target` of a lookup's found `str` payload as a
-    /// move of the payload's box, when the copy is the payload's last read
-    /// (see [`payload_clone_moves`]) and the lookup owns that box: the box
-    /// the lookup holds while the payload is lent from it, or the payload's
-    /// own reference once it took one. What the box came from then releases
-    /// nothing.
-    pub(super) fn compile_payload_clone_move(
-        &mut self,
-        target: &str,
-    ) -> std::result::Result<bool, String> {
-        let Some((payload, scrutinee)) = self.payload_clone_moves.get(target).cloned() else {
+    /// Compiles the copy `target` of a `str` local as a move of the local's
+    /// reference, when the copy is the local's last read (see
+    /// [`clone_moves`]) and the local owns a counted reference: its own,
+    /// or, for a payload lent from a lookup that owns the payload's box,
+    /// the lookup's. What the reference came from then releases nothing.
+    pub(super) fn compile_clone_move(&mut self, target: &str) -> std::result::Result<bool, String> {
+        let Some((copied, scrutinee)) = self.clone_moves.get(target).cloned() else {
             return Ok(false);
         };
-        let payload_vars = self.local_vars(&payload)?;
-        let scrutinee_vars = self.local_vars(&scrutinee)?;
-        let (Some(&flag), [payload_var], [scrutinee_var]) = (
-            self.lent_elements.get(&payload),
-            payload_vars.as_slice(),
-            scrutinee_vars.as_slice(),
-        ) else {
+        let copied_vars = self.local_vars(&copied)?;
+        let [copied_var] = copied_vars.as_slice() else {
             return Ok(false);
         };
-        if !self.lent_payloads.contains(&payload)
-            || !self.lookup_slots.contains(&scrutinee)
-            || self.lent_places.contains(&scrutinee)
-            || self.map_word_slots.contains_key(&scrutinee)
-        {
-            return Ok(false);
-        }
-        let (payload_var, scrutinee_var) = (*payload_var, *scrutinee_var);
-        let word = self.builder.use_var(payload_var);
-        let held = self.builder.use_var(scrutinee_var);
-        let flag = self.builder.use_var(flag);
-        let lent = self.builder.icmp_imm(IntCC::NotEqual, flag, 0);
+        let copied_var = *copied_var;
+        let word = self.builder.use_var(copied_var);
         let zero = self.builder.iconst(types::I64, 0);
-        let moved = self.builder.select(lent, held, word);
-        let held_left = self.builder.select(lent, zero, held);
-        let word_left = self.builder.select(lent, word, zero);
-        self.builder.def_var(scrutinee_var, held_left);
-        self.builder.def_var(payload_var, word_left);
+        let moved = if let Some(&flag) = self.lent_elements.get(&copied) {
+            // A lent payload: the lookup owns the box while the flag is set.
+            let Some(scrutinee) = scrutinee.filter(|scrutinee| {
+                self.lent_payloads.contains(&copied)
+                    && self.lookup_slots.contains(scrutinee)
+                    && !self.lent_places.contains(scrutinee)
+                    && !self.map_word_slots.contains_key(scrutinee)
+            }) else {
+                return Ok(false);
+            };
+            let scrutinee_vars = self.local_vars(&scrutinee)?;
+            let [scrutinee_var] = scrutinee_vars.as_slice() else {
+                return Ok(false);
+            };
+            let scrutinee_var = *scrutinee_var;
+            let held = self.builder.use_var(scrutinee_var);
+            let flag = self.builder.use_var(flag);
+            let lent = self.builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let moved = self.builder.select(lent, held, word);
+            let held_left = self.builder.select(lent, zero, held);
+            let word_left = self.builder.select(lent, word, zero);
+            self.builder.def_var(scrutinee_var, held_left);
+            self.builder.def_var(copied_var, word_left);
+            moved
+        } else if self.owns_counted_str(&copied)
+            && scrutinee.is_none_or(|scrutinee| self.lookup_slots.contains(&scrutinee))
+        {
+            self.builder.def_var(copied_var, zero);
+            word
+        } else {
+            return Ok(false);
+        };
         let moved = ValueRef {
             values: vec![moved],
             ty: DirectType::Opaque(Type::named("str")),
@@ -1590,6 +1647,36 @@ impl FunctionCompiler<'_> {
         self.mark_temporary_opaque_owned(&moved);
         self.store_place(target, moved)?;
         Ok(true)
+    }
+
+    /// Whether the `str` local `name` holds a counted reference of its own
+    /// that its release gives up, rather than words, a loan, a lent box, or
+    /// a box a lookup or a list lends it.
+    fn owns_counted_str(&self, name: &str) -> bool {
+        self.tracked_roots.contains(name)
+            && matches!(self.variable_types.get(name), Some(DirectType::Opaque(_)))
+            && !self.loan_locals.contains(name)
+            && !self
+                .writeback_locals
+                .iter()
+                .any(|(writeback, _)| writeback == name)
+            && !self.str_slots.contains_key(name)
+            && !self.lookup_slots.contains(name)
+            && !self.lent_places.contains(name)
+            && !self.lent_payloads.contains(name)
+            && !self.element_lend_temps.contains(name)
+            && !self.field_lend_temps.contains(name)
+            && !self.shadow_read_targets.contains(name)
+            && !self.node_read_targets.contains(name)
+            && !self.recovery_slots.contains_key(name)
+            && !self.result_slots.contains_key(name)
+            && !self.text_byte_slices.contains(name)
+            && !self.json_views.contains(name)
+            && !self.lent_temps.contains_key(name)
+            && !self.called_loan_reads.contains_key(name)
+            && !self.in_place_callees.contains_key(name)
+            && !self.node_payload_values.contains_key(name)
+            && !self.view_places.contains_key(name)
     }
 
     /// Releases the copies a call of a view twin made for its arguments.
