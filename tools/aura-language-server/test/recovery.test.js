@@ -207,3 +207,37 @@ test("recovery locates an extern declaration named C after the ABI string", () =
     });
   }
 });
+
+test("recovery navigates C layout and public module storage declarations", () => {
+  const lines = [
+    'public extern "C" packed align(8) class Header:',
+    "    tag: uint8 bits(3)",
+    "public mut ring: fixed[uint16, 2] = [0] * 2",
+    'extern "C" packed class Payload:',
+    "    bytes: fixed[uint8, 8]",
+    'extern "C" align(16) class Wide:',
+    "    value: int64",
+    "def head(h: Header) -> uint16:",
+    "    mut temporary = ring[0]",
+    "    return temporary"
+  ];
+  const source = lines.join("\n");
+  const symbols = documentSymbols(source);
+  assert.deepEqual(symbols.map((s) => [s.name, s.kind]), [
+    ["Header", "class"], ["ring", "variable"], ["Payload", "class"], ["Wide", "class"], ["head", "function"]
+  ]);
+  for (const [line, use, declaration] of [[7, "Header", 0], [8, "ring", 2]]) {
+    const column = lines[line].indexOf(use);
+    const start = lines[declaration].indexOf(use);
+    assert.deepEqual(definitionForPosition(source, line, column), {
+      line: declaration, startCharacter: start, endCharacter: start + use.length
+    });
+    assert.ok(hoverForPosition(source, line, column).value.includes(use));
+  }
+  const items = completionsForDocument(source, 9, 4, null);
+  for (const name of ["fixed", "ptr", "ring", "Header"]) {
+    assert.ok(items.some((item) => item.name === name), name);
+  }
+  assert.ok(!items.some((item) => item.name === "temporary"));
+  assert.deepEqual(diagnosticsForDocument(source), []);
+});

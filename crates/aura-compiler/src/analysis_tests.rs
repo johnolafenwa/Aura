@@ -11659,3 +11659,22 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
     assert!(read.hover.contains("index: int64"));
     assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
 }
+
+#[test]
+fn systems_data_editor_completes_types_and_receiver_methods() {
+    let program = checked_program("def main():\n    pass\n");
+    let builder = AnalysisBuilder::new("", &program, Vec::new());
+    let top_level = builder.top_level_completions();
+    for name in ["fixed", "ptr"] {
+        assert!(top_level.iter().any(|item| item.name == name && item.kind == "type"));
+    }
+    for (ty, names) in [
+        (Type::Named("ptr".into(), vec![Type::named("uint16")]), &["read", "write", "volatile_read", "volatile_write", "offset"][..]),
+        (Type::named("uint128"), &["rotate_left", "rotate_right", "count_ones", "leading_zeros", "trailing_zeros", "swap_bytes"][..]),
+    ] {
+        let methods = builder.member_completions(&ty);
+        for name in names {
+            assert!(methods.iter().any(|item| item.name == *name && item.kind == "method"), "missing {ty}.{name}");
+        }
+    }
+}

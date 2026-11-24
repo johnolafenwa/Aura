@@ -282,3 +282,11 @@ test("wordAt finds the identifier under or just after the cursor", () => {
   assert.equal(wordAt("", 4, 0), null);
   assert.equal(wordAt(null, 0, 0), null);
 });
+
+test("module storage has a variable token without the readonly modifier", () => {
+  const source = "mut tick: uint64 = 0\n";
+  const analysis = { occurrences: [occurrence(0, 4, 8, "module binding tick: uint64", [0, 4, 8])] };
+  assert.deepEqual(semanticTokens(analysis, source).data, [
+    0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("variable"), 1
+  ]);
+});
