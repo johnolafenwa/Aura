@@ -94,3 +94,98 @@ def value_list_slot_unchecked(address: uint64, index: int64) -> uint64:
 # Removes every element and keeps the buffer.
 def value_list_clear(address: uint64) -> None:
     mem.write_uint64(address + 8, 0)
+
+
+# Takes the element at `index` out of the list: the elements behind it
+# move one place forward, the list is one shorter, and the result is the
+# slot the element now lies in, just past the end. A negative index
+# counts from the end.
+def value_list_take_slot(address: uint64, index: int64) -> uint64:
+    length = mem.read_uint64(address + 8) as int64
+    mut at = index
+    if at < 0:
+        at = at + length
+    assert at >= 0 and at < length, "list index out of range"
+    words = mem.read_uint64(address + 32)
+    buffer = mem.read_uint64(address + 24)
+    first = buffer + (at as uint64) * words * 8
+    last = buffer + ((length - 1) as uint64) * words * 8
+    mut word: uint64 = 0
+    while word < words:
+        taken = mem.read_uint64(first + word * 8)
+        mut slot = first + word * 8
+        while slot < last:
+            mem.write_uint64(slot, mem.read_uint64(slot + words * 8))
+            slot = slot + words * 8
+        mem.write_uint64(slot, taken)
+        word = word + 1
+    mem.write_uint64(address + 8, (length - 1) as uint64)
+    return last - 8
+
+
+# Takes the last element out of the list and returns its slot.
+def value_list_take_last_slot(address: uint64) -> uint64:
+    return value_list_take_slot(address, 0 - 1)
+
+
+# Makes room for an element before `index`, which may be the length, and
+# returns its slot.
+def value_list_insert_slot(address: uint64, index: int64) -> uint64:
+    length = mem.read_uint64(address + 8) as int64
+    assert index >= 0 and index <= length, "list insert index out of range"
+    value_list_push_slot(address)
+    words = mem.read_uint64(address + 32)
+    buffer = mem.read_uint64(address + 24)
+    first = buffer + (index as uint64) * words * 8
+    mut slot = buffer + (length as uint64) * words * 8
+    while slot > first:
+        mut word: uint64 = 0
+        while word < words:
+            mem.write_uint64(slot + word * 8, mem.read_uint64(slot + word * 8 - words * 8))
+            word = word + 1
+        slot = slot - words * 8
+    return first - 8
+
+
+# Exchanges the elements at `left` and `right`.
+def value_list_swap(address: uint64, left: int64, right: int64) -> None:
+    length = mem.read_uint64(address + 8) as int64
+    assert left >= 0 and left < length and right >= 0 and right < length, "list swap index out of range"
+    words = mem.read_uint64(address + 32)
+    buffer = mem.read_uint64(address + 24)
+    first = buffer + (left as uint64) * words * 8
+    second = buffer + (right as uint64) * words * 8
+    mut word: uint64 = 0
+    while word < words:
+        kept = mem.read_uint64(first + word * 8)
+        mem.write_uint64(first + word * 8, mem.read_uint64(second + word * 8))
+        mem.write_uint64(second + word * 8, kept)
+        word = word + 1
+
+
+# Puts the elements in the opposite order.
+def value_list_reverse(address: uint64) -> None:
+    mut left: int64 = 0
+    mut right = (mem.read_uint64(address + 8) as int64) - 1
+    while left < right:
+        value_list_swap(address, left, right)
+        left = left + 1
+        right = right - 1
+
+
+# Makes room for `more` elements past the length.
+def value_list_reserve(address: uint64, more: int64) -> None:
+    assert more >= 0, "list reserve count is negative"
+    wanted = mem.read_uint64(address + 8) + (more as uint64)
+    capacity = mem.read_uint64(address + 16)
+    if wanted <= capacity:
+        return
+    size = mem.read_uint64(address + 32) * 8
+    mut buffer = mem.read_uint64(address + 24)
+    if capacity == 0:
+        buffer = mem.alloc(wanted * size, 8)
+    else:
+        buffer = mem.realloc(buffer, capacity * size, 8, wanted * size)
+    assert buffer != 0, "out of memory"
+    mem.write_uint64(address + 16, wanted)
+    mem.write_uint64(address + 24, buffer)

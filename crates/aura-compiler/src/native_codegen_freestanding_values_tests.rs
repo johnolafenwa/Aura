@@ -290,11 +290,33 @@ fn a_list_of_values_releases_its_elements_on_every_target() {
 }
 
 #[test]
+fn list_methods_become_calls_of_the_list_library_on_every_target() {
+    let source = include_str!("../../aura/tests/freestanding_list_methods.au");
+    let module = prepared(source);
+    for made in [
+        "aura::values::value_list_take_slot",
+        "aura::values::value_list_take_last_slot",
+        "aura::values::value_list_insert_slot",
+        "aura::values::value_list_swap",
+        "aura::values::value_list_reverse",
+        "aura::values::value_list_reserve",
+        "aura::values::clear_list::list::str",
+        "aura::values::clear_list::list::Pair",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    assert!(!module.contains("\"List\""));
+    for target in FreestandingTarget::ALL {
+        object(source, target);
+    }
+}
+
+#[test]
 fn a_list_of_other_values_and_other_list_operations_are_still_refused() {
     for body in [
         "    items: list[int64 | None] = [n, None]\n    return items.len()\n",
-        "    mut names = [\"a\", \"b\"]\n    names.clear()\n    return names.len() + n\n",
-        "    mut items = [n, 2]\n    items.reverse()\n    return items[0]\n",
+        "    mut names = [\"a\", \"b\"]\n    names.sort()\n    return names.len() + n\n",
+        "    mut items = [n, 2]\n    items.extend([3])\n    return items[0]\n",
     ] {
         let source = format!("export \"C\" def run(n: int64) -> int64:\n{body}");
         let found = refusals(&source);

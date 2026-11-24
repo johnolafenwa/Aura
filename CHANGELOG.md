@@ -35,8 +35,8 @@ in this file.
   f-strings are still reported as `AU2052`.
 - Freestanding builds compile lists of integers, floats, `bool`, text,
   classes, tuples, enums, and lists: literals, `append`, `len`,
-  `is_empty`, element reads and writes, `view` of an element, and `for`
-  loops, with `clear` on lists of numbers. A list releases what its
+  `is_empty`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`,
+  element reads and writes, `view` of an element, and `for` loops. A list releases what its
   elements own when its last reference goes. A list is a counted header and a buffer that
   grows through `aura_realloc`, and its operations are written in Aura.
   An index out of range calls the trap hook with code 3.

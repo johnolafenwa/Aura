@@ -109,8 +109,13 @@ count, and a way to drop what the block holds.
 - **An element read is a new reference.** `items[i]` and a shared loan
   of a whole element load the element and retain what it owns, and the
   end of the loan releases it. A write loads the old element, releases
-  it, and stores the new one. `clear` stays with lists of elements that
-  own nothing.
+  it, and stores the new one.
+- **`pop`, `insert`, `swap`, `reverse`, and `reserve` move words in the
+  library**, which knows the words in one element from the header. `pop`
+  moves the element just past the end and returns that slot, and the
+  load takes the reference the list held. `clear` on a list whose
+  elements own heap memory is a function the pass makes,
+  `clear_list::<class>`, which the drop function calls too.
 - A list of a union of words alone, a `mut` loan of an element, a loan
   of a part of an element, and every other list operation are still
   refused.

@@ -90,7 +90,7 @@ def read(port: uint64) -> (Reading, uint64):
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `dict` or a `set` |
 | `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
-| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops; `clear` on a list of numbers | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
+| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
 | `extern "C"` classes | `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
@@ -192,10 +192,10 @@ each of its words. The buffer doubles when it is full, through
 and first releases what each element owns: its text, its list, or its
 tree.
 
-Available: literals, `append`, `len`, `is_empty`, `items[i]`,
-`items[i] = value`, `view value = items[i]`, and `for value in items`. A
-negative index counts from the end. `clear` is available on a list of
-numbers. A write to an element releases the value it replaces. A list of
+Available: literals, `append`, `pop`, `insert`, `swap`, `reverse`,
+`reserve`, `clear`, `len`, `is_empty`, `items[i]`, `items[i] = value`,
+`view value = items[i]`, and `for value in items`. A negative index
+counts from the end. A write to an element releases the value it replaces. A list of
 `str | None` is available. A list of a union of words alone, such as
 `list[int64 | None]`, is not available yet. A list may be a `mut` parameter, a result, or a field of a
 class, a tuple, or an enum.

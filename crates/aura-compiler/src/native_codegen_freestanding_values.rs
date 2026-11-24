@@ -97,6 +97,16 @@ const LIST_SLOT: &str = "aura::values::value_list_slot";
 const LIST_SLOT_UNCHECKED: &str = "aura::values::value_list_slot_unchecked";
 const LIST_CLEAR: &str = "aura::values::value_list_clear";
 const LIST_FREE: &str = "aura::values::value_list_free";
+const LIST_TAKE_SLOT: &str = "aura::values::value_list_take_slot";
+const LIST_TAKE_LAST_SLOT: &str = "aura::values::value_list_take_last_slot";
+const LIST_INSERT_SLOT: &str = "aura::values::value_list_insert_slot";
+const LIST_SWAP: &str = "aura::values::value_list_swap";
+const LIST_REVERSE: &str = "aura::values::value_list_reverse";
+const LIST_RESERVE: &str = "aura::values::value_list_reserve";
+
+/// The function the pass makes for a list class whose elements own heap
+/// memory: it releases each element and leaves the list empty.
+const CLEAR_LIST: &str = "clear_list";
 
 /// The function the pass makes for a list class whose elements own heap
 /// memory: one reference fewer, and at the last one each element is
@@ -1773,7 +1783,14 @@ fn lower_text(
                         3
                     )
                     | (ListOp::SetIndex | ListOp::SetIndexScalar(_), 4)
-            ) || (op == ListOp::Clear && args.is_empty() && owner.is_none());
+            );
+            let known = known
+                || matches!(
+                    (op, args.len()),
+                    (ListOp::Clear | ListOp::Reverse, 0)
+                        | (ListOp::Pop | ListOp::Reserve, 1)
+                        | (ListOp::Insert | ListOp::Swap, 2)
+                );
             let (Some(element), true) = (element, known) else {
                 return Rvalue::Call {
                     callee: CallTarget::Runtime {
@@ -1785,6 +1802,7 @@ fn lower_text(
                     type_args,
                 };
             };
+            let receiver_name = receiver.clone();
             let address = fresh.local(word());
             out.push(Instruction::Assign {
                 target: address.clone(),
@@ -1804,7 +1822,55 @@ fn lower_text(
             let load = class_function(LOAD, &element.to_string());
             match op {
                 ListOp::Len => named(LIST_LENGTH.to_string(), vec![list]),
-                ListOp::Clear => named(LIST_CLEAR.to_string(), vec![list]),
+                ListOp::Clear => match place_type(&receiver_name, types, values) {
+                    Some(Type::Named(class, _)) if owner.is_some() => {
+                        named(class_function(CLEAR_LIST, &class), vec![list])
+                    }
+                    _ => named(LIST_CLEAR.to_string(), vec![list]),
+                },
+                ListOp::Reverse => named(LIST_REVERSE.to_string(), vec![list]),
+                ListOp::Reserve => named(
+                    LIST_RESERVE.to_string(),
+                    vec![list, args.next().unwrap_or(Operand::Unit)],
+                ),
+                ListOp::Swap => {
+                    let left = args.next().unwrap_or(Operand::Unit);
+                    let right = args.next().unwrap_or(Operand::Unit);
+                    named(LIST_SWAP.to_string(), vec![list, left, right])
+                }
+                // The element moves out with the reference the list held.
+                ListOp::Pop => {
+                    let slot = match args.next() {
+                        Some(Operand::Default(_)) | None => call(
+                            fresh,
+                            out,
+                            LIST_TAKE_LAST_SLOT.to_string(),
+                            vec![list],
+                            word(),
+                        ),
+                        Some(index) => call(
+                            fresh,
+                            out,
+                            LIST_TAKE_SLOT.to_string(),
+                            vec![list, index],
+                            word(),
+                        ),
+                    };
+                    named(load, vec![Operand::Place(slot)])
+                }
+                ListOp::Insert => {
+                    let index = args.next().unwrap_or(Operand::Unit);
+                    let value = args.next().unwrap_or(Operand::Unit);
+                    let value = owned_text(value, values, fresh, out);
+                    let slot = call(
+                        fresh,
+                        out,
+                        LIST_INSERT_SLOT.to_string(),
+                        vec![list, index],
+                        word(),
+                    );
+                    named(store, vec![Operand::Place(slot), value])
+                }
                 ListOp::IsEmpty => {
                     let length = call(
                         fresh,
@@ -2994,25 +3060,23 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
         }
         let address = || Operand::Place("address".to_string());
         let whole = || Type::named("int64");
+        let block = |label: &str, instructions, terminator| BasicBlock {
+            label: label.to_string(),
+            instructions,
+            terminator,
+        };
+        // The clear: each element is released, and the list is empty.
         let mut fresh = new_fresh();
         let mut entry = Vec::new();
-        let last = call(
-            &mut fresh,
-            &mut entry,
-            BOX_RELEASE.to_string(),
-            vec![address()],
-            Type::named("bool"),
-        );
-        let mut setup = Vec::new();
         let length = call(
             &mut fresh,
-            &mut setup,
+            &mut entry,
             LIST_LENGTH.to_string(),
             vec![address()],
             whole(),
         );
         let index = fresh.local(whole());
-        setup.push(Instruction::Assign {
+        entry.push(Instruction::Assign {
             target: index.clone(),
             value: Rvalue::Use(Operand::Int(0)),
         });
@@ -3060,7 +3124,53 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                 trap: crate::mir::ArithmeticTrap::Overflow,
             },
         });
+        let mut done = Vec::new();
+        call(
+            &mut fresh,
+            &mut done,
+            LIST_CLEAR.to_string(),
+            vec![address()],
+            Type::Unit,
+        );
+        functions.push(made_function(
+            class_function(CLEAR_LIST, &class),
+            vec![("address", MirReceiverKind::Borrow, word())],
+            Type::Unit,
+            fresh.locals,
+            vec![
+                block("entry", entry, Terminator::Goto("test".to_string())),
+                block(
+                    "test",
+                    test,
+                    Terminator::Branch {
+                        condition: Operand::Place(more),
+                        then_label: "body".to_string(),
+                        else_label: "done".to_string(),
+                    },
+                ),
+                block("body", body, Terminator::Goto("test".to_string())),
+                block("done", done, Terminator::Return(Operand::Unit)),
+            ],
+        ));
+        // The drop: one reference fewer, and at the last one the list is
+        // cleared and freed.
+        let mut fresh = new_fresh();
+        let mut entry = Vec::new();
+        let last = call(
+            &mut fresh,
+            &mut entry,
+            BOX_RELEASE.to_string(),
+            vec![address()],
+            Type::named("bool"),
+        );
         let mut free = Vec::new();
+        call(
+            &mut fresh,
+            &mut free,
+            class_function(CLEAR_LIST, &class),
+            vec![address()],
+            Type::Unit,
+        );
         call(
             &mut fresh,
             &mut free,
@@ -3068,11 +3178,6 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
             vec![address()],
             Type::Unit,
         );
-        let block = |label: &str, instructions, terminator| BasicBlock {
-            label: label.to_string(),
-            instructions,
-            terminator,
-        };
         functions.push(made_function(
             class_function(DROP_LIST, &class),
             vec![("address", MirReceiverKind::Borrow, word())],
@@ -3084,21 +3189,10 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                     entry,
                     Terminator::Branch {
                         condition: Operand::Place(last),
-                        then_label: "setup".to_string(),
+                        then_label: "free".to_string(),
                         else_label: "done".to_string(),
                     },
                 ),
-                block("setup", setup, Terminator::Goto("test".to_string())),
-                block(
-                    "test",
-                    test,
-                    Terminator::Branch {
-                        condition: Operand::Place(more),
-                        then_label: "body".to_string(),
-                        else_label: "free".to_string(),
-                    },
-                ),
-                block("body", body, Terminator::Goto("test".to_string())),
                 block("free", free, Terminator::Return(Operand::Unit)),
                 block("done", Vec::new(), Terminator::Return(Operand::Unit)),
             ],
