@@ -978,6 +978,9 @@ impl<'a> NativeCodegen<'a> {
         program_path: &str,
         program_source: &str,
     ) -> std::result::Result<Self, String> {
+        if module.constants.iter().any(|cell| cell.state.is_some()) {
+            return Err("mutable module storage requires freestanding execution".into());
+        }
         Self::for_target(module, program_path, program_source, None)
     }
 

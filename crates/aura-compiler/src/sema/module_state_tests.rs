@@ -34,6 +34,8 @@ fn profile_preserves_script_locals_and_rejects_shared_hosted_cells() {
 fn initializer_and_state_view_have_actionable_diagnostics() {
     let init = program(INITIALIZER).unwrap_err();
     assert_eq!(init.code, "AU2080");
+    let runtime_init = "class Limit:\n    value: int32\n    def __init__(self, input: int32):\n        self.value = input + 1\nmut limit = Limit(5)\n";
+    assert_eq!(program(runtime_init).unwrap_err().code, "AU2080");
     let borrow = program(BORROW).unwrap_err();
     assert_eq!(borrow.code, "AU3030");
     let source = "mut n: int32 = 2\ndef set(n: mut int32):\n    n = 3\nexport \"C\" def unsafe_call():\n    set(n)\n";
@@ -100,7 +102,10 @@ fn safe_reads_and_writes_through_imports_share_one_module_cell() {
     let source = "import counter\nfrom counter import ticks\nexport \"C\" def next() -> uint16:\n    counter.ticks += 2\n    ticks += 3\n    return counter.ticks\n";
     std::fs::write(&entry, source).unwrap();
     let result = check_freestanding_path(&entry, None);
+    let borrow = "import counter\nexport \"C\" def invalid() -> uint16:\n    view saved = counter.ticks\n    counter.ticks = 2\n    return saved\n";
+    let loan = check_path_with_source_without_lockfile_profile(&entry, borrow, true).unwrap_err();
     std::fs::remove_dir_all(base).unwrap();
+    assert_eq!(loan.code, "AU3030");
     let mir = lower_to_mir(&result.unwrap());
     assert_eq!(
         mir.constants.iter().filter(|c| c.state.is_some()).count(),
@@ -305,4 +310,103 @@ fn inline_union_fields_contribute_their_tag_and_payload_to_outer_unions() {
         FreestandingTarget::X86_64,
     )
     .unwrap();
+}
+
+#[test]
+fn tagged_state_unpacks_c_bitfields_and_inline_tail_in_register_order() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = r#"extern "C" packed class Mixed:
+    signed: int16
+    real: float32
+    low: uint8 bits(3)
+    high: uint16 bits(7)
+    tail: fixed[uint8, 9]
+
+mut sample: Mixed | uint128 = Mixed(signed=-513, real=-2.5, low=5, high=103, tail=[1,2,3,4,5,6,7,8,9])
+mut initial: Mixed | uint128 = 18446744073709551619
+
+export "C" def reset():
+    sample = initial
+"#;
+    let checked = check_path_with_source_without_lockfile_profile(&path, source, true).unwrap();
+    let words = |name: &str| {
+        checked.constants[name]
+            .state
+            .as_ref()
+            .unwrap()
+            .bytes
+            .chunks_exact(8)
+            .map(|word| u64::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>()
+    };
+    let sample = words("sample");
+    assert_eq!(
+        &sample[1..],
+        &[
+            (-513_i64) as u64,
+            (-2.5_f64).to_bits(),
+            5,
+            103,
+            0x0807_0605_0403_0201,
+            9
+        ]
+    );
+    let initial = words("initial");
+    assert_ne!(initial[0], sample[0]);
+    assert_eq!(&initial[1..], &[3, 1, 0, 0, 0, 0]);
+}
+
+#[test]
+fn address_of_zeroed_module_state_preserves_its_object_on_each_target() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = "import mem\nmut flag: None = None\nmut register: uint32 = 0\nexport \"C\" def status_address() -> uint64:\n    flag = None\n    return mem.address_of(register) as uint64\n";
+    let checked = check_path_with_source_without_lockfile_profile(&path, source, true).unwrap();
+    let mir = lower_to_mir(&checked);
+    for target in FreestandingTarget::ALL {
+        let bytes = emit_freestanding_object(&mir, "main.au", source, target).unwrap();
+        let obj = object::File::parse(&bytes[..]).unwrap();
+        let mut sizes = obj
+            .symbols()
+            .filter(|s| s.name().is_ok_and(|n| n.contains("__aura_state_")))
+            .map(|s| {
+                let section = obj.section_by_index(s.section_index().unwrap()).unwrap();
+                assert_eq!(section.kind(), object::SectionKind::UninitializedData);
+                s.size()
+            })
+            .collect::<Vec<_>>();
+        sizes.sort_unstable();
+        assert_eq!(sizes, [1, 4], "{target:?}");
+    }
+}
+
+#[test]
+fn hosted_engines_refuse_freestanding_module_operations() {
+    let source = "mut count: int32 = 0\nexport \"C\" def read_count() -> int32:\n    return count\ndef main() -> int32:\n    return read_count()\n";
+    let mut mir = lower_to_mir(&program(source).unwrap());
+    let error = crate::emit_host_native_object(&mir).unwrap_err();
+    assert!(
+        error.contains("mutable module storage requires freestanding execution"),
+        "{error}"
+    );
+
+    // Embedded MIR can reach a cell operation even when its declaration is absent.
+    mir.constants.clear();
+    let error = crate::emit_host_native_object(&mir).unwrap_err();
+    assert!(
+        error.contains("mutable module storage requires freestanding execution"),
+        "{error}"
+    );
+    let data = serde_json::to_vec(&mir).unwrap();
+    let error = crate::run_serialized_mir(&data, "main.au", source).unwrap_err();
+    assert_eq!(error.code, "AU4030", "{error:?}");
+    let errors =
+        emit_freestanding_object(&mir, "main.au", source, FreestandingTarget::X86_64).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("missing module storage")),
+        "{errors:?}"
+    );
 }
