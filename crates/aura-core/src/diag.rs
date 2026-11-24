@@ -295,6 +295,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid assembly syntax or option",
     },
     DiagnosticCodeInfo {
+        code: "AU2097",
+        band: "names/types",
+        title: "hardware operation unavailable on this target",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
