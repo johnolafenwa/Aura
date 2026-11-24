@@ -13582,7 +13582,14 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let Type::Module(module_path) = &receiver_ty {
-                    let namespace = self.module_namespace(module_path).ok_or_else(|| {
+                    let namespace = match &grouped_expr(object).kind {
+                        ExprKind::Name(binding) if binding.contains('#') => self
+                            .imported_modules
+                            .get(binding)
+                            .or_else(|| self.module_namespace(module_path)),
+                        _ => self.module_namespace(module_path),
+                    }
+                    .ok_or_else(|| {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
                     if namespace.path == recover::MODULE && field == recover::RECOVER {

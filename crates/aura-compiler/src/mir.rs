@@ -13171,7 +13171,10 @@ impl<'a> Lowerer<'a> {
         namespace: &'n ModuleNamespace,
         name: &str,
     ) -> Option<&'n crate::sema::FunctionInfo> {
-        if namespace.path == self.module_name {
+        if namespace.path == self.module_name
+            || (namespace.path == "iter"
+                && matches!(name, "__aura_generator" | "__aura_generator_yield"))
+        {
             namespace.all_functions.get(name)
         } else {
             namespace.functions.get(name)

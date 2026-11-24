@@ -24,10 +24,10 @@ public copy class Locked[T: Transfer]:
 
     # The compiler calls these two for a `with` item: the first on the way
     # in, the second on every way out.
-    public def __aura_take(self) -> T:
+    def __aura_take(self) -> T:
         return sync.__aura_cell_take[T](self.cell)
 
-    public def __aura_put(self, value: own T) -> None:
+    def __aura_put(self, value: own T) -> None:
         sync.__aura_cell_put[T](self.cell, value)
 
 

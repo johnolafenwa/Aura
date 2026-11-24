@@ -2241,39 +2241,66 @@ fn sync_namespace() -> ModuleNamespace {
         params.extend(extra);
         function_info("sync", name, params, result)
     };
+    let with_transfer_bounds = |mut info: FunctionInfo, params: &[&str]| {
+        for param in params {
+            info.decl
+                .type_param_bounds
+                .insert((*param).to_string(), vec![type_ref("Transfer", Vec::new())]);
+            info.type_param_bounds.insert(
+                (*param).to_string(),
+                vec![aura_core::types::TraitBound {
+                    trait_name: "Transfer".to_string(),
+                    trait_args: Vec::new(),
+                }],
+            );
+        }
+        info
+    };
     let mut namespace = function_only_namespace(
         "sync",
         vec![
-            generic_function_info(
-                "sync",
-                "__aura_cell_new",
-                vec!["T"],
-                vec![own_param("value", payload())],
-                cell(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_new",
+                    vec!["T"],
+                    vec![own_param("value", payload())],
+                    cell(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_cell_take",
-                vec!["T"],
-                vec![value_param("cell", cell())],
-                payload(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_take",
+                    vec!["T"],
+                    vec![value_param("cell", cell())],
+                    payload(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_cell_put",
-                vec!["T"],
-                vec![value_param("cell", cell()), own_param("value", payload())],
-                unit(),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_cell_put",
+                    vec!["T"],
+                    vec![value_param("cell", cell()), own_param("value", payload())],
+                    unit(),
+                ),
+                &["T"],
             ),
-            generic_function_info(
-                "sync",
-                "__aura_map_get",
-                vec!["K", "V"],
-                vec![
-                    value_param("cell", cell()),
-                    value_param("key", type_ref("K", Vec::new())),
-                ],
-                type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+            with_transfer_bounds(
+                generic_function_info(
+                    "sync",
+                    "__aura_map_get",
+                    vec!["K", "V"],
+                    vec![
+                        value_param("cell", cell()),
+                        value_param("key", type_ref("K", Vec::new())),
+                    ],
+                    type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+                ),
+                &["K", "V"],
             ),
             function_info(
                 "sync",
