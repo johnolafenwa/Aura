@@ -75,7 +75,7 @@ Every value is one or more machine words. Nothing lives on a heap.
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
-| Module constants with a literal value | Module constants computed when the program starts |
+| Pure module constants, including computed read-only tables | Module bindings that require runtime initialization |
 | `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
 
 `aura check --freestanding` and the build report each construct outside the
@@ -88,6 +88,8 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+The compiler can build a collection in a pure helper on the build machine, then emit its values in the destination object's read-only data. Read the computed table from an export, using a runtime index if needed. The kernel uses this for its decimal digits. [Compile-Time Evaluation](/manual/compile-time)
 
 ## Failed Checks
 

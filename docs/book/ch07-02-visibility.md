@@ -326,6 +326,29 @@ error[AU2001]: module constant `full_width` is used before initialization
 Swap the two lines and it compiles, with `full_width` usable inside
 `settings.au` but invisible outside it.
 
+### Choosing the width at build time
+
+Suppose a small terminal needs half the usual bar width. We can build two
+versions of the same program from one settings file. The `const` marker
+asks the compiler to calculate the normal width before the program runs.
+The `if` gives each build one public name for the width it should use.
+
+```aura
+import build
+
+const normal_width = 4 * 5
+
+if "compact" in build.cfg:
+    public const bar_width = normal_width // 2
+else:
+    public const bar_width = normal_width
+```
+
+Run the tracker with `aura run --cfg compact src/main.au` to get a width
+of ten. Omit the flag and the width is twenty. The progress bar can keep
+reading `settings.bar_width` in both builds. The [manual](/manual/compile-time)
+lists the OS, architecture and other properties you can use in a condition.
+
 ### Constants really are constant
 
 A module constant can't change. That's true from inside its module and from
