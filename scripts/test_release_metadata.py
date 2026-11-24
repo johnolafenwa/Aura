@@ -269,6 +269,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         safety_workflow = (ROOT / ".github/workflows/safety.yml").read_text()
         self.assertIn("cargo bench --locked -p aura-compiler", safety_workflow)
 
+    def test_npm_overrides_use_canonical_packages(self) -> None:
+        package_manifest = json.loads((ROOT / "package.json").read_text())
+        for name, spec in package_manifest.get("overrides", {}).items():
+            self.assertFalse(
+                str(spec).startswith("npm:"),
+                f"override for {name} uses non-canonical alias {spec!r}",
+            )
+        lockfile = json.loads((ROOT / "package-lock.json").read_text())
+        picomatch = lockfile["packages"].get("node_modules/picomatch", {})
+        self.assertNotIn("name", picomatch)
+
 
 if __name__ == "__main__":
     unittest.main()
