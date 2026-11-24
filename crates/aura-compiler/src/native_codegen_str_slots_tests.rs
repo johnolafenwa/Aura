@@ -45,6 +45,12 @@ def lonely(text: str) -> bool:
 def taken(text: own str) -> bool:
     return text == "taken"
 
+def upper_first(text: str) -> int64:
+    size = text.to_upper().len()
+    if text == "a":
+        return size
+    return 0
+
 def loops(text: str, count: int64) -> int64:
     if count == 0:
         return shouts(text).len()
@@ -65,6 +71,7 @@ def main():
     print(lonely(local))
     print(taken("taken"))
     print(loops(words[0], 2))
+    print(upper_first(words[0]))
 "#;
 
 fn module() -> MirModule {
@@ -100,8 +107,9 @@ fn a_function_gets_no_view_twin_without_a_read_of_the_bytes_or_a_call_with_words
     let views = plan_views(&module());
     // `shouts` only passes its text to an operation that takes the box,
     // no call of `lonely` has its argument as words, `taken` owns its
-    // parameter, and `loops` only passes its text on to `shouts`.
-    for function in ["shouts", "lonely", "taken", "loops", "main"] {
+    // parameter, `loops` only passes its text on to `shouts`, and
+    // `upper_first` takes the box of its text before it reads the bytes.
+    for function in ["shouts", "lonely", "taken", "loops", "upper_first", "main"] {
         assert!(!views.contains_key(function), "`{function}` has no twin");
     }
 }

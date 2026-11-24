@@ -68,6 +68,8 @@ struct ParamUse {
     reads: bool,
     /// It is used in a way that takes its box.
     boxes: bool,
+    /// The function's first block takes its box, so every call does.
+    boxes_on_entry: bool,
     /// The parameters of other functions it is passed to.
     forwards: Vec<(String, usize)>,
 }
@@ -198,6 +200,7 @@ fn param_uses(
                 let entry = uses.entry(position).or_default();
                 if !reads {
                     entry.boxes = true;
+                    entry.boxes_on_entry |= block.label == function.entry;
                 } else if forwards.iter().all(|(from, _)| *from != position) {
                     entry.reads = true;
                 }
@@ -210,7 +213,9 @@ fn param_uses(
         }
         for place in terminator_place_mentions(&block.terminator) {
             if let Some(position) = candidates.get(place.split('.').next().unwrap_or(place)) {
-                uses.entry(*position).or_default().boxes = true;
+                let entry = uses.entry(*position).or_default();
+                entry.boxes = true;
+                entry.boxes_on_entry |= block.label == function.entry;
             }
         }
     }
@@ -317,18 +322,20 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
         })
         .collect::<HashMap<_, _>>();
     // A parameter is worth its words when some read uses the bytes, here
-    // or in a function it is passed on to.
+    // or in a function it is passed on to, and some call does not need
+    // its box from the start.
     let mut useful = HashSet::<(&str, usize)>::new();
     let mut grew = true;
     while grew {
         grew = false;
         for (name, uses) in &uses {
             for (position, param) in uses {
-                let reads = param.reads
-                    || param
-                        .forwards
-                        .iter()
-                        .any(|(callee, at)| useful.contains(&(callee.as_str(), *at)));
+                let reads = !param.boxes_on_entry
+                    && (param.reads
+                        || param
+                            .forwards
+                            .iter()
+                            .any(|(callee, at)| useful.contains(&(callee.as_str(), *at))));
                 if reads {
                     grew |= useful.insert((name, *position));
                 }
@@ -1135,7 +1142,21 @@ impl FunctionCompiler<'_> {
             self.builder.brif(list, field_block, &[], slow_block, &[]);
             self.builder.switch_to_block(field_block);
             self.builder.seal_block(field_block);
-            self.emit_str_view_entry(list, index, slow_block, join_block);
+            // A list without a view reads the element as a copy, which
+            // counts the miss so the list makes its view.
+            let miss_block = self.builder.create_block();
+            self.emit_str_view_entry(list, index, miss_block, join_block);
+            self.builder.switch_to_block(miss_block);
+            self.builder.seal_block(miss_block);
+            let (line, column) = self.span_operands(selector.span);
+            let copy = self
+                .builder
+                .call(
+                    self.runtime[RuntimeFn::VecStrElement],
+                    &[list, index, line, column],
+                )
+                .results[0];
+            self.jump_with_owned_str(copy, join_block);
             self.builder.switch_to_block(slow_block);
             self.builder.seal_block(slow_block);
             let (collection, projection) = self.load_element_path_root(&selection.place)?;
