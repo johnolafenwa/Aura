@@ -25,6 +25,9 @@ pub struct HookFields {
 }
 
 struct Owner {
+    // Value destruction is linked into every native executable. Arming an
+    // owner installs this callback, so only a hook user links the queue.
+    release: fn(&mut HookFields),
     class_name: RuntimeName,
     method: DropMethod,
     rank: AtomicU64,
@@ -44,10 +47,19 @@ thread_local! {
 
 impl Drop for HookFields {
     fn drop(&mut self) {
+        if let Some(owner) = &self.owner {
+            (owner.release)(self);
+        }
+    }
+}
+
+impl HookFields {
+    fn release(&mut self) {
         let Some(Owner {
             class_name,
             method,
             rank,
+            ..
         }) = self.owner.take().and_then(Arc::into_inner)
         else {
             return;
@@ -70,6 +82,7 @@ impl InstanceValue {
         let fields = Box::new(std::mem::take(&mut self.fields));
         self.fields = InstanceFields::Hooked(HookFields {
             owner: Some(Arc::new(Owner {
+                release: HookFields::release,
                 class_name: self.class_name.clone(),
                 method,
                 rank: AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),
@@ -202,6 +215,7 @@ pub fn renew_owners(value: &mut Value) {
             if let InstanceFields::Hooked(fields) = &mut instance.fields {
                 if let Some(owner) = &mut fields.owner {
                     *owner = Arc::new(Owner {
+                        release: owner.release,
                         class_name: owner.class_name.clone(),
                         method: owner.method.clone(),
                         rank: AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),

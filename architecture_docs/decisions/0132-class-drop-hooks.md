@@ -35,8 +35,10 @@ owners. The first trap is the one reported by the task or
 The fully initialized instance carries a shared obligation, using the
 same distinction between source ownership and temporary runtime copies
 as opaque FFI handles. The last internal reference queues the disarmed
-instance for its backend to call. Generated code can skip this machinery
-for programs without hooks. A lexical marker keeps an owner live through
+instance for its backend to call. Arming the first native owner installs
+the task cleanup callback. Each armed owner carries the callback that
+queues its fields, so the linker can omit both handlers in a program
+without hooks. A lexical marker keeps an owner live through
 its scope, including when the last source read is earlier.
 
 [Opaque handle release](0083-ffi-handle-drop-functions.md)

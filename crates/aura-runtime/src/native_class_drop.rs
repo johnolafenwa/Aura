@@ -2,7 +2,9 @@
 //! runs outside Rust drop glue, using the cleanup trap boundary.
 
 use super::*;
-static CLASS_HOOKS_ARMED: AtomicBool = AtomicBool::new(false);
+// Task teardown is part of every hosted executable. Only the compiler's
+// arm entry links the handler that runs user code and drains the queue.
+static TASK_CLEANUP: OnceLock<fn(bool)> = OnceLock::new();
 
 use crate::runtime_value::class_drop::{released_instances, DropMethod};
 
@@ -17,7 +19,7 @@ pub unsafe extern "C-unwind" fn aura_direct_arm_class_drop(
     thunk: NativeThunk,
 ) {
     task_runtime_boundary(|| unsafe {
-        CLASS_HOOKS_ARMED.store(true, Ordering::Relaxed);
+        TASK_CLEANUP.get_or_init(|| drain_task_owners);
         value_mut(value, |value| {
             let Value::Instance(instance) = value else {
                 runtime_error("invalid drop hook receiver")
@@ -92,10 +94,15 @@ pub unsafe extern "C-unwind" fn aura_direct_copy_class_owners(
 /// abandoned references in the child. The pending task exit already holds
 /// the original trap. Secondary hook failures cannot replace it.
 pub(super) fn drop_abandoned_owners() {
-    if !CLASS_HOOKS_ARMED.load(Ordering::Relaxed) {
-        return;
+    if let Some(cleanup) = TASK_CLEANUP.get() {
+        cleanup(true);
     }
-    release_abandoned_references();
+}
+
+fn drain_task_owners(release_references: bool) {
+    if release_references {
+        release_abandoned_references();
+    }
     crate::runtime_value::class_drop::reverse_owner_order();
     let _secondary = drain_released_hooks();
 }
@@ -128,9 +135,8 @@ pub unsafe extern "C-unwind" fn aura_direct_stamp_owner(value: *mut OpaqueValue,
 /// A retiring task has already handed its failure to the scheduler. Run
 /// hooks queued by release of the task's ledger before retiring its state.
 pub(super) fn finish_retiring_owners() {
-    if CLASS_HOOKS_ARMED.load(Ordering::Relaxed) {
-        crate::runtime_value::class_drop::reverse_owner_order();
-        let _secondary = drain_released_hooks();
+    if let Some(cleanup) = TASK_CLEANUP.get() {
+        cleanup(false);
     }
 }
 
