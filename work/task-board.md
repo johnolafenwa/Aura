@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-24
 
+## Release 0.18 systems data
+
+The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)
+
 ## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

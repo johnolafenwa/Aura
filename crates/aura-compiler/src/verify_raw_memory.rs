@@ -7,9 +7,25 @@ use crate::mir::{CallTarget, Instruction, MethodDispatch, MirFunction, MirModule
 use crate::sema::Type;
 
 fn uses_typed_pointer(function: &MirFunction) -> bool {
-    let exposes_storage = function.blocks.iter().flat_map(|b| &b.instructions).any(|i| {
-        matches!(i, Instruction::Assign { value, .. } if matches!(value, Rvalue::CFieldAddress { .. } | Rvalue::ModuleAddress { .. } | Rvalue::CPointerAccess { .. }) || matches!(value, Rvalue::Call { callee: CallTarget::Name(name), .. } if name == crate::mir::fixed_arrays::ADDRESS))
-    });
+    let exposes_storage = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            let Instruction::Assign { value, .. } = instruction else {
+                return false;
+            };
+            match value {
+                Rvalue::CFieldAddress { .. }
+                | Rvalue::ModuleAddress { .. }
+                | Rvalue::CPointerAccess { .. } => true,
+                Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    ..
+                } => name == crate::mir::fixed_arrays::ADDRESS,
+                _ => false,
+            }
+        });
     exposes_storage
         || function
             .local_types

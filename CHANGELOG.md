@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- Freestanding modules can keep writable state in `.data` and `.bss`. Use `fixed[T, N]` for inline arrays and `ptr[T]` for typed access to cells, elements and C fields.
+- C records support packing, explicit alignment, unsigned bit-fields, C layout queries and writable union members.
+- Integers gain rotations, bit counts and byte swapping. Freestanding functions can use 128-bit integers. Memory atomics support 8-, 16-, 32- and 64-bit cells and explicit memory orders.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.
