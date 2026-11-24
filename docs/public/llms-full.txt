@@ -28150,7 +28150,8 @@ The directory can be deleted at any time.
 | `exp`, `log`, `sin`, `cos`, `pow`, `tanh`, `sigmoid`, `erf`, `randn` | Within a few units in the last place. |
 | `slice`, `index_select`, `cat`, `expand`, `argmax`, `argmin`, `rand` | Equal. |
 | `+`, `-`, `*`, `/`, `sqrt` and the conversions on `float16` | Equal. |
-| `sum`, `mean`, `matmul` and the functions on `float16` | Within a few half-precision steps. |
+| `sum`, `mean` and the functions on `float16` | Within a few half-precision steps. |
+| `matmul` on `float16` | Within about one part in a hundred of the largest element. cuBLAS adds the terms of a half product in half precision, where the CPU device adds them in `float32` and rounds once. |
 | `index_add` | Within a few units in the last place. The GPU adds in a different order. |
 
 The test suite checks these on a machine with a GPU. The hosted CI
