@@ -1416,15 +1416,23 @@ fn host_image_base() -> *mut c_void {
 /// symbol.
 #[cfg(windows)]
 fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
-    use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+    use windows_sys::Win32::System::LibraryLoader::{
+        LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+    };
     use windows_sys::Win32::System::ProcessStatus::K32EnumProcessModules;
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     static C_RUNTIME: std::sync::Once = std::sync::Once::new();
     C_RUNTIME.call_once(|| {
         let name: Vec<u16> = "ucrtbase.dll\0".encode_utf16().collect();
-        // SAFETY: `name` is NUL terminated. The module stays loaded.
-        unsafe { LoadLibraryW(name.as_ptr()) };
+        // SAFETY: `name` is NUL terminated and restricted to default dirs.
+        unsafe {
+            LoadLibraryExW(
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        };
     });
 
     let host = host_image_base();
@@ -1592,26 +1600,56 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     files
 }
 
+#[cfg(any(windows, test))]
+const WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR: u32 = 0x0000_0100;
+#[cfg(any(windows, test))]
+const WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
+
+/// Computes restricted `LoadLibraryExW` search flags for Windows DLL loads.
+/// Bare names search only default application/system directories (excluding
+/// CWD), while canonicalized absolute paths also search the DLL's own folder.
+#[cfg(any(windows, test))]
+fn windows_load_library_flags(is_absolute: bool) -> u32 {
+    if is_absolute {
+        WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    } else {
+        WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    }
+}
+
 /// Loads the library at `path`, or the one the loader finds for a bare
 /// file name, and returns its module handle.
 #[cfg(windows)]
 fn open_library(path: &Path) -> Result<usize, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{
-        LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
+        LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
     };
-    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    debug_assert_eq!(
+        WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+    );
+    debug_assert_eq!(
+        WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+    );
+    // Candidates with an explicit directory (from search paths) are
+    // canonicalized so `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR` receives a full path.
+    // Bare names stay bare so the current working directory is never searched.
+    let has_directory = path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty());
+    let resolved = if has_directory {
+        aura_core::host_path::canonicalize(path).map_err(|error| error.to_string())?
+    } else {
+        path.to_path_buf()
+    };
+    let mut wide: Vec<u16> = resolved.as_os_str().encode_wide().collect();
     if wide.contains(&0) {
         return Err("the path contains a NUL character".to_string());
     }
     wide.push(0);
-    // A library named by its full path finds the libraries it needs beside
-    // itself. The flag is only valid with such a path.
-    let flags = if path.is_absolute() {
-        LOAD_WITH_ALTERED_SEARCH_PATH
-    } else {
-        0
-    };
+    let flags = windows_load_library_flags(resolved.is_absolute());
     // SAFETY: `wide` is NUL terminated, and the reserved handle is null.
     let handle = unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), flags) };
     if handle.is_null() {
@@ -3582,5 +3620,19 @@ mod tests {
         );
         std::fs::remove_dir_all(&dir_a).expect("cleanup dir_a");
         std::fs::remove_dir_all(&dir_b).expect("cleanup dir_b");
+    }
+
+    #[test]
+    fn windows_open_library_uses_restricted_search_flags() {
+        assert_eq!(
+            windows_load_library_flags(false),
+            WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            "bare DLL names must use LOAD_LIBRARY_SEARCH_DEFAULT_DIRS to exclude CWD"
+        );
+        assert_eq!(
+            windows_load_library_flags(true),
+            WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            "absolute DLL paths must use LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS"
+        );
     }
 }
