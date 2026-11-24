@@ -13884,6 +13884,13 @@ impl<'a> FunctionCompiler<'a> {
     /// or an index out of range, takes `aura_direct_vec_str_element`, which
     /// reports the index and counts the miss.
     fn emit_str_element_copy(&mut self, list: Val, index: Val, span: Span) -> Val {
+        let (line, column) = self.span_operands(span);
+        self.emit_str_element_copy_at(list, index, line, column)
+    }
+
+    /// [`Self::emit_str_element_copy`] with the line and column of the
+    /// index expression as words.
+    fn emit_str_element_copy_at(&mut self, list: Val, index: Val, line: Val, column: Val) -> Val {
         use aura_runtime::native_runtime::{
             DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
             DIRECT_STR_VIEW_PTR_OFFSET,
@@ -13931,7 +13938,6 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
-        let (line, column) = self.span_operands(span);
         let copy = self.builder.call(
             self.runtime[RuntimeFn::VecStrElement],
             &[list, index, line, column],
@@ -18215,6 +18221,13 @@ impl<'a> FunctionCompiler<'a> {
                 } else {
                     self.emit_vec_index_failure_guard(list, index, line, column)?
                 };
+                if element_ty == Type::named("str") {
+                    // A `str` element is copied from where the list keeps
+                    // it, as a loan of the element copies it: a loop over
+                    // the list then reads each word without a runtime walk.
+                    let copy = self.emit_str_element_copy_at(list, index, line, column);
+                    return Ok(self.owned_opaque_result(vec![copy], element_ty));
+                }
                 let results = self.runtime_call_results(function, &[list, index, line, column]);
                 let indexed = self.owned_opaque_result(results, element_ty);
                 self.coerce_value(indexed, &element_direct_ty)
