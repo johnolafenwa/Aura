@@ -4684,3 +4684,55 @@ def main():
         "assert in Ready arm should still prove: {report:#?}"
     );
 }
+
+#[test]
+fn contracted_callable_keyword_arguments_bind_by_name() {
+    let source = r#"
+type PickFirst = def(a: int64, b: int64) -> int64:
+    requires b > 0
+    ensures result == a
+
+def bad_index(f: PickFirst, xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    idx = f(b=1, a=-10)
+    return xs[idx]
+
+def bad_requires(f: PickFirst) -> int64:
+    return f(b=-1, a=10)
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "bad_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "reordered kwargs must bind `a = -10` so `xs[idx]` fails: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "bad_requires"
+                && ob.kind == ObligationKind::Requires
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "reordered kwargs must bind `b = -1` so `requires b > 0` fails: {report:#?}"
+    );
+    let program = crate::check_source(source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unproved bounds check after reordered kwargs must not be removed"
+    );
+}

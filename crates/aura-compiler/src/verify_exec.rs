@@ -3779,9 +3779,48 @@ impl<'a> Exec<'a> {
                 Val::Contracted(alias) => {
                     let info = self.cx.alias_contract(&alias).expect("a contracted alias");
                     let mut pre = Vec::new();
-                    for (param, arg) in info.decl.params.iter().zip(args) {
-                        let value = self.operand(state, &arg.value, None);
-                        pre.push((param.name.clone(), value));
+                    let mut post = Vec::new();
+                    let mut positional = 0usize;
+                    for arg in args {
+                        let index = match &arg.name {
+                            Some(name) => info
+                                .decl
+                                .params
+                                .iter()
+                                .position(|param| &param.name == name),
+                            None => {
+                                let index = positional;
+                                positional += 1;
+                                (index < info.decl.params.len()).then_some(index)
+                            }
+                        };
+                        let Some(index) = index else {
+                            let _ = self.operand(state, &arg.value, None);
+                            if let Some(place) = &arg.writeback_place {
+                                self.havoc_place(state, place);
+                            }
+                            continue;
+                        };
+                        let param = &info.decl.params[index];
+                        let ty = info.signature.params.get(index);
+                        let value = self.operand(state, &arg.value, ty.and_then(IntTy::of));
+                        let value = match ty {
+                            Some(ty) => fit(value, ty),
+                            None => value,
+                        };
+                        pre.push((param.name.clone(), value.clone()));
+                        let after = match &arg.writeback_place {
+                            Some(place) => {
+                                let after = match ty {
+                                    Some(ty) => self.fresh(ty, &param.name),
+                                    None => self.fresh_local(place),
+                                };
+                                self.write_place(state, place, after.clone());
+                                after
+                            }
+                            None => value,
+                        };
+                        post.push((param.name.clone(), after));
                     }
                     let span = self.span;
                     self.contract_override = Some(&info.decl);
@@ -3790,7 +3829,7 @@ impl<'a> Exec<'a> {
                         Type::Unit => Val::Unit,
                         ty => self.fresh(ty, target.unwrap_or("result")),
                     };
-                    self.call_ensures(state, &alias, &pre, &pre, &result);
+                    self.call_ensures(state, &alias, &pre, &post, &result);
                     self.contract_override = None;
                     result
                 }
