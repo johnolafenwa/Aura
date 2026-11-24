@@ -1,0 +1,39 @@
+# An index from zero up to the length is one compare away from its
+# element. Any other is counted from the end, or out of range.
+import control
+
+def get(xs: list[int64], i: int64) -> int64:
+    return xs[i]
+
+def put(xs: mut list[int64], i: int64, v: int64):
+    xs[i] = v
+
+def at(i: int64) -> int64:
+    xs: list[int64] = [10, 20, 30]
+    return get(xs, i)
+
+def try_at(i: int64):
+    match control.recover(at, i):
+        case Ok(v):
+            print(v)
+        case Err(trap):
+            print(trap.message)
+
+def main():
+    mut xs: list[int64] = [10, 20, 30]
+    print(get(xs, 0))
+    print(get(xs, 2))
+    print(get(xs, -1))
+    print(get(xs, -3))
+    put(xs, -2, 99)
+    put(xs, 1 - 1, 7)
+    print(xs)
+    fs = [1.5, 2.5]
+    print(fs[-1] + fs[-2])
+    bs = [true, false]
+    print(bs[-2])
+    try_at(3)
+    try_at(-4)
+    try_at(9223372036854775807)
+    try_at(-9223372036854775807 - 1)
+    try_at(-1)

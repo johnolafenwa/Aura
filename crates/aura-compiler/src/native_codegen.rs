@@ -13764,6 +13764,9 @@ impl<'a> FunctionCompiler<'a> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
+        // The runtime call serves a list in another form and reports an
+        // index out of range.
+        self.builder.set_cold_block(slow_block);
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
@@ -13990,6 +13993,9 @@ impl<'a> FunctionCompiler<'a> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
+        // The runtime call serves a list in another form and reports an
+        // index out of range.
+        self.builder.set_cold_block(slow_block);
         let fast_block = self.builder.create_block();
         let store_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -14150,28 +14156,35 @@ impl<'a> FunctionCompiler<'a> {
         slow: Blk,
     ) -> Val {
         let len = self.list_view_word(list, list_snapshots::ViewWord::Len);
-        let zero = self.builder.iconst(types::I64, 0);
-        let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
-        let from_end = self.builder.iadd(len, index);
-        let mut position = self.builder.select(negative, from_end, index);
-        // One unsigned compare also rejects a position below zero.
-        let mut out_of_range = self
-            .builder
-            .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        // One unsigned compare passes an index from zero up to the length.
+        // Any other is counted from the end off the hot path, where the
+        // same compare rejects one out of range: a sum that is not below
+        // the length, also when the index is far above it and the sum
+        // wraps.
+        let mut forward = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
         if let Some(snapshot) = self.range_covered(list) {
             // The loop's copy for a qualifying view checked the whole
             // range where it was entered, so the index is the position
             // there.
-            let outside = self.builder.uextend(types::I64, out_of_range);
-            let outside = self.keep_in_copy(snapshot, zero, outside);
-            out_of_range = self.builder.icmp_imm(IntCC::NotEqual, outside, 0);
-            position = self.keep_in_copy(snapshot, index, position);
+            let inside = self.builder.uextend(types::I64, forward);
+            let one = self.builder.iconst(types::I64, 1);
+            let inside = self.keep_in_copy(snapshot, one, inside);
+            forward = self.builder.icmp_imm(IntCC::NotEqual, inside, 0);
         }
         let in_range = self.builder.create_block();
-        self.builder.brif(out_of_range, slow, &[], in_range, &[]);
+        self.builder.append_block_param(in_range, types::I64);
+        let wrap = self.builder.create_block();
+        self.builder.set_cold_block(wrap);
+        self.builder.brif(forward, in_range, &[index], wrap, &[]);
+        self.builder.switch_to_block(wrap);
+        self.builder.seal_block(wrap);
+        let from_end = self.builder.iadd(len, index);
+        let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
+        self.builder
+            .brif(counted, in_range, &[from_end], slow, &[]);
         self.builder.switch_to_block(in_range);
         self.builder.seal_block(in_range);
-        position
+        self.builder.block_params(in_range)[0]
     }
 
     fn emit_vec_index_failure_guard(
