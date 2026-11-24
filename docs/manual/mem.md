@@ -76,11 +76,16 @@ address_again = raw_bytes as uint64
 
 | Operation | Result |
 | --- | --- |
+| `mem.address_of(place)` | Address a mutable module binding, a fixed array element, or an addressable C field. Selecting an array element checks its index. |
 | `p.read()`, `p.write(value)` | Read or write one value of the pointee type. |
 | `p.volatile_read()`, `p.volatile_write(value)` | Read or write at the program point. A scalar uses one naturally aligned access. |
 | `p.offset(count)` | Advance by a signed number of elements. The unit is the size of the pointee. |
 | `p as ptr[U]` | Interpret the same address as a pointer to U. |
 | `p as uint64`, `address as ptr[T]` | Convert between an address word and a typed pointer. |
+
+A pointer to `fixed[T, N]` reads and writes a complete inline array. For example, `p.offset(1)` advances past all `N` elements, including padding in the element type. A pointer to an `extern "C"` class uses the C layout of the whole record. Ordinary accesses accept unaligned addresses, including fields in packed records. Aggregate volatile operations access each byte in order. Each volatile scalar operation requests the width of the scalar, including `int128` and `uint128`. Whether the hardware implements that width in a single bus transaction depends on the target.
+
+Use `0 as ptr[T]` for null. Comparing pointers of the same type with `==` or `!=` compares their address words. The caller is responsible for the lifetime, alignment and access rights of a pointer obtained through FFI or `mem.address_of`. An address into a local expires when its storage goes out of scope. A bit-field shares its storage unit with other members and has no pointer.
 
 The signed forms `mem.read_intN` and `mem.write_intN` use 8, 16, 32 or 64 bits. The floating forms `mem.read_floatN` and `mem.write_floatN` use 32 or 64 bits. Prefix either form with `volatile_` for a volatile access. A floating read interprets the stored bits in the target's floating-point representation.
 

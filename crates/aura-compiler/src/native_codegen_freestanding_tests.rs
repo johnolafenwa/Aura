@@ -1059,6 +1059,7 @@ fn typed_pointer_objects_use_target_memory_operations() {
         include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
         include_str!("../tests/fixtures/typed-pointers/links.au"),
         include_str!("../tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../tests/fixtures/typed-pointers/wide.au"),
         include_str!("../tests/fixtures/typed-pointers/fixed.au"),
     ] {
         for target in TARGETS {

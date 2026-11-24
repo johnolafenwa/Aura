@@ -36,6 +36,23 @@ impl Lowerer<'_> {
     }
 
     fn pointer_class_layout(&self, element: &Type) -> Option<crate::c_layout::CStruct> {
+        if element == &Type::named("int128") || element == &Type::named("uint128") {
+            use crate::c_layout::{CField, CFieldKind, CStruct};
+            let mut layout = CStruct {
+                name: format!("#{element}"),
+                union: false,
+                layout_controls: Default::default(),
+                fields: vec![CField {
+                    name: "bits".into(),
+                    kind: CFieldKind::Array(
+                        Box::new(CFieldKind::Scalar(crate::ffi::FfiScalar::U64)),
+                        2,
+                    ),
+                }],
+            };
+            layout.layout_controls.alignment = Some(16);
+            return Some(layout);
+        }
         if let Some((inner, length)) = element.as_fixed_array() {
             use crate::c_layout::{CField, CFieldKind, CStruct};
             let kind = if let Some(scalar) = crate::sema::ffi_scalar(inner) {
@@ -49,8 +66,13 @@ impl Lowerer<'_> {
                 }
             };
             return Some(CStruct {
-                name: "#fixed".into(), union: false, layout_controls: Default::default(),
-                fields: vec![CField { name: "elements".into(), kind: CFieldKind::Array(Box::new(kind), length) }],
+                name: "#fixed".into(),
+                union: false,
+                layout_controls: Default::default(),
+                fields: vec![CField {
+                    name: "elements".into(),
+                    kind: CFieldKind::Array(Box::new(kind), length),
+                }],
             });
         }
         let Type::Named(name, _) = element else {
@@ -137,6 +159,7 @@ impl Lowerer<'_> {
             return Some(self.pointer_mem_call(&format!("{method}_{element}"), ty, operands));
         }
         let layout = self.pointer_class_layout(element)?;
+        let value = value.map(|v| self.pointer_temp(element.clone(), Rvalue::Use(v)));
         let result = if value.is_some() {
             Type::Unit
         } else {
@@ -157,7 +180,9 @@ impl Lowerer<'_> {
 impl Lowerer<'_> {
     pub(super) fn lower_raw_address(&mut self, place: &Expr) -> Operand {
         let addr = self.storage_address(place);
-        let element = self.infer_expr_type(place).expect("checked pointed-to type");
+        let element = self
+            .infer_expr_type(place)
+            .expect("checked pointed-to type");
         self.pointer_cast(addr, Type::Named("ptr".into(), vec![element]), place.span)
     }
 
@@ -171,28 +196,64 @@ impl Lowerer<'_> {
             ExprKind::Index { object, index } => {
                 let array = self.infer_expr_type(object).expect("checked fixed array");
                 let element = array.as_fixed_array().expect("checked inline element").0;
-                let stride = self.pointer_element_size(element).expect("checked element size");
+                let stride = self
+                    .pointer_element_size(element)
+                    .expect("checked element size");
                 let base = self.storage_address(object);
                 let index_value = self.lower_index_domain_expr(index);
-                let values = vec![base, index_value, Operand::Int(index.span.line as u128),
-                    Operand::Int(index.span.column as u128), Operand::Int(stride as u128)];
-                self.pointer_temp(word, super::fixed_arrays::call(super::fixed_arrays::ADDRESS, &array, values))
+                let values = vec![
+                    base,
+                    index_value,
+                    Operand::Int(index.span.line as u128),
+                    Operand::Int(index.span.column as u128),
+                    Operand::Int(stride as u128),
+                ];
+                self.pointer_temp(
+                    word,
+                    super::fixed_arrays::call(super::fixed_arrays::ADDRESS, &array, values),
+                )
             }
-            ExprKind::Member { object, field } if self.infer_expr_type(object)
-                .and_then(|owner| self.pointer_class_layout(&owner)).is_some() => {
+            ExprKind::Member { object, field }
+                if self
+                    .infer_expr_type(object)
+                    .and_then(|owner| self.pointer_class_layout(&owner))
+                    .is_some() =>
+            {
                 let owner = self.infer_expr_type(object).expect("checked C field");
-                let layout = self.pointer_class_layout(&owner).expect("checked containing layout");
-                let offset = layout.fields.iter().zip(layout.field_offsets()).find(|(member, _)| &member.name == field)
-                    .expect("checked C field").1;
+                let layout = self
+                    .pointer_class_layout(&owner)
+                    .expect("checked containing layout");
+                let offset = layout
+                    .fields
+                    .iter()
+                    .zip(layout.field_offsets())
+                    .find(|(member, _)| &member.name == field)
+                    .expect("checked C field")
+                    .1;
                 let base = self.storage_address(object);
-                if offset == 0 { return base; }
-                self.pointer_mem_call("__pointer_offset", word, vec![base, Operand::Int(offset as u128), Operand::Int(1)])
+                if offset == 0 {
+                    return base;
+                }
+                self.pointer_mem_call(
+                    "__pointer_offset",
+                    word,
+                    vec![base, Operand::Int(offset as u128), Operand::Int(1)],
+                )
             }
             _ => {
-                let root = self.render_place_expr_option(place).expect("checked addressable place");
+                let root = self
+                    .render_place_expr_option(place)
+                    .expect("checked addressable place");
                 let ty = self.infer_expr_type(place).expect("checked storage type");
                 let layout = self.pointer_class_layout(&ty).expect("checked C storage");
-                self.pointer_temp(word, Rvalue::CFieldAddress { root, layout, offset:0 })
+                self.pointer_temp(
+                    word,
+                    Rvalue::CFieldAddress {
+                        root,
+                        layout,
+                        offset: 0,
+                    },
+                )
             }
         }
     }

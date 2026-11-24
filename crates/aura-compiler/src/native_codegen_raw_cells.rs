@@ -64,13 +64,18 @@ impl FunctionCompiler<'_> {
             let align_shift = layout.align().trailing_zeros() as u8;
             let slot = self.builder.create_sized_stack_slot(size, align_shift);
             let address = self.builder.stack_addr(types::I64, slot, 0);
-            let (binding, projection) = root.split_once('.').map_or((root.as_str(), None), |(base, rest)| (base, Some(rest)));
+            let (binding, projection) = root
+                .split_once('.')
+                .map_or((root.as_str(), None), |(base, rest)| (base, Some(rest)));
             if function.params.iter().any(|param| param.name == binding) {
                 let value = self.load_place(root)?;
                 self.store_foreign_struct(layout, &value, address)?;
             }
             if let Some(projection) = projection {
-                self.addressed_members.entry(binding.to_owned()).or_default().push(projection.to_owned());
+                self.addressed_members
+                    .entry(binding.to_owned())
+                    .or_default()
+                    .push(projection.to_owned());
             }
             self.raw_cells
                 .insert(root.clone(), (layout.clone(), address));
@@ -80,24 +85,34 @@ impl FunctionCompiler<'_> {
 }
 
 impl FunctionCompiler<'_> {
-    pub(in super::super) fn refresh_addressed_members(&mut self, root:&str, mut value: ValueRef) -> Result<ValueRef,String> {
+    pub(in super::super) fn refresh_addressed_members(
+        &mut self,
+        root: &str,
+        mut value: ValueRef,
+    ) -> Result<ValueRef, String> {
         for projection in self.addressed_members[root].clone() {
             let name = format!("{root}.{projection}");
-            let (layout,address) = self.raw_cells[&name].clone();
+            let (layout, address) = self.raw_cells[&name].clone();
             let member_type = self.type_of_place(&name)?;
-            let member = self.read_raw_class(&layout,address, member_type)?;
+            let member = self.read_raw_class(&layout, address, member_type)?;
             let path = projection.split('.').collect::<Vec<_>>();
             value = self.replace_nested_field(value, &path, member)?;
         }
         Ok(value)
     }
 
-    pub(in super::super) fn store_addressed_members(&mut self, root:&str, value:&ValueRef) -> Result<(),String> {
+    pub(in super::super) fn store_addressed_members(
+        &mut self,
+        root: &str,
+        value: &ValueRef,
+    ) -> Result<(), String> {
         for projection in self.addressed_members[root].clone() {
             let mut member = value.clone();
-            for field in projection.split('.') { member = self.extract_field(member,field)?; }
-            let (layout,address) = self.raw_cells[&format!("{root}.{projection}")].clone();
-            self.write_raw_class(&layout,&member,address)?;
+            for field in projection.split('.') {
+                member = self.extract_field(member, field)?;
+            }
+            let (layout, address) = self.raw_cells[&format!("{root}.{projection}")].clone();
+            self.write_raw_class(&layout, &member, address)?;
         }
         Ok(())
     }
@@ -111,6 +126,15 @@ impl FunctionCompiler<'_> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let address = self.load_operand(address)?.values[0];
+        if matches!(layout.name.as_str(), "#int128" | "#uint128") {
+            return self.compile_wide_memory(
+                address,
+                store,
+                layout.name == "#int128",
+                volatile,
+                target,
+            );
+        }
         // The temporary has the class's target alignment, so a field inside
         // a packed containing class need not be naturally aligned.
         let size = u32::try_from(layout.size()).map_err(|_| "C aggregate exceeds target size")?;
@@ -122,7 +146,8 @@ impl FunctionCompiler<'_> {
             let value = self.load_operand(value)?;
             self.copy_raw_bytes(None, scratch, size, false, false);
             if let DirectType::Fixed(_) = &value.ty {
-                self.builder.store(MemFlags::trusted(), value.values[0], scratch, 0);
+                self.builder
+                    .store(MemFlags::trusted(), value.values[0], scratch, 0);
             } else {
                 self.store_foreign_struct(layout, &value, scratch)?;
             }
@@ -131,10 +156,78 @@ impl FunctionCompiler<'_> {
         } else {
             self.copy_raw_bytes(Some(address), scratch, size, volatile, false);
             if let DirectType::Fixed(fixed) = target {
-                let value = self.builder.load(fixed.storage(), MemFlags::trusted(), scratch, 0);
-                return Ok(ValueRef { values: vec![value], ty: target.clone() });
+                let value = self
+                    .builder
+                    .load(fixed.storage(), MemFlags::trusted(), scratch, 0);
+                return Ok(ValueRef {
+                    values: vec![value],
+                    ty: target.clone(),
+                });
             }
             self.read_raw_class(layout, scratch, target.clone())
+        }
+    }
+
+    fn compile_wide_memory(
+        &mut self,
+        address: Val,
+        store: Option<&Operand>,
+        signed: bool,
+        volatile: bool,
+        target: &DirectType,
+    ) -> Result<ValueRef, String> {
+        let value = store
+            .map(|operand| self.load_operand(operand))
+            .transpose()?;
+        if self.freestanding.is_none() {
+            let ordered = self.builder.iconst(types::I64, i64::from(volatile));
+            if let Some(value) = value {
+                self.builder.call(
+                    self.runtime[RuntimeFn::PointerWideWrite],
+                    &[address, value.values[0], ordered],
+                );
+                return Ok(unit_value(self.builder));
+            }
+            let sign = self.builder.iconst(types::I64, i64::from(signed));
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::PointerWideRead],
+                &[address, sign, ordered],
+            );
+            return Ok(self.owned_opaque_result(call.results, direct_type_to_type(target)));
+        }
+        let slot = self.builder.create_sized_stack_slot(16, 4);
+        let scratch = self.builder.stack_addr(types::I64, slot, 0);
+        let flags = MemFlags::trusted();
+        if let Some(value) = value {
+            let [lo, hi] = value.values.as_slice() else {
+                return Err("wide integer requires two words".into());
+            };
+            self.builder.store(flags, *lo, scratch, 0);
+            self.builder.store(flags, *hi, scratch, 8);
+            self.builder.memory_access(
+                crate::native_backend::MemoryAccess::WideCopy {
+                    volatile_read: false,
+                    volatile_write: volatile,
+                },
+                types::I64,
+                &[scratch, address],
+            );
+            Ok(unit_value(self.builder))
+        } else {
+            self.builder.memory_access(
+                crate::native_backend::MemoryAccess::WideCopy {
+                    volatile_read: volatile,
+                    volatile_write: false,
+                },
+                types::I64,
+                &[address, scratch],
+            );
+            let lo = self.builder.load(types::I64, flags, scratch, 0);
+            let hi = self.builder.load(types::I64, flags, scratch, 8);
+            Ok(ValueRef {
+                ty: target.clone(),
+                values: vec![lo, hi],
+            })
         }
     }
 

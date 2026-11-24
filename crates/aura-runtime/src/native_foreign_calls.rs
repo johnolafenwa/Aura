@@ -1204,3 +1204,21 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) 
     let owner = unsafe { (*array.cast::<StructArrayHeader>().sub(1)).owner };
     unsafe { super::aura_direct_release_value(owner) };
 }
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar read contract.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_read(address:*const u128, signed:i64, volatile:i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(unsafe { crate::raw_wide_memory::read(address, signed != 0, volatile != 0) }))
+}
+
+/// # Safety
+/// The pointer satisfies the raw 128-bit scalar write contract and value is live.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_pointer_wide_write(address:*mut u128, value:*mut OpaqueValue, volatile:i64) {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |held| if !crate::raw_wide_memory::write(address, held, volatile != 0) {
+            runtime_diagnostic_error(Diagnostic::coded("AU4032", "wide memory write needs an integer"));
+        })
+    })
+}

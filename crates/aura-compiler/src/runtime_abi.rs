@@ -429,6 +429,8 @@ runtime_functions! {
     FfiElements => ("aura_direct_ffi_elements", [I64, I64, I64], Some(I64)),
     FfiElementsMut => ("aura_direct_ffi_elements_mut", [I64, I64, I64], None),
     FfiCheckFlags => ("aura_direct_ffi_check_flags", [I64, I64, I64], None),
+    PointerWideRead => ("aura_direct_pointer_wide_read", [I64, I64, I64], Some(I64)),
+    PointerWideWrite => ("aura_direct_pointer_wide_write", [I64, I64, I64], None),
     FixedBox => ("aura_direct_fixed_box", [I64, I64, I64], Some(I64)),
     FixedUnbox => ("aura_direct_fixed_unbox", [I64, I64, I64, I64], None),
     FixedBounds => ("aura_direct_fixed_bounds", [I64, I64, I64, I64], None),

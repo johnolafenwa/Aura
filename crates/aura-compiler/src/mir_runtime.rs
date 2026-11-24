@@ -144,7 +144,9 @@ pub fn run_entry_with_stdout_sink_and_program_args(
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
     reject_untrusted_extern_calls(module)?;
-    run_entry_with_stdout_sink_and_program_args_trusted(module, entry, stdout_sink, program_args)
+    let mut module = module.clone();
+    crate::mir::resolve_runtime_ops(&mut module);
+    run_resolved_entry(module, entry, stdout_sink, program_args, false)
 }
 
 pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
@@ -158,7 +160,7 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     // calls. Resolve them as the native emitter does, so both boundaries
     // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
-    run_resolved_entry(module, entry, stdout_sink, program_args)
+    run_resolved_entry(module, entry, stdout_sink, program_args, true)
 }
 
 /// Runs a module `lower_implicit` just made. Lowering already resolved its
@@ -169,7 +171,7 @@ pub(crate) fn run_lowered_entry(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    run_resolved_entry(module.clone(), entry, stdout_sink, program_args)
+    run_resolved_entry(module.clone(), entry, stdout_sink, program_args, true)
 }
 
 fn run_resolved_entry(
@@ -177,6 +179,7 @@ fn run_resolved_entry(
     entry: Option<&str>,
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
+    raw_memory_allowed: bool,
 ) -> Result<RunOutput> {
     crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error) => {
@@ -214,6 +217,7 @@ fn run_resolved_entry(
                             CancellationContext::default(),
                             program_args,
                         );
+                        runtime.raw_memory_allowed = raw_memory_allowed;
                         runtime.run_entry(task_entry.as_deref())
                     })
                 } else {
@@ -224,6 +228,7 @@ fn run_resolved_entry(
                         CancellationContext::default(),
                         program_args,
                     );
+                    runtime.raw_memory_allowed = raw_memory_allowed;
                     catch_lightweight_task_failure(|| runtime.run_entry(entry.as_deref()))
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
@@ -286,8 +291,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 Rvalue::Call {
                     callee: CallTarget::Extern(call),
                     ..
-                } => Some(Err(call.symbol.as_str())),
-                value if raw_cells::requires_package_grant(value) => Some(Ok(())),
+                } => Some(call.symbol.as_str()),
                 _ => None,
             },
             Instruction::Safepoint
@@ -312,11 +316,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
         });
 
     match symbol {
-        Some(Ok(())) => Err(Diagnostic::coded(
-            "AU2084",
-            "raw memory operations require a manifest-checked path with allow_ffi = true",
-        )),
-        Some(Err(symbol)) => Err(Diagnostic::coded(
+        Some(symbol) => Err(Diagnostic::coded(
             "AU4001",
             format!(
                 "public MIR execution rejects the untrusted extern call `{symbol}`; FFI must be authorized by a manifest-rooted package with `[package] allow_ffi = true` and executed through a path-based API"
@@ -825,6 +825,7 @@ fn validate_runtime_module_complexity_with_limits(
 }
 
 struct MirRuntime {
+    raw_memory_allowed: bool,
     borrowed_raw_cells: raw_cells::SharedCells,
     raw_parameters: Arc<raw_cells::ParameterLayouts>,
     module: Arc<MirModule>,
@@ -2708,6 +2709,7 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
+            raw_memory_allowed: true,
             borrowed_raw_cells: Default::default(),
             raw_parameters: Arc::new(raw_cells::parameter_layouts(&module)),
             module: Arc::new(module),
@@ -4738,6 +4740,7 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. } if !self.raw_memory_allowed => Err(raw_cells::permission_error()),
             Rvalue::CPointerAccess {
                 address,
                 store,
@@ -5837,6 +5840,9 @@ impl MirRuntime {
             return result;
         }
 
+        if !self.raw_memory_allowed && name.starts_with("mem::") {
+            return Err(raw_cells::permission_error());
+        }
         if let Some(metadata) = host_builtin_metadata(name) {
             // Checked MIR materializes builtin defaults before runtime dispatch, so
             // optional metadata parameters are present in this argument list too.
@@ -6945,6 +6951,7 @@ impl MirRuntime {
     /// its indices, output and program-wide constant states.
     fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
+            raw_memory_allowed: self.raw_memory_allowed,
             borrowed_raw_cells: Default::default(),
             raw_parameters: Arc::clone(&self.raw_parameters),
             module: Arc::clone(&self.module),

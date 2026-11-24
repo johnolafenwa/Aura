@@ -16,6 +16,8 @@ An offset counts elements. A plain access permits an unaligned address. A volati
 
 A field whose address escapes into raw code keeps its enclosing C representation in stable storage for the lifetime of the local. Taking its address requires a mutable, addressable Aura place. Mutating the field through the pointer and assigning to it through Aura address the same bytes. An extern pointer parameter accepts either a raw pointer or the existing synchronous list view. A returned raw pointer has the lifetime specified by the C library.
 
+A fixed array also has an addressable inline representation. Its element index is checked before the address is formed. The outer array length participates in the stride of a pointer to the complete array. Module cells use the address of their data symbol and retain that address across calls. Field addressing honors the target's C field offsets, including packed records. Bit-fields cannot be addressed individually.
+
 ## Permission and Proof
 
 Require the package's existing FFI grant for pointer operations, including casts in files without a mem import. The grant already covers the same operations through C. A lexical unsafe block could identify the individual sites that need review. Adding it would require checking effects across wrappers and specifying migration rules for existing mem and extern calls. Keep the capability boundary at the package for this change.
