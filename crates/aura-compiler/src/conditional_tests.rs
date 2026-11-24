@@ -35,3 +35,119 @@ fn imported_const_predicates_can_guard_imports() {
     let program = crate::check_path(&path).unwrap();
     assert_eq!(program.module.inactive_lines, [5..6, 10..11]);
 }
+
+#[test]
+fn runtime_arms_keep_their_lexical_bindings() {
+    use crate::ast::{Item, Stmt};
+    let module = parse_source(concat!(
+        "from build import hosted as active\n",
+        "def choose(active: bool) -> int64:\n",
+        "    if active:\n        return 1\n",
+        "    else:\n        return 0\n",
+        "def main():\n",
+        "    def nested(active: bool) -> int64:\n",
+        "        if active:\n            return 3\n",
+        "        return 4\n",
+        "    print(choose(false))\n"
+    ))
+    .unwrap();
+    let Item::Function(choose) = &module.items[0] else {
+        panic!("function")
+    };
+    let Stmt::If(branch) = &choose.body[0] else {
+        panic!("runtime conditional")
+    };
+    assert_eq!(branch.branches.len(), 1);
+    assert!(module.inactive_lines.is_empty());
+}
+
+#[test]
+fn runtime_if_with_a_compile_time_elif_keeps_only_reachable_suites() {
+    let source = concat!(
+        "import build\n",
+        "def label(value: bool) -> str:\n",
+        "    if value:\n        return \"runtime\"\n",
+        "    elif build.hosted:\n        return \"host\"\n",
+        "    elif build.cfg[\"unavailable\"] == \"yes\":\n        return bad()\n",
+        "    else:\n        return another_bad_call()\n",
+        "def main():\n    print(label(true))\n    print(label(false))\n",
+    );
+    let module = parse_source(source).unwrap();
+    assert_eq!(module.inactive_lines, [7..8, 9..10]);
+    assert_eq!(run_source(source).unwrap().stdout, "runtime\nhost\n");
+}
+
+#[test]
+fn syntax_only_parses_inactive_types_without_evaluating_the_guard() {
+    let source = "import build\nclass Header:\n    if build.os:\n        word: MissingType\n    else:\n        flag: bool\n";
+    let syntax = crate::parser::parse_all_syntax(source).unwrap();
+    let crate::ast::Item::Class(header) = &syntax.items[0] else {
+        panic!("class")
+    };
+    assert_eq!(header.fields.len(), 2);
+    assert_eq!(parse_source(source).unwrap_err().code, "AU2071");
+    let invalid =
+        "import build\nif build.freestanding:\n    def missing_arrow(x int64):\n        pass\n";
+    assert_eq!(parse_source(invalid).unwrap_err().span.unwrap().line, 3);
+}
+
+#[test]
+fn unreachable_nested_declarations_never_evaluate_their_conditions() {
+    let source = concat!(
+        "import build\n",
+        "if build.freestanding:\n",
+        "    if never_available:\n",
+        "        extern \"C\" def foreign_only() -> NativeOnly\n",
+        "else:\n",
+        "    public def answer() -> int64:\n        return 17\n",
+        "def main():\n    print(answer())\n",
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "17\n");
+}
+
+#[test]
+fn file_predicates_can_call_a_function_from_an_import() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-pass/conditional_imported.au");
+    let source = concat!(
+        "from conditional_support.features import enough\n",
+        "const selected = enough(7)\n",
+        "if selected:\n    available = 9\n",
+        "else:\n    import missing\n",
+        "def main():\n    print(available)\n",
+    );
+    let module = crate::parse_path_with_source(&path, source).unwrap();
+    assert_eq!(module.inactive_lines, [5..6]);
+    assert_eq!(
+        crate::run_path_with_source(&path, source).unwrap().stdout,
+        "9\n"
+    );
+}
+
+#[test]
+fn computed_guard_selects_targets_in_called_function_bodies() {
+    let source = concat!(
+        "import build\n",
+        "def probe() -> bool:\n",
+        "    if build.hosted:\n        return true\n",
+        "    else:\n        return absent_native_call()\n",
+        "const ready = probe()\n",
+        "if ready:\n    def value() -> int64:\n        return 19\n",
+        "def main():\n    print(value())\n",
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "19\n");
+}
+
+#[test]
+fn recursive_predicate_selection_reports_a_cycle() {
+    let source = concat!(
+        "def probe() -> bool:\n",
+        "    if ready:\n        return true\n",
+        "    return false\n",
+        "const ready = probe()\n",
+        "if ready:\n    def selected() -> bool:\n        return true\n",
+    );
+    let error = check_source(source).unwrap_err();
+    assert_eq!(error.code, "AU2071");
+    assert!(error.message.contains("cyclic"));
+}

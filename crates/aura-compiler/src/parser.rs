@@ -317,7 +317,7 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 }
 
 pub fn parse(source: &str) -> Result<Module> {
-    parse_configured(source, Some(conditional::Resolver::Builtins))
+    parse_configured(source, Some(conditional::Resolver::new(None)))
 }
 
 /// Validate every suite without resolving a build configuration or a package.
@@ -330,7 +330,10 @@ pub(crate) fn parse_for_path(
     loader: &mut crate::ModuleLoader,
     path: &std::path::Path,
 ) -> Result<Module> {
-    parse_configured(source, Some(conditional::Resolver::Path(loader, path)))
+    parse_configured(
+        source,
+        Some(conditional::Resolver::new(Some((loader, path)))),
+    )
 }
 
 fn parse_configured(source: &str, resolver: Option<conditional::Resolver<'_>>) -> Result<Module> {

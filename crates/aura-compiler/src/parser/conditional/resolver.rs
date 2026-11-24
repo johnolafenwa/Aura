@@ -3,19 +3,55 @@
 use super::*;
 use std::path::Path;
 
-pub(in crate::parser) enum Resolver<'a> {
-    Builtins,
-    Path(&'a mut crate::ModuleLoader, &'a Path),
+pub(in crate::parser) struct Resolver<'a> {
+    path: Option<(&'a mut crate::ModuleLoader, &'a Path)>,
+    active: Vec<Span>,
 }
 
-impl Resolver<'_> {
+impl<'a> Resolver<'a> {
+    pub(in crate::parser) fn new(path: Option<(&'a mut crate::ModuleLoader, &'a Path)>) -> Self {
+        Self {
+            path,
+            active: Vec::new(),
+        }
+    }
+
+    pub(super) fn check_dependencies(
+        &mut self,
+        probe: &mut Module,
+        tokens: &[Token],
+        span: Span,
+    ) -> Result<()> {
+        if probe.items.is_empty() {
+            return Ok(());
+        }
+        if self.active.contains(&span) {
+            return Err(Diagnostic::coded_at(
+                "AU2071",
+                span,
+                "cyclic compile-time condition",
+            ));
+        }
+        if self.active.len() >= RECURSION_LIMIT {
+            return Err(Diagnostic::coded_at(
+                "AU2071",
+                span,
+                "compile-time condition nesting exceeds the supported recursion limit",
+            ));
+        }
+        self.active.push(span);
+        let result = statements::select(self, probe, tokens, &mut Vec::new());
+        self.active.pop();
+        result
+    }
+
     pub(super) fn potential(&self, import: &ImportDecl) -> bool {
         let path = match &import.kind {
             ImportKind::Module { path, .. } => path,
             ImportKind::From { module_path, .. } => module_path,
         };
         predicates::build_import(import)
-            || (matches!(self, Self::Path(..))
+            || (self.path.is_some()
                 && path
                     .first()
                     .is_some_and(|part| !crate::builtin_modules::is_builtin_root_module(part)))
@@ -31,7 +67,7 @@ impl Resolver<'_> {
         if predicates::build_import(import) {
             return Ok(true);
         }
-        let Self::Path(loader, file) = self else {
+        let Some((loader, file)) = &mut self.path else {
             return Ok(false);
         };
         let (path, name) = match &import.kind {
@@ -70,7 +106,7 @@ impl Resolver<'_> {
     }
 
     pub(super) fn compile(&mut self, probe: Module) -> Result<crate::sema::Program> {
-        let Self::Path(loader, path) = self else {
+        let Some((loader, path)) = &mut self.path else {
             return crate::check_module_with_builtin_imports(probe);
         };
         let imported_bindings = loader.resolve_imports(&probe, path)?;

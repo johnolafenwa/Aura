@@ -145,6 +145,7 @@ pub(super) fn evaluate(
         value: expression.clone(),
         span: expression.span,
     });
+    resolver.check_dependencies(&mut probe, tokens, expression.span)?;
     let program = resolver.compile(probe)?;
     match program
         .frozen_constants
