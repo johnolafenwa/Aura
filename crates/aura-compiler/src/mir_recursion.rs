@@ -23,6 +23,17 @@ use super::{CallTarget, Instruction, MethodDispatch, MirFunction, MirModule, Rva
 /// The names of the functions of `module` that lie on a call cycle,
 /// including a function that calls itself.
 pub fn recursive_functions(module: &MirModule) -> HashSet<String> {
+    let (functions, edges) = call_graph(module);
+    cyclic_nodes(&edges)
+        .into_iter()
+        .map(|position| functions[position].name.clone())
+        .collect()
+}
+
+/// Conservative call edges indexed by the returned functions, including the
+/// top-level entry. Both recursion detection and machine-code proofs must
+/// follow calls through function values, cleanup handlers and method dispatch.
+pub(crate) fn call_graph(module: &MirModule) -> (Vec<&MirFunction>, Vec<Vec<usize>>) {
     let functions = module
         .functions
         .iter()
@@ -108,10 +119,7 @@ pub fn recursive_functions(module: &MirModule) -> HashSet<String> {
         }
     }
 
-    cyclic_nodes(&edges)
-        .into_iter()
-        .map(|position| functions[position].name.clone())
-        .collect()
+    (functions, edges)
 }
 
 fn is_static_dispatch(dispatch: &MethodDispatch) -> bool {

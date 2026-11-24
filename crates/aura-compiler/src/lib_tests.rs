@@ -4756,5 +4756,10 @@ fn unused_imported_machine_routines_do_not_block_proof() {
         solver: Some("missing-solver-for-unused-routine".into()),
         ..Default::default()
     };
-    assert_eq!(crate::verify::verify_module(&program, &module, &options).unwrap_err().code, "AU5103");
+    assert_eq!(
+        crate::verify::verify_module(&program, &module, &options)
+            .unwrap_err()
+            .code,
+        "AU5103"
+    );
 }
