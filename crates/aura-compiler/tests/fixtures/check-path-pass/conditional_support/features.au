@@ -1,0 +1,4 @@
+def enabled(n: int64) -> bool:
+    return n > 3
+
+public const available = enabled(8)
