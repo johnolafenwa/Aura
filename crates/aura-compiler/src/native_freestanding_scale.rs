@@ -117,3 +117,8 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+pub(super) fn guard_limit(instructions: &[Instruction]) -> Option<u64> {
+    scale_offset(instructions).map(|scale| scale.limit)
+}

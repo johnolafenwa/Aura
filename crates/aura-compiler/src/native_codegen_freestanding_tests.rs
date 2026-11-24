@@ -888,6 +888,35 @@ fn systems_integer_operations_emit_self_contained_objects() {
 fn load_rejects_release_order_during_checking() {
     let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
     let module = crate::parse_source(source).expect("valid syntax");
-    let errors = crate::check_module_with_builtin_imports(module).err().expect("invalid order");
+    let errors = crate::check_module_with_builtin_imports(module)
+        .err()
+        .expect("invalid order");
     assert_eq!(errors.code, "AU2087", "{errors:?}");
+}
+
+#[test]
+fn constant_scale_guard_requires_matching_checked_operations() {
+    let source = "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n";
+    let module = lower(source);
+    let function = module.functions.iter().find(|f| f.name == "scale").unwrap();
+    let pattern = function
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.windows(4))
+        .find(|ops| super::freestanding_scale::guard_limit(ops).is_some())
+        .unwrap();
+    assert_eq!(
+        super::freestanding_scale::guard_limit(pattern),
+        Some((u64::MAX - 1) / 3)
+    );
+    let mut ops = pattern.to_vec();
+    if let Instruction::Assign {
+        value: Rvalue::Use(Operand::Int(multiplier)),
+        ..
+    } = &mut ops[0]
+    {
+        *multiplier = 0;
+    }
+    assert_eq!(super::freestanding_scale::guard_limit(&ops), None);
+    assert!(!object(source, FreestandingTarget::X86_64).is_empty());
 }
