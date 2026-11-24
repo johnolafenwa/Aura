@@ -220,3 +220,16 @@ fn time_source_part_adds_date_time_to_the_host_clocks() {
     assert!(date_time.decl.public);
     assert!(merged.enums.contains_key("Error"));
 }
+
+#[test]
+fn target_constants_enter_the_registry_only_when_imported() {
+    for (source, expected) in [
+        ("def main():\n    pass\n", false),
+        ("import build\n", true),
+        ("from build import arch\n", true),
+    ] {
+        let program = crate::check_source(source).unwrap();
+        assert_eq!(program.module_registry.contains_key("build"), expected);
+        assert!(!program.module_registry["iter"].classes.contains_key("ListIter"));
+    }
+}
