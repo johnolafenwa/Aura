@@ -714,8 +714,13 @@ impl ModuleLoader {
             })?
         };
         let display_path = path.display().to_string();
-        let module = parser::parse_for_path(&source, self, &path)
-            .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
+        let module = parser::parse_for_path(&source, self, &path).map_err(|error| {
+            if error.render_path.is_some() {
+                error
+            } else {
+                error.with_render_context(display_path.clone(), source.clone())
+            }
+        })?;
         if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,

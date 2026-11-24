@@ -207,3 +207,13 @@ fn nested_entry_infers_its_root_from_unconditional_user_imports() {
         .join("tests/fixtures/check-path-pass/conditional_support/nested/entry.au");
     assert_eq!(crate::run_path(&path).unwrap().stdout, "23\n");
 }
+
+#[test]
+fn invalid_imported_predicate_preserves_its_defining_source() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-fail/conditional_import_origin.au");
+    let error = crate::check_path(&path).unwrap_err();
+    let origin = std::path::Path::new(error.render_path.as_ref().unwrap());
+    assert!(origin.ends_with("conditional_support/features.au"));
+    assert_eq!(error.span, Some(crate::Span::new(1, 31)));
+}
