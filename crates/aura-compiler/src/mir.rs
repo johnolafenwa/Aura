@@ -1340,6 +1340,9 @@ pub enum CallTarget {
     TraitMember {
         object: Operand,
         trait_name: String,
+        /// The selected trait specialization in a generated forwarder.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        trait_args: Vec<Type>,
         field: String,
         receiver_place: Option<String>,
         /// What the call runs, as on `Member`.
@@ -15600,6 +15603,7 @@ impl<'a> Lowerer<'a> {
                 target: result.clone(),
                 value: Rvalue::Call {
                     callee: CallTarget::TraitMember {
+                        trait_args: Vec::new(),
                         object: left_value.clone(),
                         trait_name,
                         field,
@@ -21755,6 +21759,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -21891,6 +21896,7 @@ impl<'a> Lowerer<'a> {
                         target: temp.clone(),
                         value: Rvalue::Call {
                             callee: CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object,
                                 trait_name,
                                 field,
@@ -27098,6 +27104,7 @@ impl<'a> Lowerer<'a> {
                     value: Rvalue::Call {
                         callee: match trait_name {
                             Some(trait_name) => CallTarget::TraitMember {
+                                trait_args: Vec::new(),
                                 object: lowered_object,
                                 trait_name,
                                 field: field.clone(),

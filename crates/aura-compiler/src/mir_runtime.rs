@@ -938,6 +938,7 @@ struct Env {
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
     loans: BTreeMap<String, RuntimeLoan>,
+    type_args: HashMap<String, Type>,
 }
 
 #[derive(Clone)]
@@ -2861,7 +2862,7 @@ impl MirRuntime {
     }
 
     fn find_trait_impl_method(&self, receiver_ty: &Type, field: &str) -> Option<&MirMethod> {
-        self.find_trait_impl_method_for_trait(receiver_ty, None, field, None)
+        self.find_trait_impl_method_for_trait(receiver_ty, None, field, &[])
     }
 
     fn find_trait_impl_method_for_trait(
@@ -2869,7 +2870,7 @@ impl MirRuntime {
         receiver_ty: &Type,
         trait_name: Option<&str>,
         field: &str,
-        selected: Option<&str>,
+        trait_args: &[Type],
     ) -> Option<&MirMethod> {
         let mut best = None;
         let mut best_specificity = 0usize;
@@ -2888,13 +2889,11 @@ impl MirRuntime {
             ) {
                 continue;
             }
+            if !trait_impl.matches_trait_args(trait_args, &substitutions) {
+                continue;
+            }
             for method in &trait_impl.methods {
-                if method.name == field
-                    && selected.is_none_or(|name| {
-                        name.strip_prefix(&method.function_name)
-                            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('['))
-                    })
-                {
+                if method.name == field {
                     let specificity = crate::sema::trait_impl_specificity_parts(
                         &trait_impl.for_type,
                         &trait_impl.trait_args,
@@ -3677,6 +3676,7 @@ impl MirRuntime {
 
             let return_type = substitute_type(&function.return_type, &substitutions);
             self.return_type_stack.push(return_type);
+            env.type_args = substitutions;
             let value = match panic::catch_unwind(AssertUnwindSafe(|| {
                 self.execute_function(function, &mut env)
             })) {
@@ -5949,7 +5949,7 @@ impl MirRuntime {
             } => {
                 if let CallTarget::TraitMember {
                     trait_name,
-                    dispatch,
+                    trait_args,
                     ..
                 } = callee
                 {
@@ -5991,10 +5991,7 @@ impl MirRuntime {
                             &resolved_receiver_ty,
                             Some(trait_name),
                             field,
-                            match dispatch {
-                                Some(crate::mir::MethodDispatch::Static { function }) => Some(function),
-                                _ => None,
-                            },
+                            &trait_args.iter().map(|ty| substitute_type(ty, &env.type_args)).collect::<Vec<_>>(),
                         )
                         .cloned()
                         .ok_or_else(|| {
