@@ -237,3 +237,14 @@ test("verifying on save is on unless turned off", () => {
   assert.equal(verifyOnSave({ AURA_LSP_VERIFY: "0" }), false);
   assert.equal(typeof verifyOnSave(), "boolean");
 });
+
+test("verify-on-save supplies the selected freestanding target", async () => {
+  const { spawnImpl, calls } = fakeSpawn({ stdout: JSON.stringify(REPORT) });
+  await runVerifier({cmd: "aura", args: []}, "irq.au", "", spawnImpl, 1000, {
+    freestandingTarget: "aarch64-unknown-none"
+  });
+  assert.deepEqual(calls[0].args, [
+    "verify", "--freestanding", "--target", "aarch64-unknown-none",
+    "--format", "json", "--stdin", "irq.au"
+  ]);
+});

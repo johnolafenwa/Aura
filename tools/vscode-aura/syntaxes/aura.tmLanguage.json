@@ -48,6 +48,10 @@
     "attributes": {
       "patterns": [
         {
+          "name": "storage.modifier.machine.aura",
+          "match": "^[ \\t]*@machine\\.(?:interrupt|naked|section|link_name|align|noinline|always_inline|used)\\b"
+        },
+        {
           "name": "storage.modifier.attribute.aura",
           "match": "@[A-Za-z_][A-Za-z0-9_]*"
         }
@@ -538,6 +542,41 @@
     "contextualSyntax": {
       "patterns": [
         {
+          "name": "meta.assembly.aura",
+          "begin": "^[ \\t]*(asm|module_asm)[ \\t]*\\(",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.assembly.aura"
+            }
+          },
+          "end": "\\)",
+          "patterns": [
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#comments"
+            },
+            {
+              "begin": "\\b(input|output|clobber|options)[ \\t]*\\(",
+              "beginCaptures": {
+                "1": {
+                  "name": "keyword.other.assembly-clause.aura"
+                }
+              },
+              "end": "\\)",
+              "patterns": [
+                {
+                  "include": "#assemblyOperandGroup"
+                },
+                {
+                  "include": "$self"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "meta.return-type.view.aura",
           "begin": "(->)(?=\\s*view\\b\\s+(?:mut\\s+)?(?:[A-Za-z_][A-Za-z0-9_.]*(?:\\s*\\[|\\s+from\\b)|\\())",
           "beginCaptures": {
@@ -671,6 +710,18 @@
         {
           "name": "keyword.operator.aura",
           "match": "->|//=|\\+=|-=|\\*=|/=|%=|\\|=|==|!=|<=|>=|//|\\+|-|\\*|/|%|=|<|>|\\||\\."
+        }
+      ]
+    },
+    "assemblyOperandGroup": {
+      "begin": "\\(",
+      "end": "\\)",
+      "patterns": [
+        {
+          "include": "#assemblyOperandGroup"
+        },
+        {
+          "include": "$self"
         }
       ]
     }
