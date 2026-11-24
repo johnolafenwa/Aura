@@ -62,6 +62,7 @@ impl Lowerer<'_> {
         let target = if let Some(object) = object {
             let receiver_place = self.lowered_writeback_place(receiver, &object);
             CallTarget::TraitMember {
+                trait_args: bound.trait_args,
                 object,
                 trait_name,
                 field: method.decl.name,
@@ -84,68 +85,38 @@ impl Lowerer<'_> {
     }
 }
 
-/// The forwarding method's own impl fixes the specialization of a member
-/// with several implementations on its receiver (e.g. Scale[str] and
-/// Scale[int64]). Reconstruct the target from the MIR declarations when
-/// selection by the trait's name alone is ambiguous.
-pub(super) fn specialized_dispatch(
-    context: &MirLoanValidationContext<'_>,
-    caller: &MirFunction,
-    receiver: &Type,
-    parts: &MemberCallParts<'_>,
-) -> Option<MethodDispatch> {
-    let trait_name = parts.trait_name?;
-    let owner = context.trait_impls.iter().find(|implementation| {
-        implementation.trait_name == trait_name
-            && implementation
-                .methods
-                .iter()
-                .any(|method| method.name == parts.field && method.function_name == caller.name)
-    })?;
-    let bound_args = &owner.trait_args;
-    let mut candidates = context.trait_impls.iter().filter_map(|implementation| {
-        if implementation.trait_name != trait_name
-            || implementation.trait_args.len() != bound_args.len()
-        {
-            return None;
+impl MirTraitImpl {
+    /// Match the type arguments selected by a delegated call using the
+    /// substitutions already inferred from the receiver.
+    pub(crate) fn matches_trait_args(
+        &self,
+        args: &[Type],
+        substitutions: &HashMap<String, Type>,
+    ) -> bool {
+        if args.is_empty() {
+            return true;
+        }
+        if self.trait_args.len() != args.len() {
+            return false;
         }
         let mut params = BTreeSet::new();
-        collect_type_params_from_type(&implementation.for_type, &mut params);
-        for arg in &implementation.trait_args {
-            collect_type_params_from_type(arg, &mut params);
+        for ty in &self.trait_args {
+            collect_type_params_from_type(ty, &mut params);
         }
-        let mut substitutions = HashMap::new();
-        if !crate::sema::type_pattern_matches(
-            &implementation.for_type,
-            receiver,
-            &params,
-            &mut substitutions,
-        ) || !implementation
-            .trait_args
-            .iter()
-            .zip(bound_args)
-            .all(|(pattern, actual)| {
-                crate::sema::type_pattern_matches(pattern, actual, &params, &mut substitutions)
-            })
-        {
-            return None;
-        }
-        let method = implementation
-            .methods
-            .iter()
-            .find(|method| method.name == parts.field)?;
-        if method.receiver == Some(MirReceiverKind::BorrowMut) && parts.receiver_place.is_none() {
-            return None;
-        }
-        Some(method)
-    });
-    let method = candidates.next()?;
-    if candidates.next().is_some() {
-        return None;
+        let mut matched = substitutions.clone();
+        self.trait_args.iter().zip(args).all(|(pattern, arg)| {
+            if crate::sema::has_unresolved_type_params(arg) {
+                let mut open = BTreeSet::new();
+                collect_type_params_from_type(arg, &mut open);
+                let implemented = substitute_type(pattern, &matched);
+                if crate::sema::type_pattern_matches(arg, &implemented, &open, &mut HashMap::new())
+                {
+                    return true;
+                }
+            }
+            crate::sema::type_pattern_matches(pattern, arg, &params, &mut matched)
+        })
     }
-    Some(MethodDispatch::Static {
-        function: method.function_name.clone(),
-    })
 }
 
 impl Lowerer<'_> {

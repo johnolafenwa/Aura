@@ -27,6 +27,9 @@ fn trait_delegation_calls_preserve_the_selected_contract() {
         "trait_delegation_parent_associated",
         "trait_delegation_methods",
         "trait_delegation_specialized",
+        "trait_delegation_bound_specialized",
+        "trait_delegation_open_specialization",
+        "trait_delegation_generic_projection",
         "trait_delegation_generic_associated",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

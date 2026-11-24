@@ -3282,6 +3282,7 @@ impl<'a> Exec<'a> {
                 trait_name,
                 field,
                 dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
             } if self
                 .trait_call_target(candidates, trait_name, field)
                 .is_some() =>

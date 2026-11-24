@@ -356,6 +356,7 @@ fn resolve_call(
     resolver.dispatch(
         receiver,
         &super::MemberCall {
+            trait_args: &[],
             field,
             trait_name,
             args: &[],
