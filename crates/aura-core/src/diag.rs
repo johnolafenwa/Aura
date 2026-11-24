@@ -390,6 +390,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "generator misuse",
     },
     DiagnosticCodeInfo {
+        code: "AU4035",
+        band: "verify",
+        title: "assembly is outside the verified subset",
+    },
+    DiagnosticCodeInfo {
         code: "AU5001",
         band: "lint",
         title: "unused local binding",

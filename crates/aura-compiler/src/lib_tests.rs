@@ -4607,3 +4607,42 @@ fn verification_names_assembly_in_an_import_and_in_editor_source() {
     assert_eq!(direct.code, "AU4035");
     assert_eq!(direct.span.unwrap().line, 2);
 }
+
+#[test]
+fn machine_code_in_lowered_imports_stops_proof_before_solver_or_cache() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+    let program = check_source("def f() -> None:\n    pass\n").unwrap();
+    let mut mir = crate::mir::lower_for_verification(&program);
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-assembly-boundary".to_owned()),
+        ..Default::default()
+    };
+    mir.foreign_link.module_asm.push("nop".into());
+    assert_eq!(
+        crate::verify::verify_module(&program, &mir, &options)
+            .unwrap_err()
+            .code,
+        "AU4035"
+    );
+
+    mir.foreign_link.module_asm.clear();
+    let span = Span::new(3, 5);
+    mir.functions[0].blocks[0]
+        .instructions
+        .push(Instruction::InlineAsm {
+            asm: MachineAsm {
+                template: "nop".into(),
+                constraints: "~{memory}".into(),
+                pure: false,
+                input_widths: vec![],
+                output_widths: vec![],
+            },
+            inputs: vec![],
+            outputs: vec![],
+            span,
+        });
+    let error = crate::verify::verify_module(&program, &mir, &options).unwrap_err();
+    assert_eq!(error.code, "AU4035");
+    assert_eq!(error.span, Some(span));
+}
