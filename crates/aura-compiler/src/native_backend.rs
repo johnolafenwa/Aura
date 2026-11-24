@@ -600,6 +600,8 @@ pub(crate) enum DataAddress {
 /// addresses written into it, in order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DataDescription {
+    /// Retain the complete object and its address through whole-module optimization.
+    pub(crate) preserve_address: bool,
     pub(crate) bytes: Vec<u8>,
     pub(crate) align: Option<u64>,
     pub(crate) addresses: Vec<(u32, DataAddress)>,

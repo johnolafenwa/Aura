@@ -565,6 +565,7 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::TraitObjectTake { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::Try { value: operand, .. } => roles.push((operand, Consume)),
+        Rvalue::ModuleStore { value, .. } => roles.push((value, Borrow)),
         // A projection's result is a fresh owned copy of the part it reads.
         Rvalue::NoneTest { value: operand }
         | Rvalue::TraitObjectHolds { value: operand, .. }
@@ -580,6 +581,8 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -2355,6 +2358,7 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
 /// Every operand of `value`, as `rvalue_roles` lists them.
 fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
     match value {
+        Rvalue::ModuleStore { value, .. } => operands.push(value),
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
         | Rvalue::TraitObject { value: operand, .. }
@@ -2375,6 +2379,8 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             operands.extend(captures.iter_mut().map(|capture| &mut capture.value))

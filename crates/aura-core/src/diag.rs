@@ -275,6 +275,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2080",
+        band: "names/types",
+        title: "invalid static storage initializer",
+    },
+    DiagnosticCodeInfo {
         code: "AU2081",
         band: "names/types",
         title: "invalid fixed array type",
@@ -360,6 +365,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3030",
+        band: "ownership",
+        title: "module state access",
+    },
+    DiagnosticCodeInfo {
         code: "AU3031",
         band: "ownership",
         title: "fixed array would duplicate a non-copy element",
@@ -413,6 +423,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4030",
+        band: "runtime",
+        title: "module state outside freestanding execution",
     },
     DiagnosticCodeInfo {
         code: "AU4031",

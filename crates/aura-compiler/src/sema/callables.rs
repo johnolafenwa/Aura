@@ -3336,6 +3336,7 @@ impl<'a> FunctionChecker<'a> {
                                 locals,
                             )?;
                         }
+                        self.reject_state_loan(&argument.value, locals)?;
                         if !self.is_mutable_place(&argument.value, locals)? {
                             return Err(Diagnostic::at(
                                 argument.span,

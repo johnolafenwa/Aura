@@ -2529,6 +2529,25 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             };
             globals.push(global);
         }
+        let retained = initialized
+            .iter()
+            .filter(|(index, _)| {
+                object.data[*index]
+                    .contents
+                    .as_ref()
+                    .is_some_and(|data| data.preserve_address)
+            })
+            .map(|(index, _)| globals[*index].as_pointer_value())
+            .collect::<Vec<_>>();
+        if !retained.is_empty() {
+            let pointers = context
+                .ptr_type(AddressSpace::default())
+                .const_array(&retained);
+            let used = module.add_global(pointers.get_type(), None, "llvm.compiler.used");
+            used.set_linkage(LlvmLinkage::Appending);
+            used.set_section(Some("llvm.metadata"));
+            used.set_initializer(&pointers);
+        }
         let lowerer = Self {
             context,
             module,
