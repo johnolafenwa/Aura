@@ -43,7 +43,11 @@ impl FrozenValue {
             Value::String(value) => Self::Str(value.as_str().to_string()),
             Value::Tuple(tuple) => Self::Tuple(
                 tuple.element_types.clone(),
-                tuple.elements.iter().map(Self::freeze).collect::<Option<_>>()?,
+                tuple
+                    .elements
+                    .iter()
+                    .map(Self::freeze)
+                    .collect::<Option<_>>()?,
             ),
             Value::Vec(list) => {
                 if let Some(bytes) = list.elements.as_uint8() {
@@ -51,29 +55,50 @@ impl FrozenValue {
                 } else {
                     Self::List(
                         (*list.element_type).clone(),
-                        list.elements.iter().map(|v| Self::freeze(&v)).collect::<Option<_>>()?,
+                        list.elements
+                            .iter()
+                            .map(|v| Self::freeze(&v))
+                            .collect::<Option<_>>()?,
                     )
                 }
             }
             Value::Map(map) => Self::Dict(
                 (*map.key_type).clone(),
                 (*map.value_type).clone(),
-                map.entries.iter().map(|(k, v)| Some((Self::freeze(k)?, Self::freeze(v)?))).collect::<Option<_>>()?,
+                map.entries
+                    .iter()
+                    .map(|(k, v)| Some((Self::freeze(k)?, Self::freeze(v)?)))
+                    .collect::<Option<_>>()?,
             ),
             Value::Set(set) => Self::Set(
                 (*set.element_type).clone(),
-                set.elements.iter().map(Self::freeze).collect::<Option<_>>()?,
+                set.elements
+                    .iter()
+                    .map(Self::freeze)
+                    .collect::<Option<_>>()?,
             ),
             Value::Instance(object) => Self::Class(
                 object.class_name.to_string(),
-                object.fields.iter().map(|(k,v)| Some((k.to_string(), Self::freeze(&v)?))).collect::<Option<_>>()?,
+                object
+                    .fields
+                    .iter()
+                    .map(|(k, v)| Some((k.to_string(), Self::freeze(&v)?)))
+                    .collect::<Option<_>>()?,
             ),
             Value::EnumVariant(variant) => Self::Enum(
                 variant.enum_name.to_string(),
                 variant.variant_name.to_string(),
-                variant.payloads.iter().map(|v| Self::freeze(&v)).collect::<Option<_>>()?,
+                variant
+                    .payloads
+                    .iter()
+                    .map(|v| Self::freeze(&v))
+                    .collect::<Option<_>>()?,
             ),
-            Value::Union(value) => Self::Union((*value.union_type).clone(), value.member_index, Box::new(Self::freeze(&value.payload)?)),
+            Value::Union(value) => Self::Union(
+                (*value.union_type).clone(),
+                value.member_index,
+                Box::new(Self::freeze(&value.payload)?),
+            ),
             _ => return None,
         };
         Some(result)
@@ -89,14 +114,38 @@ impl FrozenValue {
             Self::Duration(v) => Value::Duration(*v),
             Self::Float(bits) => Value::Float(f64::from_bits(*bits)),
             Self::Str(s) => Value::string(s.as_str()),
-            Self::Bytes(bytes) => Value::Vec(VecValue::new(Type::named("uint8"), ListElements::from_uint8(bytes.clone()))),
-            Self::Tuple(types, items) => Value::Tuple(TupleValue { element_types: types.clone(), elements: values(items) }),
+            Self::Bytes(bytes) => Value::Vec(VecValue::new(
+                Type::named("uint8"),
+                ListElements::from_uint8(bytes.clone()),
+            )),
+            Self::Tuple(types, items) => Value::Tuple(TupleValue {
+                element_types: types.clone(),
+                elements: values(items),
+            }),
             Self::List(ty, items) => Value::Vec(VecValue::new(ty.clone(), values(items).into())),
-            Self::Dict(k, v, items) => Value::Map(MapValue { key_type: k.clone().into(), value_type: v.clone().into(), entries: items.iter().map(|(k,v)| (k.thaw(),v.thaw())).collect() }),
-            Self::Set(ty, items) => Value::Set(SetValue { element_type: ty.clone().into(), elements: items.iter().map(Self::thaw).collect() }),
-            Self::Class(name, fields) => Value::Instance(InstanceValue { class_name: name.into(), fields: fields.iter().map(|(k,v)| (k.clone(),v.thaw())).collect() }),
-            Self::Enum(name, variant, payloads) => Value::EnumVariant(EnumVariantValue { enum_name: name.into(), variant_name: variant.into(), payloads: values(payloads).into() }),
-            Self::Union(ty,index,payload) => Value::Union(Box::new(UnionValue { union_type: ty.clone().into(), member_index: *index, payload: payload.thaw() })),
+            Self::Dict(k, v, items) => Value::Map(MapValue {
+                key_type: k.clone().into(),
+                value_type: v.clone().into(),
+                entries: items.iter().map(|(k, v)| (k.thaw(), v.thaw())).collect(),
+            }),
+            Self::Set(ty, items) => Value::Set(SetValue {
+                element_type: ty.clone().into(),
+                elements: items.iter().map(Self::thaw).collect(),
+            }),
+            Self::Class(name, fields) => Value::Instance(InstanceValue {
+                class_name: name.into(),
+                fields: fields.iter().map(|(k, v)| (k.clone(), v.thaw())).collect(),
+            }),
+            Self::Enum(name, variant, payloads) => Value::EnumVariant(EnumVariantValue {
+                enum_name: name.into(),
+                variant_name: variant.into(),
+                payloads: values(payloads).into(),
+            }),
+            Self::Union(ty, index, payload) => Value::Union(Box::new(UnionValue {
+                union_type: ty.clone().into(),
+                member_index: *index,
+                payload: payload.thaw(),
+            })),
         }
     }
 }

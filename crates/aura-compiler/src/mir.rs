@@ -1574,7 +1574,7 @@ pub enum Operand {
     },
     Int(u128),
     Duration(i128),
-    Float(f64),
+    Float(#[serde(with = "crate::const_eval::float_operand")] f64),
     Bool(bool),
     String(String),
     Unit,
@@ -14034,11 +14034,17 @@ impl<'a> Lowerer<'a> {
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
         let key = format!("{}::{}", constant.module_name, constant.decl.name);
-        if let Some(expr) = self.program.frozen_constants.get(&key)
+        if let Some(expr) = self
+            .program
+            .frozen_constants
+            .get(&key)
             .and_then(|value| crate::const_eval::scalar_expr(value, constant.decl.value.span))
         {
             let value = self.lower_expr_with_expected(&expr, Some(&constant.ty));
-            self.emit(Instruction::Assign { target: temp.clone(), value: Rvalue::Use(value) });
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
             return Operand::Place(temp);
         }
         if is_scalar_literal_constant(constant) {
