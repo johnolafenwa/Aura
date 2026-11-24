@@ -7384,6 +7384,26 @@ test("compiler bridge resolves delegated members, decorated methods, and propert
     assert.ok(items.some((item) => item.name === "name"));
     assert.deepEqual(items.filter((item) => item.name === "count").map((item) => item.kind), ["property"]);
     assert.ok(items.every((item) => !item.name.includes("$") && !item.name.startsWith("__aura_") && item.name !== "__drop__"));
+    const indexed = [
+      ...lines.slice(0, 25),
+      "def index(label: str) -> int64:",
+      "    print(label)",
+      "    return 0",
+      "def update(cars: mut list[Car]):",
+      '    cars[index("🌍")].count += 2',
+      "    cars[",
+      '        index("é")',
+      "    ].count = 3",
+      "",
+    ];
+    const indexedAnalysis = await analyzeWithCompiler(uri, indexed.join("\n"));
+    assert.deepEqual(indexedAnalysis?.diagnostics, []);
+    for (const line of [29, 32]) {
+      const character = indexed[line].indexOf("count");
+      const hover = compilerHoverAtPosition(indexedAnalysis, line, character);
+      assert.deepEqual(hover?.range, { start: { line, character }, end: { line, character: character + 5 } });
+      assert.equal(compilerDefinitionAtPosition(uri, indexedAnalysis, line, character)?.range.start.line, 17);
+    }
     const invalid = await analyzeWithCompiler(uri, source.replace("Car by engine", "Car by absent"));
     assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.code === "AU2060"));
   } finally {
