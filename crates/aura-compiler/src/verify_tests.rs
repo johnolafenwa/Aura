@@ -3700,7 +3700,7 @@ def impossible(n: int64) -> int64:
 def main():
     print(impossible(1))
 "#,
-        &["6 ensures failed", "7 assert failed"],
+        &["6 ensures unsupported", "7 assert unsupported"],
     );
 }
 

@@ -994,17 +994,14 @@ impl Exec<'_> {
         {
             return;
         }
+        let listed = self.read_place(&mut entry.clone(), list);
         let (
-            Some(Val::List {
+            Val::List {
                 data: Some(store), ..
-            }),
+            },
             Some(Val::Int(initial, int)),
             Some(Val::Bool(unseen)),
-        ) = (
-            entry.env.get(list),
-            entry.env.get(kept),
-            entry.env.get(seen),
-        )
+        ) = (&listed, entry.env.get(kept), entry.env.get(seen))
         else {
             return;
         };

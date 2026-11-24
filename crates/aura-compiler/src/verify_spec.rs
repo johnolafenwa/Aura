@@ -121,6 +121,7 @@ impl Exec<'_> {
             }
             self.erasing = erasing;
         }
+        self.prove_inner_arguments(state, callee, pre, span);
     }
 
     /// The invariant clauses of the class of `value`, when it is an object
@@ -195,6 +196,7 @@ impl Exec<'_> {
             }
         }
         self.erasing = erasing;
+        self.prove_inner_returns(state, result);
     }
 
     /// Whether `callee` is a method that only reads `self`.
@@ -273,6 +275,7 @@ impl Exec<'_> {
             )
             .collect();
         self.assume_record_invariants(state, &returned);
+        self.assume_inner_results(state, callee, pre, post, result);
     }
 
     /// A named function passed as a callable alias with a contract meets
@@ -489,6 +492,7 @@ impl Exec<'_> {
             .filter_map(|param| state.env.get(&param.name).cloned())
             .collect();
         self.assume_record_invariants(state, &values);
+        self.assume_inner_parameters(state);
     }
 
     /// The invariant clauses that hold on entry to `callee` and on its
@@ -826,14 +830,17 @@ impl Exec<'_> {
                 let value = self.spec(value, env, wd, depth)?;
                 self.spec_is_none(&value, *negated)
             }
-            ExprKind::Member { object, field } => match self.spec(object, env, wd, depth)? {
-                Val::Record(_, fields) => fields
-                    .iter()
-                    .find(|(name, _)| name == field)
-                    .map(|(_, value)| value.clone())
-                    .ok_or(format!("field `{field}` is not modeled")),
-                _ => Err(format!("`.{field}` on this value is not modeled yet")),
-            },
+            ExprKind::Member { object, field } => {
+                match self.spec_object(object, field, env, wd, depth)? {
+                    value @ Val::Enum(..) => Ok(value),
+                    Val::Record(_, fields) => fields
+                        .iter()
+                        .find(|(name, _)| name == field)
+                        .map(|(_, value)| value.clone())
+                        .ok_or(format!("field `{field}` is not modeled")),
+                    _ => Err(format!("`.{field}` on this value is not modeled yet")),
+                }
+            }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { object, field } = &callee.kind {
                     if let Some(module_path) = self.spec_module_path(object, env) {
@@ -1024,13 +1031,14 @@ impl Exec<'_> {
         );
         if depth >= limit || self.active_specs.contains(&call_key) {
             if self.proving {
-                wd.push("false".to_string());
+                wd.push(self.spec_cutoff(&spec.name, limit));
                 self.spec_limit_hit = Some(limit);
             }
             return match self.cx.spec_return_type(spec) {
                 Some(Type::Unit) => Ok(Val::Unit),
                 Some(ty) => {
-                    let fresh = self.fresh(ty, &spec.name);
+                    let what = super::shapes::spec_cutoff_name(&spec.name, limit);
+                    let fresh = self.unmodeled(what, |exec| exec.fresh(ty, &spec.name));
                     if matches!(fresh, Val::Opaque) {
                         Err(format!(
                             "`spec def {}` unfolds more than {limit} levels",
@@ -1123,6 +1131,12 @@ impl Exec<'_> {
         }
         let lhs = self.spec(left, env, wd, depth)?;
         let rhs = self.spec(right, env, wd, depth)?;
+        // Any operator but `==` reads a union as the member it holds.
+        let (lhs, rhs) = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            (lhs, rhs)
+        } else {
+            (self.spec_member(lhs, wd), self.spec_member(rhs, wd))
+        };
         match op {
             BinaryOp::Eq
             | BinaryOp::NotEq
@@ -1511,8 +1525,13 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
             BinaryOp::GreaterEq => format!("(str.<= {b} {a})"),
             _ => format!("(= {a} {b})"),
         },
-        (Val::Map { .. } | Val::Set { .. }, _) if symbol == "=" => structural_eq(lhs, rhs)
-            .ok_or("comparing these values is not modeled in contracts yet".to_string())?,
+        (Val::Map { .. } | Val::Set { .. } | Val::Union(..) | Val::Enum(..), _)
+        | (_, Val::Union(..))
+            if symbol == "=" =>
+        {
+            structural_eq(lhs, rhs)
+                .ok_or("comparing these values is not modeled in contracts yet".to_string())?
+        }
         _ => return Err("comparing these values is not modeled in contracts yet".into()),
     };
     Ok(if op == BinaryOp::NotEq {
@@ -1706,7 +1725,7 @@ fn find_condition<'a>(
 }
 
 /// The range facts of each integer a value holds.
-fn int_ranges(value: &Val, facts: &mut Vec<String>) {
+pub(super) fn int_ranges(value: &Val, facts: &mut Vec<String>) {
     match value {
         Val::Int(term, int) => facts.push(int.contains(term)),
         Val::Tuple(items) => items.iter().for_each(|item| int_ranges(item, facts)),

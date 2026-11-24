@@ -25,6 +25,8 @@ mod frame;
 mod guard;
 #[path = "verify_integers.rs"]
 mod integers;
+#[path = "verify_shapes.rs"]
+mod shapes;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -1030,6 +1032,19 @@ impl<'a> VerifyContext<'a> {
         )
     }
 
+    /// The names of the variants of enum `name`, in order.
+    pub(crate) fn variant_names(&self, name: &str) -> Vec<String> {
+        self.enums
+            .get(name)
+            .map(|item| {
+                item.variants
+                    .iter()
+                    .map(|variant| variant.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn variant_index(&self, name: &str, variant: &str) -> Option<usize> {
         // The builtin `Lookup` a checked list read returns.
         if name == LOOKUP && !self.enums.contains_key(name) {
@@ -1620,7 +1635,9 @@ fn ask_once(
                             exec.inputs
                                 .iter()
                                 .zip(values)
-                                .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
+                                .map(|((name, _), value)| {
+                                    (name.clone(), exec.input_text(name, smt::render_int(&value)))
+                                })
                                 .collect()
                         })
                         .unwrap_or_default()
@@ -1854,6 +1871,10 @@ mod tests_collections;
 #[cfg(test)]
 #[path = "verify_integers_tests.rs"]
 mod tests_integers;
+
+#[cfg(test)]
+#[path = "verify_shapes_tests.rs"]
+mod tests_shapes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
