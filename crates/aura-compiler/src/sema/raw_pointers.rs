@@ -228,6 +228,33 @@ mod tests {
     }
 
     #[test]
+    fn foreign_calls_distinguish_arrays_of_inline_storage_and_length_checked_views() {
+        let rows = r#"extern "C" def consume(p: ptr[fixed[uint16, 2]]) -> None
+
+def call() -> None:
+    mut rows: list[fixed[uint16, 2]] = [[1, 2]]
+    consume(rows)
+"#;
+        let checked = r#"extern "C" def fill(buffer: mut ptr[uint16], n: int64) -> None:
+    requires n <= len(buffer)
+
+def call(p: ptr[uint16]) -> None:
+    fill(p, 1)
+"#;
+        for (source, message) in [
+            (rows, "this C parameter requires a typed raw pointer"),
+            (
+                checked,
+                "this extern contract requires an Aura list view with a known length",
+            ),
+        ] {
+            let error = check(source).unwrap_err();
+            assert_eq!(error.code, "AU2083");
+            assert_eq!(error.message, message);
+        }
+    }
+
+    #[test]
     fn typed_pointer_operations_enforce_element_identity_and_addressability() {
         let prefix = "import mem\nextern \"C\" class Pair:\n    first: int32\n    second: int16\n";
         for (args, body, code) in [

@@ -131,3 +131,91 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
     }
     affected
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mir::{CleanupAction, Operand};
+
+    #[test]
+    fn proof_boundaries_follow_implicit_and_dispatched_calls() {
+        let source = "def effect(p: ptr[uint8]) -> None:\n    p.write(3)\n\ndef caller() -> None:\n    return\n\ndef parent() -> None:\n    caller()\n\ndef pure() -> None:\n    return\n";
+        let program =
+            crate::check_module_with_builtin_imports(crate::parse_source(source).unwrap()).unwrap();
+        let mut module = crate::mir::lower_for_verification(&program);
+        let caller = module
+            .functions
+            .iter()
+            .position(|f| f.name == "caller")
+            .unwrap();
+        let assign = |value| Instruction::Assign {
+            target: "result".into(),
+            value,
+        };
+        let call = |callee| {
+            assign(Rvalue::Call {
+                callee,
+                args: vec![],
+                type_args: Default::default(),
+            })
+        };
+        let dispatch = Some(MethodDispatch::Static {
+            function: "effect".into(),
+        });
+        for operation in [
+            assign(Rvalue::Try {
+                value: Operand::Unit,
+                releases_on_error: vec![],
+                from: Some("effect".into()),
+            }),
+            assign(Rvalue::ModuleConstant {
+                key: "data".into(),
+                initializer: "effect".into(),
+            }),
+            call(CallTarget::Member {
+                object: Operand::Unit,
+                field: "write".into(),
+                receiver_place: None,
+                dispatch: dispatch.clone(),
+            }),
+            call(CallTarget::TraitMember {
+                object: Operand::Unit,
+                field: "write".into(),
+                trait_name: "Writer".into(),
+                receiver_place: None,
+                dispatch,
+            }),
+            call(CallTarget::Value(Operand::Place("callback".into()))),
+            Instruction::PushCleanup {
+                place: "resource".into(),
+                action: CleanupAction::ResourceClose,
+                callee: None,
+            },
+        ] {
+            let body = &mut module.functions[caller].blocks[0].instructions;
+            body.push(operation);
+            let affected = affected_functions(&module);
+            assert!(
+                ["effect", "caller", "parent"]
+                    .iter()
+                    .all(|name| affected.contains(name)),
+                "{affected:?}"
+            );
+            assert!(!affected.contains("pure"));
+            module.functions[caller].blocks[0].instructions.pop();
+        }
+
+        for (operation, writes) in [
+            ("write_int16", true),
+            ("volatile_write_float32", true),
+            ("atomic_store_uint16", true),
+            ("atomic_compare_exchange_uint8", true),
+            ("atomic_add_uint32", true),
+            ("atomic_swap_uint64", true),
+            ("volatile_read_int32", false),
+            ("atomic_load_uint8", false),
+        ] {
+            assert_eq!(writes_memory(&format!("mem::{operation}")), writes);
+        }
+    }
+}
