@@ -324,7 +324,7 @@ def main():
             print(message)
 ```
 
-<span class="caption">Listing 10-9: Converting integers and text into `Money` with `From` and a `Parse` trait</span>
+<span class="caption">Listing 10-11: Converting integers and text into `Money` with `From` and a `Parse` trait</span>
 
 ```console
 $ aura run src/main.au

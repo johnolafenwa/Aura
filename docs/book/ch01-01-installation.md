@@ -177,6 +177,32 @@ will need the build tools by the time it reaches `aura build`.
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.
 
+## Installing a solver for `aura verify`
+
+One command needs a helper program. `aura verify` proves facts about your
+code, such as "this index is always in range", and it does that by asking an
+*SMT solver*, a program that answers logic questions. Aura works with
+[Z3](https://github.com/Z3Prover/z3) and [cvc5](https://cvc5.github.io/), and
+runs whichever it finds on your path. Install Z3 with the tool you already
+have:
+
+```console
+$ brew install z3
+```
+
+```console
+$ sudo apt install -y z3
+```
+
+```console
+$ pip install z3-solver
+```
+
+The first is for macOS, the second for Ubuntu and WSL, and the third works
+anywhere Python does, including Windows. Check it with `z3 --version`. We
+use `aura verify` for the first time at the end of this chapter, and nothing
+else in Aura depends on the solver.
+
 ## Updating
 
 To move to a newer release, run:
