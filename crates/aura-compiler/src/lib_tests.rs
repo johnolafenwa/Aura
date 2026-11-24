@@ -4632,6 +4632,8 @@ fn machine_code_in_lowered_imports_stops_proof_before_solver_or_cache() {
         .instructions
         .push(Instruction::InlineAsm {
             asm: MachineAsm {
+                arch: "x86_64".into(),
+                noreturn: false,
                 template: "nop".into(),
                 constraints: "~{memory}".into(),
                 pure: false,
