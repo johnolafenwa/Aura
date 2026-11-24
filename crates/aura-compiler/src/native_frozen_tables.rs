@@ -78,11 +78,24 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
         .iter()
         .map(|c| (c.name.as_str(), c))
         .collect();
+    let definitions: HashMap<_, _> = module
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect();
     for function in &mut module.functions {
         let types: HashMap<_, _> = function
             .local_types
             .iter()
             .map(|l| (l.name.clone(), l.ty.clone()))
+            .collect();
+        let records: HashSet<_> = types
+            .iter()
+            .filter(|(_, ty)| {
+                matches!(ty, Type::Named(n,_) if classes.contains_key(n.as_str()))
+                    && direct_type(ty, &definitions).is_some_and(|ty| plain_record(&ty))
+            })
+            .map(|(place, _)| place.clone())
             .collect();
         let mut addresses = HashSet::new();
         // MIR names a computed receiver in a temporary before the projection.
@@ -103,7 +116,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                         }
                         _ => false,
                     };
-                    if !eligible {
+                    if !eligible || records.contains(target) {
                         continue;
                     }
                     let static_read = match value {
@@ -141,7 +154,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                         &addresses,
                         &types,
                         &classes,
-                        addresses.contains(target),
+                        addresses.contains(target) || records.contains(target),
                     ) {
                         *value = replacement;
                         continue;
@@ -268,6 +281,11 @@ fn argument(value: Operand) -> MirArg {
         value,
         writeback_place: None,
     }
+}
+
+/// A record that the existing freestanding ABI passes as ordinary words.
+fn plain_record(ty: &DirectType) -> bool {
+    matches!(ty, DirectType::PlainClass(record) if record.fields.iter().all(|field| matches!(field.ty, DirectType::Scalar(_)) || plain_record(&field.ty)))
 }
 
 fn is_word(ty: &Type) -> bool {
@@ -541,6 +559,7 @@ impl FunctionCompiler<'_> {
     pub(in crate::native_codegen) fn frozen_table_address(
         &mut self,
         key: &str,
+        target: &DirectType,
     ) -> Result<ValueRef, String> {
         let name = format!("\0freestanding constant {key}");
         let data = if let Some(existing) = self.tag_cells.get(&name) {
@@ -568,6 +587,9 @@ impl FunctionCompiler<'_> {
         };
         let global = self.builder.import_data(data);
         let base = self.builder.symbol_value(types::I64, global);
+        if plain_record(target) {
+            return Ok(self.frozen_plain_record(base, target));
+        }
         Ok(ValueRef {
             values: vec![base],
             ty: DirectType::Scalar(ScalarKind::Uint64),
@@ -633,10 +655,35 @@ impl FunctionCompiler<'_> {
             }
             _ => unreachable!("only frozen projections reach the table emitter"),
         };
+        if plain_record(target) {
+            return Ok(self.frozen_plain_record(value, target));
+        }
         Ok(ValueRef {
             values: vec![value],
             ty: target.clone(),
         })
+    }
+
+    /// Load a frozen record into the same flattened words a class method takes.
+    fn frozen_plain_record(&mut self, base: Val, ty: &DirectType) -> ValueRef {
+        let DirectType::PlainClass(record) = ty else {
+            unreachable!("plain record type")
+        };
+        let mut values = Vec::new();
+        for (index, field) in record.fields.iter().enumerate() {
+            let at = self.builder.iconst(types::I64, index as i64);
+            let nested = plain_record(&field.ty);
+            let word = self.frozen_slot(base, at, 1, nested, &field.ty);
+            if nested {
+                values.extend(self.frozen_plain_record(word, &field.ty).values);
+            } else {
+                values.push(word);
+            }
+        }
+        ValueRef {
+            values,
+            ty: ty.clone(),
+        }
     }
 
     fn frozen_bounds_check(&mut self, invalid: Val, args: &[MirArg]) -> Result<(), String> {

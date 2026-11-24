@@ -6848,7 +6848,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             Rvalue::ModuleConstant { key, initializer } => {
                 if self.freestanding.is_some() && initializer.is_empty() {
-                    return self.frozen_table_address(key);
+                    return self.frozen_table_address(key, target);
                 }
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
