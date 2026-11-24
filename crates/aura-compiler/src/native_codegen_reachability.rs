@@ -110,6 +110,16 @@ fn collect_named_op_callees(function: &MirFunction, out: &mut Vec<String>) {
             ..
         } = value
         {
+            // Ordered memory operations inline the ordering at the call site.
+            // Their generic wrapper only has a runtime parameter for that order.
+            if op
+                .name()
+                .strip_prefix("mem::")
+                .and_then(aura_core::atomic_order::AtomicOperation::of)
+                .is_some()
+            {
+                continue;
+            }
             out.push(op.name().to_string());
         }
     }
