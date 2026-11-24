@@ -5040,3 +5040,93 @@ def main():
         "`PopCleanup` must prove `__exit__` requires: {report:#?}"
     );
 }
+
+#[test]
+fn narrow_integer_widths_are_preserved_in_specs_minmax_and_writeloan() {
+    let cases: [(&str, &str); 5] = [
+        (
+            "negated literal + int8 in callee requires",
+            r#"
+def callee(x: int8) -> int8:
+    requires (-1) + x <= 127
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "grouped literal + int8 in callee requires",
+            r#"
+def callee(x: int8) -> int8:
+    requires (1) + x >= -128
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "min(0, x) - 1 via spec def returning int8",
+            r#"
+spec def clamp_zero(x: int8) -> int8:
+    return min(x, 0)
+
+def callee(x: int8) -> int8:
+    requires clamp_zero(x) - 1 <= 127
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "conditional (0 if flag else x) - 1 with int8 in callee requires",
+            r#"
+def callee(flag: bool, x: int8) -> int8:
+    requires (0 if flag else x) - 1 <= 127
+    return x
+
+def caller(flag: bool, x: int8) -> int8:
+    return callee(flag, x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "WriteLoan literal addition overflowing int8",
+            r#"
+def f() -> int8:
+    mut x: int8 = 0
+    view mut v = x
+    v = 100 + 100
+    return x
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let open = report.obligations.iter().any(|ob| {
+            (ob.function == "caller" || ob.function == "f") && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            open,
+            "narrow integer width overflow `{label}` must stay open: {report:#?}"
+        );
+    }
+}

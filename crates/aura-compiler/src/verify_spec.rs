@@ -824,7 +824,8 @@ impl Exec<'_> {
                     wd.push(format!("(=> {} {})", not(&condition), conjoin(&else_wd)));
                 }
                 match (then_value, else_value) {
-                    (Val::Int(a, ty), Val::Int(b, _)) => {
+                    (Val::Int(a, aty), Val::Int(b, bty)) => {
+                        let ty = select_int_ty(then_expr, aty, bty);
                         Ok(Val::Int(format!("(ite {condition} {a} {b})"), ty))
                     }
                     (Val::Bool(a), Val::Bool(b)) => {
@@ -1027,17 +1028,21 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, *ty))
                     }
-                    ("min" | "max", [Val::Int(a, ty), Val::Int(b, _)]) => {
+                    ("min" | "max", [Val::Int(a, aty), Val::Int(b, bty)]) => {
+                        let ty = match args.first() {
+                            Some(first) => select_int_ty(&first.value, *aty, *bty),
+                            None => *aty,
+                        };
                         if let (Some(lhs_n), Some(rhs_n)) = (parse_smt_int(a), parse_smt_int(b)) {
                             let picked = if name == "min" {
                                 lhs_n.min(rhs_n)
                             } else {
                                 lhs_n.max(rhs_n)
                             };
-                            return Ok(Val::Int(lit(picked), *ty));
+                            return Ok(Val::Int(lit(picked), ty));
                         }
                         let op = if name == "min" { "<=" } else { ">=" };
-                        Ok(Val::Int(format!("(ite ({op} {a} {b}) {a} {b})"), *ty))
+                        Ok(Val::Int(format!("(ite ({op} {a} {b}) {a} {b})"), ty))
                     }
                     _ => {
                         let Some(spec) = self.cx.spec_def_in(&self.spec_module, name) else {
@@ -1168,7 +1173,13 @@ impl Exec<'_> {
                     _ => None,
                 })
                 .expect("a checked `spec def` body is one `return`");
-            self.spec(body, &env, wd, depth + 1)
+            let result = self.spec(body, &env, wd, depth + 1)?;
+            if let (Val::Int(term, _), Some(ret_int)) =
+                (&result, self.cx.spec_return_type(spec).and_then(IntTy::of))
+            {
+                return Ok(Val::Int(term.clone(), ret_int));
+            }
+            Ok(result)
         })();
         self.active_specs.pop();
         self.spec_module = prev_module;
@@ -1253,11 +1264,7 @@ impl Exec<'_> {
                 let (Val::Int(a, aty), Val::Int(b, bty)) = (&lhs, &rhs) else {
                     return Err("arithmetic on these operands is not modeled yet".into());
                 };
-                let ty = if matches!(left.kind, ExprKind::Int(_)) {
-                    *bty
-                } else {
-                    *aty
-                };
+                let ty = select_int_ty(left, *aty, *bty);
                 if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
                     if let (Some(lhs_n), Some(rhs_n)) = (parse_smt_int(a), parse_smt_int(b)) {
                         let folded = match op {
@@ -1266,11 +1273,16 @@ impl Exec<'_> {
                             BinaryOp::Mul => lhs_n.checked_mul(rhs_n),
                             _ => None,
                         };
-                        if let Some(res) = folded {
-                            if res < ty.lo || res > ty.hi {
+                        match folded {
+                            Some(res) => {
+                                if res < ty.lo || res > ty.hi {
+                                    wd.push("false".to_string());
+                                }
+                                return Ok(Val::Int(lit(res), ty));
+                            }
+                            None => {
                                 wd.push("false".to_string());
                             }
-                            return Ok(Val::Int(lit(res), ty));
                         }
                     }
                 }
@@ -1599,6 +1611,26 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     } else {
         term
     })
+}
+
+fn is_int_literal(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Int(_) => true,
+        ExprKind::Group(inner) => is_int_literal(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => is_int_literal(inner),
+        _ => false,
+    }
+}
+
+fn select_int_ty(left_expr: &Expr, left_ty: IntTy, right_ty: IntTy) -> IntTy {
+    if is_int_literal(left_expr) {
+        right_ty
+    } else {
+        left_ty
+    }
 }
 
 /// The type two float operands meet at: a `float64` literal beside a

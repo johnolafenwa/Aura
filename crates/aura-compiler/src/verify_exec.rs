@@ -2687,22 +2687,30 @@ impl<'a> Exec<'a> {
     }
 
     fn loan_int_ty(&self, state: &State, loan: &str) -> Option<IntTy> {
-        match state.loans.get(loan)? {
-            Loan::Place(place) => self.place_type(place).as_ref().and_then(IntTy::of),
-            Loan::Element {
+        let from_loan = match state.loans.get(loan) {
+            Some(Loan::Place(place)) => self.place_type(place).as_ref().and_then(IntTy::of),
+            Some(Loan::Element {
                 list, projection, ..
-            } => match self.place_type(list)? {
-                Type::Named(name, args) if name == "list" && args.len() == 1 => {
+            }) => match self.place_type(list) {
+                Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                     let mut ty = args[0].clone();
+                    let mut ok = true;
                     for segment in projection.split('.').filter(|segment| !segment.is_empty()) {
-                        ty = self.cx.project_type(&ty, segment)?;
+                        match self.cx.project_type(&ty, segment) {
+                            Some(next) => ty = next,
+                            None => {
+                                ok = false;
+                                break;
+                            }
+                        }
                     }
-                    IntTy::of(&ty)
+                    ok.then(|| IntTy::of(&ty)).flatten()
                 }
                 _ => None,
             },
             _ => None,
-        }
+        };
+        from_loan.or_else(|| self.place_type(loan).as_ref().and_then(IntTy::of))
     }
 
     /// A fresh value of the type of the place `target`.
@@ -3036,7 +3044,16 @@ impl<'a> Exec<'a> {
                 right,
                 span,
                 trap,
-            } => self.binary(state, *op, left, right, *span, *trap, target_type.as_ref()),
+            } => self.binary(
+                state,
+                *op,
+                left,
+                right,
+                *span,
+                *trap,
+                target_type.as_ref(),
+                hint,
+            ),
             Rvalue::Unary {
                 op,
                 value,
@@ -3051,7 +3068,11 @@ impl<'a> Exec<'a> {
                         float,
                     ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
-                        let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
+                        let ty = target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .or(hint)
+                            .unwrap_or(ty);
                         let result = self.define("Int", "neg", format!("(- {term})"));
                         if trap.checks_overflow() {
                             self.oblige_range(state, *span, &result, ty);
@@ -3495,10 +3516,11 @@ impl<'a> Exec<'a> {
         span: Span,
         trap: ArithmeticTrap,
         target_type: Option<&Type>,
+        expected_int: Option<IntTy>,
     ) -> Val {
         let left_ty = self.operand_int_ty(left);
         let right_ty = self.operand_int_ty(right);
-        let target_int = target_type.and_then(IntTy::of);
+        let target_int = target_type.and_then(IntTy::of).or(expected_int);
         let hint = left_ty.or(right_ty).or(target_int);
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
@@ -3512,7 +3534,7 @@ impl<'a> Exec<'a> {
         let pc = state.pc.clone();
         match (&lhs, &rhs) {
             (Val::Int(a, aty), Val::Int(b, _)) => {
-                let ty = target_int.unwrap_or(*aty);
+                let ty = target_int.or(left_ty).or(right_ty).unwrap_or(*aty);
                 let compare = |op: &str| Val::Bool(format!("({op} {a} {b})"));
                 match op {
                     BinaryOp::Less => compare("<"),
@@ -5069,8 +5091,10 @@ impl<'a> Exec<'a> {
                     .and_then(|target| self.place_type(target))
                     .as_ref()
                     .and_then(IntTy::of);
+                let arg_hint = target_int
+                    .or_else(|| args.iter().find_map(|arg| self.operand_int_ty(&arg.value)));
                 let values: Vec<Val> = (0..args.len())
-                    .map(|index| arg(self, state, index, target_int))
+                    .map(|index| arg(self, state, index, arg_hint))
                     .collect();
                 match (function, values.as_slice()) {
                     (FunctionOp::Abs, [Val::Float(term, float)]) => Some(Val::Float(
@@ -5088,7 +5112,7 @@ impl<'a> Exec<'a> {
                         self.oblige_range_at(&pc, span, &result, ty);
                         Some(Val::Int(result, ty))
                     }
-                    (FunctionOp::Min | FunctionOp::Max, [Val::Int(a, ty), Val::Int(b, _)]) => {
+                    (FunctionOp::Min | FunctionOp::Max, [Val::Int(a, aty), Val::Int(b, bty)]) => {
                         let op = if function == FunctionOp::Min {
                             "<="
                         } else {
@@ -5096,7 +5120,15 @@ impl<'a> Exec<'a> {
                         };
                         let result =
                             self.define("Int", "minmax", format!("(ite ({op} {a} {b}) {a} {b})"));
-                        Some(Val::Int(result, target_int.unwrap_or(*ty)))
+                        let ty = target_int
+                            .or_else(|| self.operand_int_ty(&args[0].value))
+                            .or_else(|| self.operand_int_ty(&args[1].value))
+                            .unwrap_or(if matches!(args[0].value, Operand::Int(_)) {
+                                *bty
+                            } else {
+                                *aty
+                            });
+                        Some(Val::Int(result, ty))
                     }
                     _ => None,
                 }
