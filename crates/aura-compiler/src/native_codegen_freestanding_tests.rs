@@ -1008,3 +1008,14 @@ export "C" def sample(i: int64, high: uint64) -> uint64:
         assert_eq!(undefined, [TRAP_HOOK]);
     }
 }
+
+#[test]
+fn fixed_array_updates_do_not_copy_the_entire_ring() {
+    let kernels = include_str!("../../../benchmarks/freestanding/kernels.au");
+    let bytes = object(kernels, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let ring = file.symbols().find(|sym| sym.name() == Ok("aura_ring_mix")).unwrap();
+    // The loop needs one indexed load and store. Copying every lane
+    // into and out of scratch storage produced 814 bytes on x86-64.
+    assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}
