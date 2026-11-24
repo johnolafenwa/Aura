@@ -2661,6 +2661,7 @@ impl<'a> NativeCodegen<'a> {
             lend_lookup: false,
             lent_elements,
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
+            shaped_lent_payloads: HashSet::new(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
             json_views,
@@ -4161,6 +4162,11 @@ struct FunctionCompiler<'a> {
     /// a reference to the box where a lent element copies it. See
     /// `elements::lent_payload_reads`.
     lent_payloads: HashSet<String>,
+    /// The locals of `lent_payloads` whose one read found a box that carries
+    /// the local's type's tag: the variant's own box read as the type its
+    /// variant declares, or a box the read tagged. A promotion only takes a
+    /// reference to the box, so it keeps the tag.
+    shaped_lent_payloads: HashSet<String>,
     /// The lent locals that take their own reference before the
     /// instruction at each block label and index.
     element_promotions: HashMap<(String, usize), Vec<String>>,
@@ -4813,6 +4819,12 @@ impl<'a> FunctionCompiler<'a> {
         let flag = self.lent_element_flag.take();
         let compiled = compiled?;
         let flag_var = self.lent_elements[target];
+        if self.lent_payloads.contains(target)
+            && !self.json_views.contains(target)
+            && matches!(compiled.values.as_slice(), [word] if self.shaped_boxes.contains(word))
+        {
+            self.shaped_lent_payloads.insert(target.to_string());
+        }
         let Some(flag) = flag else {
             let coerced = self.coerce_value(compiled, &target_ty)?;
             self.store_place(target, coerced)?;
@@ -11872,7 +11884,7 @@ impl<'a> FunctionCompiler<'a> {
     /// Records that `loaded`, read out of `place`, carries its type's tag
     /// when `place` is a shaped local.
     fn mark_shaped_place(&mut self, place: &str, loaded: &ValueRef) {
-        if self.shaped_locals.contains(place) {
+        if self.shaped_locals.contains(place) || self.shaped_lent_payloads.contains(place) {
             if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
                 self.shaped_boxes.insert(*word);
             }

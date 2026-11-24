@@ -1,0 +1,97 @@
+# Payloads read out of a variant and passed straight to a function that
+# borrows them: a box built in place, one a list holds, a generic enum's
+# payload, and a float32 payload, which keeps its tag.
+
+enum Tree:
+    Leaf
+    Node(left: indirect Tree, right: indirect Tree)
+
+
+enum Expr:
+    Num(value: int64)
+    Add(left: indirect Expr, right: indirect Expr)
+    Neg(inner: indirect Expr)
+    Named(name: str, inner: indirect Expr)
+
+
+enum Holder[T]:
+    Empty
+    Full(item: T)
+
+
+enum Wide:
+    Values(items: list[float32])
+
+
+def make(depth: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make(depth - 1), right=make(depth - 1))
+
+
+def count(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 1
+        case Tree.Node(left, right):
+            return 1 + count(left) + count(right)
+
+
+def width(name: str) -> int64:
+    return name.len()
+
+
+def eval(expr: Expr) -> int64:
+    match expr:
+        case Expr.Num(value):
+            return value
+        case Expr.Add(left, right):
+            return eval(left) + eval(right)
+        case Expr.Neg(inner):
+            return 0 - eval(inner)
+        case Expr.Named(name, inner):
+            return width(name) * 100 + eval(inner)
+
+
+def first(items: list[int64]) -> int64:
+    return items[0]
+
+
+def held(holder: Holder[list[int64]]) -> int64:
+    match holder:
+        case Holder.Full(item):
+            return first(item)
+        case Holder.Empty:
+            return -1
+
+
+def total(items: list[float32]) -> float32:
+    mut sum: float32 = 0.0
+    for item in items:
+        sum = sum + item
+    return sum
+
+
+def wide(value: Wide) -> float32:
+    match value:
+        case Wide.Values(items):
+            return total(items)
+
+
+def main():
+    print(count(make(4)))
+    trees = [make(1), Tree.Leaf, make(3)]
+    for tree in trees:
+        print(count(tree))
+    print(count(trees[2]))
+    expr = Expr.Add(
+        left=Expr.Named(name="abc", inner=Expr.Num(value=7)),
+        right=Expr.Neg(inner=Expr.Add(left=Expr.Num(value=2), right=Expr.Num(value=3))),
+    )
+    print(eval(expr))
+    exprs = [expr, Expr.Num(value=-4)]
+    for item in exprs:
+        print(eval(item))
+    print(held(Holder.Full(item=[9, 8])))
+    print(held(Holder.Empty))
+    print(wide(Wide.Values(items=[1.5, 2.25])))
