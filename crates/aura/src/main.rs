@@ -4507,6 +4507,12 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// proved.
 fn handle_verify_command(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let (_target_scope, args) = if args.iter().any(|arg| arg == "--freestanding") {
+        let (target, args) = freestanding_args::take_target(args);
+        (Some(aura_compiler::enter_freestanding_target(target)), args)
+    } else {
+        (None, args)
+    };
     let mut options = aura_compiler::verify::Options {
         cache_dir: verify_cache_root(),
         ..aura_compiler::verify::Options::default()

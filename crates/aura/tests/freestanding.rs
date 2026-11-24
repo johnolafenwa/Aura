@@ -720,10 +720,20 @@ fn assembly_stops_proofs_and_preserves_runtime_checks() {
     assert!(stderr(&verify).contains("assembly"), "{}", stderr(&verify));
 
     let build = workspace.aura(&[
-        "build", "--freestanding", "--target", "x86_64-unknown-none",
-        "--remove-proved-checks", "-o", "proof.o", "src/main.au",
+        "build",
+        "--freestanding",
+        "--target",
+        "x86_64-unknown-none",
+        "--remove-proved-checks",
+        "-o",
+        "proof.o",
+        "src/main.au",
     ]);
     assert!(build.status.success(), "{}", stderr(&build));
-    assert!(stderr(&build).contains("0 checks proved and removed"), "{}", stderr(&build));
+    assert!(
+        stderr(&build).contains("0 checks proved and removed"),
+        "{}",
+        stderr(&build)
+    );
     assert!(workspace.path.join("proof.o").is_file());
 }

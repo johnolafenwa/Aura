@@ -962,12 +962,38 @@ fn auxiliary_verified_function(
         && cx.decl(&function.name).is_some_and(|decl| decl.lemma)
 }
 
+pub(crate) fn assembly_boundary(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU4035",
+        span,
+        "the verifier cannot reason through assembly",
+    )
+}
+
 /// Verifies every function of `program` whose MIR is `module`.
 pub fn verify_module(
     program: &Program,
     module: &MirModule,
     options: &Options,
 ) -> std::result::Result<Report, Diagnostic> {
+    // Assembly can change memory that an Aura contract describes. An imported
+    // routine can affect a caller even when a function filter hides its body.
+    if let Some(span) = program.module.asm_span {
+        return Err(assembly_boundary(span));
+    }
+    if !module.foreign_link.module_asm.is_empty() {
+        return Err(assembly_boundary(Span::new(1, 1)));
+    }
+    for instruction in module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+    {
+        if let crate::mir::Instruction::InlineAsm { span, .. } = instruction {
+            return Err(assembly_boundary(*span));
+        }
+    }
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);

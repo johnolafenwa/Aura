@@ -4601,11 +4601,9 @@ fn verification_names_assembly_in_an_import_and_in_editor_source() {
     assert_eq!(imported.code, "AU4035");
     assert_eq!(imported.render_path.as_deref(), driver.to_str());
     assert_eq!(imported.span.unwrap().line, 1);
-    let direct = crate::verify_path_with_source(
-        &main,
-        "def f() -> None:\n    asm(\"nop\")\n",
-        &options,
-    ).unwrap_err();
+    let direct =
+        crate::verify_path_with_source(&main, "def f() -> None:\n    asm(\"nop\")\n", &options)
+            .unwrap_err();
     assert_eq!(direct.code, "AU4035");
     assert_eq!(direct.span.unwrap().line, 2);
 }
