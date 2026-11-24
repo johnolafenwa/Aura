@@ -9088,6 +9088,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        // A frameless function divides floats, and the call chain of the
+        // failure names it.
+        self.push_frameless_frame();
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
