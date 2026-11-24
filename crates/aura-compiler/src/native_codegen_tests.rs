@@ -18339,3 +18339,13 @@ def main():
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
+
+#[test]
+fn compiled_constant_data_has_no_initializer_call_at_entry() {
+    let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
+    let mir = lower_source_to_mir(source).expect("constant should lower");
+    let bytes = emit_host_object(&mir).expect("constant should emit");
+    assert!(!object_referenced_symbols(&bytes)
+        .iter()
+        .any(|symbol| symbol.ends_with("aura_direct_module_constant")));
+}

@@ -17996,3 +17996,31 @@ fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
         "--no-rpath binary must not embed build-host library_paths in rpath"
     );
 }
+
+#[test]
+fn native_run_selects_constants_before_consulting_the_program_cache() {
+    let cache = TempDir::new("aura-cfg-cache");
+    let (_temp, path) = write_temp_source(
+        "aura-cfg-cache-source",
+        "import build\nconst answer = 6 * 7\nif \"trace\" in build.cfg:\n    def main():\n        print(answer)\nelse:\n    def main():\n        print(0)\n",
+    );
+    for (flags, expected) in [
+        (vec![], "0\n"),
+        (vec!["--cfg", "trace"], "42\n"),
+        (vec![], "0\n"),
+    ] {
+        let run = Command::new(aura_bin())
+            .env("AURA_CACHE_DIR", cache.path())
+            .args(["run", "--backend", "direct"])
+            .args(flags)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    }
+}

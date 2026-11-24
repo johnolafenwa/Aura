@@ -702,3 +702,33 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn a_cross_target_selects_its_architecture_and_frozen_table() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "table.au",
+        r#"import build
+if build.arch == "riscv64" and build.freestanding:
+    def make() -> list[int64]:
+        return [3 * 7, 6 * 7]
+    const table = make()
+    export "C" def lookup(index: int64) -> int64:
+        return table[index]
+else:
+    import missing_on_riscv
+"#,
+    );
+    let output = workspace.aura(&[
+        "build",
+        "--freestanding",
+        "--target",
+        "riscv64gc-unknown-none-elf",
+        "-o",
+        "table.o",
+        "table.au",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let object = fs::read(workspace.path.join("table.o")).unwrap();
+    assert_eq!(u16::from_le_bytes([object[18], object[19]]), 243);
+}
