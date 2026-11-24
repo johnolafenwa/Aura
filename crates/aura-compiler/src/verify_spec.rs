@@ -67,7 +67,7 @@ impl Exec<'_> {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
                 // No run checks the invariant on entry to a method that
                 // only reads `self`; the method's proof assumes it.
-                let reads_only = self.reads_only(callee);
+                let reads_only = self.reads_only(callee) || self.cx.impl_guard(callee).is_some();
                 let erasing = self.erasing;
                 self.erasing |= reads_only;
                 for clause in clauses {
@@ -155,6 +155,15 @@ impl Exec<'_> {
     /// assume they do.
     pub(super) fn prove_return_invariants(&mut self, state: &State, result: &Val) {
         let mut values = vec![("the result".to_string(), result.clone())];
+        // No run checks the invariant a `mut self` method of a trait
+        // implementation leaves, and its callers assume it.
+        if self.function.receiver == Some(crate::mir::MirReceiverKind::BorrowMut)
+            && self.cx.impl_guard(&self.function.name).is_some()
+        {
+            if let Some(value) = state.env.get("self") {
+                values.push(("`self`".to_string(), value.clone()));
+            }
+        }
         for param in &self.function.params {
             if param.passing == crate::mir::MirReceiverKind::BorrowMut {
                 if let Some(value) = state.env.get(&param.name) {
@@ -483,22 +492,68 @@ impl Exec<'_> {
     }
 
     /// The invariant clauses that hold on entry to `callee` and on its
-    /// return, when it is a public method of a class with invariants that
-    /// takes `mut self` (where they are checked when the program runs) or
-    /// `self` (where each call is proved to keep them).
+    /// return. For a public method of a class with invariants they are
+    /// checked when the program runs if it takes `mut self`, and each call
+    /// is proved to keep them if it takes `self`. For a method of a trait
+    /// implementation no run checks them: each call that names the method
+    /// proves them, and a call on a trait object relies on the object
+    /// holding them (see `verify_guard`). A call whose implementation is
+    /// picked at run time names no class.
     fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
-        let decl = self.cx.decl(callee)?;
-        if !decl.public
-            || !matches!(
-                decl.receiver,
-                Some(crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow)
-            )
-        {
+        if self.dynamic_call {
             return None;
         }
-        let (class, _) = base_name(callee).rsplit_once('.')?;
+        let class = match self.cx.impl_guard(callee) {
+            Some(class) => class,
+            None => {
+                let decl = self.cx.decl(callee)?;
+                if !decl.public
+                    || !matches!(
+                        decl.receiver,
+                        Some(
+                            crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow
+                        )
+                    )
+                {
+                    return None;
+                }
+                base_name(callee).rsplit_once('.')?.0
+            }
+        };
         let (module_name, clauses) = self.cx.class_invariant(class)?;
         (!clauses.is_empty()).then(|| (module_name.to_string(), clauses.to_vec()))
+    }
+
+    /// A value that becomes a trait object holds its class invariant when
+    /// a trait implementation method of its class assumes it: a call on
+    /// the object proves nothing about what it holds.
+    pub(super) fn prove_held_invariant(&mut self, state: &State, value: &Val) {
+        let Val::Record(class, _) = value else {
+            return;
+        };
+        if !self.cx.guards_class(class) {
+            return;
+        }
+        let (inv_module, clauses) = self.record_invariant(value).expect("a guarded class");
+        let env: Env = [("self".to_string(), value.clone())].into();
+        let erasing = self.erasing;
+        self.erasing = true;
+        for clause in clauses {
+            let message = format!(
+                "class invariant holds for the value a trait object takes: `{}`",
+                clause.text
+            );
+            self.prove_clause_in(
+                state,
+                ObligationKind::ClassInvariant,
+                self.span,
+                message,
+                &clause,
+                &env,
+                Some(&inv_module),
+            );
+        }
+        self.erasing = erasing;
     }
 
     #[allow(clippy::too_many_arguments)]

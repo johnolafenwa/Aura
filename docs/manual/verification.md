@@ -44,6 +44,40 @@ takes an `Account`, starts from an object that keeps its invariants. No run
 checks these places, so while one of them is unproved
 `aura build --remove-proved-checks` removes nothing.
 
+A method of an `impl Trait for Class:` block cannot be `public`, so no run
+checks the class invariants around it. The verifier treats it like a public
+method anyway. Its proof assumes the invariants on entry, and a `mut self`
+method is proved to hold them again on return. In exchange, each call that
+names the method proves the invariants of its receiver, and so does each
+conversion of an object to a trait object:
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+
+class Square:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side  # proved: `side` is at most 1000
+
+
+def main():
+    print(Square(side=2).area())  # 4
+```
+
+The method assumes nothing when the program reaches it in a way that proves
+nothing about the receiver. Those ways are a call on a union value, a call
+in a generic function that the verifier could not copy for its type
+arguments, and `Display.display`, which printing calls. When the method
+belongs to an imported module, the function that reaches it this way gets an
+unsupported class invariant obligation instead.
+
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a
@@ -54,8 +88,44 @@ it relies on that type's own contract, and a `match` type arm on it is
 decided. A trait object the function receives, reads from a collection, or
 gets from two paths that hold different types may hold any type. A call of a `lemma def` relies on the
 lemma's `ensures` the same way; see
-[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
-what a caller needs to know must be in the contract.
+[Lemmas](/manual/contracts#lemmas). One more fact about the callee's body
+is used, described next. Anything else a caller needs to know must be in
+the contract.
+
+A call changes only what its callee can write. After a call, a `mut`
+argument keeps the value of every field the callee never writes, so the
+`ensures` only has to describe the fields that change:
+
+```aura
+class Stack:
+    items: list[int64]
+    cap: int64
+    invariant 0 <= len(self.items) and len(self.items) <= self.cap
+
+    public def push(mut self, x: int64):
+        requires len(self.items) < self.cap
+        ensures len(self.items) == len(old(self.items)) + 1
+        self.items.append(x)
+
+
+def fill(s: mut Stack):
+    requires s.cap == 4 and len(s.items) == 0
+    s.push(1)
+    s.push(2)  # proved: `push` cannot write `cap`
+    assert len(s.items) == 2
+
+
+def main():
+    mut s = Stack(items=[], cap=4)
+    fill(s)
+```
+
+The verifier reads the fields a function may write from its body and from
+the functions it calls. An assignment, a write through a `view mut`, a
+method such as `append`, and a `mut` argument of a call each count against
+the field they reach. A call whose callee is not known, such as one through
+a function value or through a trait, may write any part of its `mut`
+arguments.
 
 ```aura
 def clamp(x: int64, lo: int64, hi: int64) -> int64:

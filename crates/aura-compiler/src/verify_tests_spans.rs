@@ -401,7 +401,6 @@ def main():
             "9 requires failed",
             "10 assert failed",
             "10 index in range failed",
-            "10 index in range failed",
         ],
     );
     // A view a function returned, which the encoding does not follow.
