@@ -12,7 +12,7 @@
 //! whole call: a shared argument has no writer, and a `mut` argument has no
 //! other reader.
 
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{c_char, c_void, CStr};
 use std::slice;
 use std::str;
 
@@ -130,9 +130,10 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bytes_view(
                 write_view(out, &[]);
                 return std::ptr::null_mut();
             }
-            let copy = Box::leak(bytes.into_boxed_slice());
-            write_view(out, copy);
-            copy.as_mut_ptr()
+            let copy = allocate_structs(bytes.len(), free_structs_block);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy, bytes.len());
+            write_view(out, slice::from_raw_parts(copy, bytes.len()));
+            copy
         })
     })
 }
@@ -141,15 +142,12 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bytes_view(
 ///
 /// # Safety
 ///
-/// `copy` and `length` are one non-null result of that function and the
+/// `copy` and `_length` are one non-null result of that function and the
 /// length it wrote, not freed before.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_ffi_release_bytes(copy: *mut u8, length: usize) {
-    if copy.is_null() {
-        return;
-    }
-    // SAFETY: the caller's contract names a boxed slice of this length.
-    drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(copy, length)) });
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_bytes(copy: *mut u8, _length: usize) {
+    // SAFETY: `copy` is null or a tracked buffer allocated by `allocate_structs`.
+    unsafe { aura_direct_ffi_release_structs(copy) };
 }
 
 /// Writes the bytes of the `list[uint8]` `value` to `out` for a foreign
@@ -443,14 +441,24 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
 ) -> *mut c_char {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match active_member(value) {
-            Value::String(text) => match CString::new(text.as_bytes()) {
-                Ok(copy) => copy.into_raw(),
-                Err(_) => foreign_call_failure(
-                    metadata_text(symbol, symbol_length),
-                    "AU4005",
-                    crate::ffi::FfiError::InteriorNul { index },
-                ),
-            },
+            Value::String(text) => {
+                let bytes = text.as_bytes();
+                if bytes.contains(&0) {
+                    foreign_call_failure(
+                        metadata_text(symbol, symbol_length),
+                        "AU4005",
+                        crate::ffi::FfiError::InteriorNul { index },
+                    );
+                }
+                let len = bytes
+                    .len()
+                    .checked_add(1)
+                    .unwrap_or_else(|| runtime_error("a C string copy is too large"));
+                let copy = allocate_structs(len, free_structs_block);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), copy, bytes.len());
+                copy.add(bytes.len()).write(0);
+                copy.cast::<c_char>()
+            }
             Value::Unit => std::ptr::null_mut(),
             other => runtime_error(format!(
                 "FFI argument expected cstr, but received `{}`",
@@ -467,12 +475,8 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
 /// `copy` is one result of that function, not freed before.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_release_c_string(copy: *mut c_char) {
-    if copy.is_null() {
-        return;
-    }
-    // SAFETY: the caller's contract names a `CString` given up with
-    // `into_raw`.
-    drop(unsafe { CString::from_raw(copy) });
+    // SAFETY: `copy` is null or a tracked buffer allocated by `allocate_structs`.
+    unsafe { aura_direct_ffi_release_structs(copy.cast()) };
 }
 
 /// A new `str` that copies the NUL-terminated text the foreign function

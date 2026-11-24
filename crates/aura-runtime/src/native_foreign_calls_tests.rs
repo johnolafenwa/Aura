@@ -409,6 +409,52 @@ fn a_c_string_argument_is_a_terminated_copy_and_none_is_null() {
 }
 
 #[test]
+fn temporary_c_string_and_bytes_view_copies_are_tracked_and_freed_on_trap() {
+    let symbol = "open_two";
+    with_direct_task_runtime_scope(|| unsafe {
+        let text = string_value("hello");
+        let boxed = boxed_bytes(&[1, 2, 3]);
+        let before = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        let cstr = aura_direct_ffi_c_string(text, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        assert!(!cstr.is_null());
+        assert!(!bytes.is_null());
+        let during = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(
+            during,
+            before + 2,
+            "temporary CString and boxed BytesView copies must be tracked in the task ledger"
+        );
+        aura_direct_ffi_release_c_string(cstr);
+        aura_direct_ffi_release_bytes(bytes, view.length);
+        let after = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(after, before);
+        aura_direct_release_value(text);
+        aura_direct_release_value(boxed);
+    });
+
+    // Mid-call trap after arg 1 allocates CString and BytesView copies must not
+    // leak either allocation when the task scope unwinds.
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let first = string_value("arg1");
+        let boxed = boxed_bytes(&[9, 8, 7]);
+        let _cstr = aura_direct_ffi_c_string(first, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let _bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        let bad = string_value("bad\0arg2");
+        let _ = aura_direct_ffi_c_string(bad, 1, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+}
+
+#[test]
 fn a_c_string_result_is_copied_into_a_new_str() {
     let symbol = "name";
     unsafe {
