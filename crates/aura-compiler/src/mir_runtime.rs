@@ -2889,7 +2889,11 @@ impl MirRuntime {
                 continue;
             }
             for method in &trait_impl.methods {
-                if method.name == field && selected.is_none_or(|name| method.function_name == name)
+                if method.name == field
+                    && selected.is_none_or(|name| {
+                        name.strip_prefix(&method.function_name)
+                            .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('['))
+                    })
                 {
                     let specificity = crate::sema::trait_impl_specificity_parts(
                         &trait_impl.for_type,

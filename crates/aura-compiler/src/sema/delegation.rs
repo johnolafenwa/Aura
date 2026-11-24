@@ -53,10 +53,27 @@ pub(super) fn expand_parents(
             .iter()
             .map(|arg| lower(arg, decl))
             .collect::<Result<Vec<_>>>()?;
-        Ok((
-            Type::Named(name, args).canonical_key(current_module, &BTreeMap::new()),
-            lower(&decl.for_type, decl)?.canonical_key(current_module, &BTreeMap::new()),
-        ))
+        let target = lower(&decl.for_type, decl)?;
+        let mut parameters = BTreeSet::new();
+        super::collect_type_params_from_type(&target, &mut parameters);
+        for arg in &args {
+            super::collect_type_params_from_type(arg, &mut parameters);
+        }
+        let mut order = decl.type_params.clone();
+        order.extend(
+            parameters
+                .into_iter()
+                .filter(|name| !decl.type_params.contains(name)),
+        );
+        let normalized = order
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| (name, Type::TypeParam(format!("$impl{index}"))))
+            .collect();
+        let key_type = |ty: &Type| {
+            super::substitute_type(ty, &normalized).canonical_key(current_module, &BTreeMap::new())
+        };
+        Ok((key_type(&Type::Named(name, args)), key_type(&target)))
     };
     let mut positions = HashMap::new();
     for (index, item) in module.items.iter().enumerate() {
@@ -205,8 +222,13 @@ pub(super) fn order_after_field_impls(
 }
 
 pub(super) fn elaborate(
-    checker: &FunctionChecker<'_>, decl: &mut ImplDecl, info: &TraitInfo, target: &Type,
-    args: &[Type], open: &[String], serial: &mut usize,
+    checker: &FunctionChecker<'_>,
+    decl: &mut ImplDecl,
+    info: &TraitInfo,
+    target: &Type,
+    args: &[Type],
+    open: &[String],
+    serial: &mut usize,
 ) -> Result<HashMap<String, Type>> {
     let (name, span) = decl.delegation.as_ref().unwrap();
     let field = checker
@@ -505,3 +527,50 @@ impl FunctionChecker<'_> {
 #[cfg(test)]
 #[path = "delegation_tests.rs"]
 mod tests;
+
+/// An associated method of a generic delegation has no receiver at run
+/// time to identify the field's implementation. Resolve this method when
+/// the caller supplies the class type arguments.
+pub(crate) fn deferred_associated(
+    owner: &super::TraitImplInfo,
+    method: &super::TraitImplMethodInfo,
+) -> bool {
+    owner.decl.delegation.is_some()
+        && !owner.type_params.is_empty()
+        && method.decl.receiver.is_none()
+        && method.decl.span.column >= GENERATED_COLUMN_STRIDE
+}
+
+impl FunctionChecker<'_> {
+    /// `Wrapper[T].make()` forwarded to a field of type `T` in a generic
+    /// function has the same specialization requirement as `T.make()`.
+    pub(super) fn associated_delegate_param(
+        &self,
+        object: &Expr,
+        field: &str,
+        locals: &HashMap<String, super::LocalBinding>,
+    ) -> Option<String> {
+        let (class, type_args) = self.peel_specialization(object);
+        let ExprKind::Name(name) = &class.kind else {
+            return None;
+        };
+        let type_args = type_args?;
+        if locals.contains_key(name) || self.resolve_class_info(name)?.methods.contains_key(field) {
+            return None;
+        }
+        let actual = Type::Named(name.clone(), self.lower_explicit_type_args(type_args).ok()?);
+        let (owner, method, _) = self
+            .trait_method_for_concrete_type(&actual, field, object.span)
+            .ok()??;
+        if !deferred_associated(owner, method) {
+            return None;
+        }
+        let stored = &owner.decl.delegation.as_ref()?.0;
+        self.class_field_types(&actual)?
+            .into_iter()
+            .find_map(|(name, ty)| match ty {
+                Type::TypeParam(param) if &name == stored => Some(param),
+                _ => None,
+            })
+    }
+}

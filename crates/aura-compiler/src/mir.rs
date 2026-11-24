@@ -11551,6 +11551,10 @@ fn lower_trait_impl(
 ) -> MirTraitImpl {
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
+        // A receiverless generic forwarder is an alias resolved at its use.
+        if crate::sema::delegation::deferred_associated(trait_impl, method) {
+            continue;
+        }
         let qualified_name = format!(
             "{}{} for {}.{}",
             trait_impl.trait_name,
@@ -26977,18 +26981,15 @@ impl<'a> Lowerer<'a> {
                     if let Some((function_name, params, param_passings)) = self
                         .trait_impl_method_for_class_name(class_name, &written_type_args, field)
                         .filter(|(_, method)| method.decl.receiver.is_none())
-                        .map(|(trait_impl, method)| {
-                            (
-                                format!(
-                                    "{}{} for {}.{}",
-                                    trait_impl.trait_name,
-                                    format_trait_args(&trait_impl.trait_args),
-                                    trait_impl.for_type,
-                                    field
-                                ),
+                        .and_then(|(trait_impl, method)| {
+                            let actual =
+                                Type::Named(class_name.to_owned(), written_type_args.clone());
+                            let selected = self.associated_alias(&trait_impl, &method, actual)?;
+                            Some((
+                                selected,
                                 method.decl.params.clone(),
                                 method.signature.param_passings.clone(),
-                            )
+                            ))
                         })
                     {
                         let lowered_args = self.lower_user_args(

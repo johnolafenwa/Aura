@@ -13130,7 +13130,10 @@ impl<'a> FunctionChecker<'a> {
                 )
             }
             ExprKind::Member { object, field } => {
-                if let Some(type_param) = self.names_type_param(object, locals) {
+                if let Some(type_param) = self
+                    .names_type_param(object, locals)
+                    .or_else(|| self.associated_delegate_param(object, field, locals))
+                {
                     return self.type_of_type_param_associated_call(
                         &type_param,
                         field,
