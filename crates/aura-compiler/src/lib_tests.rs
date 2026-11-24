@@ -4637,7 +4637,7 @@ fn bare_board_examples_freeze_their_uart_address_and_decimal_divisors() {
                 let value =
                     |name| &program.frozen_constants[&format!("{}::{name}", program.module_name)];
                 assert!(
-                    matches!(value("serial_port"), FrozenValue::Int(n) if n.as_u128() == Some(uart))
+                    matches!(value("serial_port"), FrozenValue::Int(n) if n.as_i128() == Some(uart))
                 );
                 let FrozenValue::List(_, powers) = value("decimal_powers") else {
                     panic!("expected the decimal power table");
@@ -4645,7 +4645,7 @@ fn bare_board_examples_freeze_their_uart_address_and_decimal_divisors() {
                 assert_eq!(powers.len(), 20);
                 for (i, entry) in powers.iter().enumerate() {
                     assert!(
-                        matches!(entry, FrozenValue::Int(n) if n.as_u128() == Some(10u128.pow(i as u32)))
+                        matches!(entry, FrozenValue::Int(n) if n.as_i128() == Some(10i128.pow(i as u32)))
                     );
                 }
             },
