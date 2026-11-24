@@ -230,6 +230,24 @@ fn target_constants_enter_the_registry_only_when_imported() {
     ] {
         let program = crate::check_source(source).unwrap();
         assert_eq!(program.module_registry.contains_key("build"), expected);
-        assert!(!program.module_registry["iter"].classes.contains_key("ListIter"));
+        assert!(!program.module_registry["iter"]
+            .classes
+            .contains_key("ListIter"));
     }
+}
+
+#[test]
+fn checked_source_namespaces_follow_nested_configuration_scopes() {
+    source_part("prelude").unwrap();
+    let cached = || CHECKED.with_borrow(|checked| checked.contains_key("prelude"));
+    assert!(cached());
+    crate::with_build_config(crate::current_build_config(), || assert!(cached()));
+    let mut other = crate::current_build_config();
+    other.apply_option("other").unwrap();
+    crate::with_build_config(other, || {
+        assert!(!cached());
+        source_part("prelude").unwrap();
+        assert!(cached());
+    });
+    assert!(cached());
 }

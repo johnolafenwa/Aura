@@ -136,7 +136,15 @@ impl BuildConfig {
     /// Install this configuration for the lifetime of the returned guard.
     #[must_use]
     pub fn enter(self) -> BuildConfigGuard {
+        let saved_namespaces = CONFIG.with_borrow(|previous| {
+            (previous != &self).then(|| {
+                let mut previous = BTreeMap::new();
+                crate::builtin_sources::swap_checked_sources(&mut previous);
+                previous
+            })
+        });
         BuildConfigGuard {
+            saved_namespaces,
             previous: CONFIG.replace(self),
             thread: PhantomData,
         }
@@ -158,6 +166,7 @@ thread_local! {
 }
 
 pub struct BuildConfigGuard {
+    saved_namespaces: Option<BTreeMap<String, crate::sema::ModuleNamespace>>,
     previous: BuildConfig,
     // Restoring configuration must happen on the thread that installed it.
     thread: PhantomData<Rc<()>>,
@@ -165,6 +174,9 @@ pub struct BuildConfigGuard {
 
 impl Drop for BuildConfigGuard {
     fn drop(&mut self) {
+        if let Some(cache) = self.saved_namespaces.as_mut() {
+            crate::builtin_sources::swap_checked_sources(cache);
+        }
         CONFIG.with_borrow_mut(|cfg| std::mem::swap(cfg, &mut self.previous));
     }
 }
