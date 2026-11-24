@@ -5,11 +5,55 @@
 //! stays a made-up one: the executor reports a check that reads it as not
 //! modeled.
 
-use super::exec::{Exec, Goal, IntTy, State, Store, Val};
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::exec::{loan_roots, root_of, terminator_targets, Exec, Goal, IntTy, State, Store, Val};
 use super::ObligationKind;
+use crate::ast::BinaryOp;
 use crate::diag::Span;
-use crate::mir::{MirArg, Operand};
-use crate::runtime_ops::ListOp;
+use crate::mir::{BasicBlock, CallTarget, Instruction, MirArg, Operand, Rvalue, Terminator};
+use crate::runtime_ops::{ListOp, RuntimeOp};
+
+/// The fewest and the most times something happens on a path.
+type Count = (u64, u64);
+
+fn widen(slot: &mut Option<Count>, (low, high): Count) -> bool {
+    let merged = match *slot {
+        Some((a, b)) => (a.min(low), b.max(high)),
+        None => (low, high),
+    };
+    let changed = *slot != Some(merged);
+    *slot = Some(merged);
+    changed
+}
+
+/// Whether the MIR text `text` names the local `root` or a place in it.
+fn names(text: &str, root: &str) -> bool {
+    text.contains(&format!("\"{root}\"")) || text.contains(&format!("\"{root}."))
+}
+
+/// Whether `instruction` appends one element to the list local `root`
+/// and names it nowhere else.
+fn is_push(instruction: &Instruction, root: &str) -> bool {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::Push | ListOp::PushScalar(_)),
+                        receiver: Some(Operand::Place(receiver)),
+                        receiver_place: Some(place),
+                    },
+                args,
+                ..
+            },
+        target,
+    } = instruction
+    else {
+        return false;
+    };
+    receiver == root && place == root && !names(&format!("{target:?}{args:?}"), root)
+}
 
 impl Exec<'_> {
     /// The result of the list operation `op` on `list`, when this module
@@ -236,5 +280,386 @@ impl Exec<'_> {
         }
         let held = self.membership(item, list).ok()?;
         Some(Val::Bool(self.define("Bool", "contains", held)))
+    }
+
+    // ----- Loops the compiler can describe ----------------------------------
+
+    /// What holds each time the loop `(body, header)` reaches its header,
+    /// for the shapes read here from its MIR. `entry` is the state that
+    /// enters the loop and `havoc` the state of any later arrival, whose
+    /// values this replaces or states facts about.
+    ///
+    /// A list the loop only appends to, a fixed number of times for each
+    /// step of a counter, has a length that follows the counter. A local
+    /// that keeps the least or the greatest element of a list read so far
+    /// is a bound of those elements and one of them.
+    pub(super) fn loop_facts(
+        &mut self,
+        (body, header): (&BTreeSet<usize>, usize),
+        bounds: &BTreeMap<String, Operand>,
+        writes: &BTreeSet<String>,
+        entry: &State,
+        havoc: &mut State,
+    ) {
+        for counter in bounds.keys() {
+            let (Some(Val::Int(start, _)), Some(Val::Int(now, _))) =
+                (entry.env.get(counter), havoc.env.get(counter))
+            else {
+                continue;
+            };
+            let (start, now) = (start.clone(), now.clone());
+            let steps = |block: &BasicBlock| {
+                let step = |instruction: &&Instruction| matches!(instruction, Instruction::Assign { target, .. } if target == counter);
+                block.instructions.iter().filter(step).count() as u64
+            };
+            // Each pass through the loop steps the counter once.
+            if self.per_pass(body, header, &steps).1 != Some((1, 1)) {
+                continue;
+            }
+            for root in writes {
+                self.grown_list(body, header, root, (&start, &now), entry, havoc);
+            }
+            self.reduction(body, header, writes, (counter, &start, &now), entry, havoc);
+        }
+    }
+
+    /// Whether something other than an instruction that names the local
+    /// `root` may write it: a closure that captures it, or a view of it.
+    fn shared(&self, root: &str) -> bool {
+        self.captured.contains(root)
+            || loan_roots(&self.function.blocks)
+                .values()
+                .any(|viewed| viewed == root)
+    }
+
+    /// How many times a path from the loop's header runs what `weight`
+    /// counts in each block: on the way to each block of the loop, and on
+    /// the way back to the header. Nothing for the way back when a path
+    /// can count without end, inside a loop of its own.
+    fn per_pass(
+        &self,
+        body: &BTreeSet<usize>,
+        header: usize,
+        weight: &dyn Fn(&BasicBlock) -> u64,
+    ) -> (BTreeMap<usize, Count>, Option<Count>) {
+        let blocks = &self.function.blocks;
+        let mut reach: BTreeMap<usize, Option<Count>> = BTreeMap::from([(header, Some((0, 0)))]);
+        for _ in 0..=body.len() {
+            let mut back = None;
+            let mut changed = false;
+            for (block, count) in reach.clone() {
+                let (low, high) = count.expect("a reached block has a count");
+                let added = weight(&blocks[block]);
+                for label in terminator_targets(&blocks[block].terminator) {
+                    let target = self.labels[label];
+                    if target == header {
+                        widen(&mut back, (low + added, high + added));
+                    } else if body.contains(&target) {
+                        changed |= widen(
+                            reach.entry(target).or_default(),
+                            (low + added, high + added),
+                        );
+                    }
+                }
+            }
+            if !changed {
+                let reach = reach
+                    .into_iter()
+                    .filter_map(|(block, count)| count.map(|count| (block, count)))
+                    .collect();
+                return (reach, back);
+            }
+        }
+        (BTreeMap::new(), None)
+    }
+
+    /// States the length of the list local `root` at the loop's header,
+    /// when every write of it in the loop is an append: its length on
+    /// entry plus the appends of each pass, for the passes the counter has
+    /// counted from `start` to `now`.
+    fn grown_list(
+        &mut self,
+        body: &BTreeSet<usize>,
+        header: usize,
+        root: &str,
+        (start, now): (&str, &str),
+        entry: &State,
+        havoc: &mut State,
+    ) {
+        let blocks = &self.function.blocks;
+        let (Some(Val::List { len: before, .. }), Some(Val::List { len, data, elem })) =
+            (entry.env.get(root), havoc.env.get(root))
+        else {
+            return;
+        };
+        // The loop names the list only where it appends to it, and no
+        // closure can change it. A block that ends the function never
+        // comes back to the header.
+        let only_pushes = body.iter().all(|&block| {
+            let block = &blocks[block];
+            terminator_targets(&block.terminator).is_empty()
+                || block.instructions.iter().all(|instruction| {
+                    is_push(instruction, root) || !names(&format!("{instruction:?}"), root)
+                }) && !names(&format!("{:?}", block.terminator), root)
+        });
+        if !only_pushes || self.shared(root) {
+            return;
+        }
+        let pushes = |block: &BasicBlock| {
+            let push = |instruction: &&Instruction| is_push(instruction, root);
+            block.instructions.iter().filter(push).count() as u64
+        };
+        let Some((least, most)) = self.per_pass(body, header, &pushes).1 else {
+            return;
+        };
+        let after = |count: u64| format!("(+ {before} (* {count} (- {now} {start})))");
+        if least == most {
+            // The length is known: it is no longer a made-up one.
+            let len = self.define("Int", "len", after(least));
+            let value = Val::List {
+                len,
+                data: data.clone(),
+                elem: elem.clone(),
+            };
+            havoc.env.insert(root.to_string(), value);
+        } else {
+            let pc = havoc.pc.clone();
+            let (low, high) = (after(least), after(most));
+            self.assume(&pc, format!("(and (<= {low} {len}) (<= {len} {high}))"));
+        }
+    }
+
+    /// The loop of `min(list)` or `max(list)`: each pass reads the next
+    /// element, and keeps it in `kept` when it is the first or `kept` does
+    /// not compare to it as the built-in asks. `seen` says an element was
+    /// read. At the header, `seen` holds once the counter has moved, and
+    /// then `kept` is a bound of the elements read and one of them.
+    ///
+    /// Every block the shape names is matched whole, and the loop may name
+    /// `kept` and `seen` nowhere else, so nothing else writes them.
+    fn reduction(
+        &mut self,
+        body: &BTreeSet<usize>,
+        header: usize,
+        writes: &BTreeSet<String>,
+        (counter, start, now): (&str, &str, &str),
+        entry: &State,
+        havoc: &mut State,
+    ) {
+        let blocks = &self.function.blocks;
+        let label = |label: &str| self.labels[label];
+        // The pass reads `list[counter]` into `element` and then steps the
+        // counter, in one block.
+        let fetch = body.iter().find_map(|&block| {
+            let instructions = &blocks[block].instructions;
+            let read = instructions.iter().position(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call {
+                            callee: CallTarget::Runtime {
+                                op: RuntimeOp::List(
+                                    ListOp::IndexUnchecked | ListOp::IndexScalarUnchecked(_),
+                                ),
+                                receiver: Some(Operand::Place(_)),
+                                ..
+                            },
+                            args,
+                            ..
+                        },
+                        ..
+                    } if matches!(args.first(), Some(MirArg { value: Operand::Place(index), .. }) if index == counter)
+                )
+            })?;
+            let step = instructions.iter().position(
+                |instruction| matches!(instruction, Instruction::Assign { target, .. } if target == counter),
+            )?;
+            let Instruction::Assign {
+                target: element,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                receiver: Some(Operand::Place(list)),
+                                ..
+                            },
+                        ..
+                    },
+            } = &instructions[read]
+            else {
+                return None;
+            };
+            (read < step).then_some((block, read, element, list))
+        });
+        let Some((fetch_block, fetch_at, element, list)) = fetch else {
+            return;
+        };
+        // The test of `seen`, then the first element or the comparison,
+        // then the replacement.
+        let shape = body.iter().find_map(|&test| {
+            let Terminator::Branch {
+                condition: Operand::Place(seen),
+                then_label,
+                else_label,
+            } = &blocks[test].terminator
+            else {
+                return None;
+            };
+            let (compare, first) = (label(then_label), label(else_label));
+            let [Instruction::Assign {
+                target: flag,
+                value: Rvalue::Use(Operand::Bool(true)),
+            }] = blocks[first].instructions.as_slice()
+            else {
+                return None;
+            };
+            let Terminator::Goto(replace_label) = &blocks[first].terminator else {
+                return None;
+            };
+            let replace = label(replace_label);
+            let [Instruction::Assign {
+                target: kept,
+                value: Rvalue::Use(Operand::Place(taken)),
+            }] = blocks[replace].instructions.as_slice()
+            else {
+                return None;
+            };
+            let [Instruction::Assign {
+                target: holds,
+                value:
+                    Rvalue::Binary {
+                        op,
+                        left: Operand::Place(left),
+                        right: Operand::Place(right),
+                        ..
+                    },
+            }] = blocks[compare].instructions.as_slice()
+            else {
+                return None;
+            };
+            let Terminator::Branch {
+                condition: Operand::Place(condition),
+                then_label: keep_label,
+                else_label: other_label,
+            } = &blocks[compare].terminator
+            else {
+                return None;
+            };
+            let order = match op {
+                BinaryOp::LessEq => "<=",
+                BinaryOp::GreaterEq => ">=",
+                _ => return None,
+            };
+            let matched = flag == seen
+                && taken == element
+                && left == kept
+                && right == element
+                && condition == holds
+                && label(other_label) == replace
+                && label(keep_label) != replace
+                && ![seen, kept, holds].contains(&element)
+                && seen != kept
+                && ![seen, kept, element].contains(&holds);
+            matched.then_some((test, compare, first, replace, seen, kept, order))
+        });
+        let Some((test, compare, first, replace, seen, kept, order)) = shape else {
+            return;
+        };
+        // Only the test leads to the comparison and to the first element,
+        // and only those two to the replacement.
+        let mut preds: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+        for (index, block) in blocks.iter().enumerate() {
+            for target in terminator_targets(&block.terminator) {
+                preds.entry(label(target)).or_default().insert(index);
+            }
+        }
+        let entered = |block: usize, from: &[usize]| {
+            preds.get(&block) == Some(&from.iter().copied().collect())
+        };
+        if !entered(compare, &[test])
+            || !entered(first, &[test])
+            || !entered(replace, &[first, compare])
+        {
+            return;
+        }
+        // Every pass reads the element once, and tests `seen` once, after
+        // the read.
+        let at = |wanted: usize| {
+            move |block: &BasicBlock| u64::from(std::ptr::eq(block, &blocks[wanted]))
+        };
+        let (before_test, fetched) = self.per_pass(body, header, &at(fetch_block));
+        let tested = self.per_pass(body, header, &at(test)).1;
+        if fetched != Some((1, 1))
+            || tested != Some((1, 1))
+            || before_test.get(&test) != Some(&(1, 1))
+        {
+            return;
+        }
+        // Nothing else in the loop names the locals of the shape, and no
+        // closure can change them. The loop does not write the list.
+        let allowed = |block: usize, position: Option<usize>| {
+            [first, replace, compare].contains(&block)
+                || (block, position) == (fetch_block, Some(fetch_at))
+                || (block, position) == (test, None)
+        };
+        let named = |text: String| {
+            [seen, kept, element]
+                .iter()
+                .any(|local| names(&text, local))
+        };
+        let stray = body.iter().any(|&index| {
+            let block = &blocks[index];
+            if terminator_targets(&block.terminator).is_empty() {
+                return false;
+            }
+            let stray_instruction =
+                block
+                    .instructions
+                    .iter()
+                    .enumerate()
+                    .any(|(position, instruction)| {
+                        !allowed(index, Some(position)) && named(format!("{instruction:?}"))
+                    });
+            stray_instruction || (!allowed(index, None) && named(format!("{:?}", block.terminator)))
+        });
+        let list_root = root_of(list);
+        if stray
+            || writes.contains(list_root)
+            || [seen, kept, element].iter().any(|local| self.shared(local))
+        {
+            return;
+        }
+        let (
+            Some(Val::List {
+                data: Some(Store::Leaf(array, "Int")),
+                ..
+            }),
+            Some(Val::Int(initial, int)),
+            Some(Val::Bool(unseen)),
+        ) = (
+            entry.env.get(list),
+            entry.env.get(kept),
+            entry.env.get(seen),
+        )
+        else {
+            return;
+        };
+        if start != "0" || unseen != "false" {
+            return;
+        }
+        let (array, initial, int) = (array.clone(), initial.clone(), *int);
+        let moved = format!("(> {now} {start})");
+        let bound = self.fresh_const("Int", kept);
+        self.fact(int.contains(&bound));
+        let (k, witness) = (self.bound_name(), self.fresh_const("Int", "at"));
+        self.fact(format!("(=> (not {moved}) (= {bound} {initial}))"));
+        self.fact(format!(
+            "(=> {moved} (forall (({k} Int)) (=> (and (<= {start} {k}) (< {k} {now})) ({order} {bound} (select {array} {k})))))"
+        ));
+        self.fact(format!(
+            "(=> {moved} (and (<= {start} {witness}) (< {witness} {now}) (= {bound} (select {array} {witness}))))"
+        ));
+        havoc.env.insert(kept.clone(), Val::Int(bound, int));
+        havoc.env.insert(seen.clone(), Val::Bool(moved));
     }
 }

@@ -613,3 +613,200 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn a_comprehension_has_one_element_for_each_it_reads() {
+    assert_proved(
+        r#"
+def bumped(xs: list[int64]) -> list[int64]:
+    requires forall(x in xs, x < 100)
+    ensures len(result) == len(xs)
+    return [x + 1 for x in xs]
+
+def lengths(names: list[str]) -> list[int64]:
+    ensures len(result) == len(names)
+    return [len(name) for name in names]
+
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n < 1000
+    ensures len(result) == n
+    return [i * i for i in range(n)]
+
+def positive(xs: list[int64]) -> list[int64]:
+    ensures len(result) <= len(xs)
+    ensures len(result) >= 0
+    return [x for x in xs if x > 0]
+
+def first(xs: list[int64]) -> bool:
+    requires len(xs) > 2
+    ys = [x > 0 for x in xs]
+    return ys[2]
+
+def copied(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    mut ys: list[int64] = []
+    for x in xs:
+        ys.append(x)
+    return ys
+
+def main():
+    print(len(bumped([1, 2, 3])))
+    print(len(lengths(["a", "bc"])))
+    print(len(squares(4)))
+    print(len(positive([1, -2, 3])))
+    print(first([1, -2, 3]))
+    print(len(copied([1, -2, 3])))
+"#,
+    );
+}
+
+#[test]
+fn a_wrong_claim_about_a_comprehension_is_not_proved() {
+    assert_open(
+        r#"
+def longer(xs: list[int64]) -> list[bool]:
+    ensures len(result) == len(xs) + 1
+    return [x > 0 for x in xs]
+
+def all_kept(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    return [x for x in xs if x > 0]
+
+def past_the_end(xs: list[int64]) -> bool:
+    ys = [x > 0 for x in xs]
+    return ys[len(xs)]
+
+def unknown_length(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ys = [x for x in xs if x > 0]
+    return ys[0]
+
+def element(xs: list[int64]) -> bool:
+    requires len(xs) > 0
+    ensures result
+    ys = [x > 0 for x in xs]
+    return ys[0]
+
+def pairs(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    return [x for x in xs for y in xs]
+
+def main():
+    print(len(longer([1])))
+    print(len(all_kept([1])))
+    print(element([1]))
+    print(len(pairs([1])))
+"#,
+        &[
+            "3 ensures failed",
+            "3 overflow failed",
+            "7 ensures unsupported",
+            "12 index in range failed",
+            "17 index in range unsupported",
+            "21 ensures unsupported",
+            "26 ensures unsupported",
+        ],
+    );
+}
+
+#[test]
+fn the_least_and_greatest_of_a_list_bound_it_and_are_in_it() {
+    assert_proved(
+        r#"
+def least(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures forall(x in xs, result <= x)
+    ensures result in xs
+    return min(xs)
+
+def greatest(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures forall(x in xs, result >= x)
+    ensures exists(i in range(len(xs)), xs[i] == result)
+    return max(xs)
+
+def spread(xs: list[int64]) -> bool:
+    requires len(xs) > 0
+    ensures result
+    return min(xs) <= xs[0] and xs[0] <= max(xs)
+
+def main():
+    print(least([3, 1, 2]))
+    print(greatest([3, 1, 2]))
+    print(spread([3, 1, 2]))
+"#,
+    );
+}
+
+#[test]
+fn a_wrong_claim_about_the_least_of_a_list_still_fails() {
+    assert_open(
+        r#"
+def empty(xs: list[int64]) -> int64:
+    return min(xs)
+
+def above(xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    ensures result >= xs[1]
+    return min(xs)
+
+def first(xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    ensures result == xs[0]
+    return max(xs)
+
+def strict(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures forall(x in xs, result < x)
+    return min(xs)
+
+def of_floats(xs: list[float64]) -> float64:
+    requires len(xs) > 0
+    ensures result <= xs[0]
+    return min(xs)
+
+def main():
+    print(above([3, 1, 2]))
+    print(first([3, 1, 2]))
+    print(strict([3, 1, 2]))
+"#,
+        &[
+            "3 assert failed",
+            "7 ensures failed",
+            "12 ensures failed",
+            "17 ensures failed",
+            "22 ensures unsupported",
+            "23 assert unsupported",
+        ],
+    );
+}
+
+#[test]
+fn comprehensions_and_reductions_agree_with_their_models_at_run_time() {
+    assert_runs(
+        r#"
+def check(xs: list[int64]):
+    n = len(xs)
+    assert len([x + 1 for x in xs]) == n
+    assert len([x > 0 for x in xs]) == n
+    kept = [x for x in xs if x > 0]
+    assert 0 <= len(kept) and len(kept) <= n
+    if n > 0:
+        low = min(xs)
+        high = max(xs)
+        assert low in xs and high in xs
+        for x in xs:
+            assert low <= x and x <= high
+
+def main():
+    check([])
+    check([5])
+    check([2, 1])
+    check([3, 3, 1, 2, 3])
+    check([-4, 9, 0, -4, 7, 7, 1])
+"#,
+    );
+    assert!(
+        crate::run_source("def main():\n    xs: list[int64] = []\n    print(min(xs))\n").is_err()
+    );
+}

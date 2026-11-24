@@ -485,12 +485,12 @@ pub(super) struct Exec<'a> {
     /// Set while a call is made whose implementation is picked at run
     /// time, so nothing read from one implementation's body holds for it.
     pub(super) dynamic_call: bool,
-    labels: BTreeMap<&'a str, usize>,
+    pub(super) labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
-    captured: BTreeSet<String>,
+    pub(super) captured: BTreeSet<String>,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
     span_positions: BTreeSet<String>,
@@ -1779,6 +1779,13 @@ impl<'a> Exec<'a> {
                 self.assume(&havoc.pc.clone(), fact);
             }
         }
+        self.loop_facts(
+            (&lp.body, lp.header),
+            &lp.bounds,
+            &lp.writes,
+            &state,
+            &mut havoc,
+        );
         havoc.loans.retain(|loan, _| !lp.writes.contains(loan));
         let added: Vec<usize> = lp
             .check_fails
@@ -5212,7 +5219,7 @@ fn balanced(text: &str) -> bool {
     depth == 0
 }
 
-fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
+pub(super) fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
     match terminator {
         Terminator::Goto(label) => vec![label],
         Terminator::Branch {
@@ -5268,7 +5275,7 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
 }
 
 /// The root local each loan of `blocks` reaches, following reborrows.
-fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
+pub(super) fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
     let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
     for block in blocks {
         for instruction in &block.instructions {
