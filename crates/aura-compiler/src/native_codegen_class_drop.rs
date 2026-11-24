@@ -79,6 +79,15 @@ impl FunctionCompiler<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn class_drop_stamps_a_decorated_callable_without_leaving_temporaries() {
+        let module = crate::lower_source_to_mir(include_str!(
+            "../tests/fixtures/run-pass/class_items_together.au"
+        ))
+        .unwrap();
+        super::emit_host_object(&module).expect("an owned inline callable can enter its body");
+    }
+
+    #[test]
     fn class_drop_nested_records_preserve_each_owned_field_as_a_handle() {
         use aura_core::layout::LayoutKind;
         let module = crate::lower_source_to_mir(include_str!(
