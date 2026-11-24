@@ -4,7 +4,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const {
+  createConcurrencyLimiter,
   createVerificationState,
   parseReport,
   runVerifier,
@@ -282,3 +286,236 @@ test("verifying on save is on unless turned off", () => {
   assert.equal(verifyOnSave({ AURA_LSP_VERIFY: "0" }), false);
   assert.equal(typeof verifyOnSave(), "boolean");
 });
+
+test("verifier completes without deadlocking when subprocess writes over 128 KiB to stderr", async () => {
+  const report = JSON.stringify({ schema_version: 1, obligations: [] });
+  const script = `process.stderr.write("e".repeat(200000)); process.stdout.write(${JSON.stringify(`${report}\n`)});`;
+  const result = await runVerifier(
+    { cmd: process.execPath, args: ["-e", script, "--"] },
+    "a.au",
+    "",
+    undefined,
+    5000
+  );
+  assert.deepEqual(result, { schema_version: 1, obligations: [] });
+});
+
+test("aborting a verifier terminates its child process group cleanly on POSIX", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-verify-pg-"));
+  const pidFile = path.join(dir, "grandchild.pid");
+  try {
+    const parentScript = [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      "const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' });",
+      `fs.writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid));`,
+      "setTimeout(() => {}, 30000);"
+    ].join("\n");
+    const controller = new AbortController();
+    const pending = runVerifier(
+      { cmd: process.execPath, args: ["-e", parentScript, "--"] },
+      "a.au",
+      "",
+      undefined,
+      5000,
+      { signal: controller.signal }
+    );
+    for (let attempt = 0; attempt < 80 && !fs.existsSync(pidFile); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    const grandchildPid = Number(fs.readFileSync(pidFile, "utf8"));
+    assert.ok(Number.isInteger(grandchildPid) && grandchildPid > 0);
+    controller.abort();
+    assert.equal(await pending, null);
+    let alive = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      try {
+        process.kill(grandchildPid, 0);
+        alive = true;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } catch {
+        alive = false;
+        break;
+      }
+    }
+    if (alive) {
+      try {
+        process.kill(grandchildPid, "SIGKILL");
+      } catch {
+        // Already exited.
+      }
+    }
+    assert.equal(alive, false, "grandchild process should be terminated with the verifier group");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("verifier enforces concurrency limit, handles queued cancellation, and supports cross-platform termination", async () => {
+  const limiter = createConcurrencyLimiter(1);
+  let active = 0;
+  let maxActive = 0;
+  const finishQueue = [];
+  const spawnControlled = (cmd, args, options) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    const child = new EventEmitter();
+    child.pid = 4242;
+    child.stdout = new EventEmitter();
+    child.stdin = new EventEmitter();
+    child.stdin.end = () => {};
+    child.kill = () => {
+      active -= 1;
+      child.emit("close", null);
+    };
+    finishQueue.push({
+      child,
+      options,
+      finish(stdout) {
+        active -= 1;
+        child.stdout.emit("data", stdout);
+        child.emit("close", 0);
+      }
+    });
+    return child;
+  };
+
+  const first = runVerifier({ cmd: "aura", args: [] }, "a.au", "", spawnControlled, 5000, { limiter });
+  const queuedCancel = new AbortController();
+  const second = runVerifier({ cmd: "aura", args: [] }, "b.au", "", spawnControlled, 5000, {
+    limiter,
+    signal: queuedCancel.signal
+  });
+  const thirdSignal = new AbortController();
+  const third = runVerifier({ cmd: "aura", args: [] }, "c.au", "", spawnControlled, 5000, {
+    limiter,
+    signal: thirdSignal.signal
+  });
+  const fourth = runVerifier({ cmd: "aura", args: [] }, "d.au", "", spawnControlled, 5000, { limiter });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(maxActive, 1);
+  assert.equal(finishQueue.length, 1);
+
+  queuedCancel.abort();
+  assert.equal(await second, null);
+
+  finishQueue[0].finish(`${JSON.stringify(REPORT)}\n`);
+  assert.deepEqual(await first, REPORT);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(maxActive, 1);
+  assert.equal(finishQueue.length, 2);
+
+  // Also check string stdout chunk handling + queued entry without signal.
+  finishQueue[1].finish(`${JSON.stringify(REPORT)}\n`);
+  assert.deepEqual(await third, REPORT);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(finishQueue.length, 3);
+  finishQueue[2].finish(`${JSON.stringify(REPORT)}\n`);
+  assert.deepEqual(await fourth, REPORT);
+
+  // Exercise default limiter construction as well.
+  const defaultLimiter = createConcurrencyLimiter();
+  const release = await defaultLimiter.acquire();
+  release();
+
+  // Exercise POSIX process-group kill success, ESRCH fallback, duplicate abort, and post-abort data chunk.
+  const killedGroups = [];
+  const posixController = new AbortController();
+  let posixChild;
+  const posixSpawn = () => {
+    posixChild = new EventEmitter();
+    posixChild.pid = 777;
+    posixChild.stdout = new EventEmitter();
+    posixChild.stdin = new EventEmitter();
+    posixChild.stdin.end = () => {};
+    posixChild.kill = () => {};
+    return posixChild;
+  };
+  const posixRun = runVerifier({ cmd: "aura", args: [] }, "p.au", "", posixSpawn, 5000, {
+    signal: posixController.signal,
+    platform: "linux",
+    killProcess: (pid, sig) => {
+      killedGroups.push([pid, sig]);
+      posixChild.stdout.emit("data", Buffer.from("ignored after abort"));
+      posixChild.emit("close", null);
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  posixController.abort();
+  assert.equal(await posixRun, null);
+  assert.deepEqual(killedGroups, [[-777, "SIGTERM"]]);
+
+  // POSIX process-group kill error falls back to child.kill(), and duplicate abort is ignored.
+  let directKills = 0;
+  let fallbackChild;
+  const fallbackSpawn = () => {
+    fallbackChild = new EventEmitter();
+    fallbackChild.pid = 888;
+    fallbackChild.stdout = new EventEmitter();
+    fallbackChild.stdin = new EventEmitter();
+    fallbackChild.stdin.end = () => {};
+    fallbackChild.kill = () => {
+      directKills += 1;
+    };
+    return fallbackChild;
+  };
+  const fallbackController = new AbortController();
+  const fallbackRun = runVerifier({ cmd: "aura", args: [] }, "f.au", "", fallbackSpawn, 5, {
+    signal: fallbackController.signal,
+    maxStdoutBytes: 2,
+    platform: "linux",
+    killProcess: () => {
+      throw new Error("ESRCH");
+    }
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  fallbackChild.stdout.emit("data", Buffer.from("too-big"));
+  fallbackController.abort();
+  fallbackChild.emit("close", null);
+  assert.equal(await fallbackRun, null);
+  assert.equal(directKills, 1);
+
+  // Windows termination invokes taskkill.exe (with SystemRoot set and default fallback, plus spawn throw fallback).
+  const winTaskkills = [];
+  for (const [env, throwTaskkill] of [[{ SystemRoot: "D:\\Win" }, false], [{}, true]]) {
+    const winController = new AbortController();
+    let childKills = 0;
+    const winSpawn = (cmd, args) => {
+      if (cmd.endsWith("taskkill.exe")) {
+        winTaskkills.push([cmd, args]);
+        if (throwTaskkill) {
+          throw new Error("ENOENT");
+        }
+        return {};
+      }
+      const child = new EventEmitter();
+      child.pid = 999;
+      child.stdout = new EventEmitter();
+      child.stdin = new EventEmitter();
+      child.stdin.end = () => {};
+      child.kill = () => {
+        childKills += 1;
+        child.emit("close", null);
+      };
+      return child;
+    };
+    const winRun = runVerifier({ cmd: "aura.exe", args: [] }, "w.au", "", winSpawn, 5000, {
+      signal: winController.signal,
+      platform: "win32",
+      env
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    winController.abort();
+    assert.equal(await winRun, null);
+    assert.equal(childKills, 1);
+  }
+  assert.deepEqual(winTaskkills, [
+    ["D:\\Win\\System32\\taskkill.exe", ["/T", "/F", "/PID", "999"]],
+    ["C:\\Windows\\System32\\taskkill.exe", ["/T", "/F", "/PID", "999"]]
+  ]);
+});
+
