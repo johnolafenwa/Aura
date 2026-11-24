@@ -1,0 +1,6 @@
+error[AU4003]: list index `2` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/str_view_argument_out_of_range.au:11:29
+   |
+11 |         total += kind(words[i])
+   |                             ^
+  = note: Aura call chain (innermost first): main at 7:1

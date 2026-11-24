@@ -35,6 +35,9 @@ pub(super) struct ResultSlotPlan {
     pub(super) slots: HashMap<String, Vec<String>>,
     /// The functions that get a twin.
     pub(super) twins: HashSet<String>,
+    /// The functions that get a view twin, each with the `str` parameters
+    /// the twin takes as words (see `str_slots`).
+    pub(super) views: HashMap<String, Vec<str_slots::ViewParam>>,
 }
 
 /// One result slot: where its tag and its payloads are kept.
@@ -300,6 +303,7 @@ pub(super) fn plan(
     if module.ownership != MirOwnership::Explicit {
         return plan;
     }
+    plan.views = str_slots::plan_views(module);
     let return_types = module
         .functions
         .iter()

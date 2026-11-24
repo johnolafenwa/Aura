@@ -127,6 +127,7 @@ runtime_functions! {
     StringLiteralCell => ("aura_direct_string_literal_cell", [I64, I64, I64], Some(I64)),
     StringLen => ("aura_direct_string_len", [I64], Some(I64)),
     StringByteLen => ("aura_direct_string_byte_len", [I64], Some(I64)),
+    StringBytes => ("aura_direct_string_bytes", [I64], Some(I64)),
     StringSlice => ("aura_direct_string_slice", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     StringSliceStep => ("aura_direct_string_slice_step", [I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     StringContains => ("aura_direct_string_contains", [I64, I64], Some(I64)),

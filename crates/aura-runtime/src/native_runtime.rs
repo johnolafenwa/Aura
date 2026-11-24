@@ -8001,6 +8001,21 @@ pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 
     })
 }
 
+/// The address of the UTF-8 bytes of the `str` in `value`. They stay where
+/// they are while the box lives.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_bytes(value: *mut OpaqueValue) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => text.as_str().as_ptr(),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| unsafe {

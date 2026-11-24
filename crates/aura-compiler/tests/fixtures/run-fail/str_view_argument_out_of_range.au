@@ -1,0 +1,12 @@
+def kind(text: str) -> int64:
+    if text == "alpha":
+        return 1
+    return 2
+
+
+def main():
+    words = ["alpha", "beta"]
+    mut total = 0
+    for i in range(3):
+        total += kind(words[i])
+    print(total)

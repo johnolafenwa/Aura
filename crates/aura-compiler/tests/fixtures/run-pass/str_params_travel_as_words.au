@@ -1,0 +1,184 @@
+# A `str` parameter that is only read through its bytes is passed as words:
+# a literal, a loaned element of a `list[str]`, or a parameter passed on
+# makes no box for the call.
+import control
+
+
+class Template:
+    kinds: list[int64]
+    texts: list[str]
+
+
+def kind(text: str) -> int64:
+    if text == "alpha":
+        return 1
+    if "beta" != text:
+        if text == "":
+            return 0
+        return 3
+    return 2
+
+
+def size(text: str) -> int64:
+    return text.byte_len()
+
+
+def same(left: str, right: str) -> bool:
+    return left == right
+
+
+def passes(text: str) -> int64:
+    return kind(text) * 10 + size(text)
+
+
+def find(name: str, row: dict[str, str], context: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return context[name].clone()
+
+
+def count(name: str, totals: dict[str, int64]) -> int64:
+    match totals.get(name):
+        case Lookup.Found(total):
+            return total
+        case Lookup.Missing:
+            return -1
+
+
+def shout(text: str, loud: bool) -> str:
+    if text == "quiet":
+        return text.clone()
+    if loud:
+        return text.to_upper() + text
+    return text.to_lower()
+
+
+def keep(text: str, out: mut list[str]):
+    if text != "skip":
+        out.append(text.clone())
+        copy = text
+        out.append(copy.to_upper())
+
+
+def bump(totals: mut dict[str, int64], key: str, amount: int64):
+    if key == "ignored":
+        return
+    match mut totals.lookup(key):
+        case Lookup.Found(total):
+            total += amount
+        case Lookup.Missing:
+            totals[key.clone()] = amount
+
+
+def nested(text: str, depth: int64) -> int64:
+    if depth == 0:
+        return kind(text) + shout(text, true).len()
+    return nested(text, depth - 1) + 1
+
+
+def checked(text: str, limit: int64) -> int64:
+    upper = text.to_upper()
+    assert upper.len() < limit, f"`{text}` is too long"
+    return kind(text)
+
+
+def tagged(text: str, count: int64) -> str:
+    return f"<{text}:{count}:{text}>"
+
+
+def copies(words: list[str]) -> list[str]:
+    mut out: list[str] = []
+    for i in range(words.len()):
+        out.append(words[i].clone())
+    mut mixed: list[str | None] = [None]
+    mixed.append(words[1].clone())
+    match mixed[1]:
+        case str as text:
+            out.append(text.clone())
+        case None:
+            pass
+    return out
+
+
+def too_long(index: int64) -> int64:
+    words = ["alpha", "a longer text that no small string holds"]
+    return checked(words[index], 10)
+
+
+def render(template: Template, row: dict[str, str], context: dict[str, str]) -> str:
+    mut out: list[str] = []
+    for i in range(template.kinds.len()):
+        if template.kinds[i] == 0:
+            out.append(template.texts[i].clone())
+        else:
+            out.append(find(template.texts[i], row, context))
+    return "".join(out)
+
+
+def main():
+    words = ["alpha", "beta", "", "gamma", "quiet", "skip", "ignored", "a longer text that no small string holds"]
+    for round in range(3):
+        mut total = 0
+        for i in range(words.len()):
+            total = total * 7 + kind(words[i]) + size(words[i]) + passes(words[i])
+        print(total)
+    print(f"{kind('alpha')} {kind('beta')} {kind('')} {kind('other')}")
+    print(f"{size('')} {size('héllo')} {passes('alpha')}")
+    print(f"{same(words[0], 'alpha')} {same('beta', words[0])} {same(words[2], '')} {same(words[3], words[3])}")
+    row = {"name": "Ada", "note": "<b>"}
+    context = {"title": "Page", "user": "root"}
+    keys = ["name", "title", "note", "user"]
+    for i in range(keys.len()):
+        print(find(keys[i], row, context))
+    print(f"{find('name', row, context)} {find('user', row, context)}")
+    totals = {"alpha": 4, "beta": 9}
+    print(f"{count(words[0], totals)} {count(words[3], totals)} {count('beta', totals)}")
+    for i in range(words.len()):
+        print(shout(words[i], i % 2 == 0))
+    print(f"{shout('quiet', true)} {shout('Loud', true)} {shout('Soft', false)}")
+    mut kept: list[str] = []
+    for i in range(words.len()):
+        keep(words[i], kept)
+    keep("literal", kept)
+    print(f"{kept.len()} {kept[0]} {kept[kept.len() - 1]}")
+    mut sums: dict[str, int64] = {}
+    for round in range(4):
+        for i in range(words.len()):
+            bump(sums, words[i], round + i)
+    bump(sums, "alpha", 100)
+    bump(sums, "fresh", 1)
+    print(f"{sums['alpha']} {sums['beta']} {sums['']} {sums['fresh']} {sums.len()}")
+    print(f"{nested(words[1], 5)} {nested('alpha', 2)}")
+    template = Template(kinds=[0, 1, 0, 1, 1], texts=["<h1>", "title", "</h1>", "name", "user"])
+    for round in range(3):
+        print(render(template, row, context))
+    for round in range(3):
+        copied = copies(words)
+        print(f"{copied.len()} {copied[0]} {copied[7]} {copied[8]}")
+    view first = words[0]
+    for i in range(words.len()):
+        print(f"{words[i]}-{first}-{i}")
+    print(tagged(words[1], 2) + tagged("lit", 3))
+    for i in range(keys.len()):
+        match row.get(keys[i]):
+            case Lookup.Found(value):
+                print(value)
+            case Lookup.Missing:
+                print(keys[i].byte_len())
+    mut seen = 0
+    for round in range(3):
+        for i in range(words.len()):
+            match totals.get(words[i]):
+                case Lookup.Found(total):
+                    seen += total
+                case Lookup.Missing:
+                    seen += words[i].byte_len()
+    print(seen)
+    for index in range(2):
+        match control.recover(too_long, index):
+            case Ok(answer):
+                print(answer)
+            case Err(trap):
+                print(trap.message)

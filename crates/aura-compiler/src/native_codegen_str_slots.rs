@@ -1,0 +1,900 @@
+//! `str` values that native code keeps as words, stage 1: the `str`
+//! parameters a function only reads.
+//!
+//! The words of a `str` are `{ptr, len, owner}`. `ptr` and `len` name its
+//! UTF-8 bytes, which stay valid for as long as the words are used. `owner`
+//! is 0 while the bytes are borrowed (a literal of the program, or an
+//! element of a `list[str]` under a loan), and otherwise the box of the
+//! `str`, which every runtime operation that takes a box still takes.
+//!
+//! A function that reads a `str` parameter through its bytes (see
+//! [`ViewRead`]) gets a second body, its **view twin**, that takes the
+//! three words of each such parameter: the owner in the parameter's own
+//! word, and `ptr` and `len` after the function's other words. A call
+//! whose argument for each such parameter is a literal, a loaned element
+//! of a `list[str]`, or a parameter the calling twin holds as words,
+//! enters the twin and makes no box for the argument. Every other caller,
+//! the runtime included, enters the function's own symbol.
+//!
+//! Inside the twin a read that knows how to use the bytes uses them. Any
+//! other use loads the parameter's box as before; when the caller passed
+//! no owner, the first such load makes the box from the bytes, and the
+//! twin releases the box it made when it returns. The box is one the task's
+//! ledger knows, so a trap frees it.
+
+use std::collections::{HashMap, HashSet};
+
+use crate::mir::{
+    instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MirFunction,
+    MirModule, MirReceiverKind, Operand, Rvalue,
+};
+
+use super::*;
+
+/// How generated code reads the `str` receiver of a runtime operation from
+/// its bytes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ViewRead {
+    /// The entry point takes `(ptr, len)` and returns a new `str` box.
+    NewBox(RuntimeFn),
+    /// The result is `len`.
+    ByteLen,
+}
+
+/// The way to run `op` on a `str` receiver held as words, when there is
+/// one. A runtime entry point that reads `(ptr, len)` is one row here.
+pub(super) fn receiver_view_read(op: RuntimeOp) -> Option<ViewRead> {
+    match op {
+        RuntimeOp::Value(ValueOp::Clone) => Some(ViewRead::NewBox(RuntimeFn::StringFromView)),
+        RuntimeOp::Str(StrOp::ByteLen) => Some(ViewRead::ByteLen),
+        _ => None,
+    }
+}
+
+/// One parameter a view twin takes as words.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ViewParam {
+    /// Its position among the function's parameters.
+    pub(super) position: usize,
+    /// Whether the twin never loads its box, so a caller need not pass one
+    /// it would have to make or look up.
+    pub(super) pure: bool,
+}
+
+/// What a function does with one of its `str` parameters.
+#[derive(Default)]
+struct ParamUse {
+    /// It is read through its bytes.
+    reads: bool,
+    /// It is used in a way that takes its box.
+    boxes: bool,
+    /// The parameters of other functions it is passed to.
+    forwards: Vec<(String, usize)>,
+}
+
+fn is_str(ty: &Type) -> bool {
+    *ty == Type::named("str")
+}
+
+/// The positions of the parameters of `function` that could be views: a
+/// borrowed `str` is only read.
+fn borrowed_strs(function: &MirFunction) -> HashMap<&str, usize> {
+    if function.receiver.is_some() {
+        return HashMap::new();
+    }
+    function
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, param)| param.passing == MirReceiverKind::Borrow && is_str(&param.ty))
+        .map(|(position, param)| (param.name.as_str(), position))
+        .collect()
+}
+
+/// The use `function` makes of each of `candidates`. `positions` gives the
+/// candidate positions of a function of the program.
+fn param_uses(
+    function: &MirFunction,
+    candidates: &HashMap<&str, usize>,
+    positions: &HashMap<&str, HashMap<&str, usize>>,
+) -> HashMap<usize, ParamUse> {
+    let mut uses = candidates
+        .values()
+        .map(|position| (*position, ParamUse::default()))
+        .collect::<HashMap<_, _>>();
+    let candidate = |operand: &Operand| match operand {
+        Operand::Place(place) => candidates.get(place.as_str()).copied(),
+        _ => None,
+    };
+    let views =
+        |operand: &Operand| matches!(operand, Operand::String(_)) || candidate(operand).is_some();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let mut mentions = Vec::new();
+            instruction_place_mentions(instruction, &mut mentions);
+            let mentioned = mentions
+                .into_iter()
+                .filter_map(|place| candidates.get(place.split('.').next().unwrap_or(place)))
+                .copied()
+                .collect::<HashSet<_>>();
+            if mentioned.is_empty() {
+                continue;
+            }
+            let mut forwards = Vec::new();
+            let reads = match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Binary {
+                            op: BinaryOp::Eq | BinaryOp::NotEq,
+                            left,
+                            right,
+                            ..
+                        },
+                    ..
+                } => views(left) && views(right),
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    op,
+                                    receiver: Some(receiver),
+                                    ..
+                                },
+                            args,
+                            ..
+                        },
+                    ..
+                } => match (op, args.as_slice()) {
+                    (RuntimeOp::Dict(DictOp::Get), [key]) => {
+                        candidate(receiver).is_none() && candidate(&key.value).is_some()
+                    }
+                    (op, []) => receiver_view_read(*op).is_some(),
+                    _ => false,
+                },
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(callee),
+                            args,
+                            type_args,
+                        },
+                    ..
+                } => {
+                    let callee_positions = positions.get(callee.as_str());
+                    type_args.is_empty()
+                        && args.iter().enumerate().all(|(index, argument)| {
+                            let Some(position) = candidate(&argument.value) else {
+                                return true;
+                            };
+                            let passed = callee_positions
+                                .is_some_and(|positions| positions.values().any(|at| *at == index));
+                            if passed {
+                                forwards.push((position, (callee.clone(), index)));
+                            }
+                            passed
+                        })
+                }
+                _ => false,
+            };
+            for position in mentioned {
+                let entry = uses.entry(position).or_default();
+                if !reads {
+                    entry.boxes = true;
+                } else if forwards.iter().all(|(from, _)| *from != position) {
+                    entry.reads = true;
+                }
+            }
+            if reads {
+                for (position, target) in forwards {
+                    uses.entry(position).or_default().forwards.push(target);
+                }
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            if let Some(position) = candidates.get(place.split('.').next().unwrap_or(place)) {
+                uses.entry(*position).or_default().boxes = true;
+            }
+        }
+    }
+    uses
+}
+
+/// The loans of `function` that select a `str` to read.
+fn read_str_loans(function: &MirFunction) -> HashSet<&str> {
+    let strs = function
+        .local_types
+        .iter()
+        .filter(|local| is_str(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::BeginElementLoan {
+                loan,
+                mutable: false,
+                ..
+            } if strs.contains(loan.as_str()) => Some(loan.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The functions of `module` that get a view twin, each with the
+/// parameters the twin takes as words, in order.
+pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> {
+    let positions = module
+        .functions
+        .iter()
+        .map(|function| (function.name.as_str(), borrowed_strs(function)))
+        .filter(|(_, positions)| !positions.is_empty())
+        .collect::<HashMap<_, _>>();
+    if positions.is_empty() {
+        return HashMap::new();
+    }
+    let uses = module
+        .functions
+        .iter()
+        .filter_map(|function| {
+            let candidates = positions.get(function.name.as_str())?;
+            Some((
+                function.name.as_str(),
+                param_uses(function, candidates, &positions),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    // A parameter is worth its words when some read uses the bytes, here
+    // or in a function it is passed on to.
+    let mut useful = HashSet::<(&str, usize)>::new();
+    let mut grew = true;
+    while grew {
+        grew = false;
+        for (name, uses) in &uses {
+            for (position, param) in uses {
+                let reads = param.reads
+                    || param
+                        .forwards
+                        .iter()
+                        .any(|(callee, at)| useful.contains(&(callee.as_str(), *at)));
+                if reads {
+                    grew |= useful.insert((name, *position));
+                }
+            }
+        }
+    }
+    // It is pure when no path loads its box.
+    let mut pure = useful
+        .iter()
+        .filter(|(name, position)| !uses[name][position].boxes)
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut shrank = true;
+    while shrank {
+        let boxed = pure
+            .iter()
+            .filter(|(name, position)| {
+                uses[name][position]
+                    .forwards
+                    .iter()
+                    .any(|(callee, at)| !pure.contains(&(callee.as_str(), *at)))
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        shrank = !boxed.is_empty();
+        for param in boxed {
+            pure.remove(&param);
+        }
+    }
+    // A twin is made for a function some call can enter with words.
+    let mut entered = HashSet::<&str>::new();
+    for caller in module.functions.iter().chain(module.top_level.iter()) {
+        let loans = read_str_loans(caller);
+        let own = positions.get(caller.name.as_str());
+        for instruction in caller.blocks.iter().flat_map(|block| &block.instructions) {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(callee),
+                        args,
+                        type_args,
+                    },
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            if !type_args.is_empty() || !positions.contains_key(callee.as_str()) {
+                continue;
+            }
+            let mut params = args
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| useful.contains(&(callee.as_str(), *index)))
+                .map(|(_, argument)| &argument.value)
+                .peekable();
+            let words = params.peek().is_some()
+                && params.all(|operand| match operand {
+                    Operand::String(_) => true,
+                    Operand::Place(place) => {
+                        loans.contains(place.as_str())
+                            || own.is_some_and(|own| {
+                                own.get(place.as_str()).is_some_and(|position| {
+                                    useful.contains(&(caller.name.as_str(), *position))
+                                })
+                            })
+                    }
+                    _ => false,
+                });
+            if words {
+                entered.insert(callee.as_str());
+            }
+        }
+    }
+    let mut views = HashMap::new();
+    for name in entered {
+        let mut params = useful
+            .iter()
+            .filter(|(function, _)| *function == name)
+            .map(|param| ViewParam {
+                position: param.1,
+                pure: pure.contains(param),
+            })
+            .collect::<Vec<_>>();
+        params.sort_by_key(|param| param.position);
+        views.insert(name.to_string(), params);
+    }
+    views
+}
+
+/// The signature of a view twin: `signature`, the function's own, then
+/// `ptr` and `len` for each of its `count` view parameters.
+pub(super) fn view_twin_signature(mut signature: Signature, count: usize) -> Signature {
+    signature
+        .params
+        .extend(std::iter::repeat_n(types::I64, 2 * count));
+    signature
+}
+
+/// The bodies of a view twin as a body under construction calls them.
+#[derive(Clone, Debug)]
+pub(super) struct ViewTwin {
+    pub(super) framed: FuncRef,
+    /// The body without write-through sinks, when the function has one.
+    pub(super) sinkless: Option<FuncRef>,
+    pub(super) params: Vec<ViewParam>,
+}
+
+/// The words of a `str` parameter in a view twin besides its owner, which
+/// the parameter's own variable holds.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct StrSlot {
+    ptr: Var,
+    len: Var,
+    /// The box this body made for the owner, or 0.
+    made: Var,
+}
+
+/// Binds the `ptr` and `len` words a view twin of `function` takes, which
+/// `words` holds in the order of `params`.
+pub(super) fn bind_view_params(
+    builder: &mut dyn FunctionBackend,
+    function: &MirFunction,
+    params: &[ViewParam],
+    words: &[Val],
+    variable_index: &mut usize,
+) -> HashMap<String, StrSlot> {
+    let mut declare = |builder: &mut dyn FunctionBackend, value: Val| {
+        let variable = Var(*variable_index as u32);
+        *variable_index += 1;
+        builder.declare_var(variable, types::I64);
+        builder.def_var(variable, value);
+        variable
+    };
+    let mut slots = HashMap::new();
+    for (param, pair) in params.iter().zip(words.chunks(2)) {
+        let ptr = declare(builder, pair[0]);
+        let len = declare(builder, pair[1]);
+        let zero = builder.iconst(types::I64, 0);
+        let made = declare(builder, zero);
+        slots.insert(
+            function.params[param.position].name.clone(),
+            StrSlot { ptr, len, made },
+        );
+    }
+    slots
+}
+
+/// The other side of a comparison with a `str` held as words.
+enum ViewSide {
+    Words(Val, Val),
+    Literal(String),
+}
+
+/// How a call has a `str` argument as words.
+pub(super) enum HeldWords {
+    /// A literal of the program.
+    Literal(String),
+    /// A parameter the calling twin takes as words.
+    Slot(String),
+    /// An element of a `list[str]` a loan selects.
+    Loan(DirectViewAlternative),
+}
+
+/// The words of one argument a call passes to a view twin.
+pub(super) struct ViewArgument {
+    pub(super) owner: Val,
+    pub(super) ptr: Val,
+    pub(super) len: Val,
+    /// The owner, when the call releases it once the callee returned.
+    pub(super) released: Option<Val>,
+}
+
+impl FunctionCompiler<'_> {
+    /// Makes the box of the `str` parameter `name` of a view twin when the
+    /// caller passed none and no load has made it yet.
+    pub(super) fn materialize_str_slot(&mut self, name: &str) -> std::result::Result<(), String> {
+        let Some(slot) = self.str_slots.get(name).copied() else {
+            return Ok(());
+        };
+        let variable = self.local_vars(name)?[0];
+        let owner = self.builder.use_var(variable);
+        let make_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder.brif(owner, done_block, &[], make_block, &[]);
+        self.builder.switch_to_block(make_block);
+        self.builder.seal_block(make_block);
+        let ptr = self.builder.use_var(slot.ptr);
+        let len = self.builder.use_var(slot.len);
+        let made = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringFromView], &[ptr, len])
+            .results[0];
+        self.builder.def_var(variable, made);
+        self.builder.def_var(slot.made, made);
+        self.builder.jump(done_block, &[]);
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        Ok(())
+    }
+
+    /// Releases `owner` unless it is 0.
+    fn release_str_owner(&mut self, owner: Val) {
+        let release_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder
+            .brif(owner, release_block, &[], done_block, &[]);
+        self.builder.switch_to_block(release_block);
+        self.builder.seal_block(release_block);
+        self.release_opaque_handle(owner);
+        self.builder.jump(done_block, &[]);
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+    }
+
+    /// Releases the boxes this view twin made for its parameters, as it
+    /// returns.
+    pub(super) fn release_made_str_slots(&mut self) {
+        let mut made = self
+            .str_slots
+            .iter()
+            .map(|(name, slot)| (name.clone(), slot.made))
+            .collect::<Vec<_>>();
+        made.sort();
+        for (_, variable) in made {
+            let owner = self.builder.use_var(variable);
+            self.release_str_owner(owner);
+        }
+    }
+
+    /// The `ptr` and `len` of `operand` when it is a `str` parameter this
+    /// twin holds as words.
+    pub(super) fn str_slot_words(&mut self, operand: &Operand) -> Option<(Val, Val)> {
+        let Operand::Place(place) = operand else {
+            return None;
+        };
+        let slot = self.str_slots.get(place.as_str()).copied()?;
+        Some((
+            self.builder.use_var(slot.ptr),
+            self.builder.use_var(slot.len),
+        ))
+    }
+
+    /// Whether the `literal.len()` bytes at `ptr` are `literal`, as 0 or 1.
+    fn emit_literal_bytes_equal(
+        &mut self,
+        ptr: Val,
+        literal: &[u8],
+    ) -> std::result::Result<Val, String> {
+        let (literal_ptr, literal_len) = self.string_constant(literal)?;
+        let inst = self.builder.call(
+            self.runtime[RuntimeFn::BytesEqual],
+            &[ptr, literal_ptr, literal_len],
+        );
+        Ok(inst.results[0])
+    }
+
+    /// Whether the text at `left`, a `ptr` and a `len`, is `right`, as 0
+    /// or 1: the lengths are compared, then the bytes.
+    fn emit_view_equality(
+        &mut self,
+        left: (Val, Val),
+        right: &ViewSide,
+    ) -> std::result::Result<Val, String> {
+        let same_len = match right {
+            ViewSide::Words(_, len) => self.builder.icmp(IntCC::Equal, left.1, *len),
+            ViewSide::Literal(text) => {
+                self.builder
+                    .icmp_imm(IntCC::Equal, left.1, text.len() as i64)
+            }
+        };
+        if matches!(right, ViewSide::Literal(text) if text.is_empty()) {
+            return Ok(self.builder.uextend(types::I64, same_len));
+        }
+        let bytes_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder
+            .brif(same_len, bytes_block, &[], join_block, &[zero]);
+        self.builder.switch_to_block(bytes_block);
+        self.builder.seal_block(bytes_block);
+        let equal = match right {
+            ViewSide::Literal(text) => self.emit_literal_bytes_equal(left.0, text.as_bytes())?,
+            ViewSide::Words(ptr, len) => {
+                self.builder
+                    .call(self.runtime[RuntimeFn::BytesEqual], &[left.0, *ptr, *len])
+                    .results[0]
+            }
+        };
+        self.builder.jump(join_block, &[equal]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(self.builder.block_params(join_block)[0])
+    }
+
+    /// `left == right` or `left != right` where one side is a `str` this
+    /// twin holds as words and the other is one too, or a literal.
+    pub(super) fn compile_str_view_comparison(
+        &mut self,
+        op: BinaryOp,
+        left: &Operand,
+        right: &Operand,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        if self.str_slots.is_empty() || !matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            return Ok(None);
+        }
+        let (held, other) = if self.str_slot_words(left).is_some() {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        let Some(words) = self.str_slot_words(held) else {
+            return Ok(None);
+        };
+        let other = match (other, self.str_slot_words(other)) {
+            (Operand::String(text), _) => ViewSide::Literal(text.clone()),
+            (_, Some((ptr, len))) => ViewSide::Words(ptr, len),
+            _ => return Ok(None),
+        };
+        let mut equal = self.emit_view_equality(words, &other)?;
+        if op == BinaryOp::NotEq {
+            equal = self.builder.bxor_imm(equal, 1);
+        }
+        Ok(Some(ValueRef {
+            values: vec![equal],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        }))
+    }
+
+    /// A runtime operation on a `str` receiver this twin holds as words,
+    /// run on the bytes (see [`receiver_view_read`]).
+    pub(super) fn compile_str_view_read(
+        &mut self,
+        callee: &CallTarget,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let CallTarget::Runtime {
+            op,
+            receiver: Some(receiver),
+            ..
+        } = callee
+        else {
+            return Ok(None);
+        };
+        if !args.is_empty() {
+            return Ok(None);
+        }
+        match receiver_view_read(*op) {
+            Some(ViewRead::NewBox(function)) => {
+                // A copy of a loaned element is made where the loan is read.
+                let Some((ptr, len)) = self.str_slot_words(receiver) else {
+                    return Ok(None);
+                };
+                let results = self.runtime_call_results(self.runtime[function], &[ptr, len]);
+                Ok(Some(self.owned_opaque_result(results, Type::named("str"))))
+            }
+            Some(ViewRead::ByteLen) => {
+                let Some(words) = self.load_place_words(receiver)? else {
+                    return Ok(None);
+                };
+                self.release_view_arguments(words.released.into_iter().collect());
+                Ok(Some(ValueRef {
+                    values: vec![words.len],
+                    ty: DirectType::Scalar(ScalarKind::Int64),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// The selection the loan `place` makes when it selects one element of
+    /// a `list[str]` that generated code can read where the list keeps it.
+    fn loaned_str_element(&self, place: &str) -> Option<DirectViewAlternative> {
+        if place.contains('.')
+            || !self.view_places.contains_key(place)
+            || self.fused_entry_copies.contains_key(place)
+            || self.native_loans.contains_key(place)
+        {
+            return None;
+        }
+        let resolved = self.resolve_view_place(place).ok()?;
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return None;
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return None;
+        };
+        (alternative.conditions.is_empty()
+            && selector.projection.is_empty()
+            && matches!(selector.kind, DirectElementKind::List)
+            && is_str(&selector.element_type))
+        .then(|| alternative.clone())
+    }
+
+    /// Jumps to `join_block` with the words of element `index` of the
+    /// `list[str]` `list`, read where the list's view keeps them, or to
+    /// `slow_block` when the list has no view or the index is out of range.
+    fn emit_str_view_entry(&mut self, list: Val, index: Val, slow_block: Blk, join_block: Blk) {
+        use aura_runtime::native_runtime::{
+            DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
+            DIRECT_STR_VIEW_PTR_OFFSET,
+        };
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let fast_block = self.builder.create_block();
+        self.emit_list_access_check(list, DirectListAccess::Str, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let entries = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
+        let offset = self
+            .builder
+            .imul_imm(position, i64::from(DIRECT_STR_VIEW_ENTRY_BYTES));
+        let entry = self.builder.iadd(entries, offset);
+        let ptr = self
+            .builder
+            .load(types::I64, flags, entry, DIRECT_STR_VIEW_PTR_OFFSET);
+        let len = self
+            .builder
+            .load(types::I64, flags, entry, DIRECT_STR_VIEW_LEN_OFFSET);
+        let borrowed = self.builder.iconst(types::I64, 0);
+        self.builder.jump(join_block, &[ptr, len, borrowed]);
+    }
+
+    /// Jumps to `join_block` with the words of the `str` in the box
+    /// `owner`, which owns them.
+    fn jump_with_owned_str(&mut self, owner: Val, join_block: Blk) {
+        let ptr = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringBytes], &[owner])
+            .results[0];
+        let len = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringByteLen], &[owner])
+            .results[0];
+        self.builder.jump(join_block, &[ptr, len, owner]);
+    }
+
+    /// The words of the element the loan `selection` selects: borrowed
+    /// from the list when its view holds the element, and otherwise those
+    /// of a copy the runtime makes as a read of the loan does.
+    fn load_loaned_str_words(
+        &mut self,
+        selection: &DirectViewAlternative,
+    ) -> std::result::Result<(Val, Val, Val), String> {
+        let selector = &selection.elements[0];
+        let index = self.builder.use_var(selector.variable);
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        for _ in 0..3 {
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        let field = match self.class_place(&selection.place)? {
+            Some((root, slot, _)) if matches!(slot.kind, classes::SlotKind::Handle) => {
+                Some((root, slot))
+            }
+            _ => None,
+        };
+        if let Some((root, slot)) = field {
+            // A list in a field box of an instance kept in place.
+            let object = self.load_root(&root)?.values[0];
+            let fast_block = self.builder.create_block();
+            let field_block = self.builder.create_block();
+            self.emit_class_check(object, slot.access, slow_block, fast_block);
+            self.builder.switch_to_block(fast_block);
+            self.builder.seal_block(fast_block);
+            let block = self.class_block(object);
+            let list = self
+                .builder
+                .load(types::I64, MemFlags::trusted(), block, slot.offset);
+            self.builder.brif(list, field_block, &[], slow_block, &[]);
+            self.builder.switch_to_block(field_block);
+            self.builder.seal_block(field_block);
+            self.emit_str_view_entry(list, index, slow_block, join_block);
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            let (collection, projection) = self.load_element_path_root(&selection.place)?;
+            let copy = self.element_path_load(collection.values[0], &projection, selection)?;
+            self.jump_with_owned_str(copy, join_block);
+        } else {
+            let (collection, projection) = self.load_element_path_root(&selection.place)?;
+            if projection.is_empty() {
+                self.emit_str_view_entry(collection.values[0], index, slow_block, join_block);
+                self.builder.switch_to_block(slow_block);
+                self.builder.seal_block(slow_block);
+                let (line, column) = self.span_operands(selector.span);
+                let copy = self
+                    .builder
+                    .call(
+                        self.runtime[RuntimeFn::VecStrElement],
+                        &[collection.values[0], index, line, column],
+                    )
+                    .results[0];
+                self.jump_with_owned_str(copy, join_block);
+            } else {
+                // A list the runtime walks to.
+                self.builder.jump(slow_block, &[]);
+                self.builder.switch_to_block(slow_block);
+                self.builder.seal_block(slow_block);
+                let copy = self.element_path_load(collection.values[0], &projection, selection)?;
+                self.jump_with_owned_str(copy, join_block);
+            }
+        }
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let words = self.builder.block_params(join_block);
+        Ok((words[0], words[1], words[2]))
+    }
+
+    /// How a call has `operand` as words without making a box for it, when
+    /// it does.
+    fn words_of(&self, operand: &Operand) -> Option<HeldWords> {
+        match operand {
+            Operand::String(text) => Some(HeldWords::Literal(text.clone())),
+            Operand::Place(place) if self.str_slots.contains_key(place.as_str()) => {
+                Some(HeldWords::Slot(place.clone()))
+            }
+            Operand::Place(place) => self.loaned_str_element(place).map(HeldWords::Loan),
+            _ => None,
+        }
+    }
+
+    /// The view twin a call of `name` with `args` enters, and the words
+    /// the call has for each parameter the twin takes as words: the
+    /// function has a twin, the call asks for no other body of it, and it
+    /// has each such argument as words.
+    pub(super) fn view_twin_call(
+        &self,
+        name: &str,
+        args: &[MirArg],
+        generic: bool,
+    ) -> Option<(ViewTwin, HashMap<usize, HeldWords>)> {
+        let twin = self.view_twin_refs.get(name)?;
+        if generic || self.result_twin_request.as_deref() == Some(name) {
+            return None;
+        }
+        let mut held = HashMap::new();
+        for param in &twin.params {
+            let argument = args.get(param.position)?;
+            if argument.writeback_place.is_some() {
+                return None;
+            }
+            held.insert(param.position, self.words_of(&argument.value)?);
+        }
+        Some((twin.clone(), held))
+    }
+
+    /// Loads the words `held` names. `boxed` says whether the reader may
+    /// load the box, so that it needs an owner.
+    pub(super) fn load_held_words(
+        &mut self,
+        held: &HeldWords,
+        boxed: bool,
+    ) -> std::result::Result<ViewArgument, String> {
+        Ok(match held {
+            HeldWords::Literal(text) => {
+                let (ptr, len) = self.string_constant(text.as_bytes())?;
+                // A body that may load the box gets the literal's own.
+                let owner = if boxed {
+                    self.load_borrowed_string_literal(text)?.values[0]
+                } else {
+                    self.builder.iconst(types::I64, 0)
+                };
+                ViewArgument {
+                    owner,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+            HeldWords::Slot(place) => {
+                let slot = self.str_slots[place.as_str()];
+                let variable = self.local_vars(place)?[0];
+                ViewArgument {
+                    owner: self.builder.use_var(variable),
+                    ptr: self.builder.use_var(slot.ptr),
+                    len: self.builder.use_var(slot.len),
+                    released: None,
+                }
+            }
+            HeldWords::Loan(selection) => {
+                let (ptr, len, owner) = self.load_loaned_str_words(selection)?;
+                ViewArgument {
+                    owner,
+                    ptr,
+                    len,
+                    released: Some(owner),
+                }
+            }
+        })
+    }
+
+    /// Whether `operand` is a `str` place this body has as words.
+    pub(super) fn holds_place_words(&self, operand: &Operand) -> bool {
+        matches!(
+            self.words_of(operand),
+            Some(HeldWords::Slot(_) | HeldWords::Loan(_))
+        )
+    }
+
+    /// The words of `operand` when it is a `str` place this body has as
+    /// words: a parameter held as words, or a loaned element.
+    pub(super) fn load_place_words(
+        &mut self,
+        operand: &Operand,
+    ) -> std::result::Result<Option<ViewArgument>, String> {
+        match self.words_of(operand) {
+            Some(held) if !matches!(held, HeldWords::Literal(_)) => {
+                self.load_held_words(&held, false).map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Releases the copies a call of a view twin made for its arguments.
+    pub(super) fn release_view_arguments(&mut self, owners: Vec<Val>) {
+        for owner in owners {
+            self.release_str_owner(owner);
+        }
+    }
+}
+
+impl ViewTwin {
+    /// The body a call enters: the one without sinks when the call hands
+    /// no sink over and the function has it.
+    pub(super) fn callee(&self, sinks: bool) -> FuncRef {
+        match self.sinkless {
+            Some(sinkless) if !sinks => sinkless,
+            _ => self.framed,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "native_codegen_str_slots_tests.rs"]
+mod tests;

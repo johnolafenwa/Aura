@@ -753,6 +753,9 @@ struct NativeCodegen<'a> {
     /// (see `result_slots`).
     result_twins: HashMap<String, FuncHandle>,
     result_slot_plan: result_slots::ResultSlotPlan,
+    /// The view twin of each function that has one, and its body without
+    /// sinks when the function has such a body (see `str_slots`).
+    view_twins: HashMap<String, (FuncHandle, Option<FuncHandle>)>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -1027,6 +1030,7 @@ impl<'a> NativeCodegen<'a> {
         let mut sinkless_functions = HashMap::new();
         let mut recovery_functions = HashMap::new();
         let mut result_twins = HashMap::new();
+        let mut view_twins = HashMap::new();
         let explicit_locals = crate::mir::ownership::explicit_locals(module);
         let result_slot_plan = match freestanding {
             Some(_) => result_slots::ResultSlotPlan::default(),
@@ -1133,6 +1137,28 @@ impl<'a> NativeCodegen<'a> {
                     .declare_function(&symbol, Linkage::Local, &signature)
                     .map_err(|error| format!("failed to declare result function: {error}"))?;
                 result_twins.insert(function.name.clone(), id);
+            }
+            if let Some(params) = result_slot_plan.views.get(&function.name) {
+                let signature = str_slots::view_twin_signature(signature.clone(), params.len());
+                let mut declare = |symbol: String| {
+                    object
+                        .declare_function(&symbol, Linkage::Local, &signature)
+                        .map_err(|error| format!("failed to declare view function: {error}"))
+                };
+                let mangled = mangle_symbol(&function.name);
+                let framed = declare(format!("aura_view_{mangled}"))?;
+                let sinkless = match sinkless_functions.contains_key(&function.name) {
+                    true => Some(declare(format!("aura_view_nosinks_{mangled}"))?),
+                    false => None,
+                };
+                if small_leaf(function)
+                    && (sinkless.is_some()
+                        || frameless_leaf(function, &classes)
+                        || frameless_caller(function, &classes, &total_leaves))
+                {
+                    object.mark_inline(sinkless.unwrap_or(framed));
+                }
+                view_twins.insert(function.name.clone(), (framed, sinkless));
             }
             let thunk_signature = thunk_signature();
             if freestanding.is_none() {
@@ -1268,6 +1294,7 @@ impl<'a> NativeCodegen<'a> {
             recovery_functions,
             result_twins,
             result_slot_plan,
+            view_twins,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1454,6 +1481,21 @@ impl<'a> NativeCodegen<'a> {
                 &format!("the result body of `{}`", function.name),
                 |codegen, builder| codegen.emit_function(builder, function, id, false, None),
             )?;
+        }
+        if let Some((framed, sinkless)) = self.view_twins.get(&function.name).copied() {
+            let count = self.result_slot_plan.views[&function.name].len();
+            let signature = str_slots::view_twin_signature(signature.clone(), count);
+            for (id, without_sinks) in [(Some(framed), false), (sinkless, true)] {
+                let Some(id) = id else { continue };
+                self.define_body(
+                    id,
+                    &signature,
+                    &format!("the view body of `{}`", function.name),
+                    |codegen, builder| {
+                        codegen.emit_function(builder, function, id, without_sinks, None)
+                    },
+                )?;
+            }
         }
         let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {
             return Ok(());
@@ -1755,6 +1797,20 @@ impl<'a> NativeCodegen<'a> {
             );
             entry_index = end;
         }
+        let view_body = self
+            .view_twins
+            .get(&function.name)
+            .is_some_and(|(framed, sinkless)| *framed == func_id || *sinkless == Some(func_id));
+        let str_slots = match self.result_slot_plan.views.get(&function.name) {
+            Some(params) if view_body => str_slots::bind_view_params(
+                builder,
+                function,
+                params,
+                &entry_values[entry_index..],
+                &mut variable_index,
+            ),
+            _ => HashMap::new(),
+        };
 
         for local in &function.local_types {
             if variables.contains_key(&local.name) {
@@ -2004,6 +2060,17 @@ impl<'a> NativeCodegen<'a> {
         twins.sort_by(|left, right| left.0.cmp(right.0));
         for (name, func_id) in twins {
             result_twin_refs.insert(name.clone(), builder.import_function(*func_id));
+        }
+        let mut view_twin_refs = HashMap::new();
+        let mut twins = self.view_twins.iter().collect::<Vec<_>>();
+        twins.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, (framed, sinkless)) in twins {
+            let twin = str_slots::ViewTwin {
+                framed: builder.import_function(*framed),
+                sinkless: sinkless.map(|sinkless| builder.import_function(sinkless)),
+                params: self.result_slot_plan.views[name].clone(),
+            };
+            view_twin_refs.insert(name.clone(), twin);
         }
         let result_twin_body = (self.result_twins.get(&function.name) == Some(&func_id))
             .then(|| result_slots::slot_parts(&function.return_type, &self.classes))
@@ -2584,6 +2651,8 @@ impl<'a> NativeCodegen<'a> {
             result_twin_request: None,
             result_twin_called: false,
             result_twin_words: None,
+            view_twin_refs,
+            str_slots,
             checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
@@ -4012,6 +4081,11 @@ struct FunctionCompiler<'a> {
     result_twin_called: bool,
     /// The words the last call of a twin returned.
     result_twin_words: Option<Vec<Val>>,
+    /// The view twin of each function that has one (see `str_slots`).
+    view_twin_refs: HashMap<String, str_slots::ViewTwin>,
+    /// The `str` parameters this body takes as words, when it is a view
+    /// twin.
+    str_slots: HashMap<String, str_slots::StrSlot>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -6679,6 +6753,7 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
+        self.release_made_str_slots();
         if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
         }
@@ -7067,6 +7142,9 @@ impl<'a> FunctionCompiler<'a> {
                             .flatten()
                     });
                 if is_comparison_op(*op) {
+                    if let Some(result) = self.compile_str_view_comparison(*op, left, right)? {
+                        return Ok(result);
+                    }
                     if let Some(result) =
                         self.compile_borrowed_element_comparison(*op, left, right, *span)?
                     {
@@ -7096,7 +7174,10 @@ impl<'a> FunctionCompiler<'a> {
                 callee,
                 args,
                 type_args,
-            } => self.compile_call(callee, args, type_args, target),
+            } => match self.compile_str_view_read(callee, args)? {
+                Some(read) => Ok(read),
+                None => self.compile_call(callee, args, type_args, target),
+            },
             Rvalue::VecLiteral {
                 elements,
                 element_type,
@@ -10166,7 +10247,23 @@ impl<'a> FunctionCompiler<'a> {
         // The shared validator binds one argument to each parameter.
         debug_assert_eq!(args.len(), expected.len(), "arguments of `{name}`");
         let reads_arguments_only = reads_arguments_only(args, &kept, &expected);
+        let view_twin = self.view_twin_call(name, args, !type_args.is_empty());
+        let mut view_words = Vec::new();
+        let mut view_copies = Vec::new();
         for (index, (argument, abi_expected)) in args.iter().zip(&expected).enumerate() {
+            if let Some((twin, held)) = &view_twin {
+                if let Some(held) = held.get(&index) {
+                    let boxed = twin
+                        .params
+                        .iter()
+                        .any(|param| param.position == index && !param.pure);
+                    let words = self.load_held_words(held, boxed)?;
+                    lowered_args.push(words.owner);
+                    view_words.extend([words.ptr, words.len]);
+                    view_copies.extend(words.released);
+                    continue;
+                }
+            }
             let specialized = substitute_type(&direct_type_to_type(abi_expected), &substitutions);
             let semantic_expected = ensure_direct_type(
                 &specialized,
@@ -10228,10 +10325,17 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
+        lowered_args.extend(view_words);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
-        let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
-        let func_ref = self.result_twin_callee(name, func_ref);
+        let func_ref = match &view_twin {
+            Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
+            None => {
+                let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
+                self.result_twin_callee(name, func_ref)
+            }
+        };
         let inst = self.builder.call(func_ref, &lowered_args);
+        self.release_view_arguments(view_copies);
         let results = self.take_result_twin_words(name, inst.results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, writebacks) = self.split_call_results(name, results)?;
@@ -12820,6 +12924,7 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
+        self.materialize_str_slot(name)?;
         let vars = self.local_vars(name)?;
         let ty = self.local_type(name)?;
         let values = vars
@@ -18021,6 +18126,28 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &[map, key_ptr, key_len]);
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
             }
+            DictOp::Get if self.holds_place_words(&args[0].value) => {
+                // A key held as words is looked up as a literal key is.
+                let key = self
+                    .load_place_words(&args[0].value)?
+                    .expect("the key is held as words");
+                let words = [map, key.ptr, key.len];
+                let found = match self.dict_lookup_words(RuntimeFn::MapGetStrWord, &words) {
+                    Some(found) => found,
+                    None => {
+                        let function = self.lookup_function(
+                            self.runtime[RuntimeFn::MapGetStr],
+                            RuntimeFn::MapGetStrPayload,
+                            RuntimeFn::MapGetStrLent,
+                            in_place,
+                        );
+                        let results = self.runtime_call_results(function, &words);
+                        self.owned_opaque_result(results, optional_type(value_ty))
+                    }
+                };
+                self.release_view_arguments(key.released.into_iter().collect());
+                Ok(found)
+            }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
                 if op == DictOp::Get {
@@ -22679,6 +22806,8 @@ fn collect_task_start_targets(
 mod reachability;
 #[path = "native_codegen_result_slots.rs"]
 mod result_slots;
+#[path = "native_codegen_str_slots.rs"]
+mod str_slots;
 
 #[path = "native_codegen_callables.rs"]
 mod callables;
