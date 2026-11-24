@@ -11702,3 +11702,14 @@ fn editor_sees_package_cfg_when_parsing_unsaved_source() {
         .iter()
         .any(|item| item.name == "fixed"));
 }
+
+#[test]
+fn editor_preserves_active_outline_and_dimmed_ranges_after_a_type_error() {
+    let source = "import build\nif build.hosted:\n    def visible(code: MissingType):\n        pass\nelse:\n    def hidden():\n        absent()\n";
+    let analysis = analyze_source(source);
+    assert!(!analysis.diagnostics.is_empty());
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    assert!(analysis.symbols.iter().any(|symbol| symbol.name == "visible"));
+    assert!(!analysis.symbols.iter().any(|symbol| symbol.name == "hidden"));
+}
