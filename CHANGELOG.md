@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
+  `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
+  the random tensors on the GPU. They ran on the CPU before. Tensors
+  evaluated together, such as the weights of an optimizer step, run as
+  one MPSGraph, so a training step computes its forward and backward
+  pass once. `AURA_TENSOR_TRACE=1` prints one line for each Metal run.
+
 - A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
 
 - Language: a closure is stored without ceremony. A lambda, a function, a

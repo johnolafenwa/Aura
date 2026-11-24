@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 extern "C" {
     fn aura_metal_available() -> i32;
+    fn aura_metal_indexed() -> i32;
     fn aura_metal_buffer_new(bytes: usize) -> *mut c_void;
     fn aura_metal_buffer_contents(buffer: *mut c_void) -> *mut u8;
     fn aura_metal_buffer_release(buffer: *mut c_void);
@@ -43,8 +44,9 @@ extern "C" {
         feeds: i32,
         placeholders: *const i32,
         buffers: *const *mut c_void,
-        target: i32,
-        output: *mut c_void,
+        count: i32,
+        targets: *const i32,
+        outputs: *const *mut c_void,
     ) -> i32;
 }
 
@@ -53,6 +55,71 @@ pub(crate) fn is_available() -> bool {
     static AVAILABLE: OnceLock<bool> = OnceLock::new();
     // SAFETY: the shim call takes no arguments and may run on any thread.
     *AVAILABLE.get_or_init(|| unsafe { aura_metal_available() } == 1)
+}
+
+/// Whether the device runs the operations that move elements by index:
+/// slices, broadcasts to a shape, joins, index selects and adds, and the
+/// place of a maximum. They need macOS 12.
+pub(crate) fn moves_by_index() -> bool {
+    static INDEXED: OnceLock<bool> = OnceLock::new();
+    // SAFETY: the shim call takes no arguments and may run on any thread.
+    *INDEXED.get_or_init(|| unsafe { aura_metal_indexed() } == 1)
+}
+
+/// Whether the device makes random tensors. The random bits are 64-bit
+/// integer arithmetic, which the library must do exactly, so the first
+/// call makes a few floats on the device and compares them with the
+/// floats of the CPU kernel. A device that differs, or cannot build the
+/// graph, leaves random tensors to the CPU kernel.
+pub(crate) fn makes_random() -> bool {
+    static RANDOM: OnceLock<bool> = OnceLock::new();
+    *RANDOM.get_or_init(|| {
+        const COUNT: usize = 96;
+        let plan = Plan {
+            slots: vec![
+                Slot::Leaf {
+                    dtype: ArrayDType::Int64 as i64,
+                    shape: vec![1],
+                },
+                Slot::Step {
+                    operation: super::Operation::Random {
+                        fill: 0,
+                        dtype: ArrayDType::Float32 as i64,
+                        shape: vec![COUNT],
+                    },
+                    inputs: vec![0],
+                    dtype: ArrayDType::Float32 as i64,
+                    shape: vec![COUNT],
+                },
+            ],
+            outputs: vec![1],
+        };
+        moves_by_index()
+            && [7_i64, -3, i64::MIN + 12_345].into_iter().all(|seed| {
+                let made = || -> Result<bool> {
+                    let leaf =
+                        ArrayValue::new(Box::new([1]), ArrayStorage::Int64(vec![seed].into()))?;
+                    let storage = run(&plan, &[Storage::Host(leaf)])?
+                        .pop()
+                        .expect("a plan gives its result");
+                    let found = storage.to_host(ArrayDType::Float32 as i64, &[COUNT])?;
+                    let expected = super::tensor_kernels::filled(
+                        super::tensor_kernels::Fill::Uniform,
+                        Box::new([COUNT]),
+                        seed as u64,
+                        ArrayDType::Float32,
+                    )?;
+                    let same = match (&*found.elements()?, &*expected.elements()?) {
+                        (ArrayStorage::Float32(found), ArrayStorage::Float32(expected)) => {
+                            found[..] == expected[..]
+                        }
+                        _ => false,
+                    };
+                    Ok(same)
+                };
+                made().unwrap_or(false)
+            })
+    })
 }
 
 fn metal_error(message: &str) -> Diagnostic {
@@ -217,11 +284,12 @@ impl Buffer {
     }
 }
 
-/// A compiled plan: an MPSGraph and the index of each slot's tensor in it.
+/// A compiled plan: an MPSGraph, the index in it of each leaf's tensor,
+/// and the index of each output's.
 struct Graph {
     handle: *mut c_void,
     placeholders: Vec<i32>,
-    target: i32,
+    targets: Vec<i32>,
 }
 
 // SAFETY: a graph is used only under the cache's lock.
@@ -253,7 +321,10 @@ impl Graph {
         let mut graph = Self {
             handle,
             placeholders: Vec::new(),
-            target: -1,
+            targets: Vec::new(),
+        };
+        let shape_of = |slot: usize| match &plan.slots[slot] {
+            Slot::Leaf { shape, .. } | Slot::Step { shape, .. } => shape,
         };
         let mut tensors: Vec<i32> = Vec::with_capacity(plan.slots.len());
         for slot in &plan.slots {
@@ -315,16 +386,32 @@ impl Graph {
                             (7, 0, axes)
                         }
                         Operation::Cast(_) => (8, 0, Vec::new()),
-                        Operation::Slice { .. }
-                        | Operation::Unslice { .. }
-                        | Operation::Expand(_)
-                        | Operation::Concat { .. }
-                        | Operation::Take { .. }
-                        | Operation::IndexAdd { .. }
-                        | Operation::ArgReduce { .. }
-                        | Operation::Random { .. } => {
-                            unreachable!("the Metal device runs these in host memory")
+                        Operation::Slice { axis, step, length } => {
+                            (9, 0, vec![*axis as i64, *step as i64, *length as i64])
                         }
+                        Operation::Unslice { axis, step, .. } => (
+                            10,
+                            0,
+                            vec![
+                                *axis as i64,
+                                *step as i64,
+                                shape_of(inputs[0])[*axis] as i64,
+                            ],
+                        ),
+                        Operation::Expand(_) => (11, 0, Vec::new()),
+                        Operation::Concat { axis } => (12, 0, vec![*axis as i64]),
+                        Operation::Take { axis } => {
+                            (13, 0, vec![*axis as i64, shape_of(inputs[0])[*axis] as i64])
+                        }
+                        Operation::IndexAdd { axis, size } => {
+                            (14, 0, vec![*axis as i64, *size as i64])
+                        }
+                        Operation::ArgReduce { largest, axis } => (
+                            15,
+                            i64::from(*largest),
+                            vec![*axis as i64, shape_of(inputs[0])[*axis] as i64],
+                        ),
+                        Operation::Random { fill, .. } => (16, *fill, Vec::new()),
                     };
                     let mut operands = [-1_i32; 3];
                     for (operand, &input) in operands.iter_mut().zip(inputs) {
@@ -353,7 +440,7 @@ impl Graph {
             }
             tensors.push(tensor);
         }
-        graph.target = *tensors.last().expect("a plan has a last slot");
+        graph.targets = plan.outputs.iter().map(|&output| tensors[output]).collect();
         Ok(graph)
     }
 }
@@ -362,13 +449,14 @@ impl Graph {
 /// shapes, so this only bounds one that makes a new shape forever.
 const MAX_COMPILED_PLANS: usize = 256;
 
-/// Runs `plan` over `leaves` and gives the buffer holding its result.
-pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
+/// Runs `plan` over `leaves` and gives the buffer holding each of its
+/// outputs, in order.
+pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     static COMPILED: OnceLock<Mutex<HashMap<Plan, Graph>>> = OnceLock::new();
-    let (dtype, shape) = match plan.slots.last().expect("a plan has a last slot") {
-        Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
-    };
-    let dtype = ArrayDType::from_code(dtype).expect("a plan holds known dtypes");
+    let trace = super::trace_level() > 0;
+    if trace {
+        eprintln!("aura tensor: program={:.2}ms", super::trace_gap());
+    }
     // A leaf in host memory is copied to a buffer for this run.
     let mut uploaded: Vec<Arc<Buffer>> = Vec::new();
     let mut buffers: Vec<*mut c_void> = Vec::with_capacity(leaves.len());
@@ -382,33 +470,62 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
             }
         }
     }
-    let output = Buffer::new(shape.iter().product::<usize>() * element_bytes(dtype))?;
+    let mut outputs: Vec<Buffer> = Vec::with_capacity(plan.outputs.len());
+    for &output in &plan.outputs {
+        let (dtype, shape) = match &plan.slots[output] {
+            Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
+        };
+        let dtype = ArrayDType::from_code(dtype).expect("a plan holds known dtypes");
+        outputs.push(Buffer::new(
+            shape.iter().product::<usize>() * element_bytes(dtype),
+        )?);
+    }
+    let handles: Vec<*mut c_void> = outputs.iter().map(|output| output.handle).collect();
     let mut compiled = COMPILED
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !compiled.contains_key(plan) {
+    let known = compiled.contains_key(plan);
+    if !known {
         if compiled.len() >= MAX_COMPILED_PLANS {
             compiled.clear();
         }
         compiled.insert(plan.clone(), Graph::compile(plan)?);
     }
     let graph = &compiled[plan];
-    // SAFETY: `placeholders` and `buffers` hold one entry per leaf, and
-    // every buffer is alive and holds its placeholder's shape.
+    let built = if trace { super::trace_gap() } else { 0.0 };
+    // SAFETY: `placeholders` and `buffers` hold one entry per leaf,
+    // `targets` and `handles` one per output, and every buffer is alive
+    // and holds its tensor's shape.
     let status = unsafe {
         aura_metal_graph_run(
             graph.handle,
             buffers.len() as i32,
             graph.placeholders.as_ptr(),
             buffers.as_ptr(),
-            graph.target,
-            output.handle,
+            handles.len() as i32,
+            graph.targets.as_ptr(),
+            handles.as_ptr(),
         )
     };
+    drop(compiled);
     drop(uploaded);
     if status != 0 {
         return Err(metal_error("could not run a graph"));
     }
-    Ok(Storage::Metal(Arc::new(output)))
+    if trace {
+        // The first run of a graph includes the library's own compile.
+        eprintln!(
+            "aura tensor: metal steps={} leaves={} outputs={} new={} build={built:.2}ms run={:.2}ms",
+            plan.slots.len() - leaves.len(),
+            leaves.len(),
+            outputs.len(),
+            !known,
+            super::trace_gap()
+        );
+    }
+    Ok(outputs
+        .into_iter()
+        .map(|output| Storage::Metal(Arc::new(output)))
+        .collect())
 }

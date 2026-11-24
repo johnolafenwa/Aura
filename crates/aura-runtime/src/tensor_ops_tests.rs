@@ -222,6 +222,145 @@ fn the_generated_kernels_of_indexed_operations_agree_with_the_cpu_kernels() {
 }
 
 #[test]
+fn a_gpu_device_runs_the_indexed_operations_itself() {
+    for device in gpus() {
+        let mut ran = 0;
+        for (name, expression) in INDEXED {
+            let gpu = expression(&leaves(device)).unwrap();
+            let random = ["uniform", "normal", "random"]
+                .iter()
+                .any(|word| name.contains(word));
+            if node(&gpu).is_ready() && random && device == TensorDevice::Metal {
+                // A system whose library lacks exact 64-bit arithmetic
+                // leaves random tensors to the CPU kernel.
+                eprintln!("NOTE: {name} ran in host memory on the metal device");
+                continue;
+            }
+            assert!(
+                !node(&gpu).is_ready(),
+                "{name}: waits on the {} device",
+                device.name()
+            );
+            host_tensor_eval(vec![gpu.clone()], None).unwrap();
+            assert!(
+                !matches!(node(&gpu).storage().unwrap(), Storage::Host(_)),
+                "{name}: the result is in a device buffer"
+            );
+            ran += 1;
+        }
+        println!(
+            "RAN: {ran} indexed expressions in the memory of the {} device",
+            device.name()
+        );
+    }
+}
+
+#[test]
+fn a_gpu_device_keeps_the_rules_of_the_indexed_operations() {
+    for device in gpus() {
+        // A NaN wins, and the first of equal elements wins.
+        let odd = tensor(
+            float32(&[1.0, f32::NAN, 9.0, 4.0, 4.0, 2.0], &[2, 3]),
+            device,
+        );
+        assert_eq!(places(&array(&node_op(&odd, 2, &[1]).unwrap())), [1, 0]);
+        assert_eq!(places(&array(&node_op(&odd, 3, &[1]).unwrap())), [1, 2]);
+        let lanes = tensor(
+            float32(&[f32::NAN, 2.0, f32::NAN, 2.0, -1.0, -1.0], &[3, 2]),
+            device,
+        );
+        assert_eq!(places(&array(&node_op(&lanes, 2, &[0]).unwrap())), [0, 0]);
+        assert_eq!(places(&array(&node_op(&lanes, 3, &[0]).unwrap())), [0, 2]);
+        // An index outside the axis reads as zero on a GPU, which cannot
+        // stop the program.
+        let l = leaves(device);
+        let outside = pair_op(&l.row, &indices(&[5, -1, 1], &[3], &l.a), 1, &[0]).unwrap();
+        assert_eq!(array(&outside), float32(&[0.0, 0.0, 20.0], &[3]));
+        // A slice of integers and of a mask.
+        let host = leaves(TensorDevice::Cpu);
+        close(
+            "slice of integers",
+            &array(&slice(&l.counts, 0, 1, 4, 2).unwrap()),
+            &array(&slice(&host.counts, 0, 1, 4, 2).unwrap()),
+        );
+        let mask = |l: &Leaves| compare(&l.a, &l.b, 2);
+        close(
+            "expand of a mask",
+            &array(&node_op(&slice(&mask(&l).unwrap(), 0, 1, 2, 1).unwrap(), 1, &[4, 3]).unwrap()),
+            &array(
+                &node_op(
+                    &slice(&mask(&host).unwrap(), 0, 1, 2, 1).unwrap(),
+                    1,
+                    &[4, 3],
+                )
+                .unwrap(),
+            ),
+        );
+        close(
+            "concat of masks",
+            &array(&pair_op(&mask(&l).unwrap(), &mask(&l).unwrap(), 0, &[1]).unwrap()),
+            &array(&pair_op(&mask(&host).unwrap(), &mask(&host).unwrap(), 0, &[1]).unwrap()),
+        );
+        println!(
+            "RAN: the rules of the indexed operations on the {} device",
+            device.name()
+        );
+    }
+}
+
+#[test]
+fn a_gpu_device_agrees_on_large_random_tensors() {
+    for device in gpus() {
+        let like = |device| tensor(float32(&[0.0], &[1]), device);
+        for (name, fill, seed, shape) in [
+            ("uniform", 0, 20_261_124, [1000_i64, 37]),
+            ("uniform of a negative seed", 0, -9, [3, 4099]),
+            ("normal", 1, 5, [257, 129]),
+        ] {
+            let host = random(
+                fill,
+                seed,
+                ArrayDType::Float32,
+                &shape,
+                &like(TensorDevice::Cpu),
+            );
+            let gpu = random(fill, seed, ArrayDType::Float32, &shape, &like(device));
+            close(name, &array(&gpu.unwrap()), &array(&host.unwrap()));
+        }
+        println!("RAN: large random tensors on the {} device", device.name());
+    }
+}
+
+#[test]
+fn a_gpu_device_runs_several_results_as_one_plan() {
+    for device in gpus() {
+        let results = |device| {
+            let l = leaves(device);
+            let total = binary(&l.a, &l.b, 0).unwrap();
+            let scaled = binary(&total, &l.a, 2).unwrap();
+            let summed = reduce(&total, 0, Some(1)).unwrap();
+            let picked = slice(&scaled, 1, 1, 3, 1).unwrap();
+            [total, scaled, summed, picked]
+        };
+        let expected = results(TensorDevice::Cpu);
+        let found = results(device);
+        for result in &found[..3] {
+            node_op(result, 8, &[]).unwrap();
+        }
+        node_op(&found[3], 9, &[]).unwrap();
+        for (found, expected) in found.iter().zip(&expected) {
+            assert!(node(found).is_ready(), "every result ran");
+            assert!(!matches!(node(found).storage().unwrap(), Storage::Host(_)));
+            close("several results", &array(found), &array(expected));
+        }
+        println!(
+            "RAN: several results as one plan on the {} device",
+            device.name()
+        );
+    }
+}
+
+#[test]
 fn a_gpu_device_agrees_on_the_indexed_operations() {
     for device in gpus() {
         for (name, expression) in INDEXED {

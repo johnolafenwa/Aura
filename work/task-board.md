@@ -313,6 +313,23 @@ See `2026-11-17-ordered-collections.md`.
   section 18.2 walks through it.
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
+## Metal device catch-up (in progress)
+
+- Target: the Metal device runs on the GPU every tensor operation the
+  CUDA device runs there, and the workload programs are timed on an
+  Apple M2 Pro. Scope: `tensor_metal.rs`, `metal_shim.m`, and the Metal
+  routing in `tensor_host.rs`. The CUDA device and a kernel language are
+  out of scope.
+- Done: MPSGraph steps for `tanh`, `sigmoid`, `erf`, slices and their
+  reverse, `expand`, `cat`, `index_select`, `index_add`, `argmax`,
+  `argmin`, and random tensors; plans with several outputs; variables
+  that wait for the next run.
+- Verification: the runtime tensor tests pass on Linux, where the Metal
+  code is type-checked only. The shim is checked against the macOS 14.5
+  MPSGraph headers. The GPU tests and timings wait for a run on the Mac.
+- Remaining: build and run the GPU tests on the Mac, time
+  `benchmarks/tensor` there, and record the numbers.
+
 ## GPU tensors (in progress)
 
 - Target: tensors on a GPU for real machine learning work, training and

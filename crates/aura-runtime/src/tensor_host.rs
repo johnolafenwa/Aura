@@ -371,14 +371,14 @@ impl TensorValue {
     }
 
     /// A watched tensor of this tensor's elements, for a variable to
-    /// hold. Work this tensor waits on, off the Metal device, stays
-    /// waiting and joins the next work that runs on its device, so
+    /// hold. Work this tensor waits on stays waiting and joins the next
+    /// work that runs on its device, so
     /// assigning a variable in the middle of a training step does not cut
     /// the step in two.
     fn watched_later(&self, name: &str) -> Result<Self> {
         let depth = self.depth();
         let floats = matches!(self.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
-        if depth == 0 || !floats || self.device() == TensorDevice::Metal {
+        if depth == 0 || !floats {
             return self.watched(name);
         }
         let later = Self::in_state(
@@ -519,17 +519,7 @@ impl TensorValue {
         if let State::Ready(storage) = &*self.state() {
             return Ok(storage.clone());
         }
-        if self.device() == TensorDevice::Metal {
-            // The Metal device runs the plan of one tensor.
-            let (plan, leaves) = Plan::collect(self);
-            let storage = plan
-                .run(self.device(), &leaves)?
-                .pop()
-                .expect("a plan gives its result");
-            *self.state() = State::Ready(storage.clone());
-            return Ok(storage);
-        }
-        if trace_level() > 0 && self.device().is_gpu() {
+        if trace_level() > 0 && self.device() == TensorDevice::Cuda {
             // The run's own line then reports the time to collect the plan.
             eprintln!("aura tensor: program={:.2}ms", trace_gap());
         }
@@ -624,11 +614,13 @@ pub(crate) struct Plan {
 
 impl Plan {
     /// The plan for `root` and the memory of its leaves, in slot order.
+    #[cfg(test)]
     fn collect(root: &TensorValue) -> (Self, Vec<Storage>) {
         Self::collect_all(&[root])
     }
 
     /// One plan for all of `roots`, so work they share runs once.
+    #[cfg(test)]
     fn collect_all(roots: &[&TensorValue]) -> (Self, Vec<Storage>) {
         let (plan, leaves, _) = Self::collect_nodes(roots);
         (plan, leaves)
@@ -743,10 +735,9 @@ impl Plan {
 
     /// The memory of each output, in order.
     fn run(&self, device: TensorDevice, leaves: &[Storage]) -> Result<Vec<Storage>> {
-        // The Metal device runs the plan of one tensor.
         #[cfg(target_os = "macos")]
         if device == TensorDevice::Metal {
-            return tensor_metal::run(self, leaves).map(|storage| vec![storage]);
+            return tensor_metal::run(self, leaves);
         }
         #[cfg(target_os = "linux")]
         if device == TensorDevice::Cuda {
@@ -802,9 +793,7 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
         return Ok(());
     };
     let device = first.device();
-    let together = device != TensorDevice::Metal
-        && waiting.len() > 1
-        && waiting.iter().all(|node| node.device() == device);
+    let together = waiting.len() > 1 && waiting.iter().all(|node| node.device() == device);
     if !together {
         return waiting
             .iter()
@@ -896,8 +885,16 @@ fn planned_result(
             })
             .map(Vec::into_boxed_slice)
     };
-    // The Metal device runs these through the Array kernels for now.
-    let indexed = inputs[0].device() != TensorDevice::Metal;
+    // The Metal device moves elements by index where its library can,
+    // and makes random floats where it makes the CPU kernel's floats.
+    let metal = inputs[0].device() == TensorDevice::Metal;
+    #[cfg(target_os = "macos")]
+    let (indexed, random) = (
+        !metal || tensor_metal::moves_by_index(),
+        !metal || tensor_metal::makes_random(),
+    );
+    #[cfg(not(target_os = "macos"))]
+    let (indexed, random) = (!metal, !metal);
     let resized = |axis: usize, length: usize| {
         let mut shape = inputs[0].shape().to_vec();
         shape[axis] = length;
@@ -1033,7 +1030,10 @@ fn planned_result(
             exact.then(|| (target, inputs[0].shape().into()))
         }
         Operation::Slice { axis, length, .. } => indexed.then(|| resized(*axis, *length)),
-        Operation::Unslice { axis, size, .. } => indexed.then(|| resized(*axis, *size)),
+        // Metal fills the gaps by adding into zeros, which a mask cannot do.
+        Operation::Unslice { axis, size, .. } => {
+            (indexed && (number || !metal)).then(|| resized(*axis, *size))
+        }
         Operation::Expand(shape) => indexed.then(|| (dtype, shape.clone().into())),
         Operation::Concat { axis } => (indexed && same_dtype)
             .then(|| resized(*axis, inputs[0].shape()[*axis] + inputs[1].shape()[*axis])),
@@ -1060,7 +1060,13 @@ fn planned_result(
             .then(|| (Int64, tensor_kernels::lane_shape(inputs[0].shape(), *axis))),
         Operation::Random { dtype, shape, .. } => {
             let dtype = ArrayDType::from_code(*dtype)?;
-            (indexed && !shape.contains(&0) && (dtype == Float32 || double))
+            // Metal counts the elements in an `int32`.
+            let counted = !metal
+                || shape
+                    .iter()
+                    .try_fold(1_usize, |count, &dimension| count.checked_mul(dimension))
+                    .is_some_and(|count| i32::try_from(count).is_ok());
+            (random && counted && !shape.contains(&0) && (dtype == Float32 || double))
                 .then(|| (dtype, shape.clone().into()))
         }
     }

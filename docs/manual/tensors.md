@@ -539,9 +539,10 @@ On a GPU device these run on the GPU:
   reductions, and `matmul` of operands of rank two or more, for float
   tensors
 - `where`, `reshape`, `flatten`, `transpose`, `permute`
-- on CUDA: `tanh`, `sigmoid`, `erf`, `slice`, `index_select`, `index_add`,
-  `cat`, `expand`, `argmax`, `argmin`, and the random tensors.
-  On Metal these run on the CPU for now.
+- `tanh`, `sigmoid`, `erf`, `slice`, `index_select`, `index_add`, `cat`,
+  `expand`, `argmax`, `argmin`, and the random tensors. On Metal the
+  indexed operations need macOS 12 and the random tensors need macOS 13.
+  An older system runs them on the CPU.
 - conversions from an integer dtype to a float dtype, and from `int32` to
   `int64`
 
@@ -553,6 +554,10 @@ overflow, conversions from a float to an integer, which are checked for
 range, integer `matmul`, and `matmul` with a rank-one operand. So every
 operation exists on every device and means the same thing. An empty
 tensor is always computed on the CPU.
+
+Tensors that are evaluated together, such as the weights an optimizer
+step updates, run as one piece of work on both GPU devices. The work
+they share is computed once.
 
 The two GPU devices do the work differently. Metal hands the expression
 to Apple's MPSGraph. CUDA has no library of elementwise operations, so
