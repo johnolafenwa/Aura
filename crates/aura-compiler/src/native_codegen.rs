@@ -17697,10 +17697,14 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_opaque_owned(&object);
             return Ok(self.owned_opaque_result(object.values, result_ty));
         }
-        let results = self.runtime_call_results(
-            self.runtime[runtime_op.runtime_call().function],
-            &[object.values[0]],
-        );
+        // A `str` copies its text and nothing else.
+        let function = match op {
+            ValueOp::Clone | ValueOp::Copy if receiver_ty == Type::named("str") => {
+                self.runtime[RuntimeFn::StringClone]
+            }
+            _ => self.runtime[runtime_op.runtime_call().function],
+        };
+        let results = self.runtime_call_results(function, &[object.values[0]]);
         Ok(self.owned_opaque_result(results, result_ty))
     }
 

@@ -10122,6 +10122,26 @@ pub unsafe extern "C-unwind" fn aura_direct_string_from_view(
     })
 }
 
+/// A copy of the `str` `value`, as `aura_direct_clone_value` makes one,
+/// without the walk that looks for what else a value holds.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_clone(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
+        let text = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => text.clone(),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        boxed_value_with_type(Value::String(text), runtime_type_name)
+    })
+}
+
 /// A copy of element `index` of a `list[str]`, for a read that missed the
 /// list's view. It counts the miss, so a list read this way often enough
 /// gets a view generated code reads in place.
