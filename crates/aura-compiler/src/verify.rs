@@ -1809,19 +1809,19 @@ fn solve(
 #[path = "verify_tests.rs"]
 mod tests;
 #[cfg(test)]
-#[path = "verify_tests_outcomes.rs"]
+#[path = "verify_outcomes_tests.rs"]
 mod tests_outcomes;
 
 #[cfg(test)]
-#[path = "verify_tests_generators.rs"]
+#[path = "verify_generators_tests.rs"]
 mod tests_generators;
 
 #[cfg(test)]
-#[path = "verify_tests_spans.rs"]
+#[path = "verify_spans_tests.rs"]
 mod tests_spans;
 
 #[cfg(test)]
-#[path = "verify_tests_classes.rs"]
+#[path = "verify_classes_tests.rs"]
 mod tests_classes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
