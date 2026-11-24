@@ -3075,34 +3075,41 @@ impl ArrayValue {
     }
 
     pub fn render(&self) -> String {
-        // Rendering has no way to report a failed allocation, and a view
-        // too large to pack is too large to print.
-        let elements = self.elements().unwrap_or_else(|_| {
-            Cow::Owned(array_storage_map!(&self.base, |values| values.window(0, 0)))
-        });
-        let values = match &*elements {
-            ArrayStorage::Int32(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Int64(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Float32(values) => {
-                values.iter().map(|value| render_float32(*value)).collect()
-            }
-            ArrayStorage::Float64(values) => {
-                values.iter().map(|value| render_float(*value)).collect()
-            }
-            ArrayStorage::Bool(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+        use std::fmt::Write;
+
+        let mut text = format!(
+            "Array[{}](shape={:?}, values=[",
+            self.dtype().runtime_type_name(),
+            self.shape
+        );
+        let mut separator = "";
+        let mut append = |position: usize| {
+            text.push_str(separator);
+            separator = ", ";
+            match &self.base {
+                ArrayStorage::Int32(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Int64(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Float32(values) => text.push_str(&render_float32(values[position])),
+                ArrayStorage::Float64(values) => text.push_str(&render_float(values[position])),
+                ArrayStorage::Bool(values) => {
+                    text.push_str(if values[position] { "true" } else { "false" })
+                }
             }
         };
-        format!(
-            "Array[{}](shape={:?}, values=[{}])",
-            self.dtype().runtime_type_name(),
-            self.shape,
-            values.join(", ")
-        )
+        if let Some(layout) = &self.strided {
+            array_layout::walk_runs(&self.shape, [layout], |[start], [step], count| {
+                for index in 0..count as isize {
+                    append((start as isize + index * step) as usize);
+                }
+                true
+            });
+        } else {
+            for position in 0..self.base.len() {
+                append(position);
+            }
+        }
+        text.push_str("])");
+        text
     }
 
     /// Where the element at `coordinates` lies in the storage window.
