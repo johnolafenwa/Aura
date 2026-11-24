@@ -208,10 +208,9 @@ returns a view. Decorators also apply only to module-level functions, not to
 methods, classes, or functions inside other functions.
 
 Python programmers sometimes use a decorator to register a function in a
-global table as a side effect. That doesn't carry over, because Aura modules
-have no mutable state:
+global table as a side effect. A hosted module rejects a plain mutable counter shared across tasks.
 
-```aura check-fail:AU3003
+```aura check-fail:AU3030
 mut calls = 0
 
 def main():
@@ -220,12 +219,12 @@ def main():
 
 ```console
 $ aura check tools.au
-error[AU3003]: module bindings are immutable; `mut` module state is not supported
+error[AU3030]: hosted module bindings are immutable
  --> tools.au:1:5
   |
 1 | mut calls = 0
   |     ^
-  = help: put mutable state in a local value owned by `main` or another explicit owner
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task
 ```
 
 A decorator in Aura transforms one function and nothing else. When we need a

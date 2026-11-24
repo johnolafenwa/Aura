@@ -344,9 +344,9 @@ error[AU3003]: cannot assign through immutable place `settings.bar_width`
    |     ^
 ```
 
-and a module can't declare a mutable top-level binding in the first place:
+A hosted module also rejects a mutable top-level binding.
 
-```aura check-fail:AU3003
+```aura check-fail:AU3030
 mut pages_read: int64 = 0
 
 def main():
@@ -355,19 +355,19 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU3003]: module bindings are immutable; `mut` module state is not supported
+error[AU3030]: hosted module bindings are immutable
  --> src/main.au:1:5
   |
 1 | mut pages_read: int64 = 0
   |     ^
-  = help: put mutable state in a local value owned by `main` or another explicit owner
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task
 ```
 
-The help line is the whole design in one sentence. Python modules are a
+Python modules are a
 common place to keep global state: a cache, a counter, a configuration
 object that gets patched in tests. Every function that touches that state is
 quietly coupled to every other one, and once tasks run in parallel (Chapter
-15), shared mutable globals become data races. Aura removes the option.
+15), unsynchronized reads and writes can race. A hosted Aura module can bind a synchronization handle such as `sync.AtomicInt` for a shared counter.
 Mutable state lives in a value with an owner, usually created in `main`, and
 it's passed to the functions that need it, where their signatures say whether
 they read it or change it.
