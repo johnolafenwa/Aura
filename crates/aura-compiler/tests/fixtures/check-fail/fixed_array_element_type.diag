@@ -1,0 +1,5 @@
+error[AU2082]: fixed array element must be `uint8`, found `bool`
+ --> crates/aura-compiler/tests/fixtures/check-fail/fixed_array_element_type.au:2:34
+  |
+2 |     slots: fixed[uint8, 2] = [1, true]
+  |                                  ^

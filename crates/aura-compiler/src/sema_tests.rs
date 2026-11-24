@@ -34242,3 +34242,23 @@ fn c_bit_field_cannot_be_lent_as_an_independent_scalar() {
         "AU3033"
     );
 }
+
+#[test]
+fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_length_zero.au"),
+            "AU2081",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_element_type.au"),
+            "AU2082",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_noncopy_repeat.au"),
+            "AU3031",
+        ),
+    ] {
+        assert_eq!(crate::check_source(source).unwrap_err().code, code);
+    }
+}

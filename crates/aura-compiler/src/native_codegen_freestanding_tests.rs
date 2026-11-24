@@ -1074,3 +1074,32 @@ fn a_pointer_cast_requires_ffi_without_a_mem_import() {
     let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
     assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
 }
+
+#[test]
+fn fixed_arrays_of_wide_words_stay_inline() {
+    let source = r#"
+export "C" def sample(i: int64, high: uint64) -> uint64:
+    word = (high as uint128) << 64
+    mut row: fixed[uint128, 2] = [word, 0]
+    row[1] = row[0]
+    return (row[i] >> 64) as uint64
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_updates_do_not_copy_the_entire_ring() {
+    let kernels = include_str!("../../../benchmarks/freestanding/kernels.au");
+    let bytes = object(kernels, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let ring = file
+        .symbols()
+        .find(|sym| sym.name() == Ok("aura_ring_mix"))
+        .unwrap();
+    // The loop needs one indexed load and store. Copying every lane
+    // into and out of scratch storage produced 814 bytes on x86-64.
+    assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}

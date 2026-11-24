@@ -115,8 +115,21 @@ fn scalar_name(scalar: FfiScalar) -> &'static str {
 pub fn kind_type(kind: &CFieldKind) -> Type {
     match kind {
         CFieldKind::Scalar(scalar) => Type::named(scalar_name(*scalar)),
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            Type::named(fixed_wide_kind(layout).unwrap().runtime_type_name())
+        }
         CFieldKind::Struct(layout) => Type::named(layout.name.clone()),
         CFieldKind::Array(element, _) => Type::Named("list".to_string(), vec![kind_type(element)]),
+    }
+}
+
+/// Compiler-private descriptors for the two-word payload of a hosted wide
+/// integer. A C class name cannot start with '#'.
+fn fixed_wide_kind(layout: &CStruct) -> Option<IntegerKind> {
+    match layout.name.as_str() {
+        "#fixed.int128" => Some(IntegerKind::Int128),
+        "#fixed.uint128" => Some(IntegerKind::Uint128),
+        _ => None,
     }
 }
 
@@ -220,6 +233,17 @@ pub fn pack_kind(
             bytes[..size].copy_from_slice(&word.to_le_bytes()[..size]);
             Ok(())
         }
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            let Value::Int(integer) = value else {
+                return Err(shape(layout.name.clone(), value));
+            };
+            let bits = match integer.representation() {
+                IntegerRepresentation::Signed(value) => value as u128,
+                IntegerRepresentation::Unsigned(value) => value,
+            };
+            bytes[..16].copy_from_slice(&bits.to_le_bytes());
+            Ok(())
+        }
         CFieldKind::Struct(layout) => pack(value, layout, &mut bytes[..layout.size()]),
         CFieldKind::Array(element, count) => {
             let Value::Vec(list) = value else {
@@ -264,6 +288,16 @@ pub fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError
             let mut word = [0_u8; 8];
             word[..size].copy_from_slice(&bytes[..size]);
             scalar_value(*scalar, u64::from_le_bytes(word))
+        }
+        CFieldKind::Struct(layout) if fixed_wide_kind(layout).is_some() => {
+            let kind = fixed_wide_kind(layout).unwrap();
+            let bits = u128::from_le_bytes(bytes[..16].try_into().unwrap());
+            let integer = if kind.is_signed() {
+                IntegerValue::from_signed(bits as i128)
+            } else {
+                IntegerValue::from_literal(bits)
+            };
+            Ok(Value::Int(integer.with_runtime_kind(kind).unwrap()))
         }
         CFieldKind::Struct(layout) => unpack(layout, &bytes[..layout.size()]),
         CFieldKind::Array(element, count) => {
