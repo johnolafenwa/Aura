@@ -62,7 +62,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
         trigger = workflow.split("\nenv:\n", 1)[0]
 
-        self.assertIn("  push:\n    branches: [main]\n", trigger)
+        self.assertIn("  push:\n    branches: [main, codex/integration-0.18]\n", trigger)
         self.assertEqual(trigger.count("    paths-ignore:\n"), 2)
         for path in (
             "'**/*.md'",
