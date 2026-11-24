@@ -434,6 +434,12 @@ jobs:
       - name: Build release compiler and runtime
         run: cargo build --release --locked -p aura -p aura-runtime
 
+      - name: Boot freestanding boards and check their serial output
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get install -y clang lld qemu-system-x86 qemu-system-arm qemu-system-misc
+          examples/freestanding/kernel/test.sh target/release/aura
+
       - name: Check the libraries the compiler loads
         run: python3 scripts/check-aura-libraries.py target/release/aura
 
