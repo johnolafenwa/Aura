@@ -11659,3 +11659,13 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
     assert!(read.hover.contains("index: int64"));
     assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
 }
+
+#[test]
+fn editor_analysis_reports_only_discarded_suites() {
+    let program = "import build\nif build.hosted:\n    def answer() -> int64:\n        return 3\nelse:\n    def answer() -> int64:\n        return unavailable()\ndef main():\n    print(answer())\n";
+    let analysis = analyze_source(program);
+    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert_eq!(analysis.inactive_lines.as_slice(), &[5..7]);
+    let suggestions = complete_source(program, 0, 0, None).expect("top-level completions");
+    assert!(suggestions.iter().any(|item| item.name == "const"));
+}

@@ -7321,3 +7321,15 @@ test("compiler bridge completes ordered collection methods and their signatures"
     assert.ok(item.detail.includes(signature), item.detail);
   }
 });
+
+test("discarded suites become unnecessary hints over whole lines, including a Unicode EOF", () => {
+  const source = 'if build.hosted:\r\n    print(1)\r\nelse:\r\n    print("😀")';
+  const analysis = { inactive_lines: [{ start: 3, end: 4 }] };
+  assert.deepEqual(compilerDiagnosticsToLsp(analysis, pointUri, source), [{
+    range: { start: { line: 3, character: 0 }, end: { line: 3, character: 15 } },
+    severity: 4,
+    tags: [1],
+    source: "aura-compiler",
+    message: "Inactive for this build configuration"
+  }]);
+});

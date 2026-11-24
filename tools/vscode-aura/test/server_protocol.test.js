@@ -1296,3 +1296,39 @@ test(
     assert.equal(fs.existsSync(verifyMarker), false, "untitled buffer triggered aura verify");
   }
 );
+
+test("bundled language server dims discarded suites and resolves declarations in them", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const uri = pathToFileURL(path.join(workspaceRoot, "build-branches.au")).href;
+  const text = [
+    "import build",
+    "public const limit = 4",
+    "if build.hosted:",
+    "    def answer() -> int64:",
+    "        return limit",
+    "else:",
+    "    def answer() -> int64:",
+    "        return missing_target_function()",
+    "    def fallback() -> int64:",
+    "        return answer()",
+    "",
+    "def main():",
+    "    print(answer())",
+    ""
+  ].join("\n");
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((entry) => entry.severity === 1), []);
+  assert.ok(diagnostics.some((entry) =>
+    entry.tags?.includes(1) && entry.range.start.line <= 6 && entry.range.end.line >= 9));
+  const params = { textDocument: { uri }, position: { line: 9, character: 16 } };
+  const hover = await client.request("textDocument/hover", params);
+  assert.match(hover.result?.contents?.value, /answer/);
+  const definition = await client.request("textDocument/definition", params);
+  assert.deepEqual(definition.result?.range, {
+    start: { line: 6, character: 8 }, end: { line: 6, character: 14 }
+  });
+});
