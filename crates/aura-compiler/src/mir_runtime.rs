@@ -6659,6 +6659,9 @@ impl MirRuntime {
             });
         }
         self.evaluate_extern_call_with(call, args, env, |symbol, signature, arguments| {
+            if signature.needs_aligned_stack() {
+                return ffi_stack::call(symbol, signature, arguments);
+            }
             // SAFETY: semantic analysis admits only the documented FFI v0
             // surface. The remaining process-symbol signature and foreign
             // implementation obligations belong to the package author.
@@ -13428,3 +13431,6 @@ mod task_stack_tests;
 mod fixed_arrays;
 #[path = "mir_integer_bits.rs"]
 mod integer_bits;
+
+#[path = "mir_ffi_stack.rs"]
+mod ffi_stack;

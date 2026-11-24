@@ -49,3 +49,8 @@ uint8_t check_packet(struct Packet *p) {
     p->lines[1].value = 77;
     return ok;
 }
+
+struct Line bump_line(uint32_t before, struct Line line, uint32_t after) {
+    line.value += before + after;
+    return line;
+}

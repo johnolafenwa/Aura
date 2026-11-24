@@ -24,6 +24,7 @@ extern "C" align(32) class Line:
 
 extern "C" def make_small(s: Small, delta: uint32) -> Small
 extern "C" def aligned_line(line: mut Line) -> uint8
+extern "C" def bump_line(before: uint32, line: Line, after: uint32) -> Line
 
 extern "C" class Packet:
     rows: fixed[Small, 2]
@@ -50,4 +51,6 @@ def main() -> int32:
     print(check_packet(p) == 1)
     print(p.rows[1].serial)
     print(p.lines[1].value)
+    shifted = bump_line(3, Line(value=5), 7)
+    print(shifted.value)
     return 0
