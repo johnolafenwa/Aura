@@ -228,7 +228,7 @@ fn ffi_keywords_and_reserved_syntax_have_stable_frontend_diagnostics() {
         ),
         (
             "extern \"C\" def read(output: *uint8) -> int64\n",
-            "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
+            "use `ptr[T]` for a typed pointer in an extern declaration",
         ),
     ] {
         let error = parse_source(source).expect_err("reserved FFI syntax should be rejected");
