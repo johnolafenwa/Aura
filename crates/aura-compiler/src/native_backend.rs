@@ -639,6 +639,7 @@ pub(crate) trait ModuleBackend {
         function: FuncHandle,
         attrs: crate::machine_attributes::MachineAttributes,
     );
+    fn set_module_asm(&mut self, fragments: &[String]);
     fn declare_function(
         &mut self,
         name: &str,
@@ -709,6 +710,12 @@ pub(crate) type VersionEntry = (Blk, Val, Option<(Val, i64)>);
 /// Builds one function body: blocks, variables, stack slots, and
 /// instructions.
 pub(crate) trait FunctionBackend {
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val>;
     /// The module the function belongs to, for declarations made while the
     /// body is built.
     fn module(&mut self) -> &mut dyn ModuleBackend;

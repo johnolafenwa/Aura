@@ -20352,6 +20352,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     };
     let program = check_with_context(
         Module {
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
@@ -20367,6 +20369,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_class = check_with_context(
         Module {
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
@@ -20390,6 +20394,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_enum = check_with_context(
         Module {
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Enum(EnumDecl {
@@ -20421,6 +20427,8 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_function = check_with_context(
         Module {
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],

@@ -275,6 +275,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2090",
+        band: "names/types",
+        title: "assembly requires a freestanding target",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2091",
+        band: "names/types",
+        title: "invalid assembly operand type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2092",
+        band: "names/types",
+        title: "invalid assembly register or clobber",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2093",
+        band: "names/types",
+        title: "invalid assembly syntax or option",
+    },
+    DiagnosticCodeInfo {
         code: "AU2094",
         band: "names/types",
         title: "machine attributes in a hosted build",
@@ -353,6 +373,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU3012",
         band: "ownership",
         title: "definite initialization",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3035",
+        band: "ownership",
+        title: "invalid assembly output destination",
     },
     DiagnosticCodeInfo {
         code: "AU4001",

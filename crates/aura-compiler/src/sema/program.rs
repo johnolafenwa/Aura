@@ -569,6 +569,9 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    if let Some(span) = module.asm_span {
+        crate::inline_asm::target_at(span)?;
+    }
     let mut module = module;
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check

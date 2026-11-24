@@ -447,6 +447,7 @@ struct Parser {
     extern_fields: bool,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
+    asm_span: Option<Span>,
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
@@ -469,6 +470,7 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            asm_span: None,
             generated_items: Vec::new(),
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
@@ -513,6 +515,7 @@ impl Parser {
         let mut imports = Vec::new();
         let mut constants = Vec::new();
         let mut items = Vec::new();
+        let mut module_asm = Vec::new();
         let mut top_level_stmts = Vec::new();
         // Module constants are the bindings above the first top-level
         // statement. From the first statement on, `name = value` is an
@@ -523,7 +526,14 @@ impl Parser {
         self.skip_newlines();
 
         while !self.at_eof() {
-            if self.at_keyword_import() || self.at_from_import_start() {
+            if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "module_asm")
+                && matches!(self.peek_kind(1), Some(TokenKind::LParen))
+            {
+                let expr = self.parse_expr()?;
+                module_asm.push(crate::inline_asm::module_template(&expr)?.to_string());
+                self.asm_span.get_or_insert(expr.span);
+                self.expect_statement_terminator()?;
+            } else if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
             } else if self.at_type_alias_start() {
                 items.push(self.parse_item()?);
@@ -567,6 +577,8 @@ impl Parser {
 
         items.append(&mut self.generated_items);
         Ok(Module {
+            module_asm,
+            asm_span: self.asm_span,
             doc,
             imports,
             constants,
@@ -2182,6 +2194,11 @@ impl Parser {
         self.enter_recursion("statement")?;
         let result = self.parse_stmt_inner();
         self.exit_recursion();
+        if let Ok(Stmt::Expr(stmt)) = &result {
+            if crate::inline_asm::is_asm(&stmt.expr) {
+                self.asm_span.get_or_insert(stmt.span);
+            }
+        }
         result
     }
 

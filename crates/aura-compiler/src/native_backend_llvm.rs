@@ -95,6 +95,7 @@ const UNIT_THREAD_STACK: usize = 8 << 20;
 
 /// One object built with LLVM for the host.
 pub(super) struct LlvmModule {
+    module_asm: String,
     functions: Vec<FunctionDecl>,
     data: Vec<DataDecl>,
     names: HashMap<String, Symbol>,
@@ -136,6 +137,7 @@ impl LlvmModule {
         // LLVM target.
         host_target_machine()?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -147,6 +149,7 @@ impl LlvmModule {
     pub(super) fn for_freestanding(target: super::FreestandingTarget) -> Result<Self, String> {
         freestanding_target_machine(target)?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -181,6 +184,9 @@ impl LlvmModule {
             _ => format!("aura_direct.{unit}"),
         };
         let module = context.create_module(&name);
+        if unit == 0 && !self.module_asm.is_empty() {
+            module.set_inline_assembly(&self.module_asm);
+        }
         module.set_source_file_name(&name);
         module.set_triple(&machine.get_triple());
         module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -224,6 +230,10 @@ impl ModuleBackend for LlvmModule {
     ) {
         self.functions[id.0 as usize].machine = Some(Box::new(attrs));
     }
+    fn set_module_asm(&mut self, fragments: &[String]) {
+        self.module_asm = fragments.join("\n");
+    }
+
     fn declare_function(
         &mut self,
         name: &str,
@@ -582,6 +592,9 @@ impl LlvmModule {
         if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
             dump_unit_ir(&module, prefix, unit)?;
         }
+        if self.freestanding.is_some() {
+            return inline_asm::write_object(machine, &module);
+        }
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
             Err(error) => Err(format!("LLVM failed to write the object: {error}")),
@@ -822,6 +835,7 @@ fn target_machine_at(
 /// What a recorded instruction does. Result types live with its results.
 #[derive(Clone, Debug)]
 enum Op {
+    InlineAsm(crate::inline_asm::MachineAsm, Vec<Val>),
     Nop,
     Copy(Val),
     Iconst(i64),
@@ -1005,6 +1019,7 @@ enum VarSource {
 /// The values `op` reads.
 fn op_operands(op: &Op) -> Vec<Val> {
     match op {
+        Op::InlineAsm(_, inputs) => inputs.clone(),
         Op::Nop
         | Op::Iconst(_)
         | Op::Fconst(_)
@@ -1052,6 +1067,7 @@ fn op_targets(op: &Op) -> Vec<Blk> {
 fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op {
     let values = |args: &[Val]| args.iter().map(|arg| value(*arg)).collect::<Vec<_>>();
     match op {
+        Op::InlineAsm(asm, inputs) => Op::InlineAsm(asm.clone(), values(inputs)),
         Op::Nop => Op::Nop,
         Op::Copy(source) => Op::Copy(value(*source)),
         Op::Iconst(constant) => Op::Iconst(*constant),
@@ -1865,6 +1881,17 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.overflow(OverflowOp::Umul, left, right)
     }
 
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val> {
+        self.ir
+            .push(Op::InlineAsm(asm.clone(), operands.to_vec()), results)
+            .1
+    }
+
     fn memory_access(
         &mut self,
         access: MemoryAccess,
@@ -2574,6 +2601,9 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
 }
 
 /// The LLVM values of one function body while it is lowered.
+#[path = "native_backend_llvm_asm.rs"]
+mod inline_asm;
+
 struct FunctionLowerer<'ctx, 'm, 'o> {
     object: &'o ObjectLowerer<'ctx, 'm>,
     context: &'ctx Context,
@@ -3171,6 +3201,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     fn lower_inst(&mut self, inst: &InstIr) -> Result<(), String> {
         let context = self.context;
         match &inst.op {
+            Op::InlineAsm(asm, inputs) => self.lower_inline_asm(inst, asm, inputs)?,
             Op::Nop => {}
             Op::Copy(value) => {
                 let value = self.value(*value)?;

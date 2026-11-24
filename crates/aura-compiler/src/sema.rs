@@ -79,6 +79,7 @@ pub use program::{
 };
 mod aliases;
 mod assoc_bounds;
+mod inline_asm;
 mod iterator_fast;
 mod iterator_fast_args;
 #[cfg(test)]
@@ -5217,6 +5218,11 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                    }
+                }
+                Stmt::Expr(stmt) if crate::inline_asm::is_asm(&stmt.expr) => {
+                    if self.check_inline_asm(&stmt.expr, locals)? {
+                        flow = BlockFlow::AlwaysReturns;
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
