@@ -4635,10 +4635,9 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// Makes lent local `name` own its element: a box the list lends is
-    /// copied into a new box, so the list's box is never reached once the
-    /// list may change, and only the list ever holds a reference to it. A
-    /// lent payload's box is counted, so a payload takes a reference to it.
+    /// Makes lent local `name` own its element: a box the list or enum lends
+    /// is copied into a new box, so the container's `ElementBox` keeps sole
+    /// ownership and is never linked into a task ledger.
     fn own_lent_element(&mut self, name: &str) -> std::result::Result<(), String> {
         let flag_var = self.lent_elements[name];
         let flag = self.builder.use_var(flag_var);
@@ -4651,7 +4650,9 @@ impl<'a> FunctionCompiler<'a> {
         let word_var = self.local_vars(name)?[0];
         let word = self.builder.use_var(word_var);
         let copy = if self.lent_payloads.contains(name) {
-            self.retain_opaque_handle(word)
+            self.builder
+                .call(self.runtime[RuntimeFn::InstanceCopyField], &[word])
+                .results[0]
         } else {
             self.builder
                 .call(self.runtime[RuntimeFn::CloneValue], &[word])

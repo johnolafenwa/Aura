@@ -18339,3 +18339,32 @@ def main():
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
+
+#[test]
+fn typed_enum_handle_payload_copies_into_a_fresh_box() {
+    let source = r#"
+enum Holder:
+    QueueBox(Queue[int64])
+    Empty
+
+def extract(h: Holder) -> Queue[int64]:
+    match h:
+        case Holder.QueueBox(q):
+            return q
+        case Holder.Empty:
+            return Queue[int64](capacity=1)
+
+def main():
+    q = Queue[int64](capacity=1)
+    h = Holder.QueueBox(q)
+    out = extract(h)
+    _ = out.put(1)
+"#;
+    let mir = lower_source_to_mir(source).expect("the enum extraction should lower");
+    let object = emit_unoptimized_object(&mir).expect("the enum extraction should emit");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_instance_copy_field"),
+        "extracting a handle payload from a typed enum must copy into a fresh box instead of retaining the container's ElementBox: {referenced:?}"
+    );
+}
