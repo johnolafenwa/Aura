@@ -25441,3 +25441,141 @@ def main():
         assert!(error.message.contains(message), "{body}: {}", error.message);
     }
 }
+
+#[test]
+fn fixed_array_address_validates_the_index_address_and_source_location() {
+    use crate::mir::fixed_arrays::ADDRESS;
+    let ty = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("2")],
+    );
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut address = |base, index, stride| {
+        let args = [base, index, Operand::Int(7), Operand::Int(12), stride]
+            .map(|value| mir_arg(None, value));
+        runtime.evaluate_fixed(ADDRESS, &args, Some(&ty), &mut env)
+    };
+
+    let wrapped = address(
+        Operand::Int(u64::MAX.into()),
+        Operand::Int(1),
+        Operand::Int(2),
+    )
+    .unwrap();
+    assert!(matches!(wrapped, Value::Int(value) if value.as_i128() == Some(1)));
+    let out_of_bounds = address(Operand::Int(0), Operand::Int(2), Operand::Int(2)).unwrap_err();
+    assert_eq!(out_of_bounds.code, "AU4031");
+    assert_eq!(out_of_bounds.span, Some(Span::new(7, 12)));
+    let invalid_base =
+        address(Operand::Int(u128::MAX), Operand::Int(0), Operand::Int(2)).unwrap_err();
+    assert_eq!(invalid_base.code, "AU4032");
+    assert_eq!(
+        address(Operand::Bool(false), Operand::Int(0), Operand::Int(2))
+            .unwrap_err()
+            .message,
+        "invalid array element address"
+    );
+    assert_eq!(
+        address(Operand::Int(0), Operand::Int(0), Operand::Unit)
+            .unwrap_err()
+            .message,
+        "missing array stride or position"
+    );
+}
+
+#[test]
+fn fixed_array_access_rejects_mismatched_runtime_storage_and_malformed_mir() {
+    use crate::mir::fixed_arrays::{LITERAL, READ};
+    let ty = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("2")],
+    );
+    let mut env = Env::default();
+    let mut runtime = test_runtime();
+    let args = [4, 7].map(|n| mir_arg(None, Operand::Int(n)));
+    let array = runtime
+        .evaluate_fixed(LITERAL, &args, Some(&ty), &mut env)
+        .unwrap();
+    env.values.insert("lanes".into(), array);
+    let mut read = |base, index, line, ty| {
+        let args = [base, index, line, Operand::Int(1)].map(|value| mir_arg(None, value));
+        runtime.evaluate_fixed(READ, &args, ty, &mut env)
+    };
+    let lanes = Operand::Place("lanes".into());
+    let wrong_length = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("3")],
+    );
+    assert_eq!(
+        read(
+            lanes.clone(),
+            Operand::Int(0),
+            Operand::Int(1),
+            Some(&wrong_length)
+        )
+        .unwrap_err()
+        .message,
+        "MIR fixed array has the wrong length"
+    );
+    assert_eq!(
+        read(
+            lanes.clone(),
+            Operand::Bool(true),
+            Operand::Int(1),
+            Some(&ty)
+        )
+        .unwrap_err()
+        .message,
+        "MIR array index must be an integer"
+    );
+    assert_eq!(
+        read(lanes.clone(), Operand::Int(9), Operand::Unit, Some(&ty))
+            .unwrap_err()
+            .message,
+        "MIR array access needs a source position"
+    );
+    assert_eq!(
+        read(
+            Operand::Bool(false),
+            Operand::Int(0),
+            Operand::Int(1),
+            Some(&ty)
+        )
+        .unwrap_err()
+        .message,
+        "MIR array access needs an inline array"
+    );
+    assert_eq!(
+        read(lanes, Operand::Int(0), Operand::Int(1), None)
+            .unwrap_err()
+            .message,
+        "missing fixed array type in MIR"
+    );
+    assert_eq!(
+        runtime
+            .evaluate_fixed(LITERAL, &args[..1], Some(&ty), &mut env)
+            .unwrap_err()
+            .message,
+        format!("invalid arguments to {LITERAL}")
+    );
+}
+
+#[test]
+fn fixed_array_assignment_projects_a_class_field_and_preserves_its_neighbors() {
+    let source = r#"FLOOR: fixed[int16, 2] = [(-2)] * 2
+
+class Cell:
+    number: int16
+
+def update(i: int64) -> int16:
+    mut cells: fixed[Cell, 2] = [Cell(number=6), Cell(number=9)]
+    cells[i].number = FLOOR[i]
+    return cells[0].number + cells[1].number
+
+def main():
+    print(update(0))
+    print(update(1))
+"#;
+    assert_eq!(crate::run_source(source).unwrap().stdout, "7\n4\n");
+}
