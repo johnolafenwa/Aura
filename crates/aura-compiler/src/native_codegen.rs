@@ -2511,31 +2511,17 @@ impl<'a> NativeCodegen<'a> {
             key_loop_keys.insert(key_loop.key.clone(), list.clone());
             key_loops.insert(list, (key_loop, at, next));
         }
-        let list_snapshots = list_snapshots::list_snapshot_regions(
-            function,
-            |list| {
-                list != "self"
-                    && !explicit_locals.loans.contains(list)
-                    && (matches!(
-                        variable_types.get(list),
-                        Some(DirectType::Opaque(Type::Named(name, args)))
-                            if name == "list"
-                                && matches!(args.as_slice(), [element]
-                                    if !matches!(element, Type::Named(element, _) if element == "str"))
-                    ) || array_view_code(variable_types.get(list)).is_some())
-            },
-            |list| {
-                matches!(
+        let list_snapshots = list_snapshots::list_snapshot_regions(function, |list| {
+            list != "self"
+                && !explicit_locals.loans.contains(list)
+                && (matches!(
                     variable_types.get(list),
-                    Some(DirectType::Opaque(Type::Named(_, args)))
-                        if matches!(args.as_slice(), [element]
-                            if matches!(
-                                direct_type(element, &self.classes),
-                                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
-                            ))
-                )
-            },
-        )
+                    Some(DirectType::Opaque(Type::Named(name, args)))
+                        if name == "list"
+                            && matches!(args.as_slice(), [element]
+                                if !matches!(element, Type::Named(element, _) if element == "str"))
+                ) || array_view_code(variable_types.get(list)).is_some())
+        })
         .into_iter()
         .filter_map(|region| {
             // An Array's loop reads its layout once when every element

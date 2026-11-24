@@ -198,7 +198,7 @@ fn proofs(name: &str) -> Vec<(String, Option<RangeProof>)> {
                 .iter()
                 .any(|param| param.name == place && param.ty == int64)
     };
-    let mut found = list_snapshot_regions(&function, |_| true, |_| true)
+    let mut found = list_snapshot_regions(&function, |_| true)
         .into_iter()
         .map(|region| {
             let proof = range_proof(&function, &region, is_index);
