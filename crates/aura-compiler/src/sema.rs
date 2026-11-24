@@ -627,7 +627,8 @@ pub(crate) fn ffi_struct_elements_layout(
 }
 
 /// Checks that every field of the `extern "C" class` `class` has a type C
-/// can lay out: a fixed-width scalar or another `extern "C" class`.
+/// can lay out: a fixed-width scalar or another `extern "C" class`, and that
+/// the total byte size and leaf count stay within Aura's C layout bounds.
 pub(crate) fn validate_ffi_struct_fields(
     class: &ClassInfo,
     classes: &BTreeMap<String, ClassInfo>,
@@ -670,7 +671,129 @@ pub(crate) fn validate_ffi_struct_fields(
             "a C struct or union holds fixed-width scalars, `extern \"C\"` classes and unions, and `array[T, N]` fields of those; keep a pointer to anything else in a `uint64` or an opaque handle",
         ));
     }
+    if let Err(reason) = checked_ffi_class_metrics(class, classes, &mut BTreeSet::new()) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            class.decl.span,
+            format!("`extern \"C\"` {what} `{owner}` {reason}"),
+        )
+        .with_help(format!(
+            "a C struct or union layout may use at most {} bytes and {} scalar elements",
+            aura_runtime::c_layout::MAX_C_STRUCT_BYTES,
+            aura_runtime::c_layout::MAX_C_STRUCT_LEAVES
+        )));
+    }
     Ok(())
+}
+
+/// Computes `(size, align, leaf_count)` for an `extern "C"` class or union
+/// using checked arithmetic and cycle detection.
+fn checked_ffi_class_metrics(
+    class: &ClassInfo,
+    classes: &BTreeMap<String, ClassInfo>,
+    visiting: &mut BTreeSet<(String, String)>,
+) -> std::result::Result<(usize, usize, usize), String> {
+    use aura_runtime::c_layout::{MAX_C_STRUCT_BYTES, MAX_C_STRUCT_LEAVES};
+
+    let (holder, is_union) = match &class.decl.c_union {
+        Some(members) => {
+            let Some(holder) = classes.values().find(|other| {
+                other.decl.name == *members && other.module_name == class.module_name
+            }) else {
+                return Err("references missing union members".to_string());
+            };
+            (holder, true)
+        }
+        None => (
+            class,
+            crate::ast::c_union_of_members_class(&class.decl.name).is_some(),
+        ),
+    };
+    let key = (holder.module_name.clone(), holder.decl.name.clone());
+    if !visiting.insert(key.clone()) {
+        return Err("has a recursive C layout".to_string());
+    }
+
+    let mut end = 0usize;
+    let mut align = 1usize;
+    let mut leaves = 0usize;
+
+    let result = (|| -> std::result::Result<(usize, usize, usize), String> {
+        for field in &holder.decl.fields {
+            let info = &holder.fields[&field.name];
+            let lengths = holder
+                .decl
+                .c_arrays
+                .get(&field.name)
+                .map_or(&[][..], Vec::as_slice);
+            let mut element = &info.ty;
+            for _ in lengths {
+                if let Type::Named(_, args) = element {
+                    element = args.first().unwrap_or(element);
+                }
+            }
+            let (mut field_size, field_align, mut field_leaves) =
+                if let Some(scalar) = ffi_scalar(element) {
+                    (scalar.size(), scalar.size(), 1usize)
+                } else if let Some(inner) = ffi_struct(element, classes) {
+                    checked_ffi_class_metrics(inner, classes, visiting)?
+                } else {
+                    return Err(format!("field `{}` has no C layout", field.name));
+                };
+            for &length in lengths {
+                field_size = field_size
+                    .checked_mul(length)
+                    .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                    .ok_or_else(|| {
+                        format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                    })?;
+                field_leaves = field_leaves
+                    .checked_mul(length)
+                    .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                    .ok_or_else(|| {
+                        format!(
+                            "exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}"
+                        )
+                    })?;
+            }
+            align = align.max(field_align);
+            leaves = leaves
+                .checked_add(field_leaves)
+                .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}")
+                })?;
+            let offset = if is_union {
+                0
+            } else {
+                end.checked_next_multiple_of(field_align).ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?
+            };
+            let field_end = offset
+                .checked_add(field_size)
+                .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?;
+            end = end.max(field_end);
+        }
+        let total_size = end
+            .checked_next_multiple_of(align)
+            .filter(|size| {
+                *size <= MAX_C_STRUCT_BYTES
+                    && size
+                        .checked_next_multiple_of(8)
+                        .is_some_and(|slot| i32::try_from(slot).is_ok())
+            })
+            .ok_or_else(|| {
+                format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+            })?;
+        Ok((total_size, align, leaves))
+    })();
+
+    visiting.remove(&key);
+    result
 }
 
 /// The C symbol of the `drop` function an opaque class declares. The

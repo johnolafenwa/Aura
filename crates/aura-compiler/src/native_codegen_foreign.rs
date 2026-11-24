@@ -612,9 +612,31 @@ fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<
     }
 }
 
-/// The size of the stack slot that holds one `layout` struct.
-fn struct_slot_size(layout: &CStruct) -> u32 {
-    layout.size().next_multiple_of(8) as u32
+/// The size of the stack slot that holds one `layout` struct, checked against
+/// Aura's C layout bounds and 32-bit signed stack offsets.
+fn struct_slot_size(layout: &CStruct) -> std::result::Result<u32, String> {
+    layout
+        .validate_bounds()
+        .map_err(|reason| format!("direct backend cannot allocate C struct slot: {reason}"))?;
+    let size = layout
+        .checked_size()
+        .and_then(|size| size.checked_next_multiple_of(8))
+        .ok_or_else(|| {
+            format!(
+                "direct backend C struct `{}` slot size overflows usize",
+                layout.name
+            )
+        })?;
+    let size_u32 = u32::try_from(size)
+        .ok()
+        .filter(|rounded| i32::try_from(*rounded).is_ok())
+        .ok_or_else(|| {
+            format!(
+                "direct backend C struct `{}` slot size {size} exceeds 32-bit signed offset range",
+                layout.name
+            )
+        })?;
+    Ok(size_u32)
 }
 
 /// The type a register's piece of a struct travels as.
@@ -792,13 +814,13 @@ impl FunctionCompiler<'_> {
         let struct_result = match &call.c_struct_result {
             Some(layout) => {
                 let layout = layout.interned();
-                let slot = self.foreign_struct_slot(layout);
+                let slot = self.foreign_struct_slot(layout)?;
                 let passing = layout.passing(foreign_abi(self.freestanding)?);
                 match &passing {
                     CPassing::Memory => {
                         arguments.push_word(slot);
                         arguments.mark_last(Indirect::Result {
-                            size: struct_slot_size(layout),
+                            size: struct_slot_size(layout)?,
                         });
                     }
                     CPassing::Registers(pieces) => {
@@ -888,7 +910,7 @@ impl FunctionCompiler<'_> {
                     ForeignWriteback::Same(value)
                 }
                 FfiType::Struct(layout) => {
-                    let slot = self.foreign_struct_slot(layout);
+                    let slot = self.foreign_struct_slot(layout)?;
                     self.store_foreign_struct(layout, &value, slot)?;
                     self.push_foreign_struct(layout, slot, &mut arguments)?;
                     continue;
@@ -943,7 +965,7 @@ impl FunctionCompiler<'_> {
                     ForeignWriteback::Structs(layout, array, value)
                 }
                 FfiType::StructPointer(layout) => {
-                    let slot = self.foreign_struct_slot(layout);
+                    let slot = self.foreign_struct_slot(layout)?;
                     self.store_foreign_struct(layout, &value, slot)?;
                     arguments.push_word(slot);
                     ForeignWriteback::Struct(layout, slot, value)
@@ -1176,7 +1198,16 @@ impl FunctionCompiler<'_> {
             self.ensure_opaque(value)?
         };
         let label = crate::ffi::reinterpret_label(&call.name);
-        let slot = self.foreign_struct_slot(if from.size() >= to.size() { from } else { to });
+        let from_size = from.checked_size().ok_or_else(|| {
+            format!(
+                "direct backend C struct `{}` size overflows usize",
+                from.name
+            )
+        })?;
+        let to_size = to
+            .checked_size()
+            .ok_or_else(|| format!("direct backend C struct `{}` size overflows usize", to.name))?;
+        let slot = self.foreign_struct_slot(if from_size >= to_size { from } else { to })?;
         self.store_foreign_struct(from, &value, slot)?;
         let return_direct = ensure_direct_type(
             &call.return_type,
@@ -1201,16 +1232,45 @@ impl FunctionCompiler<'_> {
     /// The address of a new zeroed stack slot that holds one `layout`
     /// struct. The slot is a whole number of 8-byte words, so a register's
     /// piece of the struct loads and stores as one word.
-    fn foreign_struct_slot(&mut self, layout: &CStruct) -> Val {
-        let size = struct_slot_size(layout);
+    fn foreign_struct_slot(&mut self, layout: &CStruct) -> std::result::Result<Val, String> {
+        let size = struct_slot_size(layout)?;
         let slot = self.builder.create_sized_stack_slot(size, 3);
         let address = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
-        for offset in (0..size).step_by(8) {
-            self.builder
-                .store(MemFlags::trusted(), zero, address, offset as i32);
+        if size <= 256 {
+            for offset in (0..size).step_by(8) {
+                let offset = i32::try_from(offset).map_err(|_| {
+                    format!(
+                        "direct backend C struct `{}` offset {offset} overflows i32",
+                        layout.name
+                    )
+                })?;
+                self.builder
+                    .store(MemFlags::trusted(), zero, address, offset);
+            }
+        } else {
+            let header = self.builder.create_block();
+            let body = self.builder.create_block();
+            let done = self.builder.create_block();
+            let cursor = self.builder.append_block_param(header, types::I64);
+            let start = self.builder.iconst(types::I64, 0);
+            self.builder.jump(header, &[start]);
+            self.builder.switch_to_block(header);
+            let more = self
+                .builder
+                .icmp_imm(IntCC::UnsignedLessThan, cursor, i64::from(size));
+            self.builder.brif(more, body, &[], done, &[]);
+            self.builder.switch_to_block(body);
+            self.builder.seal_block(body);
+            let ptr = self.builder.iadd(address, cursor);
+            self.builder.store(MemFlags::trusted(), zero, ptr, 0);
+            let next = self.builder.iadd_imm(cursor, 8);
+            self.builder.jump(header, &[next]);
+            self.builder.seal_block(header);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
         }
-        address
+        Ok(address)
     }
 
     /// The JSON text of `layout` in the program's data, which the runtime
@@ -1287,7 +1347,9 @@ impl FunctionCompiler<'_> {
             };
             (field.name.as_str(), *scalar, *count)
         };
-        let bytes = count * scalar.size();
+        let Some(bytes) = count.checked_mul(scalar.size()) else {
+            return Ok(None);
+        };
         // The constant-size loads below are for small by-value aggregates.
         if bytes > 128 || bytes == 0 {
             return Ok(None);
@@ -1414,7 +1476,7 @@ impl FunctionCompiler<'_> {
             CArgument::Stack => {
                 arguments.push_word(slot);
                 arguments.mark_last(Indirect::ByValue {
-                    size: struct_slot_size(layout),
+                    size: struct_slot_size(layout)?,
                 });
             }
             CArgument::Address => arguments.push_word(slot),
@@ -2008,5 +2070,43 @@ mod tests {
             assert_eq!(layout.passing(abi), CPassing::Memory);
             assert_eq!(layout.argument(abi, 0, 0), Ok(CArgument::Address));
         }
+    }
+
+    #[test]
+    fn struct_slot_size_rejects_oversized_and_overflowing_layouts() {
+        let small = struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]);
+        assert_eq!(struct_slot_size(&small), Ok(8));
+
+        let four_gib = CStruct {
+            name: "FourGiB".to_string(),
+            fields: vec![CField {
+                name: "data".to_string(),
+                kind: CFieldKind::Array(
+                    Box::new(CFieldKind::Array(
+                        Box::new(CFieldKind::Scalar(FfiScalar::U8)),
+                        65536,
+                    )),
+                    65536,
+                ),
+            }],
+            union: false,
+        };
+        assert!(struct_slot_size(&four_gib).is_err());
+
+        let two_gib = CStruct {
+            name: "TwoGiB".to_string(),
+            fields: vec![CField {
+                name: "data".to_string(),
+                kind: CFieldKind::Array(
+                    Box::new(CFieldKind::Array(
+                        Box::new(CFieldKind::Scalar(FfiScalar::U8)),
+                        65536,
+                    )),
+                    32768,
+                ),
+            }],
+            union: false,
+        };
+        assert!(struct_slot_size(&two_gib).is_err());
     }
 }

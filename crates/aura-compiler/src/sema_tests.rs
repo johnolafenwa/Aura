@@ -33575,6 +33575,31 @@ def run() -> None:
 }
 
 #[test]
+fn extern_c_rejects_oversized_nested_array_structs() {
+    let four_gib = r#"extern "C" class Huge:
+    data: array[array[uint8, 65536], 65536]
+"#;
+    let err = check_ffi_source_for_test(four_gib)
+        .expect_err("oversized nested C array struct must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let too_many_leaves = r#"extern "C" class ManyLeaves:
+    data: array[array[uint8, 2048], 1024]
+"#;
+    let err = check_ffi_source_for_test(too_many_leaves)
+        .expect_err("C array struct exceeding leaf limit must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let union_overflow = r#"extern "C" union HugeUnion:
+    a: array[array[uint64, 65536], 65536]
+    b: uint64
+"#;
+    let err =
+        check_ffi_source_for_test(union_overflow).expect_err("oversized C union must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"

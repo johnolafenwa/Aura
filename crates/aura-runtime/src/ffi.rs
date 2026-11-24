@@ -503,6 +503,7 @@ pub enum FfiError {
     InvalidUtf8Return,
     NullCallbackText,
     InvalidUtf8CallbackText,
+    InvalidLayout(String),
 }
 
 impl fmt::Display for FfiError {
@@ -562,6 +563,7 @@ impl fmt::Display for FfiError {
             Self::InvalidUtf8CallbackText => {
                 formatter.write_str("the C caller passed a cstr that is not valid UTF-8")
             }
+            Self::InvalidLayout(detail) => formatter.write_str(detail),
             Self::InvalidUtf8Return => {
                 formatter.write_str("FFI function returned a cstr that is not UTF-8")
             }
@@ -656,25 +658,29 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
 /// the same way. A struct that is or holds a union is described by what
 /// decides how it is passed: its size, its alignment, and the class of
 /// each of its register pieces on this machine.
-fn struct_type(layout: &CStruct) -> Type {
-    if layout.holds_union() {
-        return overlapping_struct_type(layout);
-    }
-    Type::structure(
-        layout
-            .fields
-            .iter()
-            .map(|field| field_type(&field.kind))
-            .collect::<Vec<_>>(),
-    )
+fn struct_type(layout: &CStruct) -> Result<Type, FfiError> {
+    layout.validate_bounds().map_err(FfiError::InvalidLayout)?;
+    struct_type_unchecked(layout)
 }
 
-fn field_type(kind: &CFieldKind) -> Type {
-    match kind {
-        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
-        CFieldKind::Struct(inner) => struct_type(inner),
-        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element); *count]),
+fn struct_type_unchecked(layout: &CStruct) -> Result<Type, FfiError> {
+    if layout.holds_union() {
+        return Ok(overlapping_struct_type(layout));
     }
+    let fields = layout
+        .fields
+        .iter()
+        .map(|field| field_type(&field.kind))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Type::structure(fields))
+}
+
+fn field_type(kind: &CFieldKind) -> Result<Type, FfiError> {
+    Ok(match kind {
+        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
+        CFieldKind::Struct(inner) => struct_type_unchecked(inner)?,
+        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element)?; *count]),
+    })
 }
 
 /// A struct of scalars with the size, alignment, and register classes of
@@ -725,12 +731,15 @@ fn scalar_type(scalar: FfiScalar) -> Type {
 /// `words`, one scalar each, packed as C lays out an array of `scalar`.
 fn pack_elements(scalar: FfiScalar, words: &[u64]) -> Vec<u64> {
     let size = scalar.size();
-    let mut packed = vec![0_u64; (words.len() * size).div_ceil(8)];
-    // SAFETY: the storage holds at least `words.len() * size` bytes, and a
-    // byte has no alignment.
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(packed.as_mut_ptr().cast::<u8>(), words.len() * size)
-    };
+    let byte_len = words
+        .len()
+        .checked_mul(size)
+        .expect("FFI packed element byte length overflows usize");
+    let mut packed = vec![0_u64; byte_len.div_ceil(8)];
+    // SAFETY: the storage holds at least `byte_len` bytes, and a byte has no
+    // alignment.
+    let bytes =
+        unsafe { std::slice::from_raw_parts_mut(packed.as_mut_ptr().cast::<u8>(), byte_len) };
     for (chunk, word) in bytes.chunks_exact_mut(size).zip(words) {
         chunk.copy_from_slice(&word.to_le_bytes()[..size]);
     }
@@ -741,8 +750,19 @@ fn pack_elements(scalar: FfiScalar, words: &[u64]) -> Vec<u64> {
 /// [`pack_elements`].
 fn unpack_elements(scalar: FfiScalar, packed: &[u64], count: usize) -> Vec<u64> {
     let size = scalar.size();
-    // SAFETY: `packed` was made by `pack_elements` for `count` scalars.
-    let bytes = unsafe { std::slice::from_raw_parts(packed.as_ptr().cast::<u8>(), count * size) };
+    let byte_len = count
+        .checked_mul(size)
+        .expect("FFI unpacked element byte length overflows usize");
+    let capacity = packed
+        .len()
+        .checked_mul(8)
+        .expect("FFI packed buffer byte capacity overflows usize");
+    assert!(
+        byte_len <= capacity,
+        "FFI unpacked element byte length exceeds packed buffer capacity"
+    );
+    // SAFETY: `packed` holds at least `byte_len` bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(packed.as_ptr().cast::<u8>(), byte_len) };
     bytes
         .chunks_exact(size)
         .map(|chunk| {
@@ -917,7 +937,7 @@ fn append_argument(
         }
         (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
             let words = aligned_bytes(bytes, 1);
-            types.push(struct_type(layout));
+            types.push(struct_type(layout)?);
             // Moving the `Vec` keeps its heap buffer where it is.
             values.push(AbiArgument::Struct(words.as_ptr(), words.len()));
             storage.structs.push((index, words));
@@ -967,7 +987,7 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         | FfiType::NullableOpaqueHandle
         | FfiType::CString
         | FfiType::NullableCString => Type::pointer(),
-        FfiType::Struct(layout) => struct_type(layout),
+        FfiType::Struct(layout) => struct_type(layout)?,
         FfiType::StringView
         | FfiType::BytesView
         | FfiType::BytesViewMut

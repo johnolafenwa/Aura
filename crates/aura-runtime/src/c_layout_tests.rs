@@ -476,3 +476,43 @@ fn arrays_and_unions_are_classified_by_every_scalar_that_overlaps() {
         assert_eq!(big.passing(abi), CPassing::Memory);
     }
 }
+
+#[test]
+fn overflowing_c_struct_layout_does_not_panic_in_passing() {
+    let overflowing = of_kinds(
+        "Overflowing",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U64), usize::MAX / 4)],
+    );
+    assert_eq!(overflowing.checked_size(), None);
+    assert!(overflowing.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(overflowing.passing(abi), CPassing::Memory);
+    }
+
+    // Large nested arrays must classify as CPassing::Memory in O(1) space
+    // without expanding leaves().
+    let four_gib = of_kinds(
+        "FourGiB",
+        false,
+        vec![array(
+            array(CFieldKind::Scalar(FfiScalar::U8), 65536),
+            65536,
+        )],
+    );
+    assert_eq!(four_gib.checked_size(), Some(4 * 1024 * 1024 * 1024));
+    assert_eq!(four_gib.checked_leaf_count(), Some(4 * 1024 * 1024 * 1024));
+    assert!(four_gib.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(four_gib.passing(abi), CPassing::Memory);
+    }
+
+    let valid = of_kinds(
+        "Small",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U32), 16)],
+    );
+    assert_eq!(valid.checked_size(), Some(64));
+    assert_eq!(valid.checked_leaf_count(), Some(16));
+    assert!(valid.validate_bounds().is_ok());
+}

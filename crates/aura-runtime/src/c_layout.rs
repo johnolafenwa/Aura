@@ -43,14 +43,36 @@ pub enum CFieldKind {
     Array(Box<CFieldKind>, usize),
 }
 
+/// The largest C struct or union layout Aura accepts, in bytes.
+/// Keeps stack slots, signed 32-bit offsets, and runtime buffers bounded.
+pub const MAX_C_STRUCT_BYTES: usize = 16 * 1024 * 1024;
+
+/// The most scalar leaves one C struct or union layout may expand to.
+pub const MAX_C_STRUCT_LEAVES: usize = 1 << 20;
+
 impl CFieldKind {
+    /// The size of a value of the kind in bytes, or `None` on overflow.
+    pub fn checked_size(&self) -> Option<usize> {
+        match self {
+            Self::Scalar(scalar) => Some(scalar.size()),
+            Self::Struct(inner) => inner.checked_size(),
+            Self::Array(element, count) => element.checked_size()?.checked_mul(*count),
+        }
+    }
+
+    /// The number of scalar leaves in a value of the kind, or `None` on overflow.
+    pub fn checked_leaf_count(&self) -> Option<usize> {
+        match self {
+            Self::Scalar(_) => Some(1),
+            Self::Struct(inner) => inner.checked_leaf_count(),
+            Self::Array(element, count) => element.checked_leaf_count()?.checked_mul(*count),
+        }
+    }
+
     /// The size of a value of the kind in bytes.
     pub fn size(&self) -> usize {
-        match self {
-            Self::Scalar(scalar) => scalar.size(),
-            Self::Struct(inner) => inner.size(),
-            Self::Array(element, count) => element.size() * count,
-        }
+        self.checked_size()
+            .expect("C field layout size overflows usize")
     }
 
     /// The alignment of a value of the kind in bytes.
@@ -243,15 +265,23 @@ impl CStruct {
             .unwrap_or(1)
     }
 
-    /// Places one field at its aligned offset and advances the struct's end.
-    fn place_field(&self, field: &CField, end: &mut usize) -> usize {
+    /// Places one field at its aligned offset and advances the struct's end,
+    /// returning `None` if alignment or size overflows `usize`.
+    fn checked_place_field(&self, field: &CField, end: &mut usize) -> Option<usize> {
         let offset = if self.union {
             0
         } else {
-            end.next_multiple_of(field.kind.align())
+            end.checked_next_multiple_of(field.kind.align())?
         };
-        *end = (*end).max(offset + field.kind.size());
-        offset
+        let field_end = offset.checked_add(field.kind.checked_size()?)?;
+        *end = (*end).max(field_end);
+        Some(offset)
+    }
+
+    /// Places one field at its aligned offset and advances the struct's end.
+    fn place_field(&self, field: &CField, end: &mut usize) -> usize {
+        self.checked_place_field(field, end)
+            .expect("C struct layout overflows usize")
     }
 
     /// Fields and their byte offsets in declaration order. All members of
@@ -270,13 +300,62 @@ impl CStruct {
         !self.union && self.fields.iter().all(|field| field.kind.is_plain())
     }
 
-    /// The size of the struct in bytes, as `sizeof` gives it.
-    pub fn size(&self) -> usize {
+    /// The size of the struct in bytes, as `sizeof` gives it, or `None` on
+    /// arithmetic overflow.
+    pub fn checked_size(&self) -> Option<usize> {
         let mut end = 0;
         for field in &self.fields {
-            self.place_field(field, &mut end);
+            self.checked_place_field(field, &mut end)?;
         }
-        end.next_multiple_of(self.align())
+        end.checked_next_multiple_of(self.align())
+    }
+
+    /// The total number of scalar leaves in the struct, or `None` on overflow.
+    pub fn checked_leaf_count(&self) -> Option<usize> {
+        let mut total = 0usize;
+        for field in &self.fields {
+            total = total.checked_add(field.kind.checked_leaf_count()?)?;
+        }
+        Some(total)
+    }
+
+    /// Checks that the struct's total byte size and leaf count stay within
+    /// Aura's layout limits and 32-bit stack-slot bounds.
+    pub fn validate_bounds(&self) -> Result<(), String> {
+        let size = self.checked_size().ok_or_else(|| {
+            format!(
+                "C layout `{}` exceeds maximum size of {} bytes",
+                self.name, MAX_C_STRUCT_BYTES
+            )
+        })?;
+        let slot_size = size.checked_next_multiple_of(8);
+        if size > MAX_C_STRUCT_BYTES
+            || slot_size.is_none_or(|rounded| i32::try_from(rounded).is_err())
+        {
+            return Err(format!(
+                "C layout `{}` requires {} bytes, which exceeds the maximum of {} bytes",
+                self.name, size, MAX_C_STRUCT_BYTES
+            ));
+        }
+        let leaves = self.checked_leaf_count().ok_or_else(|| {
+            format!(
+                "C layout `{}` exceeds maximum scalar count of {}",
+                self.name, MAX_C_STRUCT_LEAVES
+            )
+        })?;
+        if leaves > MAX_C_STRUCT_LEAVES {
+            return Err(format!(
+                "C layout `{}` has {} scalar elements, which exceeds the maximum of {}",
+                self.name, leaves, MAX_C_STRUCT_LEAVES
+            ));
+        }
+        Ok(())
+    }
+
+    /// The size of the struct in bytes, as `sizeof` gives it.
+    pub fn size(&self) -> usize {
+        self.checked_size()
+            .expect("C struct layout size overflows usize")
     }
 
     /// The byte offset of each field, in order.
@@ -310,6 +389,10 @@ impl CStruct {
     /// float type, and it holds one to four of them, counted by size so
     /// that the overlapping members of a union count once.
     fn homogeneous_floats(&self) -> Option<(FfiScalar, usize)> {
+        let size = self.checked_size()?;
+        if size > 32 || self.checked_leaf_count()? > MAX_C_STRUCT_LEAVES {
+            return None;
+        }
         let leaves = self.leaves();
         let first = leaves.first()?.scalar;
         if !matches!(first, FfiScalar::F32 | FfiScalar::F64)
@@ -317,25 +400,15 @@ impl CStruct {
         {
             return None;
         }
-        let count = self.size() / first.size();
+        let count = size / first.size();
         (1..=4).contains(&count).then_some((first, count))
     }
 
     /// How `abi` passes the struct by value.
     pub fn passing(&self, abi: CAbi) -> CPassing {
-        let size = self.size();
-        let leaves = self.leaves();
-        let is_float = |leaf: &CLeaf| matches!(leaf.scalar, FfiScalar::F32 | FfiScalar::F64);
-        if let (CAbi::Aapcs64, Some((scalar, count))) = (abi, self.homogeneous_floats()) {
-            return CPassing::Registers(
-                (0..count)
-                    .map(|index| CPiece::Float {
-                        offset: index * scalar.size(),
-                        scalar,
-                    })
-                    .collect(),
-            );
-        }
+        let Some(size) = self.checked_size() else {
+            return CPassing::Memory;
+        };
         if abi == CAbi::Win64 {
             // Windows passes a struct of 1, 2, 4 or 8 bytes as an integer of
             // that size, whatever its fields, and every other struct in
@@ -346,9 +419,28 @@ impl CStruct {
                 CPassing::Memory
             };
         }
+        // Short-circuit before expanding `leaves()` so large structs pass in
+        // memory in O(1) space.
+        if abi == CAbi::Aapcs64 {
+            if size > 32 {
+                return CPassing::Memory;
+            }
+            if let Some((scalar, count)) = self.homogeneous_floats() {
+                return CPassing::Registers(
+                    (0..count)
+                        .map(|index| CPiece::Float {
+                            offset: index * scalar.size(),
+                            scalar,
+                        })
+                        .collect(),
+                );
+            }
+        }
         if size > 16 {
             return CPassing::Memory;
         }
+        let leaves = self.leaves();
+        let is_float = |leaf: &CLeaf| matches!(leaf.scalar, FfiScalar::F32 | FfiScalar::F64);
         let pieces = (0..size)
             .step_by(8)
             .map(|offset| {

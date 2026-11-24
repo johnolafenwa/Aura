@@ -863,6 +863,9 @@ unsafe fn foreign_layout(descriptor: *const u8, length: usize) -> &'static CStru
     let Ok(layout) = serde_json::from_str::<CStruct>(text) else {
         runtime_error("a foreign call names a C layout that does not read");
     };
+    if let Err(reason) = layout.validate_bounds() {
+        runtime_error(reason);
+    }
     let layout = layout.interned();
     layouts.insert(descriptor as usize, (text.into(), layout));
     layout
