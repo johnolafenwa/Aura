@@ -12,6 +12,7 @@ pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
 mod freestanding_mode;
+pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
@@ -732,7 +733,12 @@ impl ModuleLoader {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
             }
-            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            program.constant_init_plan =
+                self.build_constant_init_plan(&path, &mut |import, dependency| {
+                    if import != path {
+                        inline_asm::append_module(dependency, &mut program.foreign_link);
+                    }
+                })?;
             self.cache.insert(
                 path.clone(),
                 LoadedModule {
@@ -744,12 +750,17 @@ impl ModuleLoader {
         Ok(program)
     }
 
-    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+    fn build_constant_init_plan(
+        &self,
+        entry_path: &Path,
+        visit_module: &mut dyn FnMut(&Path, &Program),
+    ) -> Result<Vec<sema::ConstantInfo>> {
         fn visit(
             loader: &ModuleLoader,
             path: &Path,
             visited: &mut BTreeSet<PathBuf>,
             plan: &mut Vec<sema::ConstantInfo>,
+            visit_module: &mut dyn FnMut(&Path, &Program),
         ) -> Result<()> {
             let path = absolutize(path);
             if !visited.insert(path.clone()) {
@@ -777,8 +788,9 @@ impl ModuleLoader {
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
-                visit(loader, &dependency, visited, plan)?;
+                visit(loader, &dependency, visited, plan, visit_module)?;
             }
+            visit_module(&path, &loaded.program);
             let mut local = loaded
                 .program
                 .constants
@@ -793,7 +805,7 @@ impl ModuleLoader {
 
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
-        visit(self, entry_path, &mut visited, &mut plan)?;
+        visit(self, entry_path, &mut visited, &mut plan, visit_module)?;
         let mut seen = BTreeSet::new();
         plan.retain(|constant| {
             seen.insert((constant.module_name.clone(), constant.decl.name.clone()))
@@ -2150,3 +2162,6 @@ mod tests;
 
 #[cfg(test)]
 use aura_runtime::array_kernel_corpus;
+
+#[cfg(test)]
+mod inline_asm_tests;
