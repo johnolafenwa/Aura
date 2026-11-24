@@ -32294,3 +32294,42 @@ fn extending_a_byte_list_with_a_text_appends_its_bytes() {
         release_value(text);
     }
 }
+
+#[test]
+fn join_reads_the_parts_in_place_and_keeps_the_ascii_flag() {
+    let join = |separator: &str, parts: &[&str]| {
+        let separator = string_value(separator);
+        let parts = string_vec(parts);
+        let joined = super::aura_direct_string_join(separator, parts);
+        let text = match unsafe { value_ref(joined) } {
+            Value::String(text) => text,
+            other => panic!("expected a string, found {other:?}"),
+        };
+        assert_eq!(text.is_ascii(), text.as_str().is_ascii(), "{text}");
+        unsafe {
+            release_value(joined);
+            release_value(parts);
+            release_value(separator);
+        }
+        text.into_string()
+    };
+    assert_eq!(join(", ", &[]), "");
+    assert_eq!(join("\u{e9}", &["only"]), "only");
+    assert_eq!(join(", ", &["a", "b", "c"]), "a, b, c");
+    assert_eq!(join("", &["a", "\u{e9}", "c"]), "a\u{e9}c");
+    assert_eq!(join("\u{2192}", &["a", "b"]), "a\u{2192}b");
+    // A list that keeps each element in a box of its own.
+    let parts = string_vec(&["x", "y"]);
+    super::with_vector_mut(parts, |vector| {
+        vector.elements.lend(0);
+    });
+    let separator = string_value("-");
+    assert_eq!(
+        expect_string(super::aura_direct_string_join(separator, parts)),
+        "x-y"
+    );
+    unsafe {
+        release_value(parts);
+        release_value(separator);
+    }
+}

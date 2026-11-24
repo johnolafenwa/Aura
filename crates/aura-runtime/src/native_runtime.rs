@@ -3069,12 +3069,8 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Map(map) => {
             if let Type::Named(name, args) = parsed {
                 if name == "dict" && args.len() == 2 {
-                    if map.key_type != args[0] {
-                        map.key_type = args[0].clone().into();
-                    }
-                    if map.value_type != args[1] {
-                        map.value_type = args[1].clone().into();
-                    }
+                    assign_shared_type(&mut map.key_type, &args[0]);
+                    assign_shared_type(&mut map.value_type, &args[1]);
                 }
             }
         }
@@ -3639,9 +3635,59 @@ unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
     let value = unsafe { take_owned_contents(ptr) };
     unsafe {
-        aura_direct_release_value(ptr);
+        if !free_emptied_box(ptr) {
+            aura_direct_release_value(ptr);
+        }
     }
     value
+}
+
+/// Frees a box whose value was taken out, leaving `Unit`, when the caller's
+/// reference is the only one and the running task's ledger links it, and
+/// returns whether it did. Only the block is left to free then, so the
+/// general release of a value is skipped: a value appended to a list or
+/// stored in a dict leaves its box this way.
+///
+/// # Safety
+///
+/// `ptr` is null or a live box the caller owns one reference to, which
+/// this takes when it returns true.
+#[inline]
+unsafe fn free_emptied_box(ptr: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let Some(header) = (unsafe { ptr.as_ref() }) else {
+        return false;
+    };
+    if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+        return false;
+    }
+    // SAFETY: no other access to a confined box with one reference is in
+    // progress.
+    let (held, named) = unsafe { (&*header.value.get(), &*header.runtime_type_name.get()) };
+    if !matches!(held, Value::Unit) || named.is_some() {
+        return false;
+    }
+    let unlinked = current_direct_frame_stack().is_some_and(|stack| {
+        // SAFETY: the stack belongs to the running task, and the box is
+        // live.
+        unsafe {
+            (*stack.as_ptr())
+                .owned_values
+                .remove_last(stack.as_ptr(), ptr)
+        }
+    });
+    if !unlinked {
+        return false;
+    }
+    header.ref_count.store(0, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_box_freed();
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+    // SAFETY: the last reference is gone, no ledger links the box, and it
+    // holds `Unit`, no type name and no lock, so only the block is left.
+    unsafe { std::alloc::dealloc(ptr.cast(), std::alloc::Layout::new::<OpaqueValue>()) };
+    true
 }
 
 unsafe fn consume_untracked_value(ptr: *mut OpaqueValue) -> Value {
@@ -8687,29 +8733,47 @@ pub extern "C-unwind" fn aura_direct_string_join(
     separator: *mut OpaqueValue,
     parts: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let Value::Vec(parts) = (unsafe { take_value(parts) }) else {
-            runtime_error("`join` requires `list[str]`");
-        };
-        unsafe {
+    task_runtime_boundary(|| unsafe {
+        // The parts are read where the list keeps them, into one buffer of
+        // the final size.
+        let joined = with_value(parts, |parts| {
+            let Value::Vec(parts) = parts else {
+                runtime_error("`join` requires `list[str]`");
+            };
             with_value(separator, |value| match value {
-                Value::String(separator) => {
-                    let mut rendered_parts = Vec::new();
-                    for value in parts.elements {
-                        let Value::String(part) = value else {
-                            runtime_error("`join` requires `list[str]`");
-                        };
-                        rendered_parts.push(part);
-                    }
-                    boxed_value(Value::String(rendered_parts.join(separator).into()))
-                }
+                Value::String(separator) => join_parts(&parts.elements, separator),
                 other => runtime_error(format!(
                     "expected `str`, found `{}`",
                     value_type_name(other)
                 )),
             })
-        }
+        });
+        boxed_value(Value::String(joined))
     })
+}
+
+/// The `str` elements of a list with `separator` between them.
+fn join_parts(elements: &ListElements, separator: &crate::text::Text) -> crate::text::Text {
+    let count = elements.len();
+    let part = |index: usize| match elements.value_at(index) {
+        Some(Value::String(part)) => part,
+        _ => runtime_error("`join` requires `list[str]`"),
+    };
+    let mut len = separator.len().saturating_mul(count.saturating_sub(1));
+    let mut ascii = count < 2 || separator.is_ascii();
+    for index in 0..count {
+        let part = part(index);
+        len = len.saturating_add(part.len());
+        ascii &= part.is_ascii();
+    }
+    let mut joined = String::with_capacity(len);
+    for index in 0..count {
+        if index > 0 {
+            joined.push_str(separator);
+        }
+        joined.push_str(part(index));
+    }
+    crate::text::Text::from_string_with(joined, ascii)
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -9450,9 +9514,9 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
 
 /// Appends the text of `value` to the list `vec` when `value` is a `str`
 /// box with one reference, which the caller hands over, and returns
-/// whether it did. The text moves into the list and the emptied box is
-/// freed here, without the general release of a value: appending a string
-/// that was just built is what a text program's output loop does.
+/// whether it did. The text moves into the list without the checks an
+/// append of any value makes: appending a string that was just built is
+/// what a text program's output loop does.
 ///
 /// # Safety
 ///
@@ -9486,27 +9550,12 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
             elements => elements.push(text),
         }
     });
-    let unlinked = current_direct_frame_stack().is_some_and(|stack| {
-        // SAFETY: the stack belongs to the running task, and the box is
-        // live.
-        unsafe {
-            (*stack.as_ptr())
-                .owned_values
-                .remove_last(stack.as_ptr(), value)
+    // SAFETY: the caller's reference, which this function took.
+    unsafe {
+        if !free_emptied_box(value) {
+            aura_direct_release_value(value);
         }
-    });
-    if !unlinked {
-        // SAFETY: the caller's reference, which this function took.
-        unsafe { aura_direct_release_value(value) };
-        return true;
     }
-    header.ref_count.store(0, Ordering::Relaxed);
-    crate::runtime_value::representation_stats::note_box_freed();
-    #[cfg(coverage)]
-    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
-    // SAFETY: the last reference is gone, no ledger links the box, and it
-    // holds `Unit`, no type name and no lock, so only the block is left.
-    unsafe { std::alloc::dealloc(value.cast(), std::alloc::Layout::new::<OpaqueValue>()) };
     true
 }
 
