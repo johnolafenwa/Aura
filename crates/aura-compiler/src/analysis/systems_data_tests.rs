@@ -198,8 +198,16 @@ fn systems_data_editor_shows_writable_union_members() {
     let (_temp, file) = ffi_editor_package(&source);
     let completions = complete_path_source(&file, &source, 3, 9, Some('.')).unwrap();
     assert!(completions.iter().any(|item| item.name == "bits"));
-    assert!(completions.iter().all(|item| !item.name.starts_with("__write_")));
+    assert!(completions
+        .iter()
+        .all(|item| !item.name.starts_with("__write_")));
     let analysis = analyze_path_source(&file, &source);
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
-    assert!(occurrence_at(&analysis, 3, 9).hover.contains("property bits"));
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert!(occurrence_at(&analysis, 3, 9)
+        .hover
+        .contains("property bits"));
 }

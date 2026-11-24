@@ -496,6 +496,10 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_stmts(&function_decl.body, &mut scope);
                 }
                 Item::Class(class_decl) => {
+                    // Union methods come from the parser and have no user-written bodies.
+                    if class_decl.c_union.is_some() {
+                        continue;
+                    }
                     let class_info = self.program.classes.get(&class_decl.name).unwrap();
                     for method in &class_decl.methods {
                         self.type_parameters = class_decl
@@ -2058,6 +2062,7 @@ impl<'a> AnalysisBuilder<'a> {
                 // `__init__` runs only through a class call; the invariant check is hidden.
                 if name == crate::sema::INITIALIZER_NAME
                     || name == crate::ast::CLASS_INVARIANT_METHOD
+                    || (class_info.decl.c_union.is_some() && name.starts_with("__write_"))
                 {
                     continue;
                 }
