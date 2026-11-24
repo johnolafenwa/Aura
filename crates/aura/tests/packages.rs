@@ -920,3 +920,45 @@ fn invalid_cfg_is_reported_by_each_command() {
         );
     }
 }
+
+#[test]
+fn build_cfg_reaches_unsaved_source_and_the_package_test_runner() {
+    let temp = TempDir::new("aura-cfg-command-inputs");
+    temp.write("Aura.toml", "[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[build.cfg]\nboard = \"pico\"");
+    let main = temp.write("src/main.au", "def main():\n    pass\n");
+    let test = temp.write("tests/board.au", "import build\ndef test_board():\n    assert build.cfg[\"board\"] == \"pico\"\n    assert build.cfg[\"trace\"] == \"true\"\n");
+    let mut child = Command::new(aura_bin())
+        .args(["run", "--cfg", "trace", "--stdin"])
+        .arg(&main)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"import build\ndef main():\n    print(build.cfg[\"board\"])\n    print(build.cfg[\"trace\"])\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "pico\ntrue\n"
+    );
+    for command in ["check", "test"] {
+        let output = Command::new(aura_bin())
+            .args([command, "--cfg=trace"])
+            .arg(&test)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

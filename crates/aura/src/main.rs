@@ -56,7 +56,7 @@ fn main() {
         print_command_usage_and_exit(&command);
     }
     let mut config = aura_compiler::current_build_config();
-    let args = if matches!(command.as_str(), "build" | "run" | "check" | "test") {
+    let mut args = if matches!(command.as_str(), "build" | "run" | "check" | "test") {
         build_options::take_cfg(rest.clone(), &mut config)
             .unwrap_or_else(|error| {
                 let (format, _) = parse_diagnostic_format(rest);
