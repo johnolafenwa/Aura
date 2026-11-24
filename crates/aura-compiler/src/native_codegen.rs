@@ -87,6 +87,7 @@ pub fn emit_freestanding_object(
     program_source: &str,
     target: FreestandingTarget,
 ) -> std::result::Result<Vec<u8>, Vec<crate::diag::Diagnostic>> {
+    let _target_scope = crate::enter_freestanding_target(target);
     let module = freestanding::prepare(module)?;
     let internal = |error: String| vec![freestanding::emitter_diagnostic(error)];
     let module = validated_for_emission(&module).map_err(internal)?;

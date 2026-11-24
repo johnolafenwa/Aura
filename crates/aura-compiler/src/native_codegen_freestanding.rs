@@ -1079,6 +1079,7 @@ pub(crate) fn check_object(bytes: &[u8], module: &MirModule) -> std::result::Res
         .filter(|name| {
             !name.is_empty()
                 && *name != TRAP_HOOK
+                && !crate::freestanding_mode::is_soft_float_helper(name)
                 && !MEMORY_ROUTINES.contains(name)
                 && !declared.contains(name)
         })
