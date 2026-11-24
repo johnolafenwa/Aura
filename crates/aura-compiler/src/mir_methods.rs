@@ -349,6 +349,21 @@ impl Resolver<'_, '_> {
             .operand_type(function, parts.object)
             .ok_or("its receiver has no type")?;
         let call = MemberCall {
+            owner: match callee {
+                CallTarget::TraitMember { trait_args, .. }
+                    if function.span.column >= crate::diag::GENERATED_COLUMN_STRIDE
+                        && trait_args
+                            .iter()
+                            .any(crate::sema::has_unresolved_type_params) =>
+                {
+                    function
+                        .local_types
+                        .iter()
+                        .find(|local| local.name == "self")
+                        .map(|local| &local.ty)
+                }
+                _ => None,
+            },
             field: parts.field,
             trait_name: parts.trait_name,
             trait_args: match callee {
@@ -540,6 +555,23 @@ impl Resolver<'_, '_> {
                 return Err(format!("the runtime has no member `{name}.{}`", call.field));
             }
         }
+        if let (Type::TypeParam(_), Some(owner), Some(trait_name)) =
+            (receiver, call.owner, call.trait_name)
+        {
+            let candidates = super::delegation::open_field_candidates(
+                self.context.trait_impls,
+                owner,
+                trait_name,
+                call.trait_args,
+                call.field,
+            );
+            if !candidates.is_empty() {
+                return Ok(MethodDispatch::Candidates {
+                    candidates,
+                    erased: true,
+                });
+            }
+        }
         let candidates = self.candidate_types(call.field, call.trait_name, call.trait_args);
         let erased = matches!(receiver, Type::TypeParam(_));
         if candidates.len() == 1 && !erased {
@@ -565,7 +597,11 @@ impl Resolver<'_, '_> {
                 else {
                     unreachable!("a class method is a static call");
                 };
-                Ok(MethodCandidate { ty, function })
+                Ok(MethodCandidate {
+                    ty,
+                    function,
+                    owner_type: None,
+                })
             })
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(MethodDispatch::Candidates { candidates, erased })
@@ -729,7 +765,11 @@ impl Resolver<'_, '_> {
                         &trait_impl.for_type,
                         &trait_impl.trait_args,
                     ),
-                    trait_impl.for_type.clone(),
+                    if trait_args.is_empty() {
+                        trait_impl.for_type.clone()
+                    } else {
+                        trait_impl.receiver_for_trait_args(trait_args)
+                    },
                 ));
             }
         }
@@ -903,6 +943,7 @@ pub(super) fn cleanup_method(
 
 /// One member call to resolve.
 struct MemberCall<'a> {
+    owner: Option<&'a Type>,
     field: &'a str,
     trait_name: Option<&'a str>,
     trait_args: &'a [Type],

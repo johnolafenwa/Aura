@@ -85,7 +85,42 @@ impl Lowerer<'_> {
     }
 }
 
+impl Lowerer<'_> {
+    /// A trait object erases its type after lowering. Preserve the selected
+    /// specialization, including substitutions on an inherited method.
+    pub(super) fn trait_object_call_args(&self, receiver: Option<&Type>, field: &str) -> Vec<Type> {
+        let Some(ty) = receiver.filter(|ty| ty.is_trait_object()) else {
+            return Vec::new();
+        };
+        let Some((_, info, _, substitutions)) = self.bounded_trait_method_for_receiver(ty, field)
+        else {
+            return Vec::new();
+        };
+        info.decl
+            .type_params
+            .iter()
+            .filter_map(|param| substitutions.get(param).cloned())
+            .collect()
+    }
+}
+
 impl MirTraitImpl {
+    /// Bind the candidate receiver's parameters from a concrete trait object
+    /// bound before comparing it with the boxed value's actual type.
+    pub(super) fn receiver_for_trait_args(&self, args: &[Type]) -> Type {
+        let mut parameters = BTreeSet::new();
+        for arg in &self.trait_args {
+            collect_type_params_from_type(arg, &mut parameters);
+        }
+        let mut substitutions = HashMap::new();
+        for (pattern, actual) in self.trait_args.iter().zip(args) {
+            if !crate::sema::has_unresolved_type_params(actual) {
+                crate::sema::type_pattern_matches(pattern, actual, &parameters, &mut substitutions);
+            }
+        }
+        substitute_type(&self.for_type, &substitutions)
+    }
+
     /// Match the type arguments selected by a delegated call using the
     /// substitutions already inferred from the receiver.
     pub(crate) fn matches_trait_args(
@@ -219,4 +254,64 @@ pub(super) fn associated_alias_for_bound(
     crate::sema::delegation::deferred_associated(owner, method)
         .then(|| resolver.associated_alias(owner, method, ty.clone()))
         .flatten()
+}
+
+/// Erased copies dispatch on the field type and, when that type implements
+/// the same trait more than once, the enclosing receiver's type arguments.
+/// Specialization replaces the call's arguments and needs no such test.
+pub(super) fn open_field_candidates(
+    implementations: &[MirTraitImpl],
+    owner: &Type,
+    trait_name: &str,
+    arguments: &[Type],
+    method_name: &str,
+) -> Vec<MethodCandidate> {
+    let mut open = BTreeSet::new();
+    for arg in arguments {
+        collect_type_params_from_type(arg, &mut open);
+    }
+    let mut candidates = Vec::new();
+    for implementation in implementations {
+        if implementation.trait_name != trait_name
+            || arguments.len() != implementation.trait_args.len()
+            || matches!(&implementation.for_type, Type::Union(_))
+        {
+            continue;
+        }
+        let Some(method) = implementation
+            .methods
+            .iter()
+            .find(|method| method.name == method_name)
+        else {
+            continue;
+        };
+        let mut bindings = HashMap::new();
+        if !arguments
+            .iter()
+            .zip(&implementation.trait_args)
+            .all(|(arg, pattern)| {
+                crate::sema::type_pattern_matches(arg, pattern, &open, &mut bindings)
+            })
+        {
+            continue;
+        }
+        let witness = substitute_type(owner, &bindings);
+        let specificity = crate::sema::trait_impl_specificity_parts(
+            &implementation.for_type,
+            &implementation.trait_args,
+        );
+        candidates.push((
+            specificity,
+            MethodCandidate {
+                ty: implementation.for_type.clone(),
+                function: method.function_name.clone(),
+                owner_type: (witness != *owner).then_some(witness),
+            },
+        ));
+    }
+    candidates.sort_by_key(|(specificity, _)| std::cmp::Reverse(*specificity));
+    candidates
+        .into_iter()
+        .map(|(_, candidate)| candidate)
+        .collect()
 }
