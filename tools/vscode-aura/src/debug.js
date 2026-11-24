@@ -123,12 +123,17 @@ function defaultConfiguration(document) {
   };
 }
 
-function expandHome(value, home = os.homedir()) {
+function isAbsoluteForPlatform(value, platform = process.platform) {
+  return (platform === "win32" ? path.win32 : path.posix).isAbsolute(value);
+}
+
+function expandHome(value, home = os.homedir(), platform = process.platform) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   if (value === "~") {
     return home;
   }
   if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(home, value.slice(2));
+    return pathApi.join(home, value.slice(2));
   }
   return value;
 }
@@ -141,14 +146,23 @@ function findDebugCompiler({
   systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"],
   executable = isExecutable
 } = {}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const delimiter = platform === "win32" ? ";" : ":";
   if (configured) {
-    return expandHome(configured, home);
+    const expanded = expandHome(configured, home, platform);
+    return isAbsoluteForPlatform(expanded, platform) ? expanded : null;
   }
   const name = platform === "win32" ? "aura.exe" : "aura";
-  const pathDirs = pathValue.split(path.delimiter).filter((entry) => entry && path.isAbsolute(entry));
-  const installDirs = [path.join(home, ".local", "bin"), path.join(home, ".cargo", "bin"), ...systemDirs];
+  const pathDirs = pathValue
+    .split(delimiter)
+    .filter((entry) => entry && isAbsoluteForPlatform(entry, platform));
+  const installDirs = [
+    pathApi.join(home, ".local", "bin"),
+    pathApi.join(home, ".cargo", "bin"),
+    ...(platform === "win32" ? [] : systemDirs)
+  ];
   for (const directory of [...pathDirs, ...installDirs]) {
-    const candidate = path.join(directory, name);
+    const candidate = pathApi.join(directory, name);
     if (executable(candidate)) {
       return candidate;
     }
@@ -281,6 +295,8 @@ module.exports = {
   debugBuildArguments,
   defaultConfiguration,
   environmentList,
+  expandHome,
+  findDebugCompiler,
   findLldbDap,
   registerDebugger
 };
