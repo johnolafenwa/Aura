@@ -1034,7 +1034,7 @@ impl<'a> Exec<'a> {
         current
     }
 
-    fn write_place(&mut self, state: &mut State, path: &str, value: Val) {
+    pub(super) fn write_place(&mut self, state: &mut State, path: &str, value: Val) {
         let value = match (&value, self.place_type(path)) {
             (Val::Float(..), Some(ty)) => fit(value, &ty),
             _ => value,
@@ -1125,7 +1125,12 @@ impl<'a> Exec<'a> {
 
     // ----- Operands --------------------------------------------------------
 
-    fn operand(&mut self, state: &mut State, operand: &Operand, hint: Option<IntTy>) -> Val {
+    pub(super) fn operand(
+        &mut self,
+        state: &mut State,
+        operand: &Operand,
+        hint: Option<IntTy>,
+    ) -> Val {
         let value = self.operand_value(state, operand, hint);
         // A function value that goes where the verifier cannot follow it,
         // such as into a call or a collection, may be called with
@@ -4163,7 +4168,10 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
-                    _ => None,
+                    _ => {
+                        let list = Val::List { len, data, elem };
+                        self.list_op(state, list_op, list, args)
+                    }
                 }
             }
             RuntimeOp::Str(str_op) => {

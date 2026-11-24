@@ -12,6 +12,8 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_collections.rs"]
+mod collections;
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
@@ -1823,6 +1825,10 @@ mod tests_spans;
 #[cfg(test)]
 #[path = "verify_classes_tests.rs"]
 mod tests_classes;
+
+#[cfg(test)]
+#[path = "verify_collections_tests.rs"]
+mod tests_collections;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

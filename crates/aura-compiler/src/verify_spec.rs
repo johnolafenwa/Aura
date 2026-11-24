@@ -960,7 +960,7 @@ impl Exec<'_> {
 
     /// Whether `item` is in `collection`: a key of a `dict`, an element of
     /// a `set` or a list, or a part of a `str`.
-    fn membership(&mut self, item: &Val, collection: &Val) -> Result<String, String> {
+    pub(super) fn membership(&mut self, item: &Val, collection: &Val) -> Result<String, String> {
         match (item, collection) {
             (Val::Int(key, _) | Val::Str(key), Val::Map { keys, key: ty, .. })
                 if key_sort(ty).is_some() =>
