@@ -176,7 +176,7 @@ fn an_element_read_that_is_kept_or_written_is_copied() {
             value: Rvalue::Use(Operand::Place(temp.to_string())),
         },
         |temp: &str| Instruction::Lend {
-            place: format!("{temp}.name"),
+            place: temp.to_string(),
             temp: "%t_lent".to_string(),
             mutable: true,
         },
@@ -1222,9 +1222,9 @@ fn a_copy_element_only_read_is_lent() {
 }
 
 #[test]
-fn a_copy_of_a_part_reads_the_element() {
+fn a_copy_of_a_part_or_a_loop_over_one_reads_the_element() {
     let (module, _) = copies_module();
-    for name in ["copies"] {
+    for name in ["copies", "walks"] {
         let function = module
             .functions
             .iter()
@@ -1236,6 +1236,54 @@ fn a_copy_of_a_part_reads_the_element() {
             "{name}: {found:?}"
         );
     }
+}
+
+#[test]
+fn a_mutable_lend_of_a_part_only_read_as_a_list_reads_the_element() {
+    let lend = |temp: &str, mutable| Instruction::Lend {
+        place: format!("{temp}.tags"),
+        temp: "%t_lent".to_string(),
+        mutable,
+    };
+    let end = |temp: &str| Instruction::EndLend {
+        place: format!("{temp}.tags"),
+        temp: "%t_lent".to_string(),
+        mutable: true,
+    };
+    // The lent part is only read: its length.
+    let found = lent_after(|tail, temp| {
+        tail.insert(0, lend(temp, true));
+        tail.insert(
+            1,
+            runtime_call(
+                "%t_len",
+                RuntimeOp::List(ListOp::Len),
+                "%t_lent",
+                Vec::new(),
+            ),
+        );
+        tail.insert(2, end(temp));
+    });
+    assert!(!found.lists.is_empty(), "{found:?}");
+    // The lent part is changed, which a copy of the part would lose.
+    let found = lent_after(|tail, temp| {
+        tail.insert(0, lend(temp, true));
+        tail.insert(
+            1,
+            runtime_call(
+                "%t_unit",
+                RuntimeOp::List(ListOp::Push),
+                "%t_lent",
+                vec![MirArg {
+                    name: None,
+                    value: Operand::Int(1),
+                    writeback_place: None,
+                }],
+            ),
+        );
+        tail.insert(2, end(temp));
+    });
+    assert!(found.lists.is_empty(), "{found:?}");
 }
 
 #[test]

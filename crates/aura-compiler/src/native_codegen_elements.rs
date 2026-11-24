@@ -518,6 +518,29 @@ pub(super) fn lent_element_reads<'f>(
             lists.insert(target, list);
         }
     }
+    // The temporaries a `Lend` fills that are only read as lists until
+    // its `EndLend`. A lend of a part of a lent element copies the part's
+    // handle and puts nothing back, so such a lend only reads the element
+    // even when the MIR calls it mutable.
+    let mut read_lends = HashMap::<&str, bool>::new();
+    for instruction in instructions() {
+        let lends = matches!(
+            instruction,
+            Instruction::Lend { .. } | Instruction::EndLend { .. }
+        );
+        for root in mentioned_roots(instruction) {
+            let read = lends || only_reads_list(instruction, root);
+            *read_lends.entry(root).or_insert(true) &= read;
+        }
+    }
+    let reads_part = |instruction: &Instruction, temp: &str| {
+        matches!(
+            instruction,
+            Instruction::Lend { place, temp: lent, mutable: true }
+                | Instruction::EndLend { place, temp: lent, mutable: true }
+                if place != temp && read_lends.get(lent.as_str()) == Some(&true)
+        )
+    };
     let mut rejected = HashSet::<&str>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
@@ -536,6 +559,7 @@ pub(super) fn lent_element_reads<'f>(
                 if captures(instruction, list)
                     || (roots.contains(temp)
                         && !defines
+                        && !reads_part(instruction, temp)
                         && !(if copies(temp) {
                             reads_kept_copy(instruction, temp, &borrowed)
                         } else {
