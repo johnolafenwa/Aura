@@ -150,6 +150,51 @@ mod tests {
     }
 
     #[test]
+    fn class_drop_trapping_hook_releases_its_abandoned_local_and_receiver_fields() {
+        unsafe extern "C-unwind" fn fail_with_local(_: *const i64, _: usize) -> *mut OpaqueValue {
+            // A trap bypasses the instruction that would release this local.
+            let local = boxed_value(Value::Instance(InstanceValue {
+                class_name: "Local".into(),
+                fields: Default::default(),
+            }));
+            unsafe {
+                aura_direct_arm_class_drop(local, observe);
+            }
+            runtime_error("failed to release envelope")
+        }
+
+        crate::runtime_value::run_lightweight_root_task(|| {
+            with_direct_task_runtime_scope(|| {
+                let mut field = InstanceValue {
+                    class_name: "Field".into(),
+                    fields: Default::default(),
+                };
+                field.arm_drop(DropMethod::Native(observe));
+                let mut envelope = InstanceValue {
+                    class_name: "Envelope".into(),
+                    fields: Default::default(),
+                };
+                envelope
+                    .fields
+                    .insert("item", Value::Instance(field))
+                    .unwrap();
+                let receiver = boxed_value(Value::Instance(envelope));
+                INVOCATIONS.set(0);
+                unsafe {
+                    aura_direct_arm_class_drop(receiver, fail_with_local);
+                    aura_direct_release_value(receiver);
+                }
+                let failure = drain_released_hooks().expect("the hook trapped");
+                assert_eq!(failure.message, "failed to release envelope");
+                assert_eq!(INVOCATIONS.get(), 2);
+                assert!(drain_released_hooks().is_none());
+                Ok(Value::Unit)
+            })
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn class_drop_native_abi_arms_copies_and_drains_each_owner_once() {
         with_direct_task_runtime_scope(|| unsafe {
             let receiver = boxed_value(Value::Instance(InstanceValue {
