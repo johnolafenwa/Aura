@@ -16960,7 +16960,18 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         for (index, argument) in args.iter().enumerate() {
+            let borrowed = kept
+                .as_ref()
+                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
+                && argument.writeback_place.is_none();
+            // A followed loan passed to a borrowed parameter lends the box
+            // where its list keeps it, as a call by name does.
+            let passed = match &argument.value {
+                Operand::Place(place) if borrowed => self.pass_native_element(place)?,
+                _ => None,
+            };
             let loaded = match &argument.value {
+                _ if passed.is_some() => passed.expect("checked above"),
                 Operand::Place(place)
                     if self
                         .moved_operands
@@ -16984,11 +16995,7 @@ impl<'a> FunctionCompiler<'a> {
                     *slot = Some(place.clone());
                 }
             }
-            if kept
-                .as_ref()
-                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
-                && argument.writeback_place.is_none()
-            {
+            if borrowed {
                 lowered_args.extend(coerced.values.iter().copied());
                 continue;
             }
