@@ -238,3 +238,11 @@ fn packed_module_record_uses_c_offsets_alignment_and_shared_bit_storage() {
         );
     }
 }
+
+#[test]
+fn literal_device_addresses_preserve_uint64_values() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/freestanding/module_state/packed/src/main.au");
+    let source = "public mut base: ptr[uint8] = 18446744073709551615 as ptr[uint8]\nexport \"C\" def base_address() -> uint64:\n    return base as uint64\n";
+    let checked = check_freestanding_path(&path, Some(source)).unwrap();
+    assert_eq!(checked.constants["base"].state.as_ref().unwrap().bytes,u64::MAX.to_le_bytes());
+}
