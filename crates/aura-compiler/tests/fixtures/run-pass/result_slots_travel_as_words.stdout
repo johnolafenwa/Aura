@@ -1,0 +1,61 @@
+scalar ok 6
+scalar err 3
+halves ok 4.5
+halves err negative
+flag plain
+flag ok false
+flag ok true
+text 1
+text 1!
+text err 4
+own text err 4
+nothing ok
+seven 7
+chain err 2
+chain err 4
+chain ok 101
+convert inner plain
+convert ok true
+convert ok false
+convert text ninety-nine
+parsed 42
+parse failed invalid digit found in string
+stored ok 10
+through ok 110
+stored err 6
+through err 6
+[Result.Ok(10), Result.Err(6)]
+pick ok 42
+pick err 4
+pick err 6
+pick err 4
+depth ok 10
+depth err too big 60
+bump ok 5
+bump err too big 500
+bump ok 12
+noted a
+a=62
+note err missing <empty>
+both err missing <empty>
+noted b
+b=112
+112 [a, a, b, b]
+Result.Ok(None)
+Result.Err(Fault.TooBig(1000))
+113 [a, a, b, b, c]
+ok 6
+trapped trap with text 2
+ok 4
+trapped trap with code
+account 0
+pair 20
+account err missing b
+pair err missing b
+account 2
+pair 22
+account err plain
+pair err plain
+twice err 8
+twice ok 32
+twice ok 160

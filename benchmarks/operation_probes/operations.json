@@ -133,5 +133,10 @@
     "count": 100000,
     "plan_step": "element method calls",
     "measures": "`tallies[i].bump(2)`, a `mut self` method call on an element of a list of a class of two integers"
+  },
+  "result_call": {
+    "count": 100000,
+    "plan_step": "result words",
+    "measures": "one call of a function that returns a `Result[int64, int64]`, matched by the caller"
   }
 }

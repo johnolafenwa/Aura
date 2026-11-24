@@ -1,0 +1,290 @@
+# Results that travel between a function and its caller as a tag and
+# payload words: built, moved, matched, unwrapped with `try`, discarded,
+# and boxed again where they escape.
+import control
+
+trait From[T]:
+    def from(value: own T) -> Self
+
+enum Fault:
+    Missing(name: str)
+    TooBig(amount: int64)
+    Plain
+
+enum Wrapped:
+    Inner(Fault)
+    Text(str)
+
+impl From[Fault] for Wrapped:
+    def from(value: own Fault) -> Wrapped:
+        return Wrapped.Inner(value)
+
+class Counter:
+    total: int64
+    names: list[str]
+
+    def bump(mut self, by: int64) -> Result[int64, Fault]:
+        if by > 100:
+            return Result.Err(Fault.TooBig(amount=by))
+        self.total += by
+        return Result.Ok(self.total)
+
+    def note(mut self, name: str) -> Result[None, Fault]:
+        if name == "":
+            return Result.Err(Fault.Missing(name="<empty>"))
+        self.names.append(name.clone())
+        return Result.Ok(None)
+
+    def both(mut self, name: str, by: int64) -> Result[str, Fault]:
+        try self.note(name)
+        total = try self.bump(by)
+        return Result.Ok(f"{name}={total}")
+
+class Book:
+    index: dict[str, int64]
+    frozen: list[bool]
+
+    def account(self, name: str) -> Result[int64, Fault]:
+        match self.index.get(name):
+            case Lookup.Found(slot):
+                if self.frozen[slot]:
+                    return Result.Err(Fault.Missing(name=name.clone()))
+                return Result.Ok(slot)
+            case Lookup.Missing:
+                return Result.Err(Fault.Plain)
+
+    def pair(self, left: str, right: str) -> Result[int64, Fault]:
+        first = try self.account(left)
+        second = try self.account(right)
+        return Result.Ok(first * 10 + second)
+
+def scalar(value: int64) -> Result[int64, int64]:
+    if value < 0:
+        return Result.Err(-value)
+    return Result.Ok(value * 2)
+
+def halves(value: float64) -> Result[float64, str]:
+    if value < 0.0:
+        return Result.Err("negative")
+    return Result.Ok(value / 2.0)
+
+def flag(value: int64) -> Result[bool, Fault]:
+    if value == 0:
+        return Result.Err(Fault.Plain)
+    return Result.Ok(value > 10)
+
+def text(value: int64) -> Result[str, int64]:
+    if value > 3:
+        return Result.Err(value)
+    return Result.Ok(f"text {value}")
+
+def nothing(value: int64) -> Result[None, str]:
+    if value == 7:
+        return Result.Err(f"seven {value}")
+    return Result.Ok(None)
+
+def twice(value: int64) -> Result[int64, int64]:
+    first = scalar(value)
+    second = first
+    match first:
+        case Result.Ok(found):
+            if found > 100:
+                return first
+        case Result.Err(_):
+            pass
+    doubled = try second
+    return Result.Ok(doubled * 2)
+
+def chain(value: int64) -> Result[int64, int64]:
+    doubled = try scalar(value)
+    again = try scalar(doubled - 10)
+    return Result.Ok(again + 1)
+
+def convert(value: int64) -> Result[bool, Wrapped]:
+    if value == 99:
+        return Result.Err(Wrapped.Text("ninety-nine"))
+    big = try flag(value)
+    return Result.Ok(not big)
+
+def parsed(source: str) -> Result[int64, str]:
+    number = try parse_int64(source)
+    return Result.Ok(number + 1)
+
+def stored(values: list[Result[int64, int64]], index: int64) -> Result[int64, int64]:
+    return values[index]
+
+def through(values: list[Result[int64, int64]], index: int64) -> Result[int64, int64]:
+    value = try stored(values, index)
+    return Result.Ok(value + 100)
+
+def pick(which: int64) -> Result[int64, int64]:
+    mut outcome: Result[int64, int64] = Result.Ok(0)
+    if which == 0:
+        outcome = scalar(21)
+    elif which == 1:
+        outcome = scalar(-4)
+    else:
+        outcome = chain(which)
+    return outcome
+
+def depth(n: int64) -> Result[int64, Fault]:
+    if n == 0:
+        return Result.Ok(0)
+    if n > 50:
+        return Result.Err(Fault.TooBig(amount=n))
+    below = try depth(n - 1)
+    return Result.Ok(below + n)
+
+def describe(fault: Fault) -> str:
+    match fault:
+        case Fault.Missing(name):
+            return f"missing {name}"
+        case Fault.TooBig(amount):
+            return f"too big {amount}"
+        case Fault.Plain:
+            return "plain"
+
+def trapping(value: int64) -> int64:
+    match text(value):
+        case Result.Ok(found):
+            assert value != 2, f"trap with {found}"
+            return found.len()
+        case Result.Err(code):
+            assert code != 5, "trap with code"
+            return code
+
+def recovered(value: int64) -> str:
+    match control.recover(trapping, value):
+        case Ok(number):
+            return f"ok {number}"
+        case Err(trap):
+            return f"trapped {trap.message}"
+
+def main():
+    for value in [3, -3]:
+        match scalar(value):
+            case Result.Ok(found):
+                print(f"scalar ok {found}")
+            case Result.Err(code):
+                print(f"scalar err {code}")
+    for value in [9.0, -1.0]:
+        match halves(value):
+            case Result.Ok(found):
+                print(f"halves ok {found}")
+            case Result.Err(message):
+                print(f"halves err {message}")
+    for value in [0, 5, 50]:
+        match flag(value):
+            case Result.Ok(big):
+                print(f"flag ok {big}")
+            case Result.Err(Fault.Plain):
+                print("flag plain")
+            case Result.Err(other):
+                print(f"flag err {describe(other)}")
+    for value in [1, 4]:
+        match text(value):
+            case Result.Ok(found):
+                print(found)
+            case Result.Err(code):
+                print(f"text err {code}")
+        match own text(value):
+            case Result.Ok(found):
+                print(found + "!")
+            case Result.Err(code):
+                print(f"own text err {code}")
+    for value in [1, 7]:
+        match nothing(value):
+            case Result.Ok(_):
+                print("nothing ok")
+            case Result.Err(message):
+                print(message)
+    for value in [-2, 3, 30]:
+        match chain(value):
+            case Result.Ok(found):
+                print(f"chain ok {found}")
+            case Result.Err(code):
+                print(f"chain err {code}")
+    for value in [0, 5, 50, 99]:
+        match convert(value):
+            case Result.Ok(small):
+                print(f"convert ok {small}")
+            case Result.Err(Wrapped.Inner(fault)):
+                print(f"convert inner {describe(fault)}")
+            case Result.Err(Wrapped.Text(message)):
+                print(f"convert text {message}")
+    for source in ["41", "x"]:
+        match parsed(source):
+            case Result.Ok(number):
+                print(f"parsed {number}")
+            case Result.Err(message):
+                print(f"parse failed {message}")
+    kept: list[Result[int64, int64]] = [scalar(5), scalar(-6)]
+    for index in range(2):
+        match stored(kept, index):
+            case Result.Ok(found):
+                print(f"stored ok {found}")
+            case Result.Err(code):
+                print(f"stored err {code}")
+        match through(kept, index):
+            case Result.Ok(found):
+                print(f"through ok {found}")
+            case Result.Err(code):
+                print(f"through err {code}")
+    print(kept)
+    for which in range(4):
+        match pick(which):
+            case Result.Ok(found):
+                print(f"pick ok {found}")
+            case Result.Err(code):
+                print(f"pick err {code}")
+    for n in [4, 60]:
+        match depth(n):
+            case Result.Ok(total):
+                print(f"depth ok {total}")
+            case Result.Err(fault):
+                print(f"depth err {describe(fault)}")
+    mut counter = Counter(total=0, names=[])
+    for by in [5, 500, 7]:
+        match counter.bump(by):
+            case Result.Ok(total):
+                print(f"bump ok {total}")
+            case Result.Err(fault):
+                print(f"bump err {describe(fault)}")
+    for name in ["a", "", "b"]:
+        match counter.note(name):
+            case Result.Ok(_):
+                print(f"noted {name}")
+            case Result.Err(fault):
+                print(f"note err {describe(fault)}")
+        match counter.both(name, 200 - name.len() * 150):
+            case Result.Ok(line):
+                print(line)
+            case Result.Err(fault):
+                print(f"both err {describe(fault)}")
+    print(f"{counter.total} {counter.names}")
+    _ = counter.bump(1)
+    _ = counter.note("")
+    discarded = counter.note("c")
+    print(discarded)
+    print(counter.bump(1000))
+    print(f"{counter.total} {counter.names}")
+    for value in [1, 2, 4, 5]:
+        print(recovered(value))
+    book = Book(index={"a": 0, "b": 1, "c": 2}, frozen=[false, true, false])
+    for name in ["a", "b", "c", "d"]:
+        match book.account(name):
+            case Result.Ok(slot):
+                print(f"account {slot}")
+            case Result.Err(fault):
+                print(f"account err {describe(fault)}")
+        match book.pair("c", name):
+            case Result.Ok(code):
+                print(f"pair {code}")
+            case Result.Err(fault):
+                print(f"pair err {describe(fault)}")
+    for value in [-8, 8, 80]:
+        match twice(value):
+            case Result.Ok(found):
+                print(f"twice ok {found}")
+            case Result.Err(code):
+                print(f"twice err {code}")
