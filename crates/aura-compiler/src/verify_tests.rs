@@ -4130,3 +4130,10 @@ def main():
         );
     }
 }
+
+#[test]
+fn class_drop_postcondition_holds_for_every_initialized_owner() {
+    assert_proved(include_str!(
+        "../tests/fixtures/check-pass/class_drop_postcondition.au"
+    ));
+}
