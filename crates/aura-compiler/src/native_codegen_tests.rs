@@ -18383,3 +18383,23 @@ fn exhaustive_match_returning_a_record_emits_a_typed_function() {
         .all(|block| !matches!(block.terminator, Terminator::Return(Operand::Unit))));
     emit_host_object(&mir).expect("the record-returning function should emit");
 }
+
+#[test]
+fn exhaustive_branches_returning_a_record_with_postconditions_emit() {
+    let source = r#"
+class Pair:
+    value: int64
+
+def choose(flag: bool) -> Pair:
+    ensures result.value > 0
+    if flag:
+        return Pair(value=11)
+    else:
+        return Pair(value=22)
+
+def main():
+    print(choose(true).value)
+"#;
+    let mir = lower_source_to_mir(source).expect("the contracted function should lower");
+    emit_host_object(&mir).expect("the contracted record return should emit");
+}
