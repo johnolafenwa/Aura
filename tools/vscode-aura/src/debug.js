@@ -89,23 +89,26 @@ function escapeLldbPath(value) {
 }
 
 // The launch request lldb-dap receives for an Aura configuration whose
-// program was built at `binary`.
+// program was built at `binary`. Only documented Aura fields are forwarded.
 function adapterConfiguration(configuration, binary, formatterPath) {
   const adapter = {
-    ...configuration,
+    type: DEBUG_TYPE,
+    request: "launch",
     program: binary,
-    args: (configuration.args || []).map(String),
+    args: Array.isArray(configuration.args) ? configuration.args.map(String) : [],
+    cwd:
+      typeof configuration.cwd === "string" && configuration.cwd
+        ? configuration.cwd
+        : path.dirname(configuration.program),
     env: environmentList(configuration.env),
-    initCommands: [
-      `command script import "${escapeLldbPath(formatterPath)}"`,
-      ...(configuration.initCommands || [])
-    ],
+    initCommands: [`command script import "${escapeLldbPath(formatterPath)}"`],
     auraProgram: configuration.program
   };
-  if (configuration.cwd) {
-    adapter.cwd = configuration.cwd;
-  } else {
-    adapter.cwd = path.dirname(configuration.program);
+  if (typeof configuration.name === "string" && configuration.name) {
+    adapter.name = configuration.name;
+  }
+  if (typeof configuration.stopOnEntry === "boolean") {
+    adapter.stopOnEntry = configuration.stopOnEntry;
   }
   return adapter;
 }

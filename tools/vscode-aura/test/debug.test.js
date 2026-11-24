@@ -126,8 +126,7 @@ test("lldb-dap gets the built binary, the formatter, and listed variables", () =
   assert.deepEqual(adapter.env, ["MODE=debug"]);
   assert.equal(adapter.cwd, "/w");
   assert.deepEqual(adapter.initCommands, [
-    'command script import "/ext/debug/aura_lldb.py"',
-    "settings set x y"
+    'command script import "/ext/debug/aura_lldb.py"'
   ]);
   const withCwd = adapterConfiguration({ program: "/w/app.au", cwd: "/elsewhere" }, "/o/app", "/f.py");
   assert.equal(withCwd.cwd, "/elsewhere");
@@ -141,6 +140,43 @@ test("lldb-dap gets the built binary, the formatter, and listed variables", () =
   assert.deepEqual(windowsFormatter.initCommands, [
     'command script import "C:\\\\Users\\\\dev\\\\\\"ext\\"\\\\debug\\\\aura_lldb.py"'
   ]);
+});
+
+test("adapterConfiguration forwards only documented Aura fields and drops LLDB command arrays", () => {
+  const adapter = adapterConfiguration(
+    {
+      type: "aura",
+      request: "launch",
+      name: "Debug",
+      program: "/w/app.au",
+      args: ["one"],
+      cwd: "/w/sub",
+      env: { K: "V" },
+      stopOnEntry: true,
+      initCommands: ["platform shell id"],
+      preRunCommands: ["platform shell id"],
+      launchCommands: ["platform shell id"],
+      postRunCommands: ["platform shell id"],
+      attachCommands: ["platform shell id"],
+      exitCommands: ["platform shell id"],
+      terminateCommands: ["platform shell id"],
+      unknownField: "ignored"
+    },
+    "/o/app",
+    "/ext/debug/aura_lldb.py"
+  );
+  assert.deepEqual(adapter, {
+    type: "aura",
+    request: "launch",
+    name: "Debug",
+    program: "/o/app",
+    args: ["one"],
+    cwd: "/w/sub",
+    env: ["K=V"],
+    stopOnEntry: true,
+    initCommands: ['command script import "/ext/debug/aura_lldb.py"'],
+    auraProgram: "/w/app.au"
+  });
 });
 
 test("F5 with no launch.json debugs the open Aura file", () => {
