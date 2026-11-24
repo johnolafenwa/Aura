@@ -18365,3 +18365,21 @@ fn compiled_constant_data_has_no_initializer_call_at_entry() {
         .iter()
         .any(|symbol| symbol.ends_with("aura_direct_module_constant")));
 }
+
+#[test]
+fn exhaustive_match_returning_a_record_emits_a_typed_function() {
+    let mir = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/conditional_trait_dependency.au"
+    ))
+    .expect("the exhaustive match should lower");
+    let select = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "select_layout")
+        .expect("select_layout should be present");
+    assert!(select
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::Return(Operand::Unit))));
+    emit_host_object(&mir).expect("the record-returning function should emit");
+}
