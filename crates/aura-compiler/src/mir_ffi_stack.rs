@@ -97,6 +97,14 @@ fn scalar_type(ty: FfiType) -> &'static str {
     }
 }
 
+fn extension(ty: FfiType) -> &'static str {
+    match ty {
+        FfiType::I8 | FfiType::I16 => "signext ",
+        FfiType::Bool | FfiType::U8 | FfiType::U16 => "zeroext ",
+        _ => "",
+    }
+}
+
 fn piece_type(piece: CPiece) -> (usize, &'static str) {
     match piece {
         CPiece::Int { offset, .. } => (offset, "i64"),
@@ -165,6 +173,7 @@ fn forwarding_ir(
             }
         } else {
             params.push(ty);
+            let extend = extension(ty);
             let parts = if matches!(
                 ty,
                 FfiType::StringView | FfiType::BytesView | FfiType::BytesViewMut
@@ -174,7 +183,7 @@ fn forwarding_ir(
                 vec![scalar_type(ty)]
             };
             for (n, ty) in parts.into_iter().enumerate() {
-                let arg = format!("{ty} %p{i}_{n}");
+                let arg = format!("{ty} {extend}%p{i}_{n}");
                 entry.push(arg.clone());
                 target.push(arg);
                 if matches!(ty, "float" | "double") {
@@ -190,7 +199,8 @@ fn forwarding_ir(
     } else {
         ("%r = ", format!("ret {result} %r"))
     };
-    let ir = format!("define {result} @aura_ffi_forward({}) {{\n{loads}  {assign}call {result} inttoptr (i64 {address} to ptr)({})\n  {ret}\n}}\n", entry.join(", "), target.join(", "));
+    let extend = extension(signature.result());
+    let ir = format!("define {extend}{result} @aura_ffi_forward({}) {{\n{loads}  {assign}call {extend}{result} inttoptr (i64 {address} to ptr)({})\n  {ret}\n}}\n", entry.join(", "), target.join(", "));
     Ok((ir, FfiSignature::new(params, signature.result())))
 }
 
