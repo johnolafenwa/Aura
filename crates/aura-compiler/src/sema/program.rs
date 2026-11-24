@@ -160,6 +160,7 @@ impl AliasInfo {
 
 #[derive(Clone, Debug)]
 pub struct ConstantInfo {
+    pub state: Option<std::sync::Arc<super::StateImage>>,
     pub module_name: String,
     pub decl: crate::ast::ConstantDecl,
     pub ty: Type,
@@ -571,10 +572,17 @@ pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Resu
 }
 
 pub(crate) fn check_with_profile(
-    mut module: Module,
+    module: Module,
     context: ModuleContext,
     freestanding: bool,
 ) -> Result<Program> {
+    if !freestanding {
+        if let Some(cell) = module.constants.iter().find(|decl| decl.mutable) {
+            return Err(Diagnostic::coded_at("AU3030", cell.span, "hosted module bindings are immutable")
+                .with_help("share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"));
+        }
+    }
+    let mut module = module;
     if freestanding {
         module.use_freestanding_c_layout();
     }
@@ -2300,6 +2308,13 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             constant.name.clone(),
             ConstantInfo {
                 module_name: module_name.clone(),
+                state: constant
+                    .mutable
+                    .then(|| {
+                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &constant.value)
+                    })
+                    .transpose()?
+                    .map(std::sync::Arc::new),
                 decl: super::c_layout_queries::folded_binding(constant, &imported_modules, &classes),
                 ty: expected.unwrap_or(inferred),
             },
@@ -2967,6 +2982,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         &program.module_registry,
         &program.imported_modules,
     )?;
+    super::fixed_arrays::validate_layouts(&program)?;
     Ok(program)
 }
 

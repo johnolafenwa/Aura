@@ -3247,6 +3247,30 @@ def main() -> int32:
 }
 
 #[test]
+fn fixed_array_field_matches_c_float_array_on_both_backends() {
+    let (package, source) = fixture_package(
+        r#"
+extern "C" class InlinePair:
+    values: fixed[float32, 2]
+
+extern "C" def swap_inline(pair: InlinePair) -> InlinePair symbol "fx_fpair_swap"
+
+def main() -> int32:
+    pair = InlinePair(values=[1.5, -3.25])
+    result = swap_inline(pair)
+    print(result.values[0])
+    print(result.values[1])
+    return 0
+"#,
+    );
+    let (mir, native) = run_on_both_backends(&package, &source);
+    for output in [mir, native] {
+        assert_success(&output, "inline float array sent to C");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "-3.25\n1.5\n");
+    }
+}
+
+#[test]
 fn packed_bit_fields_match_c_and_union_writes_preserve_tail_bytes() {
     let package = TempPackage::new(true);
     package.c_library("layout", include_str!("fixtures/systems_layout/layout.c"));

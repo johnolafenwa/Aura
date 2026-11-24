@@ -2,7 +2,7 @@
 
 The `sync` module holds the values several tasks can change: a lock around
 a value, atomic integers and booleans, and a shared map. Everything else
-in Aura has one owner, and module constants never change, so these four
+in Aura has one owner, and hosted module bindings are immutable, so these four
 types are how tasks share state.
 
 ```aura
@@ -184,7 +184,7 @@ NEXT_ID = sync.AtomicInt(1)
 ```
 
 Every task in the program reaches the same map and the same counter
-through these names.
+through these names. A hosted module declaration such as `mut NEXT_ID = sync.AtomicInt(1)` produces `AU3030`. Keep the binding immutable and call `NEXT_ID.add(1)`. Replacing the handle would race with a task reading that name.
 
 ## Typing Rules
 

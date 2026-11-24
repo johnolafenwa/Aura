@@ -1,3 +1,5 @@
+mod module_state;
+
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
     BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
@@ -315,8 +317,13 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 }
 
 pub fn parse(source: &str) -> Result<Module> {
+    parse_with_module_scope(source, false)
+}
+
+pub(crate) fn parse_with_module_scope(source: &str, declaration_module: bool) -> Result<Module> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
+    parser.module_storage = declaration_module || parser.has_explicit_entry();
     parser.source_lines = source.lines().map(str::to_owned).collect();
     let mut module = parser.parse_module()?;
     check_module_documentation_limit(&module)?;
@@ -452,6 +459,7 @@ struct Parser {
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
+    module_storage: bool,
     source_lines: Vec<String>,
     /// The `ghost` locals of the function being parsed. Reads of one in a
     /// ghost value, an `assert`, or a loop clause name it `ghost <name>`.
@@ -473,6 +481,7 @@ impl Parser {
             extern_fields: false,
             c_bit_widths: Default::default(),
             generated_items: Vec::new(),
+            module_storage: false,
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
         }
@@ -576,6 +585,8 @@ impl Parser {
 
     fn at_module_constant_start(&self) -> bool {
         match self.current_kind() {
+            TokenKind::KwMut => self.module_storage,
+            TokenKind::KwPublic if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) => true,
             // `_ = expr` discards a value; it is a statement, not a constant.
             TokenKind::Identifier(name) if name == "_" => false,
             TokenKind::Identifier(_) => {
@@ -598,6 +609,7 @@ impl Parser {
 
     fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let (name, span) = self.expect_identifier_with_span()?;
         let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
             Some(self.parse_type()?)
@@ -608,6 +620,7 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            mutable,
             public,
             name,
             annotation,
@@ -3426,11 +3439,11 @@ impl Parser {
                     let mut closed = false;
                     loop {
                         // `array[T, N]`: the length of a C array field.
-                        if name == C_ARRAY_TYPE_NAME && args.len() == 1 {
+                        if matches!(name.as_str(), C_ARRAY_TYPE_NAME | "fixed") && args.len() == 1 {
                             if let TokenKind::IntLiteral(length) = self.current_kind() {
                                 let length = length.to_string();
                                 let length_span = self.bump().span;
-                                if !self.extern_fields {
+                                if name == C_ARRAY_TYPE_NAME && !self.extern_fields {
                                     return Err(parse_error(
                                         span,
                                         "`array[T, N]` is the type of a field of an `extern \"C\"` class and names no type elsewhere; use `list[T]`",

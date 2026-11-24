@@ -275,6 +275,21 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2080",
+        band: "names/types",
+        title: "invalid static storage initializer",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2081",
+        band: "names/types",
+        title: "invalid fixed array type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2082",
+        band: "names/types",
+        title: "invalid fixed array initializer",
+    },
+    DiagnosticCodeInfo {
         code: "AU2085",
         band: "names/types",
         title: "invalid C layout declaration",
@@ -283,6 +298,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU2086",
         band: "names/types",
         title: "invalid C layout query",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2087",
+        band: "names/types",
+        title: "invalid atomic ordering",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2088",
+        band: "names/types",
+        title: "invalid rotation count type",
     },
     DiagnosticCodeInfo {
         code: "AU2999",
@@ -350,6 +375,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "definite initialization",
     },
     DiagnosticCodeInfo {
+        code: "AU3030",
+        band: "ownership",
+        title: "module state access",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3031",
+        band: "ownership",
+        title: "fixed array would duplicate a non-copy element",
+    },
+    DiagnosticCodeInfo {
         code: "AU3033",
         band: "ownership",
         title: "borrow of a C bit-field",
@@ -405,9 +440,24 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "generator misuse",
     },
     DiagnosticCodeInfo {
+        code: "AU4030",
+        band: "runtime",
+        title: "module state outside freestanding execution",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4031",
+        band: "runtime",
+        title: "fixed array index out of bounds",
+    },
+    DiagnosticCodeInfo {
         code: "AU4033",
         band: "runtime",
         title: "value exceeds C bit-field width",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4034",
+        band: "runtime",
+        title: "invalid integer operation argument",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

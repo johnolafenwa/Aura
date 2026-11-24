@@ -1,3 +1,4 @@
+mod module_state;
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, CompareLink, CompareOp,
     ComprehensionClause, ComprehensionOutput, DestructureStmt, Expr, ExprKind, IfStmt,
@@ -736,6 +737,8 @@ impl MirOwnership {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirConstant {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::sema::StateImage>,
     pub key: String,
     pub initializer: String,
     pub ty: Type,
@@ -1165,6 +1168,17 @@ pub enum Rvalue {
     /// union whose only `None` can come from a type parameter: `true` when
     /// the runtime value is unit `None` or a union holding it (ADR-0052 A7).
     NoneTest {
+        value: Operand,
+    },
+    /// Reads, writes and address formation for a freestanding data symbol.
+    ModuleLoad {
+        key: String,
+    },
+    ModuleAddress {
+        key: String,
+    },
+    ModuleStore {
+        key: String,
         value: Operand,
     },
     /// Read a once-initialized immutable module value. The initializer thunk
@@ -4761,6 +4775,9 @@ fn rebase_callable_rvalue(
             }
             identities
         }
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleStore { .. } | Rvalue::ModuleAddress { .. } => {
+            Vec::new()
+        }
         Rvalue::ModuleConstant { initializer, .. } => context
             .functions
             .get(initializer.as_str())
@@ -5176,6 +5193,8 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::UnionTakePayload { place, .. } | Rvalue::TupleTakeElement { place, .. } => {
                 place.split('.').next() == Some(root)
             }
+            Rvalue::ModuleStore { value, .. } => operand_moves(value, root),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
             Rvalue::UnionTagTest { .. } | Rvalue::ModuleConstant { .. } => false,
             Rvalue::Closure { captures, .. } => captures
                 .iter()
@@ -7462,6 +7481,8 @@ fn validate_loan_rvalue(
             validate_canonical_mir_identifier(function, field, false)?;
             validate_loan_operand(function, object, context, state)
         }
+        Rvalue::ModuleStore { value, .. } => validate_loan_operand(function, value, context, state),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             function: closure_function,
@@ -10535,6 +10556,8 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         Rvalue::UnionTagTest { place, .. }
         | Rvalue::UnionTakePayload { place, .. }
         | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
+        Rvalue::ModuleStore { value, .. } => operand_place_mention(value, mentions),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
         Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -11005,8 +11028,18 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
             continue;
         }
         let initializer = format!("__aura_const_init::{key}");
+        if let Some(state) = &constant.state {
+            constants.push(MirConstant {
+                key,
+                initializer: String::new(),
+                ty: constant.ty.clone(),
+                state: Some(state.as_ref().clone()),
+            });
+            continue;
+        }
         functions.extend(lower_constant_initializer(program, &initializer, constant));
         constants.push(MirConstant {
+            state: None,
             key,
             initializer,
             ty: constant.ty.clone(),
@@ -14034,7 +14067,19 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
-        if is_scalar_literal_constant(constant) {
+        if constant.decl.mutable {
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::ModuleLoad {
+                    key: module_state::cell_key(constant),
+                },
+            });
+            return Operand::Place(temp);
+        }
+        if is_scalar_literal_constant(constant)
+            || constant.ty.as_fixed_array().is_some()
+                && fixed_arrays::constant_initializer(&constant.decl.value)
+        {
             // The literal has no effects, so each read computes it where
             // it stands; the program still runs the initializer at startup.
             let value = self.lower_expr_with_expected(&constant.decl.value, Some(&constant.ty));
@@ -15683,6 +15728,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
+        if self.lower_state_assignment(assign) {
+            return;
+        }
         let named_target_type = match (&assign.target, &assign.annotation) {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
@@ -15752,6 +15800,9 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        if self.lower_fixed_assign(assign) {
+            return;
+        }
         if self.lower_element_write_beside_loans(assign) {
             return;
         }
@@ -16489,6 +16540,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
+        if let Some(value) = self.fixed_literal(expr, ty) {
+            return Some(value);
+        }
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
                 if name == "list" && args.len() == 1 =>
@@ -19909,6 +19963,7 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
+                Some(ty) if ty.as_fixed_array().is_some() => ty.as_fixed_array().unwrap().0.clone(),
                 Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
                     if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
@@ -19949,6 +20004,17 @@ impl<'a> Lowerer<'a> {
         let mut stepped_next = dispatch_block;
 
         match iterable_ty {
+            Some(ref ty) if ty.as_fixed_array().is_some() => {
+                self.fixed_iteration(
+                    ty,
+                    iterable,
+                    simple_binding.clone().expect("fixed array loop binding"),
+                    for_stmt.span,
+                    dispatch_block,
+                    body_block,
+                    after_block,
+                );
+            }
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
                 let binding = simple_binding
                     .clone()
@@ -22031,6 +22097,9 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                if let Some(value) = self.lower_fixed_read(object, index) {
+                    return value;
+                }
                 // `receiver.method[T]`: the checker registered the bound
                 // method's closure at the member; the index only fixed its
                 // type arguments.
@@ -26042,6 +26111,12 @@ impl<'a> Lowerer<'a> {
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
+                if let Some(ty) = self.infer_expr_type(&args[0].value) {
+                    if let Some((_, length)) = ty.as_fixed_array() {
+                        self.lower_expr(&args[0].value);
+                        return Operand::Int(length as u128);
+                    }
+                }
                 if let Some(len) = self.lower_span_len(&args[0].value) {
                     return len;
                 }
@@ -30308,6 +30383,9 @@ impl<'a> Lowerer<'a> {
                     {
                         args.first().cloned()
                     }
+                    ref ty if ty.as_fixed_array().is_some() => {
+                        ty.as_fixed_array().map(|(elem, _)| elem.clone())
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -32090,6 +32168,8 @@ fn mir_class_type_name(
         })
 }
 
+#[path = "mir_fixed_arrays.rs"]
+pub(crate) mod fixed_arrays;
 #[path = "mir_spans.rs"]
 mod spans;
 
