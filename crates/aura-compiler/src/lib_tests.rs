@@ -4599,7 +4599,14 @@ fn verification_names_assembly_in_an_import_and_in_editor_source() {
     let options = crate::verify::Options::default();
     let imported = crate::verify_path(&main, &options).expect_err("assembly is opaque to proof");
     assert_eq!(imported.code, "AU4035");
-    assert_eq!(imported.render_path.as_deref(), driver.to_str());
+    let reported_path = imported
+        .render_path
+        .as_deref()
+        .expect("imported source path");
+    assert_eq!(
+        fs::canonicalize(reported_path).unwrap(),
+        fs::canonicalize(&driver).unwrap()
+    );
     assert_eq!(imported.span.unwrap().line, 1);
     let direct =
         crate::verify_path_with_source(&main, "def f() -> None:\n    asm(\"nop\")\n", &options)
