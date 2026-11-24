@@ -839,6 +839,30 @@ class WindowsArchiveTests(unittest.TestCase):
         self.assertEqual(installer.rstrip("\n").splitlines()[-1], "Install-Aura")
         self.assertEqual(installer.count("\nInstall-Aura\n"), 1)
 
+    def test_powershell_installer_enforces_tls_redirects_tag_checksums_and_safe_zip(self) -> None:
+        installer = WINDOWS_INSTALL_SCRIPT.read_text(encoding="utf-8")
+        # TLS 1.2+ pinning and HTTPS-only manual redirect handling via HttpClient.
+        self.assertIn("[Net.SecurityProtocolType]::Tls12", installer)
+        self.assertIn("[Net.ServicePointManager]::SecurityProtocol", installer)
+        self.assertIn("System.Net.Http.HttpClientHandler", installer)
+        self.assertIn("$handler.AllowAutoRedirect = $false", installer)
+        self.assertIn("$nextUri.Scheme -ne 'https'", installer)
+        self.assertNotIn("Invoke-WebRequest", installer)
+        # Strict release tag validation.
+        self.assertIn(r"^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$", installer)
+        self.assertIn(".Contains('..')", installer)
+        # Strict 64-hex unique SHA256SUMS entry matching.
+        self.assertIn("^[0-9A-Fa-f]{64}$", installer)
+        self.assertIn("duplicate SHA256SUMS entries", installer)
+        # Safe ZIP extraction via ZipFile::OpenRead without Expand-Archive.
+        self.assertIn("[System.IO.Compression.ZipFile]::OpenRead", installer)
+        self.assertNotIn("Expand-Archive", installer)
+        self.assertIn("[System.IO.Path]::GetFullPath", installer)
+        self.assertIn("0xA000", installer)
+        # Literal runtime file enumeration without wildcard Copy-Item -Path.
+        self.assertIn("Get-ChildItem -LiteralPath $runtime -File", installer)
+        self.assertNotIn("Copy-Item -Path (Join-Path $runtime '*')", installer)
+
 
 class TargetPackTests(unittest.TestCase):
     """What `aura build --target` links from an installation (ADR-0101)."""
