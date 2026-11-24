@@ -136,7 +136,8 @@ impl PlainRecords {
     /// instance's block in its own layout rather than in a box. A class
     /// field stays inline, where generated code reads its scalars.
     fn field_lies_inline(&self, ty: &Type) -> bool {
-        if matches!(ty, Type::Named(name, _) if self.hooked_classes.contains(name)) {
+        if !self.owner_types.is_empty() && super::class_drop::can_hold_owner(ty, &self.owner_types)
+        {
             return false;
         }
         match ty {

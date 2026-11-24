@@ -59,6 +59,10 @@ mod tests {
     fn class_drop_hook_fixtures_release_owners_on_normal_and_trapping_exits() {
         for (source, expected) in [
             (
+                include_str!("../tests/fixtures/run-pass/class_drop_nested_record_copy.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_nested_record_copy.stdout"),
+            ),
+            (
                 include_str!("../tests/fixtures/run-pass/class_drop_reinitialized_local.au"),
                 include_str!("../tests/fixtures/run-pass/class_drop_reinitialized_local.stdout"),
             ),
