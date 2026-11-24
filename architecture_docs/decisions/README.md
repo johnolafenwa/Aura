@@ -141,3 +141,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
+128. [ADR-0128: Freestanding programs allocate through hooks, with an allocator written in Aura](0128-freestanding-allocation-hooks.md) — Accepted; `aura_alloc`, `aura_free`, and `aura_realloc` with sized frees; `mem.alloc`, `mem.free`, `mem.realloc`; a default allocator in Aura source that the build compiles into the object as weak symbols

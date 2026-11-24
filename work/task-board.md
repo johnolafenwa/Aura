@@ -2,6 +2,26 @@
 
 Last updated: 2026-11-24
 
+
+## Freestanding heap
+
+- Target: memory at run time in freestanding builds (ADR-0128), and after
+  it the heap values of the language there. Scope: the `mem` module, the
+  freestanding emitter, and a new Aura source file. No file of the runtime
+  moves.
+- Done: the allocation hooks `aura_alloc`, `aura_free`, and `aura_realloc`;
+  `mem.alloc`, `mem.free`, `mem.realloc`, `mem.heap_add_region`, and
+  `mem.heap_free_bytes` in hosted and freestanding builds; the default
+  allocator in `crates/aura-compiler/std/freestanding_heap.au`; the heap in
+  the example kernel.
+- Verified locally on Linux x86-64: 9 compiler tests, 5 command tests, and
+  4 runtime tests for the heap pass. The example kernel boots under QEMU on
+  RISC-V and AArch64 and prints `h=76127` and `f=0`.
+- Remaining: `str`, `list`, enums with payloads, boxed classes, `dict`,
+  and closures in freestanding builds. The route is the owner's call in
+  [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md).
+  [Notes](2026-11-24-freestanding-heap.md)
+
 ## Release 0.17.0-preview (in progress)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

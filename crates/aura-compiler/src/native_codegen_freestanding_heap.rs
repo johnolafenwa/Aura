@@ -219,11 +219,8 @@ impl NativeCodegen<'_> {
             }
             let signature = heap_signature(&symbol);
             let entry = try_or_string_error!(
-                self.module_backend()?.declare_function(
-                    symbol.symbol,
-                    Linkage::Export,
-                    &signature
-                ),
+                self.module_backend()?
+                    .declare_function(symbol.symbol, Linkage::Export, &signature),
                 "failed to declare `{}`: {}",
                 symbol.symbol
             );

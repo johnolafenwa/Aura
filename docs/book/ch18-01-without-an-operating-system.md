@@ -48,8 +48,8 @@ a freestanding program is made of: fixed-width integers and floats, classes
 of them, `T | None`, functions, generics, traits, loops, `assert`, and
 contracts.
 
-Anything that lives on the heap is out: `str`, lists, dictionaries, enums
-with payloads, closures, tasks. You do not have to remember the list. Ask
+The values Aura keeps on the heap for you are out: `str`, lists,
+dictionaries, enums with payloads, closures, tasks. You do not have to remember the list. Ask
 the compiler:
 
 ```console
@@ -119,14 +119,56 @@ def put_number(uart: uint64, value: uint64) -> None:
         divisor = divisor // 10
 ```
 
+## Memory that grows
+
+Everything so far has a size the compiler knows. A kernel also keeps
+tables that grow: the processes it runs, the pages it has handed out. For
+those it needs a heap, and a freestanding program has one as soon as it
+says where the heap may live:
+
+```aura fragment
+mem.heap_add_region(heap_start(), heap_size())
+```
+
+From then on `mem.alloc` hands out blocks of that region, `mem.realloc`
+resizes one, and `mem.free` gives it back. Here is a list of numbers that
+doubles its room whenever it fills:
+
+```aura fragment
+mut room: uint64 = 4
+mut count: uint64 = 0
+mut primes = mem.alloc(room * 8, 8)
+assert primes != 0, "the heap has no memory"
+...
+if count == room:
+    primes = mem.realloc(primes, room * 8, 8, room * 16)
+    assert primes != 0, "the heap is full"
+    room = room * 2
+mem.write_uint64(primes + count * 8, candidate)
+count = count + 1
+```
+
+Two things differ from the lists you know. A block is an address and
+nothing more, so you read and write it with `mem` and you free it
+yourself, passing the size you asked for. And `mem.alloc` returns 0 when
+the heap is full, where a hosted program would stop. A kernel has to be
+able to say no to a request and keep running.
+
+Where does the allocator come from, with no runtime? It is a few hundred
+lines of Aura, and the compiler adds it to your object when you call
+`mem.alloc`. A kernel that already has an allocator defines three
+functions, `aura_alloc`, `aura_free`, and `aura_realloc`, and Aura calls
+those instead.
+
 ## Booting it
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
-`uint8` on purpose. Each board adds a short assembly file that sets the
-stack pointer, turns the float registers on, and calls `kernel_main`, plus
-a linker script that says where memory is.
+built from `mem.atomic_compare_exchange_uint32`, sums the primes from a
+block on the heap, and then overflows a `uint8` on purpose. Each board
+adds a short assembly file that sets the stack pointer, turns the float
+registers on, and calls `kernel_main`, plus a linker script that says
+where memory is.
 
 QEMU can emulate both boards the example supports:
 
@@ -136,10 +178,14 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+h=76127
+f=0
+trap 1 main.au:204:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first six lines are computed results. `h` is the sum of the primes
+below 1000, read back from the heap, and `f` says that no byte of the
+heap is missing after the block is freed. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
@@ -147,8 +193,8 @@ output is the same.
 ## What is missing
 
 This is the first step toward systems work in Aura, and it is honest to
-say where it stops. There is no allocator, so there are no strings or
-collections. There is no inline assembly, so startup code and x86 port
+say where it stops. The heap holds blocks of bytes and nothing else:
+there are no strings or collections yet. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`. The
 [Freestanding Builds](/manual/freestanding) and

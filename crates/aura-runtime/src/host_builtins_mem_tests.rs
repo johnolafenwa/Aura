@@ -161,9 +161,8 @@ fn allocation_functions_check_their_arguments() {
         assert!(mem(name, &too_many).is_err(), "{name}");
         if count > 0 {
             let args = (0..count).map(|_| Value::Bool(true)).collect();
-            let result = host_builtin_function(&format!("mem::{name}")).expect("a mem builtin")(
-                args, None,
-            );
+            let result =
+                host_builtin_function(&format!("mem::{name}")).expect("a mem builtin")(args, None);
             assert_eq!(result.expect_err("a bool is no address").code, "AU4001");
         }
     }

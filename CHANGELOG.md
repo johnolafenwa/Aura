@@ -7,6 +7,17 @@ in this file.
 
 ## Unreleased
 
+- Freestanding builds have a heap. `mem.alloc`, `mem.free`, and
+  `mem.realloc` hand out blocks of memory at a `uint64` address, and
+  `mem.heap_add_region` names the memory the heap may use. They call three
+  allocation hooks, the C symbols `aura_alloc`, `aura_free`, and
+  `aura_realloc`. A program that defines none of them gets an allocator
+  written in Aura, which `aura build --freestanding` compiles into the
+  object as weak symbols, so the build still writes one object and links
+  nothing. In a hosted program the same functions use the process
+  allocator. The values the language keeps on a heap, such as `str` and
+  `list`, are still not available in a freestanding build.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.

@@ -347,3 +347,30 @@ fn the_allocator_keeps_its_rules_when_run_as_an_ordinary_program() {
     let output = captured.lock().expect("the sink is not poisoned").clone();
     assert_eq!(output, "0\n63\n64\n66\n95\nok\n");
 }
+
+#[test]
+fn a_heap_function_the_program_exports_is_the_programs() {
+    let source = r#"
+import mem
+
+export "C" def aura_heap_free_bytes() -> uint64:
+    return 7
+
+export "C" def boot() -> uint64:
+    return mem.alloc(8, 8) + mem.heap_free_bytes()
+"#;
+    for target in FreestandingTarget::ALL {
+        let (strong, weak, undefined) = heap_symbols(&object(source, target));
+        assert_eq!(strong, ["aura_heap_free_bytes"]);
+        assert_eq!(
+            weak,
+            [
+                "aura_alloc",
+                "aura_free",
+                "aura_heap_add_region",
+                "aura_realloc"
+            ]
+        );
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}

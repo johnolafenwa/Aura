@@ -62,7 +62,9 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Nothing lives on a heap.
+Every value is one or more machine words. No value of the language lives
+on a heap. A program reaches heap memory through addresses: see
+[The Heap](#the-heap).
 
 | Available | Not available |
 | --- | --- |
@@ -151,6 +153,90 @@ export "C" def put(byte: uint8) -> None:
     mem.volatile_write_uint8(UART, byte)
 ```
 
+## The Heap
+
+`mem.alloc`, `mem.free`, and `mem.realloc` give a freestanding program
+blocks of memory. The program first names the memory the heap may use:
+
+```aura fragment
+import mem
+
+export "C" def kernel_main(heap_start: uint64, heap_size: uint64) -> None:
+    mem.heap_add_region(heap_start, heap_size)
+    table = mem.alloc(4096, 16)
+    if table == 0:
+        return
+    mem.write_uint64(table, 1)
+    mem.free(table, 4096, 16)
+```
+
+[Memory Module](/manual/mem#allocation) has the rules of the three
+functions. They call three C symbols, the allocation hooks:
+
+```c
+void *aura_alloc(size_t size, size_t align);
+void aura_free(void *address, size_t size, size_t align);
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size);
+```
+
+A program that calls one of the three functions and declares no hook gets
+Aura's allocator. The build compiles it into the object, which then
+defines these symbols:
+
+| Symbol | C signature | Purpose |
+| --- | --- | --- |
+| `aura_alloc`, `aura_free`, `aura_realloc` | Above | The hooks. |
+| `aura_heap_add_region` | `void aura_heap_add_region(uint64_t start, uint64_t size)` | What `mem.heap_add_region` calls. Startup code in C or assembly may call it too. |
+| `aura_heap_free_bytes` | `uint64_t aura_heap_free_bytes(void)` | What `mem.heap_free_bytes` calls. |
+
+- **Regions.** The heap starts empty, and every request fails until the
+  program adds a region. A program may add several, at any time. A region
+  is never given back. A region too small to hold a 32-byte block is
+  ignored.
+- **Cost.** A block takes its size rounded up to a multiple of 16, plus 8
+  bytes, and at least 32 bytes. The allocator adds 4 to 6 KB of code, by
+  target, to the object.
+- **State.** The allocator keeps its lists in 784 bytes of the object's
+  `.bss` section. Startup code must zero `.bss` before the first
+  allocation, as it must for C.
+- **Reuse.** A freed block joins the free blocks on either side of it, so
+  freeing everything leaves each region whole.
+- **Cores.** A spin lock guards every call, so several cores may
+  allocate. A call from an interrupt handler deadlocks if the handler
+  interrupted an allocation. Turn interrupts off around allocations, or
+  do not allocate in a handler.
+- **Checks.** A failed check inside the allocator, which a damaged heap
+  can cause, calls `aura_trap` with the file `aura/freestanding_heap.au`.
+
+### Your Own Allocator
+
+The five symbols are weak. A definition in C, assembly, or another object
+replaces the build's at link time. Define all three hooks or none: memory
+from one allocator must not reach the `free` of another.
+
+```c
+void *aura_alloc(size_t size, size_t align) { return kernel_alloc(size, align); }
+void aura_free(void *address, size_t size, size_t align) { kernel_free(address, size); }
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size) {
+    return kernel_resize(address, old_size, new_size, align);
+}
+```
+
+A hook written in Aura is an exported function:
+
+```aura fragment
+export "C" def aura_alloc(size: uint64, align: uint64) -> uint64:
+    return bump(size, align)
+```
+
+A program that declares any of the three hooks, as an `export "C" def` or
+an `extern "C" def`, gets no allocator from the build. The object then
+refers to each heap symbol the program calls and does not define.
+
+- A hook returns 0 when it has no memory. `mem.alloc` hands the 0 on.
+- `align` is a power of two, and `size` is at least 1.
+- `aura_free` gets the size and alignment the block was made with.
+
 ## Targets
 
 `--target` names the machine. Without it the build targets the
@@ -182,6 +268,7 @@ The object refers to these symbols and no others:
 | --- | --- |
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
+| `aura_alloc`, `aura_free`, `aura_realloc`, `aura_heap_add_region`, `aura_heap_free_bytes` | The program calls the `mem` function for one and declares an allocation hook itself. See [The Heap](#the-heap). |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
 `memset`, or `memcmp`. The object carries a small weak definition of each,
