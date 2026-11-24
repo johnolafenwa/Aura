@@ -20,29 +20,47 @@ pub enum DropMethod {
 
 #[derive(Clone)]
 pub struct HookFields {
-    owner: Option<Arc<(RuntimeName, DropMethod, AtomicU64)>>,
+    owner: Option<Arc<Owner>>,
     pub(super) fields: Box<InstanceFields>,
 }
 
+struct Owner {
+    class_name: RuntimeName,
+    method: DropMethod,
+    rank: AtomicU64,
+}
+
+struct ReleasedInstance {
+    task: Option<u64>,
+    rank: u64,
+    method: DropMethod,
+    receiver: InstanceValue,
+}
+
 thread_local! {
-    static RELEASED: RefCell<VecDeque<(Option<u64>, u64, DropMethod, InstanceValue)>> =
+    static RELEASED: RefCell<VecDeque<ReleasedInstance>> =
         const { RefCell::new(VecDeque::new()) };
 }
 
 impl Drop for HookFields {
     fn drop(&mut self) {
-        let Some((class_name, method, order)) = self.owner.take().and_then(Arc::into_inner) else {
+        let Some(Owner {
+            class_name,
+            method,
+            rank,
+        }) = self.owner.take().and_then(Arc::into_inner)
+        else {
             return;
         };
         let fields = std::mem::take(self.fields.as_mut());
         let receiver = InstanceValue { class_name, fields };
         RELEASED.with_borrow_mut(|queue| {
-            queue.push_back((
-                current_lightweight_task_id(),
-                order.load(Ordering::Relaxed),
+            queue.push_back(ReleasedInstance {
+                task: current_lightweight_task_id(),
+                rank: rank.load(Ordering::Relaxed),
                 method,
                 receiver,
-            ));
+            });
         });
     }
 }
@@ -51,11 +69,11 @@ impl InstanceValue {
     pub fn arm_drop(&mut self, method: DropMethod) {
         let fields = Box::new(std::mem::take(&mut self.fields));
         self.fields = InstanceFields::Hooked(HookFields {
-            owner: Some(Arc::new((
-                self.class_name.clone(),
+            owner: Some(Arc::new(Owner {
+                class_name: self.class_name.clone(),
                 method,
-                AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),
-            ))),
+                rank: AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),
+            })),
             fields,
         });
     }
@@ -67,10 +85,10 @@ pub fn next_released_instance() -> Option<(DropMethod, InstanceValue)> {
             return None;
         }
         let task = current_lightweight_task_id();
-        let index = queue.iter().position(|(owner, _, _, _)| owner == &task)?;
+        let index = queue.iter().position(|entry| entry.task == task)?;
         queue
             .remove(index)
-            .map(|(_, _, method, receiver)| (method, receiver))
+            .map(|entry| (entry.method, entry.receiver))
     })
 }
 
@@ -86,7 +104,7 @@ pub fn reverse_owner_order() {
     RELEASED.with_borrow_mut(|queue| {
         queue
             .make_contiguous()
-            .sort_by_key(|entry| std::cmp::Reverse(entry.1));
+            .sort_by_key(|entry| std::cmp::Reverse(entry.rank));
     });
 }
 
@@ -102,7 +120,7 @@ pub fn stamp_owner(value: &Value, rank: u64) -> u64 {
         Value::Instance(instance) => match &instance.fields {
             InstanceFields::Hooked(fields) => {
                 if let Some(owner) = &fields.owner {
-                    owner.2.store(rank, Ordering::Relaxed);
+                    owner.rank.store(rank, Ordering::Relaxed);
                 }
             }
             InstanceFields::Recovered(_) => {}
@@ -183,11 +201,11 @@ pub fn renew_owners(value: &mut Value) {
         Value::Instance(instance) => {
             if let InstanceFields::Hooked(fields) = &mut instance.fields {
                 if let Some(owner) = &mut fields.owner {
-                    *owner = Arc::new((
-                        owner.0.clone(),
-                        owner.1.clone(),
-                        AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),
-                    ));
+                    *owner = Arc::new(Owner {
+                        class_name: owner.class_name.clone(),
+                        method: owner.method.clone(),
+                        rank: AtomicU64::new(NEXT_OWNER.fetch_add(1, Ordering::Relaxed)),
+                    });
                 }
             }
             if !matches!(instance.fields, InstanceFields::Recovered(_)) {
@@ -328,7 +346,7 @@ mod tests {
         drop(copied);
         reverse_owner_order();
         assert_eq!(
-            RELEASED.with_borrow(|q| q.iter().map(|entry| entry.1).collect::<Vec<_>>()),
+            RELEASED.with_borrow(|q| q.iter().map(|entry| entry.rank).collect::<Vec<_>>()),
             [200, 100]
         );
         assert_eq!(released_instances().len(), 2);
