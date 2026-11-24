@@ -51,6 +51,7 @@ export "C" def nested(i: int64) -> int64:
             return 0
         return rect.size.area() * rect.scale + ROW_MAP[11][-1] + LENGTHS[LABELS[i]] + value
     return 0
+
 class Port:
     label: str
     number: int64
@@ -61,3 +62,14 @@ export "C" def details(i: int64) -> int64:
         p = PORTS[i]
         return p.label.len() + p.number
     return 0
+
+def select_title(enabled: bool) -> str | None:
+    if enabled:
+        return "board"
+    return None
+const TITLE = select_title(true)
+export "C" def title_len() -> int64:
+    title = TITLE
+    if title is None:
+        return 0
+    return title.len()
