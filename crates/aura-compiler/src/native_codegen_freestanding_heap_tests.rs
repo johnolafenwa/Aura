@@ -293,8 +293,10 @@ def main() -> None:
     assert check_region(state, first, end) == total
     a = heap_alloc(state, 100, 8)
     b = heap_alloc(state, 40, 64)
-    c = heap_alloc(state, 1500, 16)
     d = heap_alloc(state, 0, 1)
+    # The last block, so the free block after it is the rest of the region
+    # wherever the region lies.
+    c = heap_alloc(state, 1500, 16)
     assert a != 0 and b != 0 and c != 0 and d != 0
     assert b % 64 == 0 and a % 16 == 0
     mem.write_uint64(a + 88, 7)
