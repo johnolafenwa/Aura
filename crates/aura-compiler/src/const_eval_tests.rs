@@ -135,3 +135,87 @@ const absolute = path.is_absolute("C:/data")
         );
     }
 }
+
+#[test]
+fn deterministic_codecs_and_big_integers_share_the_constant_budget() {
+    let source = r#"import bytes
+import gzip
+import regex
+from numbers import BigInt
+const packed = gzip.compress(b"abc")
+const decoded = gzip.decompress(packed)
+const escaped = regex.escape("a.b")
+const big = BigInt.from_int(2).pow(130).to_radix(16)
+"#;
+    let program = check_source(source).unwrap();
+    assert!(matches!(
+        program.frozen_constants["<main>::decoded"],
+        FrozenValue::Enum(..)
+    ));
+    assert_eq!(
+        program.frozen_constants["<main>::escaped"],
+        FrozenValue::Str(r"a\.b".to_string())
+    );
+    assert_eq!(
+        program.frozen_constants["<main>::big"],
+        FrozenValue::Str(format!("4{}", "0".repeat(32)))
+    );
+    let error = check_source(
+        "from numbers import BigInt\nconst huge = BigInt.from_int(1).shift_left(1000000000)\n",
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "AU3028");
+}
+
+#[test]
+fn unused_defaults_and_unrelated_display_implementations_are_not_effects() {
+    let source = r#"class Tag:
+    n: int64
+
+impl Display for Tag:
+    def display(self) -> str:
+        print("effect")
+        return "tag"
+
+def observe() -> int64:
+    print("default")
+    return 0
+
+def f(n: int64 = observe()) -> int64:
+    return n
+
+const selected = f(9)
+const message = f"answer {selected}"
+dynamic = f()
+"#;
+    let program = check_source(source).unwrap();
+    assert_eq!(
+        program.frozen_constants["<main>::message"],
+        FrozenValue::Str("answer 9".to_string())
+    );
+    assert!(!program.frozen_constants.contains_key("<main>::dynamic"));
+}
+
+#[test]
+fn evaluation_diagnostics_match_the_documented_source_spans_and_call_frames() {
+    macro_rules! fixture {
+        ($name:literal) => {{
+            let path = concat!(
+                "crates/aura-compiler/tests/fixtures/check-fail/",
+                $name,
+                ".au"
+            );
+            let source = include_str!(concat!("../tests/fixtures/check-fail/", $name, ".au"));
+            let expected = include_str!(concat!("../tests/fixtures/check-fail/", $name, ".diag"));
+            let rendered = check_source(source)
+                .unwrap_err()
+                .render_with_source(path, source);
+            assert_eq!(rendered.trim_end(), expected.trim_end());
+        }};
+    }
+    fixture!("module_constant_indirect_reentry");
+    fixture!("module_constant_initializer_failure");
+    fixture!("required_effectful_constant");
+    fixture!("compile_time_step_limit");
+    fixture!("compile_time_memory_limit");
+}

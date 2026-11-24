@@ -5268,6 +5268,23 @@ impl MirRuntime {
         env: &mut Env,
         expected_return_type: Option<&Type>,
     ) -> Result<Value> {
+        if let Some(budget) = &self.eval_budget {
+            let value = aura_runtime::builtin_limit::with_allowance(budget.remaining(), || {
+                self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+            })?;
+            self.eval_budget.as_mut().unwrap().builtin_result(&value)?;
+            return Ok(value);
+        }
+        self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+    }
+
+    fn evaluate_named_builtin_body(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+    ) -> Result<Value> {
         if let Some(operation) = name.strip_prefix("iter::__aura_generator_") {
             return self.evaluate_generator_builtin(operation, args, env);
         }
