@@ -179,11 +179,32 @@ pub(super) fn folded_binding(
     modules: &BTreeMap<String, ModuleNamespace>,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> crate::ast::ConstantDecl {
-    let mut decl = decl.clone();
-    if let ExprKind::Call { callee, args } = &decl.value.kind {
-        if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
-            decl.value.kind = ExprKind::Int(value as u128);
+    fn fold(
+        expr: &mut Expr,
+        modules: &BTreeMap<String, ModuleNamespace>,
+        classes: &BTreeMap<String, ClassInfo>,
+    ) {
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
+                expr.kind = ExprKind::Int(value as u128);
+                return;
+            }
+        }
+        // These initializer forms introduce no names of their own.
+        if matches!(
+            expr.kind,
+            ExprKind::Call { .. }
+                | ExprKind::List(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Group(_)
+                | ExprKind::Unary { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Cast { .. }
+        ) {
+            expr.for_each_child_mut(&mut |child| fold(child, modules, classes));
         }
     }
+    let mut decl = decl.clone();
+    fold(&mut decl.value, modules, classes);
     decl
 }

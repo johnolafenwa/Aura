@@ -992,9 +992,10 @@ extern "C" union Word:
     low: uint8
 
 mut WORD_SIZE: uint64 = mem.size_of(Word)
+mut LAYOUT: fixed[uint64, 2] = [mem.align_of(Word), mem.size_of(Word)]
 
 export "C" def word_size() -> uint64:
-    return WORD_SIZE
+    return WORD_SIZE + LAYOUT[0] + LAYOUT[1]
 
 export "C" def replace_low(original: uint32, low: uint8) -> uint32:
     mut word = Word.from_whole(original)
@@ -1021,7 +1022,7 @@ void aura_trap(uint32_t code, const char *file, uint64_t n, uint32_t line, uint3
 }
 int main(void) {
     union { uint32_t whole; uint8_t low; } w = { .whole = 0x12345678 };
-    if (word_size() != sizeof(w)) return 1;
+    if (word_size() != 2 * sizeof(w) + _Alignof(uint32_t)) return 1;
     w.low = 10;
     if (replace_low(0x12345678, 10) != w.whole) return 1;
     w.whole = 0;
