@@ -819,6 +819,6 @@ int main(int argc, char **argv) {
     assert_eq!(Command::new(&path).status().unwrap().code(), Some(0));
     assert_eq!(
         Command::new(&path).arg("trap").status().unwrap().code(),
-        Some(3)
+        Some(9)
     );
 }

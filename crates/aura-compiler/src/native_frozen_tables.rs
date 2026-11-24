@@ -7,6 +7,9 @@ use super::*;
 use crate::const_eval::FrozenValue;
 use crate::integer::IntegerRepresentation;
 
+/// A frozen sequence index is out of range or a dictionary key is absent.
+const TRAP_LOOKUP: i64 = 9;
+
 const INDEX: &str = "$frozen.index";
 const INDEX_REF: &str = "$frozen.index.ref";
 const LEN: &str = "$frozen.len";
@@ -650,7 +653,7 @@ impl FunctionCompiler<'_> {
         } else {
             self.span_values(None)
         };
-        self.call_trap_hook(TRAP_ASSERT, line, col);
+        self.call_trap_hook(TRAP_LOOKUP, line, col);
         self.builder.trap(TrapCode::User(1));
         self.builder.switch_to_block(resume);
         self.builder.seal_block(resume);
