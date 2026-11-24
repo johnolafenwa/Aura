@@ -1,0 +1,38 @@
+class Holder:
+    values: list[int64]
+
+
+def made(a: int64) -> list[int64]:
+    mut values: list[int64] = [a, a + 1, 0, a + 2, 2]
+    values[4] = a * 10
+    return values
+
+
+def main():
+    mut total = 0
+    for i in range(50):
+        mut values: list[int64] = [i, i + 1, 0, i + 2, 2]
+        if i % 3 == 0:
+            values[4] = 0
+        total += values[i % 5] + values.len()
+    print(total)
+    # Appends past the literal grow the list, and a copy keeps its own.
+    mut grown = made(3)
+    copied = grown.copy()
+    for i in range(6):
+        grown.append(i)
+    print(grown)
+    print(copied)
+    print(grown.pop())
+    mut floats = [1.5, 2.5]
+    floats.append(3.5)
+    print(floats)
+    flags = [true, false, true]
+    print(flags)
+    small: list[int8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    print(small)
+    mut holder = Holder(values=[7, 8, 9])
+    holder.values.append(10)
+    print(holder.values)
+    one = [42]
+    print(one.len())

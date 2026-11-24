@@ -186,6 +186,11 @@ runtime_functions! {
     RangeAdvance => ("aura_direct_range_advance", [I64], Some(I64)),
     VecEmpty => ("aura_direct_vec_empty", [], Some(I64)),
     VecEmptyTagged => ("aura_direct_vec_empty_tagged", [I64, I64, I64], Some(I64)),
+    VecEmptyTaggedWithRoom => (
+        "aura_direct_vec_empty_tagged_with_room",
+        [I64, I64, I64, I64],
+        Some(I64)
+    ),
     VecPushStrLiteral => ("aura_direct_vec_push_str_literal", [I64, I64, I64], None),
     VecLen => ("aura_direct_vec_len", [I64], Some(I64)),
     VecIsEmpty => ("aura_direct_vec_is_empty", [I64], Some(I64)),

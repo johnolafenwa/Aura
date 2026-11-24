@@ -9145,6 +9145,31 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
     })
 }
 
+/// [`aura_direct_vec_empty_tagged`] with storage for `room` elements, which
+/// its view offers to generated code, so a list literal's elements go in
+/// place with no further allocation, as appends do once one has grown the
+/// storage.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_empty_tagged_with_room(
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+    room: usize,
+) -> *mut OpaqueValue {
+    let boxed = aura_direct_vec_empty_tagged(cell, type_ptr, type_len);
+    // SAFETY: the box is new and live.
+    let header = unsafe { &*boxed };
+    let shape = header.shape_tag.load(Ordering::Relaxed);
+    // Storage that cannot be had is left for the first append to ask for,
+    // which reports it. The write refreshes the view, which then offers
+    // the room, and forgets the shape, which the room keeps.
+    with_vector_mut(boxed, |vector| {
+        let _ = vector.elements.try_reserve(room);
+    });
+    header.shape_tag.store(shape, Ordering::Relaxed);
+    boxed
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {

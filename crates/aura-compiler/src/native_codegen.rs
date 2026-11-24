@@ -7451,6 +7451,14 @@ impl<'a> FunctionCompiler<'a> {
         let resolved_is_str = resolved_element_type == Type::named("str");
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
         let wildcard = runtime_type_is_wildcard(&list_type);
+        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
+        // A short literal of scalars starts with room for every element,
+        // which all go in place. The room is what appends growing the list
+        // from empty would have left, so later appends grow it as before.
+        let room = (scalar.is_some() && !wildcard && elements.len() <= LITERAL_ELEMENTS_IN_PLACE)
+            .then_some(elements.len())
+            .filter(|len| *len > 0)
+            .map(|len| len.next_power_of_two().max(4));
         let init = if wildcard {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
         } else {
@@ -7459,10 +7467,19 @@ impl<'a> FunctionCompiler<'a> {
             let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
             let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
             let cell = self.tag_cell(&encoded)?;
-            let call = self.builder.call(
-                self.runtime[RuntimeFn::VecEmptyTagged],
-                &[cell, type_ptr, type_len],
-            );
+            let call = match room {
+                Some(room) => {
+                    let room = self.builder.iconst(types::I64, room as i64);
+                    self.builder.call(
+                        self.runtime[RuntimeFn::VecEmptyTaggedWithRoom],
+                        &[cell, type_ptr, type_len, room],
+                    )
+                }
+                None => self.builder.call(
+                    self.runtime[RuntimeFn::VecEmptyTagged],
+                    &[cell, type_ptr, type_len],
+                ),
+            };
             if elements.is_empty() {
                 self.last_runtime_type_tag = Some((call.inst, call.results[0], encoded));
             }
@@ -7471,14 +7488,13 @@ impl<'a> FunctionCompiler<'a> {
         let vector = self.owned_opaque_result(init.results, list_type);
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
-        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
         let record = self.plain_record(&element_direct_ty)?;
         for (position, element) in elements.iter().enumerate() {
             // The first element's call gives the list its storage, which
             // has room for the next few, so those go in place as an
             // `append` does. A long literal keeps the calls, which take
             // less code.
-            let in_place = (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
+            let in_place = room.is_some() || (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
             if let Some(kind) = scalar {
                 let loaded =
                     self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
