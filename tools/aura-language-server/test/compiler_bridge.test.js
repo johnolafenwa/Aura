@@ -7384,6 +7384,14 @@ test("compiler bridge resolves delegated members, decorated methods, and propert
     assert.ok(items.some((item) => item.name === "name"));
     assert.deepEqual(items.filter((item) => item.name === "count").map((item) => item.kind), ["property"]);
     assert.ok(items.every((item) => !item.name.includes("$") && !item.name.startsWith("__aura_") && item.name !== "__drop__"));
+    const traitFile = path.join(root, "named.au");
+    fs.writeFileSync(traitFile, "public trait Named:\n    def name(self) -> str\n");
+    const imported = ["from named import Named", "", ...lines.slice(2)].join("\n");
+    const importedAnalysis = await analyzeWithCompiler(uri, imported);
+    assert.deepEqual(importedAnalysis?.diagnostics, []);
+    const forwarded = compilerDefinitionAtPosition(uri, importedAnalysis, 29, lines[29].indexOf("name"));
+    assert.equal(forwarded?.uri, pathToFileURL(fs.realpathSync(traitFile)).href);
+    assert.deepEqual(forwarded.range.start, { line: 1, character: 8 });
     const indexed = [
       ...lines.slice(0, 25),
       "def index(label: str) -> int64:",
