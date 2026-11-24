@@ -114,7 +114,11 @@ fn append_in_place(list: &ElementBox, value: i64) {
 
 fn ints(value: &Value) -> Vec<Value> {
     match value {
-        Value::Vec(vector) => vector.elements.iter().map(|value| value.into_owned()).collect(),
+        Value::Vec(vector) => vector
+            .elements
+            .iter()
+            .map(|value| value.into_owned())
+            .collect(),
         other => panic!("expected a list, found {other:?}"),
     }
 }

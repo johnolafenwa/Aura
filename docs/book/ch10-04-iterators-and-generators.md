@@ -130,6 +130,12 @@ intact. When the body finishes, the loop gets `End`. `Generator[T]` implements
 `Iterator[T]`, so everything in the previous section works on it, including
 `for x in mut gen:`.
 
+That pausing has a cost for `aura verify`, the prover from [the traits
+section](/book/ch10-02-traits#contracts-on-trait-methods). A generator's body
+is checked without its own `requires` clauses, and the values it yields carry
+no contract, so a loop over `evens(7)` knows nothing about `x`. When a proof
+matters, build a list in a loop with an `invariant` and iterate over that.
+
 Because nothing runs until it's asked for, a generator can describe a sequence
 that never ends. Let's number some words by zipping an endless counter with a
 list:

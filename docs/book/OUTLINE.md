@@ -92,12 +92,23 @@ and promises to explain each later.
 - 10.4 Iterators and generators
 - 10.5 Trait objects (`dyn Trait`, conversion, `match` type arms, when to use a generic, a union, or a trait object)
 
-## 11. Writing automated tests
+Verification runs through the whole book, not only Chapter 11: 1.3 proves a
+first contract, 3.3 introduces `requires` and `ensures`, and each later
+chapter adds the contracts that fit its subject and shows what `aura verify`
+proves about them. A chapter states plainly what the verifier does not model.
+Every `aura verify` report in the book is pasted from a real run.
+
+## 11. Testing and proving
 
 - 11.1 How to write tests
 - 11.2 Running tests and reading failures
 - 11.3 Organizing tests (parameterized cases, CI output)
 - 11.4 Contracts and proofs (`requires`, `ensures`, `invariant`, `aura verify`)
+- 11.5 Proving loops and collections (invariants, `decreases`, quantifiers,
+  dict keys)
+- 11.6 Proving types (class invariants, trait contracts, `spec def`, `ghost`,
+  `lemma def`, the AU51xx codes, what is not modeled, the proof cache,
+  `--remove-proved-checks`)
 
 ## 12. An I/O project: building a log analyzer
 

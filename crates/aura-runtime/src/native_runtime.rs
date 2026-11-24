@@ -12710,6 +12710,88 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
     task_runtime_boundary(|| with_map(map, |map| boxed_map_payload(map.entries.value_of_i64(key))))
 }
 
+/// Writes the `int64` a map lookup found to `out` and returns 1, or writes
+/// 0 and returns 0 when the key is missing. Generated code keeps a `Lookup`
+/// of an `int64` it only matches and unpacks as these two words, so the
+/// found value never goes in a box.
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    i64::from(found.is_some())
+}
+
+/// `aura_direct_map_get_payload` for a dict of `int64` values, as the two
+/// words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_word(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| match tape_lookup_key(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract, and `key` is a live box.
+            None => unsafe {
+                with_value(key, |key| map_lookup_word(map.entries.value_of(key), out))
+            },
+        })
+    })
+}
+
+/// `aura_direct_map_get_str_payload` for a dict of `int64` values, as the
+/// two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_str_word(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract.
+            None => unsafe { map_lookup_word(map.entries.value_of_str(key), out) },
+        })
+    })
+}
+
+/// `aura_direct_map_get_int64_payload` for a dict of `int64` values, as
+/// the two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_int64_word(
+    map: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        with_map(map, |map| unsafe {
+            map_lookup_word(map.entries.value_of_i64(key), out)
+        })
+    })
+}
+
 /// Turns an owned `Lookup` into the found value's own box, or null for
 /// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
 /// form came from a path that builds the `Lookup`.
@@ -13095,6 +13177,112 @@ pub extern "C-unwind" fn aura_direct_map_index(
             }
         };
         boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+/// Reports that `map[key]` found no `key`, whose rendering is
+/// `rendered_key`, at `line:column`.
+fn missing_dict_key(rendered_key: &str, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{rendered_key}` was not present");
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// `map[key]` for a dict of scalar values: `read` gives the found value as
+/// the scalar generated code keeps, so the value never goes in a box. A
+/// missing key reports what `aura_direct_map_index` reports.
+fn map_index_scalar<T>(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    read: fn(&Value) -> T,
+) -> T {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(read)
+                    .ok_or_else(|| key.render())
+            })
+        });
+        found.unwrap_or_else(|rendered_key| missing_dict_key(&rendered_key, line, column))
+    })
+}
+
+/// `map[key]` for a dict of `int64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_int64_of)
+}
+
+/// `map[key]` for a dict of integer values narrower than 64 bits.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_i64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_i64_of)
+}
+
+/// `map[key]` for a dict of `uint64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_u64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> u64 {
+    map_index_scalar(map, key, line, column, unbox_u64_of)
+}
+
+/// `map[key]` for a dict of float values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_f64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> f64 {
+    map_index_scalar(map, key, line, column, unbox_f64_of)
+}
+
+/// `map[key]` for a dict of `bool` values, as 0 or 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_bool(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_bool_of)
+}
+
+/// `map[key]` for a dict from `int64` to `int64`: neither the key nor the
+/// found value goes in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| map.entries.value_of_i64(key).map(unbox_int64_of));
+        found.unwrap_or_else(|| {
+            let rendered_key = Value::Int(IntegerValue::from_i64(key)).render();
+            missing_dict_key(&rendered_key, line, column)
+        })
     })
 }
 
@@ -14511,21 +14699,22 @@ fn unbox_u64_of(value: &Value) -> u64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    task_runtime_boundary(|| {
-        let value = unsafe { value_ref(value) };
-        // A trait object holds a float beside its width.
-        let held = match &value {
-            Value::TraitObject(object) => &object.value,
-            other => other,
-        };
-        match held {
-            Value::Float(value) => *value,
-            _ => runtime_error(format!(
-                "direct backend expected `float64`, found `{}`",
-                value_type_name(&value)
-            )),
-        }
-    })
+    task_runtime_boundary(|| unbox_f64_of(&unsafe { value_ref(value) }))
+}
+
+fn unbox_f64_of(value: &Value) -> f64 {
+    // A trait object holds a float beside its width.
+    let held = match value {
+        Value::TraitObject(object) => &object.value,
+        other => other,
+    };
+    match held {
+        Value::Float(value) => *value,
+        _ => runtime_error(format!(
+            "direct backend expected `float64`, found `{}`",
+            value_type_name(value)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

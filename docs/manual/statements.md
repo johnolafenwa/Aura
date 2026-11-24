@@ -860,6 +860,36 @@ Runtime diagnostics:
 
 A failed assertion reports `AU4001` with `assertion failed` or the exact custom message, and points to its keyword.
 
+## Verification
+
+A loop can open with `invariant` and `decreases` clauses; see
+[Loop Invariants And `decreases`](/manual/contracts#loop-invariants-and-decreases).
+`aura verify` proves each invariant on entry and after every iteration, and
+proves that each `decreases` measure shrinks and stays at least 0, which
+proves that the loop ends. After the loop it knows the invariants and the
+condition that ended the loop.
+
+```aura
+def count_down(start: int64) -> int64:
+    requires 0 <= start and start <= 1000
+    ensures result == 0
+    mut left = start
+    while left > 0:
+        invariant 0 <= left and left <= start
+        decreases left
+        left -= 1
+    return left
+
+
+def main():
+    print(count_down(3))
+```
+
+`aura verify` proves all 6 checks. The invariant and the exit condition
+`not (left > 0)` together give `left == 0`. An `assert` statement is proved
+the same way; see [Assertions](/manual/assertions#verification).
+
+
 ## Backend Support
 
 Every implemented statement form uses the same checker and MIR lowering for MIR execution and for direct native generation. The backend-parity suite forces cleanup, loop, match, task, and runtime-trap behavior to agree. Where direct lowering is unsupported, it is contained rather than silently given different semantics.

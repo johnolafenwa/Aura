@@ -5,7 +5,9 @@ Python. You write indented blocks, `def`, `class`, f-strings, and
 `for name in names`, much as you would in a Python file. The difference is
 what happens before your program runs: the compiler checks the type of every
 value, checks who owns each piece of data and who is only borrowing it, and
-checks that every failure your code can meet is handled somewhere. Then it
+checks that every failure your code can meet is handled somewhere. Functions
+can state what they need and what they promise, and `aura verify` proves
+those contracts for every input. Then it
 either runs the program straight away or compiles it to a native executable
 with no runtime to install alongside it.
 
@@ -45,8 +47,14 @@ on ownership, the idea the rest of the book leans on. Chapters 5 and 6 cover
 the two ways to define your own types, classes and enums, and Chapter 7 shows
 how to split a growing program into modules and packages. Chapter 8 tours
 the collections, Chapter 9 covers error handling, Chapter 10 covers generics,
-traits, and conversions, and Chapter 11 covers testing. Chapter 12 puts all of
-that to work in a log analyzer.
+traits, and conversions, and Chapter 11 covers testing and proving. Chapter 12
+puts all of that to work in a log analyzer.
+
+Contracts and `aura verify` run through all of it. Chapter 1 proves a first
+contract, Chapter 3 introduces `requires` and `ensures` with functions, and
+the chapters after it add the contracts that fit their subject: invariants on
+classes, bounds on indexes, promises on trait methods. Chapter 11 then covers
+proofs in depth.
 
 The second half is about programs that deal with the world outside their own
 memory. Chapter 13 covers closures and decorators, Chapter 14 covers resources
@@ -93,7 +101,8 @@ the diagnostic code it should produce, and CI fails if the compiler stops
 reporting exactly that code. Short pieces of code shown out of context are
 marked as fragments, and CI checks that they really are incomplete. The
 output shown after a `$` prompt was produced by running the command, not
-written by hand.
+written by hand. That includes every `aura verify` report: when the book says
+a program's checks are all proved, we ran the verifier and it proved them.
 
 That means the book cannot quietly drift away from the compiler. If you find
 an example that behaves differently on your machine, check `aura --version`
@@ -102,7 +111,8 @@ in Aura.
 
 ## Getting started
 
-To follow along you need the `aura` command. The
+To follow along you need the `aura` command, and an SMT solver such as Z3
+for the `aura verify` examples. The
 [installation guide](/install/) has instructions for macOS, Linux, and
 Windows, and [Chapter 1](/book/ch01-00-getting-started) walks
 through the same steps with a little more explanation. The source for Aura
