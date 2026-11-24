@@ -100,19 +100,28 @@ pub(super) fn check_with_property_reads(
     let mut module = module;
     let mut reads = BTreeSet::new();
     loop {
-        let (result, discovered, writes) = with_property_state(&module_name, reads.clone(), || {
-            check(module.clone(), context.clone())
-        });
+        let (result, discovered, mut writes) =
+            with_property_state(&module_name, reads.clone(), || {
+                check(module.clone(), context.clone())
+            });
         let pending = discovered
             .difference(&reads)
             .copied()
             .collect::<BTreeSet<_>>();
-        let rewritten = if pending.is_empty() && writes.is_empty() {
+        let had_writes = !writes.is_empty();
+        let rewritten = if pending.is_empty() && !had_writes {
             BTreeSet::new()
         } else {
-            rewrite_module(&mut module, &pending, &writes)
+            rewrite_module(&mut module, &pending, &mut writes)
         };
-        if rewritten.is_empty() && writes.is_empty() {
+        if let Some(&(line, column)) = writes.first() {
+            return Err(Diagnostic::coded_at(
+                "AU2064",
+                crate::diag::Span::new(line, column),
+                "cannot lower a property assignment in this context",
+            ));
+        }
+        if rewritten.is_empty() && !had_writes {
             MODULE_PROPERTY_READS.with(|module_reads| {
                 module_reads
                     .borrow_mut()
@@ -151,7 +160,7 @@ fn module_may_read_properties(module: &Module, context: &ModuleContext) -> bool 
 pub(super) fn rewrite_module(
     module: &mut Module,
     sites: &BTreeSet<PropertySite>,
-    writes: &BTreeSet<PropertySite>,
+    writes: &mut BTreeSet<PropertySite>,
 ) -> BTreeSet<PropertySite> {
     let mut rewritten = BTreeSet::new();
     let mut rewriter = Rewriter {
@@ -197,7 +206,7 @@ pub(super) fn rewrite_module(
 
 struct Rewriter<'a> {
     sites: &'a BTreeSet<PropertySite>,
-    writes: &'a BTreeSet<PropertySite>,
+    writes: &'a mut BTreeSet<PropertySite>,
     rewritten: &'a mut BTreeSet<PropertySite>,
 }
 
@@ -230,7 +239,7 @@ impl Rewriter<'_> {
                 }
                 self.expr(&mut assign.value, false);
                 if let crate::ast::AssignTarget::Member { object, field } = &assign.target {
-                    if self.writes.contains(&site(assign.span)) {
+                    if self.writes.remove(&site(assign.span)) {
                         *stmt = super::property_setters::lower_write(assign, object, field);
                     }
                 }

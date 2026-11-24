@@ -43,7 +43,11 @@ def main():
         );
         (args[0].value.span.line, args[0].value.span.column)
     };
-    let rewritten = rewrite_module(&mut module, &BTreeSet::from([read_site]), &BTreeSet::new());
+    let rewritten = rewrite_module(
+        &mut module,
+        &BTreeSet::from([read_site]),
+        &mut BTreeSet::new(),
+    );
     assert_eq!(rewritten, BTreeSet::from([read_site]));
 
     let Some(Item::Function(main)) = module
@@ -69,7 +73,11 @@ def main():
     assert!(getter_args.is_empty());
     assert!(matches!(&callee.kind, ExprKind::Member { field, .. } if field == "doubled"));
 
-    let unchanged = rewrite_module(&mut module, &BTreeSet::from([(99, 1)]), &BTreeSet::new());
+    let unchanged = rewrite_module(
+        &mut module,
+        &BTreeSet::from([(99, 1)]),
+        &mut BTreeSet::new(),
+    );
     assert!(unchanged.is_empty());
 }
 
@@ -175,4 +183,68 @@ def main():
     print(box.slot.value)
 ";
     assert_eq!(crate::run_source(source).unwrap().stdout, "6\n");
+}
+
+#[test]
+fn property_setter_contracts_apply_to_the_generated_call() {
+    if crate::verify::smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none(), "CI must install Z3");
+        return;
+    }
+    let source = "
+class Gauge:
+    stored: int64
+    @property
+    def level(self) -> int64:
+        return self.stored
+    @level.setter
+    def level(mut self, value: int64):
+        requires value >= 0
+        ensures self.stored == value
+        self.stored = value
+
+def main():
+    mut gauge = Gauge(stored=0)
+    gauge.level = 7
+    assert gauge.stored == 7
+";
+    let program = crate::check_source(source).unwrap();
+    let report = crate::verify_program(&program, &crate::verify::Options::default()).unwrap();
+    assert!(!report.obligations.is_empty());
+    assert!(report.is_proved(), "{report:#?}");
+    let invalid = source.replace("gauge.level = 7", "gauge.level = -1");
+    let program = crate::check_source(&invalid).unwrap();
+    let report = crate::verify_program(&program, &crate::verify::Options::default()).unwrap();
+    assert!(!report.is_proved());
+}
+
+#[test]
+fn property_setter_checks_visibility_at_the_write() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-fail/property_setter_private.au");
+    let diagnostic = crate::check_path(&path).unwrap_err();
+    assert_eq!(
+        diagnostic.message,
+        "setter for `level` is private on `Gauge`"
+    );
+}
+
+#[test]
+fn property_setter_finishes_rhs_reads_before_taking_the_mutable_receiver() {
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let source = format!(
+        "{declaration}
+def index() -> int64:
+    print(\"index\")
+    return 0
+
+def main():
+    mut slots = [Counter(stored=4)]
+    slots[index()].count = slots[0].count
+    slots[index()].count += slots[0].count
+    print(slots[0].stored)
+"
+    );
+    let output = crate::run_source(&source).unwrap();
+    assert_eq!(output.stdout, "index\nget\nset\nindex\nget\nget\nset\n8\n");
 }

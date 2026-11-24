@@ -42,7 +42,7 @@ pub(super) fn validate_setter(
 /// Lower a write after the checker has resolved the property on its receiver.
 /// Each generated call needs a distinct position for the typed call tables.
 pub(super) fn lower_write(assign: &AssignStmt, object: &Expr, field: &str) -> Stmt {
-    let span = assign.span;
+    let span = assign.member_span.unwrap_or(assign.span);
     let mut body = Vec::new();
     let mut receiver = object.clone();
     let mut value = assign.value.clone();
@@ -73,6 +73,7 @@ pub(super) fn lower_write(assign: &AssignStmt, object: &Expr, field: &str) -> St
         let name = "property value".to_owned();
         body.push(Stmt::Assign(AssignStmt {
             mutable: false,
+            member_span: None,
             annotation: None,
             op: None,
             span: getter_span,

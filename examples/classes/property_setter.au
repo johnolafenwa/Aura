@@ -9,6 +9,7 @@ class Score:
     def total(mut self, value: int64):
         self.points = value if value >= 0 else 0
 
+
 def main():
     mut score = Score(points=0)
     score.total = 5
