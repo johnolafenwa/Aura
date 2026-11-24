@@ -6,12 +6,7 @@ pub(super) fn select(
     tokens: &[Token],
     inactive: &mut Vec<Range<usize>>,
 ) -> Result<()> {
-    if !module.constants.iter().any(|c| c.required)
-        && !module
-            .imports
-            .iter()
-            .any(|import| resolver.potential(import))
-    {
+    if !has_guard_name(module, resolver, tokens) {
         return Ok(());
     }
     let declarations = module.clone();
@@ -208,5 +203,42 @@ fn bind_pattern(pattern: &Pattern, locals: &mut BTreeSet<String>) {
             .iter()
             .for_each(|field| bind_pattern(&field.pattern, locals)),
         Pattern::Literal(_) | Pattern::Wildcard(_) => {}
+    }
+}
+
+fn has_guard_name(module: &Module, resolver: &Resolver, _tokens: &[Token]) -> bool {
+    module.constants.iter().any(|c| c.required)
+        || module
+            .imports
+            .iter()
+            .any(|import| resolver.potential(import))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_build_names_only_inside_statement_guards() {
+        fn candidate(source: &str) -> bool {
+            let module = crate::parser::parse_all_syntax(source).unwrap();
+            has_guard_name(&module, &Resolver::new(None), &lex(source).unwrap())
+        }
+
+        let ordinary = concat!(
+            "from build import hosted as host\n",
+            "def f(value: bool) -> bool:\n",
+            "    if value:\n",
+            "        return host\n",
+            "    return false\n",
+        );
+        assert!(!candidate(ordinary));
+        assert!(candidate(&ordinary.replace("if value", "if host")));
+        assert!(candidate(&ordinary.replace(
+            "    return false",
+            "    elif (\n        host\n    ):\n        return true\n    return false"
+        )));
+        assert!(candidate("const ready = true\ndef f() -> bool:\n    if ready:\n        return true\n    return false\n"));
+        assert!(!candidate(&ordinary.replace("if value", "if true")));
     }
 }
