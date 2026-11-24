@@ -31,3 +31,40 @@ fn set_extent(ty: &Type, size: usize, align: usize) {
         (*ty.as_raw_ptr()).alignment = align as u16;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::c_layout::CField;
+
+    #[test]
+    fn controlled_descriptors_and_argument_slots_preserve_the_required_extent() {
+        let mut layout = CStruct {
+            name: "Header".into(),
+            union: false,
+            layout_controls: Default::default(),
+            fields: [("tag", FfiScalar::U8), ("serial", FfiScalar::U32)]
+                .into_iter()
+                .map(|(name, scalar)| CField {
+                    name: name.into(),
+                    kind: CFieldKind::Scalar(scalar),
+                })
+                .collect(),
+        };
+        layout.layout_controls.packed = true;
+        for (alignment, expected) in [(1, 5), (32, 32), (8192, 8192)] {
+            layout.layout_controls.alignment = Some(alignment);
+            let ty = descriptor(&layout);
+            // SAFETY: the owned descriptor is alive and fully initialized.
+            let raw = unsafe { &*ty.as_raw_ptr() };
+            assert_eq!(
+                (raw.size, usize::from(raw.alignment)),
+                (expected, alignment)
+            );
+            let mut data = AlignedWords::new(&[1, 2, 3], expected.div_ceil(8), alignment);
+            let slice = data.words();
+            assert_eq!(slice.as_ptr() as usize % alignment, 0);
+            assert_eq!(leading_bytes(slice, 3), [1, 2, 3]);
+        }
+    }
+}

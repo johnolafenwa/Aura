@@ -21,7 +21,7 @@ pub struct CStruct {
     pub name: String,
     pub fields: Vec<CField>,
     #[serde(default, skip_serializing_if = "LayoutControls::is_default")]
-    pub layout_controls: LayoutControls,
+    pub layout_controls: Box<LayoutControls>,
     /// The fields are the members of a union: each starts at offset 0.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub union: bool,

@@ -602,7 +602,7 @@ pub(crate) fn ffi_struct_layout(
     Some(CStruct {
         name: name.clone(),
         fields,
-        layout_controls,
+        layout_controls: Box::new(layout_controls),
         union: class.decl.c_union.is_some(),
     })
 }

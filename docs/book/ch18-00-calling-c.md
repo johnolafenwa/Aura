@@ -536,8 +536,7 @@ a union, even inside a nested struct, assignment moves the value. An
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C
-bit-fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. Declare an unsigned C bit-field with its width, as in `code: uint16 bits(3)`.
 
 ### Arrays of structs
 
@@ -948,7 +947,7 @@ The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
 variadic functions such as `printf`, no
-raw pointers or pointer arithmetic, no returned views, no freeing of
+returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
 signature, built as a library the package links, or a separate helper program driven

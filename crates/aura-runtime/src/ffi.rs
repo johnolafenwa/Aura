@@ -670,6 +670,9 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
 }
 
+#[path = "ffi_controlled_struct.rs"]
+mod controlled_struct;
+
 /// The libffi description of a C struct or union.
 ///
 /// libffi has structs of scalars and structs only. An array is described
@@ -677,9 +680,6 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
 /// the same way. A struct that is or holds a union is described by what
 /// decides how it is passed: its size, its alignment, and the class of
 /// each of its register pieces on this machine.
-#[path = "ffi_controlled_struct.rs"]
-mod controlled_struct;
-
 fn struct_type(layout: &CStruct) -> Type {
     if layout.has_controlled_layout() {
         return controlled_struct::descriptor(layout);
