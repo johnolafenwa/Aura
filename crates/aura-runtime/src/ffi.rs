@@ -1281,15 +1281,23 @@ fn host_image_base() -> *mut libc::c_void {
     }
 }
 
-#[cfg(unix)]
-fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
-    if symbol.starts_with("aura_direct_")
+fn is_internal_host_symbol_name(symbol: &str) -> bool {
+    symbol.starts_with("aura_direct_")
         || symbol.starts_with("aura_debug_")
         || symbol.starts_with("LLVM")
         || symbol.starts_with("_ZN")
         || symbol.starts_with("__rust_")
         || symbol == "rust_eh_personality"
-    {
+}
+
+fn is_internal_host_image_name(file_name: &str) -> bool {
+    let lower = file_name.to_ascii_lowercase();
+    lower.starts_with("libllvm") || lower.starts_with("llvm")
+}
+
+#[cfg(unix)]
+fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
+    if is_internal_host_symbol_name(symbol) {
         return true;
     }
     if pointer.is_null() {
@@ -1312,7 +1320,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
                 .file_name()
                 .and_then(|n| n.to_str())
             {
-                if base_name.starts_with("libLLVM") || base_name.starts_with("LLVM") {
+                if is_internal_host_image_name(base_name) {
                     return true;
                 }
             }
@@ -1323,14 +1331,29 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
 
 fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     let c_symbol = CString::new(symbol).map_err(|_| FfiError::InvalidSymbolName)?;
+    if is_internal_host_symbol_name(symbol) {
+        return Err(FfiError::SymbolNotFound {
+            symbol: symbol.to_owned(),
+            detail: "symbol resolves to internal Aura host image".to_owned(),
+        });
+    }
     let handles = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .handles
         .clone();
     for handle in handles {
-        if let Some(function) = HostFunction::new(library_symbol(handle, &c_symbol)) {
-            return Ok(function);
+        let pointer = library_symbol(handle, &c_symbol);
+        if !pointer.is_null() {
+            if is_internal_host_symbol(symbol, pointer) {
+                return Err(FfiError::SymbolNotFound {
+                    symbol: symbol.to_owned(),
+                    detail: "symbol resolves to internal Aura host image".to_owned(),
+                });
+            }
+            if let Some(function) = HostFunction::new(pointer) {
+                return Ok(function);
+            }
         }
     }
 
@@ -1462,7 +1485,7 @@ fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
     }
     modules
         .into_iter()
-        .filter(|module| *module != host)
+        .filter(|module| *module != host && !is_internal_host_module(*module))
         .map(|module| library_symbol(module as usize, symbol))
         .find(|pointer| !pointer.is_null())
         .unwrap_or(std::ptr::null_mut())
@@ -1474,6 +1497,36 @@ fn symbol_lookup_failure() -> String {
     "no module loaded into the process exports the symbol".to_owned()
 }
 
+#[cfg(windows)]
+fn is_internal_host_module(module: *mut c_void) -> bool {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleFileNameW;
+
+    if std::ptr::eq(module, host_image_base()) {
+        return true;
+    }
+    let mut buffer = vec![0u16; 1024];
+    loop {
+        // SAFETY: `buffer` is writable for `buffer.len()` UTF-16 code units.
+        let len =
+            unsafe { GetModuleFileNameW(module as _, buffer.as_mut_ptr(), buffer.len() as u32) };
+        if len == 0 {
+            return false;
+        }
+        if (len as usize) < buffer.len() {
+            let path = std::ffi::OsString::from_wide(&buffer[..len as usize]);
+            return Path::new(&path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(is_internal_host_image_name);
+        }
+        if buffer.len() >= 32_768 {
+            return false;
+        }
+        buffer.resize(buffer.len() * 2, 0);
+    }
+}
+
 /// Whether `symbol` is one of Aura's own, which no program may call as a
 /// foreign function.
 #[cfg(windows)]
@@ -1482,13 +1535,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const c_void) -> bool {
         GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
     };
-    if symbol.starts_with("aura_direct_")
-        || symbol.starts_with("aura_debug_")
-        || symbol.starts_with("LLVM")
-        || symbol.starts_with("_ZN")
-        || symbol.starts_with("__rust_")
-        || symbol == "rust_eh_personality"
-    {
+    if is_internal_host_symbol_name(symbol) {
         return true;
     }
     if pointer.is_null() {
@@ -1504,7 +1551,7 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const c_void) -> bool {
             &mut module,
         )
     };
-    found != 0 && std::ptr::eq(module, host_image_base())
+    found != 0 && is_internal_host_module(module)
 }
 
 /// The function `symbol` among the libraries loaded into the process, as
@@ -3634,5 +3681,57 @@ mod tests {
             WIN_LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | WIN_LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
             "absolute DLL paths must use LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_symbol_rejects_internal_host_symbol_from_loaded_handle() {
+        let dir = scratch_directory("internal-sym");
+        let file_name = &library_file_names("aura_ffi_internal_sym")[0];
+        let lib_path = dir.join(file_name);
+        build_fixture_library(&lib_path, "aura_direct_probe_from_handle", 77);
+        load_libraries(
+            &["aura_ffi_internal_sym".to_owned()],
+            std::slice::from_ref(&dir),
+            &[],
+        )
+        .expect("load fixture library");
+        let lookup = process_symbol("aura_direct_probe_from_handle");
+        std::fs::remove_dir_all(&dir).expect("cleanup internal-sym dir");
+        assert!(
+            matches!(
+                lookup,
+                Err(FfiError::SymbolNotFound { ref detail, .. })
+                    if detail.contains("internal Aura host image")
+            ),
+            "process_symbol must reject internal-prefix symbols even from loaded handles: {lookup:?}"
+        );
+    }
+
+    #[test]
+    fn internal_host_image_name_filters_llvm_libraries_case_insensitively() {
+        for blocked in [
+            "libLLVM-22.so",
+            "libLLVM.dylib",
+            "LLVM-C.dll",
+            "llvm-22.dll",
+            "libllvm-22.dll",
+        ] {
+            assert!(
+                is_internal_host_image_name(blocked),
+                "`{blocked}` must be classified as an internal host image"
+            );
+        }
+        for allowed in [
+            "libsqlite3.so",
+            "ucrtbase.dll",
+            "kernel32.dll",
+            "mylib.dylib",
+        ] {
+            assert!(
+                !is_internal_host_image_name(allowed),
+                "`{allowed}` must not be blocked as an internal host image"
+            );
+        }
     }
 }
