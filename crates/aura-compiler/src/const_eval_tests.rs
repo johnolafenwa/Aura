@@ -398,3 +398,6 @@ const folded = make()(40)
     );
     assert!(run_source(mixed).unwrap_err().message.contains("startup"));
 }
+
+#[path = "const_eval_transport_tests.rs"]
+mod compile_time_transport;
