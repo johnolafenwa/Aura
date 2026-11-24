@@ -21,6 +21,6 @@ def increment() -> int64:
 
 def main():
     mut counters = [Counter(stored=0)]
-    counters[0].count = 5
+    counters[index()].count = 5
     counters[index()].count += increment()
     print(counters[0].stored)

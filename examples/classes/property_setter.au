@@ -1,0 +1,18 @@
+class Score:
+    points: int64
+
+    @property
+    def total(self) -> int64:
+        return self.points
+
+    @total.setter
+    def total(mut self, value: int64):
+        self.points = value if value >= 0 else 0
+
+def main():
+    mut score = Score(points=0)
+    score.total = 5
+    score.total += 2
+    print(score.total)
+    score.total = -1
+    print(score.total)

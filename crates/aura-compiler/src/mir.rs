@@ -7846,7 +7846,13 @@ fn validate_loan_rvalue(
                     } = callee
                         .member_parts()
                         .expect("member and receiver runtime calls have member parts");
-                    validate_canonical_mir_identifier(function, field, false)?;
+                    let identifier = match callee {
+                        CallTarget::Member { .. } => field
+                            .strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX)
+                            .unwrap_or(field),
+                        _ => field,
+                    };
+                    validate_canonical_mir_identifier(function, identifier, false)?;
                     validate_loan_operand(function, object, context, state)?;
                     let receiver_passing =
                         context.member_receiver_passing(function, object, trait_name, field)?;

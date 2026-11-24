@@ -1,3 +1,5 @@
+mod property_setters;
+
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
     BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
@@ -1155,6 +1157,10 @@ impl Parser {
             }
             if self.at_simple(&TokenKind::KwPass) {
                 self.parse_pass_stmt()?;
+                continue;
+            }
+            if self.at_property_setter(&methods) {
+                methods.push(self.parse_property_setter(&methods)?);
                 continue;
             }
             if self.at_simple(&TokenKind::At) {

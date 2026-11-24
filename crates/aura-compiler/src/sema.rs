@@ -25,6 +25,7 @@ mod prelude;
 mod property_reads;
 #[cfg(test)]
 mod property_reads_tests;
+mod property_setters;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod trait_objects;
@@ -6039,7 +6040,9 @@ impl<'a> FunctionChecker<'a> {
         assign: &AssignStmt,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        self.reject_property_assignment(assign, locals)?;
+        if self.discover_property_assignment(assign, locals)? {
+            return Ok(());
+        }
         if let AssignTarget::Index { object, index } = &assign.target {
             if assign.mutable {
                 return Err(Diagnostic::at(
