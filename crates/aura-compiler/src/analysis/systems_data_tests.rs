@@ -68,6 +68,8 @@ fn systems_data_editor_profiles_restore_hosted_checking() {
     with_freestanding_analysis(true, || {
         let result = analyze_path_source(&file, source);
         assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let declaration = occurrence_at(&result, 0, 4);
+        assert!(declaration.hover.contains("module binding ticks: uint64"));
         let binding = occurrence_at(&result, 2, 11);
         assert!(binding.hover.contains("module binding ticks: uint64"));
         assert_eq!(binding.definition.as_ref().unwrap().line, 0);

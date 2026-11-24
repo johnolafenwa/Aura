@@ -7329,8 +7329,7 @@ test("freestanding editor checks are opt-in and preserve module definitions", as
     "mut ticks: uint64 = 0",
     'export "C" def get() -> uint64:',
     "    return ticks",
-    'export "C" def next_tick() -> uint64:',
-    "    mut ticks: uint64 = 10",
+    'export "C" def next_tick(ticks: uint64) -> uint64:',
     "    return ticks"
   ];
   const source = lines.join("\n");
@@ -7343,10 +7342,10 @@ test("freestanding editor checks are opt-in and preserve module definitions", as
     const bare = await analyzeWithCompiler(uri, source);
     assert.deepEqual(bare.diagnostics, []);
     const global = findOccurrence(bare, 2, lines[2].indexOf("ticks"));
-    const local = findOccurrence(bare, 5, lines[5].indexOf("ticks"));
+    const local = findOccurrence(bare, 4, lines[4].indexOf("ticks"));
     assert.match(global.hover, /module binding ticks: uint64/);
     assert.equal(global.definition.line, 0);
-    assert.equal(local.definition.line, 4);
+    assert.equal(local.definition.line, 3);
     const completions = await completeWithCompiler(uri, source, 2, 4, null);
     assert.ok(completions.some((item) => item.name === "ticks" && item.kind === "variable"));
     const unsupported = await analyzeWithCompiler(uri, 'export "C" def entry() -> None:\n    print("text")\n');
