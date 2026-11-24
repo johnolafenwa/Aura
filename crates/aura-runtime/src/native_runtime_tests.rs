@@ -31810,3 +31810,6 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     );
     assert_eq!(out, [-1, 0]);
 }
+
+#[path = "native_frozen_value_tests.rs"]
+mod compile_time_transport;
