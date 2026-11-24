@@ -1,4 +1,9 @@
-public extern "C" def getpid() -> int32
+import build
+
+if build.os == "windows":
+    public extern "C" def getpid() -> uint32 symbol "GetCurrentProcessId"
+else:
+    public extern "C" def getpid() -> int32
 
 def main() -> int32:
     print(getpid() > 0)

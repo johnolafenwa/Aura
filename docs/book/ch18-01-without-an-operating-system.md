@@ -104,19 +104,34 @@ here.
 a wrong one can corrupt anything. For that reason it needs the same
 permission as calling C: `allow_ffi = true` in *Aura.toml*.
 
-There are no strings in a freestanding program, so printing a number means
-producing its digits ourselves:
+We can build a table of the powers of ten while compiling the kernel.
+The serial output routine indexes that table to print each decimal digit.
+An unsigned 64-bit number fits in 20 digits, so we store the powers from
+10⁰ to 10¹⁹.
 
 ```aura fragment
+def decimal_divisors() -> list[uint64]:
+    mut power: uint64 = 1
+    mut powers: list[uint64] = [power]
+    for i in range(19):
+        power = power * 10
+        powers.append(power)
+    return powers
+
+
+const decimal_powers = decimal_divisors()
+
+
 def put_number(uart: uint64, value: uint64) -> None:
-    mut divisor: uint64 = 1
-    while value // divisor >= 10:
-        divisor = divisor * 10
+    mut place: int64 = 19
+    while place > 0 and decimal_powers[place] > value:
+        place = place - 1
     mut rest = value
-    while divisor > 0:
+    while place >= 0:
+        divisor = decimal_powers[place]
         put(uart, (48 + rest // divisor) as uint8)
         rest = rest % divisor
-        divisor = divisor // 10
+        place = place - 1
 ```
 
 ## Booting it
@@ -136,7 +151,7 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+trap 1 main.au:179:13
 ```
 
 The first four lines are computed results. The last is our `aura_trap`

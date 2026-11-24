@@ -227,7 +227,6 @@ fn exported_bindings_preserve_public_opaque_handle_identity_and_privacy() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn manifest_authorized_path_run_uses_the_trusted_ffi_runtime_route() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3207,7 +3206,11 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/io/process_run.au",
                 EXAMPLE_CASES[45].1,
-                "aura process\n13\n0\nExitStatus.Exited(0)\n",
+                if cfg!(windows) {
+                    "aura process\n14\n0\nExitStatus.Exited(0)\n"
+                } else {
+                    "aura process\n13\n0\nExitStatus.Exited(0)\n"
+                },
             ),
             (
                 "examples/io/process_pipes.au",
@@ -3217,7 +3220,7 @@ fn categorized_examples_run_with_expected_output() {
         ];
 
     for (path, source, expected_stdout) in cases {
-        if example_needs_unix_paths(source) {
+        if path != "examples/io/process_run.au" && example_needs_unix_paths(source) {
             continue;
         }
         let output = run_source(source).unwrap_or_else(|error| {

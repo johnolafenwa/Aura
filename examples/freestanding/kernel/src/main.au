@@ -1,12 +1,12 @@
 """
 A program for a machine with no operating system. The board's startup
-code calls `kernel_main` with the address of its serial port and of a
-scratch region of memory. Everything here is Aura: the serial output, a
-spin lock, and the hook that reports a failed check.
+code calls `kernel_main` with the address of a scratch region. Aura writes
+the serial output, takes a spin lock, and reports a failed check.
 
 Build it with `aura build --freestanding`. See `README.md`.
 """
 
+import build
 import mem
 
 
@@ -14,9 +14,20 @@ import mem
 extern "C" def power_off() -> None
 
 
-# The startup code gives the serial port's address to a hook that has no
-# other way to learn it.
-extern "C" def console_address() -> uint64
+# QEMU's virt boards expose different serial ports. Other boards can
+# supply their address through the same function.
+if build.freestanding and build.arch == "aarch64":
+    const serial_port: uint64 = 0x09000000
+
+    def console_address() -> uint64:
+        return serial_port
+elif build.freestanding and build.arch == "riscv64":
+    const serial_port: uint64 = 0x10000000
+
+    def console_address() -> uint64:
+        return serial_port
+else:
+    extern "C" def console_address() -> uint64
 
 
 # The scratch region holds a lock word and a counter.
@@ -32,15 +43,28 @@ def put(uart: uint64, byte: uint8) -> None:
     mem.volatile_write_uint8(uart, byte)
 
 
+def decimal_divisors() -> list[uint64]:
+    mut power: uint64 = 1
+    mut powers: list[uint64] = [power]
+    for i in range(19):
+        power = power * 10
+        powers.append(power)
+    return powers
+
+
+const decimal_powers = decimal_divisors()
+
+
 def put_number(uart: uint64, value: uint64) -> None:
-    mut divisor: uint64 = 1
-    while value // divisor >= 10:
-        divisor = divisor * 10
+    mut place: int64 = 19
+    while place > 0 and decimal_powers[place] > value:
+        place = place - 1
     mut rest = value
-    while divisor > 0:
+    while place >= 0:
+        divisor = decimal_powers[place]
         put(uart, (48 + rest // divisor) as uint8)
         rest = rest % divisor
-        divisor = divisor // 10
+        place = place - 1
 
 
 def put_line(uart: uint64, label: uint8, value: uint64) -> None:
@@ -130,7 +154,8 @@ export "C" def aura_trap(
     put(uart, 10)
     power_off()
 
-export "C" def kernel_main(uart: uint64, scratch: uint64) -> None:
+export "C" def kernel_main(scratch: uint64) -> None:
+    uart = console_address()
     lock = lock_cell(scratch)
     counter = counter_cell(scratch)
     mem.atomic_store_uint32(lock, 0)
