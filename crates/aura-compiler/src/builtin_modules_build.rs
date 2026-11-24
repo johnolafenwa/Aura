@@ -11,6 +11,7 @@ pub(super) fn namespace() -> ModuleNamespace {
             crate::sema::ConstantInfo {
                 module_name: "build".into(),
                 decl: ConstantDecl {
+                    required: true,
                     public: true,
                     name: name.into(),
                     annotation: Some(annotation),
