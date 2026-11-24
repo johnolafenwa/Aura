@@ -27,6 +27,9 @@ use crate::runtime_ops::{
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
+#[path = "native_freestanding_scale.rs"]
+mod freestanding_scale;
+
 use callables::{CallableShape, CallableShapeKey};
 
 const MODULE_BACKEND_BUSY_ERROR: &str =
@@ -5090,6 +5093,10 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.freestanding.is_some() && self.compile_scale_offset(block, instruction_index)? {
+                skipped = 3;
+                continue;
+            }
             if self.compile_union_buffer_read(block, instruction_index)? {
                 skipped = 3;
                 continue;
