@@ -606,8 +606,13 @@ enum ForeignWriteback {
 
 /// The convention foreign calls follow for `arch` on `os`.
 fn foreign_abi_for(arch: &str, os: &str) -> std::result::Result<CAbi, String> {
-    CAbi::of_target(arch, os)
-        .ok_or_else(|| format!("direct backend cannot pass a C struct by value on `{arch}-{os}`"))
+    CAbi::of_target(arch, os).ok_or_else(|| {
+        if os == "none" {
+            format!("direct backend cannot pass a C struct by value on `{arch}`")
+        } else {
+            format!("direct backend cannot pass a C struct by value on `{arch}` ({os})")
+        }
+    })
 }
 
 /// The convention foreign calls follow on the machine being built for.
@@ -646,6 +651,33 @@ fn struct_slot_size(layout: &CStruct) -> std::result::Result<u32, String> {
             )
         })?;
     Ok(size_u32)
+}
+
+/// The LLVM aggregate shape for an AArch64 stack-spilled by-value struct.
+/// On Darwin (`macos`), non-HFA structs spilled past registers keep their
+/// natural size and alignment instead of being padded to 8-byte slots.
+fn aapcs64_stack_aggregate(layout: &CStruct, pieces: &[CPiece], os: &str) -> Indirect {
+    if os == "macos"
+        && pieces
+            .first()
+            .is_some_and(|piece| matches!(piece, CPiece::Int { .. }))
+    {
+        let size = layout.size();
+        let (element, width) = match layout.align() {
+            1 => (types::I8, 1usize),
+            2 => (types::I16, 2usize),
+            4 => (types::I32, 4usize),
+            _ => (types::I64, 8usize),
+        };
+        return Indirect::Aggregate {
+            element,
+            count: (size / width) as u32,
+        };
+    }
+    Indirect::Aggregate {
+        element: piece_type(pieces[0]).1,
+        count: pieces.len() as u32,
+    }
 }
 
 /// The type a register's piece of a struct travels as.
@@ -1513,11 +1545,13 @@ impl FunctionCompiler<'_> {
                         layout.name
                     ));
                 };
+                let target_os = if self.freestanding.is_some() {
+                    "none"
+                } else {
+                    crate::native_backend::target_os()
+                };
                 arguments.push_word(slot);
-                arguments.mark_last(Indirect::Aggregate {
-                    element: piece_type(pieces[0]).1,
-                    count: pieces.len() as u32,
-                });
+                arguments.mark_last(aapcs64_stack_aggregate(layout, &pieces, target_os));
             }
             CArgument::Stack => {
                 arguments.push_word(slot);
@@ -2154,5 +2188,62 @@ mod tests {
             union: false,
         };
         assert!(struct_slot_size(&two_gib).is_err());
+    }
+
+    #[test]
+    fn darwin_aarch64_stack_aggregate_uses_natural_alignment() {
+        let cases = [
+            (struct_of(&[FfiScalar::U8]), types::I8, 1u32),
+            (struct_of(&[FfiScalar::U16]), types::I16, 1u32),
+            (
+                struct_of(&[FfiScalar::U8, FfiScalar::U8, FfiScalar::U8]),
+                types::I8,
+                3u32,
+            ),
+            (struct_of(&[FfiScalar::I32]), types::I32, 1u32),
+            (
+                struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]),
+                types::I32,
+                3u32,
+            ),
+            (
+                struct_of(&[FfiScalar::I64, FfiScalar::I32]),
+                types::I64,
+                2u32,
+            ),
+            // HFA keeps its float element type on both Linux and macOS.
+            (
+                struct_of(&[FfiScalar::F32, FfiScalar::F32, FfiScalar::F32]),
+                types::F32,
+                3u32,
+            ),
+        ];
+        for (layout, expected_element, expected_count) in cases {
+            let CPassing::Registers(pieces) = layout.passing(CAbi::Aapcs64) else {
+                panic!("expected register passing pieces for {}", layout.size());
+            };
+            assert_eq!(
+                aapcs64_stack_aggregate(&layout, &pieces, "macos"),
+                Indirect::Aggregate {
+                    element: expected_element,
+                    count: expected_count,
+                },
+                "darwin stack aggregate for {}-byte, align-{} struct",
+                layout.size(),
+                layout.align()
+            );
+        }
+        // Linux AAPCS64 keeps 8-byte integer slots for non-HFA structs.
+        let s12 = struct_of(&[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32]);
+        let CPassing::Registers(pieces) = s12.passing(CAbi::Aapcs64) else {
+            panic!("expected register pieces");
+        };
+        assert_eq!(
+            aapcs64_stack_aggregate(&s12, &pieces, "linux"),
+            Indirect::Aggregate {
+                element: types::I64,
+                count: 2,
+            }
+        );
     }
 }
