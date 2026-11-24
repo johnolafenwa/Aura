@@ -291,3 +291,82 @@ def main():
     );
     assert_eq!(crate::check_source(&source).unwrap_err().code, "AU3002");
 }
+
+#[test]
+fn property_write_rewrite_preserves_index_writes_and_read_only_diagnostics() {
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let source = format!(
+        "{declaration}
+def main():
+    mut counters = [Counter(stored=0)]
+    counters[0] = Counter(stored=3)
+    print(counters[0].count)
+"
+    );
+    assert_eq!(crate::run_source(&source).unwrap().stdout, "get\n3\n");
+    let getter = declaration.split("    @count.setter").next().unwrap();
+    for (write, action) in [
+        ("counter.count = 1", "assigned"),
+        ("counter.count += 1", "updated"),
+    ] {
+        let source =
+            format!("{getter}\ndef main():\n    mut counter = Counter(stored=0)\n    {write}\n");
+        let error = crate::check_source(&source).unwrap_err();
+        assert_eq!(error.code, "AU2045");
+        assert_eq!(
+            error.message,
+            format!("property `count` is read-only and cannot be {action}")
+        );
+    }
+    let invalid = format!("{declaration}\ndef main():\n    mut counter = Counter(stored=0)\n    mut counter.count = 1\n");
+    let error = crate::check_source(&invalid).unwrap_err();
+    assert_eq!(
+        error.message,
+        "`mut` can only be used when introducing a new binding"
+    );
+}
+
+#[test]
+fn property_write_preserves_shared_and_owned_noncopy_arguments() {
+    let source = "
+class Shelf:
+    items: list[str]
+
+    @property
+    def shared(self) -> list[str]:
+        return self.items[:]
+
+    @shared.setter
+    def shared(mut self, value: list[str]):
+        self.items = value[:]
+
+    @property
+    def owned(self) -> list[str]:
+        return self.items[:]
+
+    @owned.setter
+    def owned(mut self, value: own list[str]):
+        self.items = value
+
+def books() -> list[str]:
+    return [\"new\"]
+
+def main():
+    mut shelf = Shelf(items=[\"old\"])
+    keep = [\"keep\"]
+    shelf.shared = keep
+    print(keep[0])
+    shelf.shared = books()
+    shelf.shared = shelf.owned
+    print(shelf.items[0])
+    moved = [\"move\"]
+    shelf.owned = moved
+    print(shelf.items[0])
+";
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        "keep\nnew\nmove\n"
+    );
+    let invalid = format!("{source}    print(moved[0])\n");
+    assert_eq!(crate::check_source(&invalid).unwrap_err().code, "AU3001");
+}
