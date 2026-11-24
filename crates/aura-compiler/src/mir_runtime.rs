@@ -2947,6 +2947,10 @@ impl MirRuntime {
             .iter()
             .map(|argument| argument.writeback_place.clone())
             .collect::<Vec<_>>();
+        self.lend_argument_owners(env, &evaluated_args)?;
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            self.lend_mutable_owner(env, receiver_place, &receiver)?;
+        }
         let outcome = self.call_function_with_receiver_type(
             &function,
             Some(receiver),
@@ -4708,9 +4712,13 @@ impl MirRuntime {
                     method.function_name
                 ))
             })?;
+        let receiver = Value::Instance(instance);
+        if method.receiver == Some(MirReceiverKind::BorrowMut) {
+            self.lend_mutable_owner(env, Some(place), &receiver)?;
+        }
         let outcome = self.call_function_with_receiver_type(
             &function,
-            Some(Value::Instance(instance)),
+            Some(receiver),
             Vec::new(),
             None,
             None,
@@ -5917,6 +5925,7 @@ impl MirRuntime {
                 let evaluated_args = evaluate_named_args(args, env)?;
                 let writeback_places =
                     bind_function_writeback_places(&function.params, &evaluated_args)?;
+                self.lend_argument_owners(env, &evaluated_args)?;
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
@@ -6583,9 +6592,12 @@ impl MirRuntime {
                     .iter()
                     .map(|argument| argument.writeback_place.clone())
                     .collect::<Vec<_>>();
+                self.lend_argument_owners(env, &evaluated_args)?;
+                let lent = method.receiver == Some(MirReceiverKind::BorrowMut)
+                    && self.lend_mutable_owner(env, receiver_place, &receiver)?;
                 let outcome = self.call_function_with_receiver_type(
                     &function,
-                    Some(if method.receiver == Some(MirReceiverKind::Value) {
+                    Some(if lent || method.receiver == Some(MirReceiverKind::Value) {
                         std::mem::replace(&mut receiver, Value::Unit)
                     } else {
                         try_clone_mir_value(&receiver)?
@@ -6898,6 +6910,7 @@ impl MirRuntime {
             }
             combined.append(&mut evaluated_args);
             let writeback_places = bind_function_writeback_places(&function.params, &combined)?;
+            self.lend_argument_owners(env, &combined)?;
             let outcome =
                 self.call_function_for_target(&function, None, combined, expected_return_type)?;
             // Environment-owned mutable captures have no caller place: their
@@ -6924,6 +6937,7 @@ impl MirRuntime {
             return Ok(value);
         }
         let writeback_places = bind_function_writeback_places(&function.params, &evaluated_args)?;
+        self.lend_argument_owners(env, &evaluated_args)?;
         let outcome = self.call_function_for_value(
             &function,
             evaluated_args,

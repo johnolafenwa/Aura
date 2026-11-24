@@ -7,6 +7,39 @@ use aura_runtime::runtime_value::class_drop::{released_instances, DropMethod};
 pub(super) use aura_runtime::runtime_value::class_drop::holds_owner;
 
 impl MirRuntime {
+    /// A mutable call returns the updated value even when its body traps.
+    /// Suspend the caller's internal copy until writeback so an overwrite
+    /// inside the callee can release the previous owner's fields immediately.
+    pub(super) fn lend_mutable_owner(
+        &self,
+        env: &mut Env,
+        place: Option<&str>,
+        value: &Value,
+    ) -> Result<bool> {
+        let owns = self.has_owner_hooks && holds_owner(value);
+        if owns {
+            if let Some(place) = place {
+                env.write_place(place, Value::Unit)?;
+            }
+        }
+        Ok(owns)
+    }
+
+    pub(super) fn lend_argument_owners(
+        &self,
+        env: &mut Env,
+        args: &[EvaluatedMirArg],
+    ) -> Result<()> {
+        if self.has_owner_hooks {
+            for arg in args {
+                if let Some(place) = arg.writeback_place.as_deref() {
+                    self.lend_mutable_owner(env, Some(place), &arg.value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn drain_owner_hooks(&mut self) -> Result<()> {
         let mut first = Ok(());
         for (method, value) in released_instances() {
@@ -58,6 +91,10 @@ mod tests {
     #[test]
     fn class_drop_hook_fixtures_release_owners_on_normal_and_trapping_exits() {
         for (source, expected) in [
+            (
+                include_str!("../tests/fixtures/run-pass/class_drop_mutable_writeback.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_mutable_writeback.stdout"),
+            ),
             (
                 include_str!("../tests/fixtures/run-pass/class_drop_nested_record_copy.au"),
                 include_str!("../tests/fixtures/run-pass/class_drop_nested_record_copy.stdout"),
