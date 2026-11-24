@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- Freestanding x86-64, AArch64 and RISC-V programs can use typed assembly,
+  machine entry and placement attributes, and privileged operations in
+  `mem`. The new x86-64 `--kernel` profile disables the red zone and
+  vector registers. The QEMU kernel example now boots an x86-64 board
+  and returns from breakpoint and timer interrupts.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.

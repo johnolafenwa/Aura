@@ -22,3 +22,7 @@ argument and return convention.
 The initial verifier regression reported an unknown function at the
 `asm` statement. The test also checks the named proof diagnostic and
 compiles the same source with proved-check removal enabled.
+
+The x86-64 interrupt board printed `breakpoint`, `timer` and `ok`
+and exited QEMU with status 33. Both virt boards exited with status 0.
+The interrupt table and two event bytes use C-backed storage.

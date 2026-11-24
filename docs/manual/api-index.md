@@ -204,6 +204,10 @@ undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 
 | API | Signature | Contract |
 | --- | --- | --- |
+| `mem.in_uintN`, `mem.out_uintN` | `in_uintN(port: uint16) -> uintN`, `out_uintN(port: uint16, value: uintN) -> None` | x86-64 port transfer for N = 8, 16 or 32. |
+| `mem.read_msr`, `mem.write_msr` | `read_msr(index: uint32) -> uint64`, `write_msr(index: uint32, value: uint64) -> None` | x86-64 model-specific register access. |
+| Named control and system registers | `read_<name>() -> uint64`, `write_<name>(value: uint64) -> None` | [Register names and access directions by target](/manual/mem). |
+| Interrupt control and wait | `enable_interrupts() -> None`, `disable_interrupts() -> None`, `halt() -> None` | Change the interrupt mask or wait for a wakeup. |
 | `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`, at any alignment. |
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |

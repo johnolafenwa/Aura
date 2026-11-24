@@ -141,3 +141,8 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
 117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.
+145. [ADR-0145: Freestanding Assembly](0145-freestanding-assembly.md)
+146. [ADR-0146 Machine Entries And Object Placement](0146-machine-function-attributes.md)
+147. [ADR-0147. Privileged hardware operations in mem](0147-privileged-hardware-operations.md)
+148. [ADR-0148: x86-64 Kernel Code Generation](0148-x86-64-kernel-profile.md)
+149. [ADR-0149 PC Interrupts Under QEMU](0149-qemu-x86-64-interrupt-board.md)

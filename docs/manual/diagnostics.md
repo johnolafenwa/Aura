@@ -102,6 +102,14 @@ String and format-specification diagnostics are described under
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2090` | assembly target | Assembly requires freestanding mode. | Select a freestanding target. |
+| `AU2091` | assembly operand type | The register cannot hold this scalar type or width. | Match the operand type and register. |
+| `AU2092` | assembly register | A register is unknown, reserved or overlaps another constraint. | Choose distinct registers supported by the target. |
+| `AU2093` | assembly contract | The template, operand reference, clause or options are invalid. | Correct the assembly declaration. |
+| `AU2094` | machine attribute target | A hosted declaration specifies a machine attribute. | Select a freestanding target. |
+| `AU2095` | machine declaration | An attribute, signature, placement or body violates its contract. | Follow the declaration requirements in Freestanding Builds. |
+| `AU2096` | interrupt convention | The interrupt target differs or the entry is used as an ordinary function. | Use the matching hardware entry convention. |
+| `AU2097` | hardware operation | The selected target does not provide this mem operation. | Choose an operation provided on this target. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -323,6 +331,7 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3010` | view escape or returned provenance | A view that outlives or does not come from its declared origin. | Return an owned clone, index, or handle, or keep the loan inside the owner's region. |
 | `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 | `AU3012` | definite initialization | Inside `__init__`, a read of a field before it is set, an assignment to a field set on only some paths, or a use, escape, or return of `self` before every field is set. | Set the field on every path first, or move the use after the last field assignment. |
+| `AU3035` | assembly output binding | An output lacks a distinct writable scalar destination. | Bind each output to its own mutable scalar. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -523,6 +532,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
 | `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU4035` | assembly proof boundary | Verification encountered assembly whose effects it cannot prove. | Keep runtime checks around the machine operation. |
 | `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
 
 ## Diagnostic Structure

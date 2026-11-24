@@ -144,12 +144,29 @@ hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
 
-## What is missing
+## Returning from an interrupt
 
-This is the first step toward systems work in Aura, and it is honest to
-say where it stops. There is no allocator, so there are no strings or
-collections. There is no inline assembly, so startup code and x86 port
-I/O stay in an assembly file. State that outlives a function call has to
-live at an address you manage through `mem`. The
-[Freestanding Builds](/manual/freestanding) and
-[Memory Module](/manual/mem) pages have the exact rules.
+Run `examples/freestanding/kernel/run.sh x86_64`. The board starts in
+long mode and gives Aura addresses for its interrupt table and two event
+bytes. Aura fills the gates, loads the table, then executes `asm("int3")`.
+The processor switches to the breakpoint handler.
+
+```aura fragment
+@machine.interrupt("x86_64")
+export "C" def breakpoint_handler() -> None:
+    serial_text("breakpoint\n")
+    mem.volatile_write_uint8(board_events(), 1)
+```
+
+The generated entry saves the interrupted registers. When the Aura body
+returns, the entry restores them and executes `iretq`. Back in the kernel,
+an assertion checks the byte the handler wrote. The kernel then enables the
+timer. Its handler masks the timer line, acknowledges the interrupt and
+records the second event. Seeing both bytes tells the kernel that it can
+print `ok` and write to the QEMU exit port. The test checks both the serial
+transcript and exit status 33.
+
+The kernel uses `--kernel` throughout so that interrupt entry can use the
+stack below the interrupted stack pointer. The board keeps persistent
+storage in C and accesses it through `mem`. The freestanding profile has
+no allocator. [Freestanding Builds](/manual/freestanding)

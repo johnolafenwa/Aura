@@ -139,6 +139,18 @@ Windows the Microsoft linker from the Visual Studio C++ build tools. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
 
+### Freestanding target selection
+
+Use the same target for source checks and object generation, for example
+`aura check --freestanding --target x86_64-unknown-none --kernel kernel.au`
+and `aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au`.
+The optional x86-64 kernel profile disables the red zone, uses the kernel
+code model and passes floating-point values in integer registers.
+Set `aura.freestandingTarget` in VS Code to check a board for its target.
+The formatter preserves the contents of assembly strings. Verification
+reports AU4035 when it encounters assembly.
+[Freestanding Builds](/manual/freestanding)
+
 ### Debug Builds
 
 `aura build --debug -o app app.au` builds a binary for a debugger:

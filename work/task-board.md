@@ -2,6 +2,12 @@
 
 Last updated: 2026-11-24
 
+## Freestanding machine code
+
+The three freestanding targets support typed assembly, interrupt entries
+and privileged operations. The x86-64 kernel board checks two interrupt
+returns in QEMU. [Design and local results](2026-11-24-freestanding-machine-code.md)
+
 ## Release 0.17.0-preview (in progress)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and
