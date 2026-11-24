@@ -1594,52 +1594,27 @@ impl FunctionCompiler<'_> {
 
     /// Compiles the copy `target` of a `str` local as a move of the local's
     /// reference, when the copy is the local's last read (see
-    /// [`clone_moves`]) and the local owns a counted reference: its own,
-    /// or, for a payload lent from a lookup that owns the payload's box,
-    /// the lookup's. What the reference came from then releases nothing.
+    /// [`clone_moves`]) and the local owns a counted reference: its own, or
+    /// one a lookup slot's payload read took. The local then releases
+    /// nothing. A payload a lookup lends keeps its copy.
     pub(super) fn compile_clone_move(&mut self, target: &str) -> std::result::Result<bool, String> {
         let Some((copied, scrutinee)) = self.clone_moves.get(target).cloned() else {
             return Ok(false);
         };
+        if self.lent_elements.contains_key(&copied)
+            || !self.owns_counted_str(&copied)
+            || !scrutinee.is_none_or(|scrutinee| self.lookup_slots.contains(&scrutinee))
+        {
+            return Ok(false);
+        }
         let copied_vars = self.local_vars(&copied)?;
         let [copied_var] = copied_vars.as_slice() else {
             return Ok(false);
         };
         let copied_var = *copied_var;
-        let word = self.builder.use_var(copied_var);
+        let moved = self.builder.use_var(copied_var);
         let zero = self.builder.iconst(types::I64, 0);
-        let moved = if let Some(&flag) = self.lent_elements.get(&copied) {
-            // A lent payload: the lookup owns the box while the flag is set.
-            let Some(scrutinee) = scrutinee.filter(|scrutinee| {
-                self.lent_payloads.contains(&copied)
-                    && self.lookup_slots.contains(scrutinee)
-                    && !self.lent_places.contains(scrutinee)
-                    && !self.map_word_slots.contains_key(scrutinee)
-            }) else {
-                return Ok(false);
-            };
-            let scrutinee_vars = self.local_vars(&scrutinee)?;
-            let [scrutinee_var] = scrutinee_vars.as_slice() else {
-                return Ok(false);
-            };
-            let scrutinee_var = *scrutinee_var;
-            let held = self.builder.use_var(scrutinee_var);
-            let flag = self.builder.use_var(flag);
-            let lent = self.builder.icmp_imm(IntCC::NotEqual, flag, 0);
-            let moved = self.builder.select(lent, held, word);
-            let held_left = self.builder.select(lent, zero, held);
-            let word_left = self.builder.select(lent, word, zero);
-            self.builder.def_var(scrutinee_var, held_left);
-            self.builder.def_var(copied_var, word_left);
-            moved
-        } else if self.owns_counted_str(&copied)
-            && scrutinee.is_none_or(|scrutinee| self.lookup_slots.contains(&scrutinee))
-        {
-            self.builder.def_var(copied_var, zero);
-            word
-        } else {
-            return Ok(false);
-        };
+        self.builder.def_var(copied_var, zero);
         let moved = ValueRef {
             values: vec![moved],
             ty: DirectType::Opaque(Type::named("str")),
