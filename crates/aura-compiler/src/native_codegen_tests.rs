@@ -18441,7 +18441,7 @@ fn mixed_width_mir_comparisons_only_box_the_full_unsigned_and_signed_pair() {
             let refs = object_function_referenced_symbols(&object, &format!("aura_fn_cmp_{name}"));
             let calls_boxed_comparison = refs
                 .iter()
-                .any(|symbol| symbol.contains("aura_direct_compare_values_at"));
+                .any(|symbol| symbol.trim_start_matches('_') == "aura_direct_compare_values");
             assert_eq!(
                 calls_boxed_comparison, boxed,
                 "{left_type} {name} {right_type}: {refs:?}"
