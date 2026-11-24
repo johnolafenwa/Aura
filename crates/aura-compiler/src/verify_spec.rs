@@ -811,8 +811,20 @@ impl Exec<'_> {
                             .ok_or("tuple index out of range".to_string()),
                         _ => Err("a tuple index must be a literal".into()),
                     },
+                    Val::Str(text) => {
+                        let index = self.spec(index, env, wd, depth)?;
+                        self.spec_text(&text, "char_at", &[index], wd)
+                    }
                     _ => Err("indexing this type is not modeled in contracts yet".into()),
                 }
+            }
+            ExprKind::Slice {
+                object, start, end, ..
+            } => self.spec_slice(object, [start, end], env, wd, depth),
+            ExprKind::FString(parts) => self.spec_format(parts, env, wd, depth),
+            ExprKind::IsNone { value, negated, .. } => {
+                let value = self.spec(value, env, wd, depth)?;
+                self.spec_is_none(&value, *negated)
             }
             ExprKind::Member { object, field } => match self.spec(object, env, wd, depth)? {
                 Val::Record(_, fields) => fields
@@ -856,20 +868,11 @@ impl Exec<'_> {
                         return self.membership(&item, &receiver).map(Val::Bool);
                     }
                     if let Val::Str(text) = &receiver {
-                        let [arg] = args.as_slice() else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        let Val::Str(other) = self.spec(&arg.value, env, wd, depth)? else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        return match field.as_str() {
-                            "starts_with" => {
-                                Ok(Val::Bool(format!("(str.prefixof {other} {text})")))
-                            }
-                            "ends_with" => Ok(Val::Bool(format!("(str.suffixof {other} {text})"))),
-                            "contains" => Ok(Val::Bool(format!("(str.contains {text} {other})"))),
-                            _ => Err(format!("`str.{field}` is not modeled in contracts yet")),
-                        };
+                        let mut values = Vec::new();
+                        for arg in args {
+                            values.push(self.spec(&arg.value, env, wd, depth)?);
+                        }
+                        return self.spec_text(text, field, &values, wd);
                     }
                     let Val::Record(class, _) = &receiver else {
                         return Err(format!(
@@ -916,6 +919,7 @@ impl Exec<'_> {
                     ("len", [Val::Str(text)]) => {
                         Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
                     }
+                    ("str", [value]) => self.spec_display(value),
                     ("abs", [Val::Float(term, float)]) => {
                         Ok(Val::Float(format!("(fp.abs {term})"), *float))
                     }

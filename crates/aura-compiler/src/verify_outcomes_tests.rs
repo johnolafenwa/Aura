@@ -93,8 +93,6 @@ def main():
     assert_eq!(
         open(&report),
         [
-            format!("parts: {}", not_modeled("`split`", 4)),
-            format!("fmt: {}", not_modeled("an f-string", 8)),
             format!(
                 "positive: {}",
                 not_modeled("a comprehension or built-in loop", 25)
@@ -112,7 +110,7 @@ def main():
     );
     assert_eq!(
         (report.failed(), report.not_modeled(), report.undecided()),
-        (0, 5, 0)
+        (0, 3, 0)
     );
     let diagnostics = report.diagnostics();
     assert!(diagnostics
@@ -181,8 +179,7 @@ def main():
 
 #[test]
 fn a_check_guarded_by_an_unmodeled_result_is_not_a_failure() {
-    // `split` never returns an empty list, so this `assert` cannot run:
-    // the test that leads to it reads a result the encoding makes up.
+    // `split` never returns an empty list, which its model says.
     let Some(report) = verify(
         r#"
 def never(text: str) -> int64:
@@ -196,11 +193,7 @@ def main():
     ) else {
         return;
     };
-    assert_eq!(
-        open(&report),
-        [format!("never: {}", not_modeled("`split`", 3))],
-        "{report:#?}"
-    );
+    assert_eq!(open(&report), Vec::<String>::new(), "{report:#?}");
 }
 
 #[test]

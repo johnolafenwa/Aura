@@ -543,9 +543,11 @@ pub(super) struct Exec<'a> {
     pub(super) lazy: BTreeMap<usize, Vec<String>>,
     /// Where the assumed term starts in each fact that holds only on some
     /// paths: the path condition before it is not what the fact is about.
-    guarded: BTreeMap<usize, usize>,
+    pub(super) guarded: BTreeMap<usize, usize>,
     /// The condition of the branch that last led to each block.
     branch_guards: BTreeMap<usize, String>,
+    /// What the `str` models remember.
+    pub(super) text: super::text::TextState,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -602,6 +604,7 @@ impl<'a> Exec<'a> {
             lazy: BTreeMap::new(),
             guarded: BTreeMap::new(),
             branch_guards: BTreeMap::new(),
+            text: Default::default(),
         }
     }
 
@@ -689,7 +692,7 @@ impl<'a> Exec<'a> {
                 // about this one.
                 let defines_other = names.first().is_some_and(|name| {
                     *name != symbol && self.definitions.get(*name) == Some(&index)
-                });
+                }) || self.text.describes_other(index, symbol);
                 if defines_other {
                     continue;
                 }
@@ -1042,6 +1045,13 @@ impl<'a> Exec<'a> {
             let source = join_path(source, &rest.join("."));
             return self.read_place(state, &source);
         }
+        // A view of a part a `str` method returned reads the part.
+        if let Some(Loan::Element { list, index, .. }) = state.loans.get(&root).cloned() {
+            let list = self.read_place(state, &list);
+            if self.is_part_list(&list) {
+                return self.element(&list, &index, &root);
+            }
+        }
         if !state.env.contains_key(&root) {
             let value = self.fresh_local(&root);
             state.env.insert(root.clone(), value);
@@ -1310,7 +1320,7 @@ impl<'a> Exec<'a> {
         }
     }
 
-    fn operand_type(&self, operand: &Operand) -> Option<Type> {
+    pub(super) fn operand_type(&self, operand: &Operand) -> Option<Type> {
         match operand {
             Operand::Place(place) | Operand::MovePlace(place) => self.place_type(place),
             Operand::Int(_) => Some(Type::named("int64")),
@@ -2692,7 +2702,9 @@ impl<'a> Exec<'a> {
                 ..
             } => {
                 let value = self.store_select(data, elem, index);
-                self.name_scalars(value, hint)
+                let value = self.name_scalars(value, hint);
+                self.text_part_facts(data, index, &value);
+                value
             }
             Val::List { elem, .. } => {
                 let elem = elem.clone();
@@ -2810,6 +2822,7 @@ impl<'a> Exec<'a> {
         };
         match value {
             Rvalue::Use(operand) => self.followed_operand(state, operand, hint),
+            Rvalue::FormatString { parts } => self.format_string(state, parts),
             // An adapted function value still calls the function it names.
             Rvalue::CallableAdapt { value, .. } => {
                 match self.followed_operand(state, value, None) {
@@ -4276,7 +4289,13 @@ impl<'a> Exec<'a> {
                         let other = other(self, state)?;
                         Some(Val::Bool(format!("(str.suffixof {other} {text})")))
                     }
-                    _ => None,
+                    _ => {
+                        let values: Vec<Val> = (0..args.len())
+                            .map(|index| arg(self, state, index, Some(IntTy::INT64)))
+                            .collect();
+                        let span = span_of(self, 4);
+                        self.text_call(state, span, str_op, &text, &values)
+                    }
                 }
             }
             RuntimeOp::Dict(dict_op) => {
@@ -4907,6 +4926,11 @@ impl<'a> Exec<'a> {
                 }
             }
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => receiver,
+            RuntimeOp::Value(ValueOp::ToString) => self.text_of(receiver.as_ref()),
+            RuntimeOp::Host(host) if host.name() == "str.to_bytes" => {
+                let text = arg(self, state, 0, None);
+                self.text_bytes(&text)
+            }
             RuntimeOp::Print(_) => Some(Val::Unit),
             _ => None,
         }

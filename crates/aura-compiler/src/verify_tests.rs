@@ -1138,11 +1138,7 @@ def main():
     print(f1(5, 3))
     print(f2([3], ["a"], "A", P(x=1), (1, 2)))
 "#,
-        &[
-            "22 assert unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-        ],
+        &["22 assert unsupported", "35 requires unsupported"],
     );
 }
 

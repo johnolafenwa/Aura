@@ -29,6 +29,8 @@ mod integers;
 pub mod smt;
 #[path = "verify_spec.rs"]
 mod spec;
+#[path = "verify_text.rs"]
+mod text;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -1677,6 +1679,9 @@ fn solve(
     let mut attempts = SAMPLE_CHECKS * float::SAMPLES;
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
+    // What says what a made-up result is goes only to the checks that read
+    // the result.
+    let described = exec.described_by();
     for obligation in &exec.obligations {
         // Facts are asserted in the order the walk assumed them, so each
         // check sees only what holds before it.
@@ -1686,7 +1691,9 @@ fn solve(
             for (index, fact) in exec.facts[asserted..obligation.facts].iter().enumerate() {
                 // A fact about constants of its own is asserted only for
                 // the checks that reach them.
-                if exec.lazy.contains_key(&(asserted + index)) {
+                if exec.lazy.contains_key(&(asserted + index))
+                    || exec.is_described(asserted + index)
+                {
                     continue;
                 }
                 text.push_str(&format!("(assert {fact})\n"));
@@ -1731,8 +1738,9 @@ fn solve(
             exec::Goal::Holds(goal) => goal,
         };
         let query = format!(
-            "(push 1)\n{}(assert {})\n",
+            "(push 1)\n{}{}(assert {})\n",
             exec.lazy_asserts(obligation),
+            exec.descriptions(&described, obligation, goal),
             exec::and(&obligation.pc, &exec::not(goal))
         );
         if trace {
@@ -1761,7 +1769,7 @@ fn solve(
             let rows = samples.as_mut().expect("the samples were just drawn");
             let mut facts = String::from("; the check with its float inputs fixed\n");
             for (index, fact) in exec.facts[..obligation.facts].iter().enumerate() {
-                if !exec.lazy.contains_key(&index) {
+                if !exec.lazy.contains_key(&index) && !exec.is_described(index) {
                     facts.push_str(&format!("(assert {fact})\n"));
                 }
             }
@@ -1823,6 +1831,9 @@ mod tests;
 #[cfg(test)]
 #[path = "verify_outcomes_tests.rs"]
 mod tests_outcomes;
+#[cfg(test)]
+#[path = "verify_text_tests.rs"]
+mod tests_text;
 
 #[cfg(test)]
 #[path = "verify_generators_tests.rs"]
