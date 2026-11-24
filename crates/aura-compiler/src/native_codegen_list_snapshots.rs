@@ -69,6 +69,9 @@ pub(super) struct ListSnapshotRegion {
     /// The temporaries the loop lends the list to, when the list is a
     /// field of an instance (see `field_list_snapshot_regions`).
     pub(super) temps: HashSet<String>,
+    /// Set for the whole body of a method that keeps its receiver, `list`
+    /// (see `method_region`), which is entered where the body begins.
+    pub(super) method: bool,
 }
 
 pub(super) fn root(place: &str) -> &str {
@@ -416,6 +419,7 @@ pub(super) fn list_snapshot_regions(
                 entries,
                 writes,
                 temps: HashSet::new(),
+                method: false,
             });
         }
     }
@@ -644,10 +648,61 @@ pub(super) fn field_list_snapshot_regions(
                 entries,
                 writes: false,
                 temps,
+                method: false,
             });
         }
     }
+    regions.extend(method_region(function, &exclusive, rules));
     regions
+}
+
+/// The whole body of a method that keeps its receiver: `self`, held
+/// alone (see `field_list_snapshot_regions`), which every instruction
+/// that names it keeps in its layout (see `keeps_field_list`). The
+/// receiver then stays in the layout the body's entry found it in, and
+/// the caller's write-through sink stays absent, for the whole call.
+fn method_region(
+    function: &MirFunction,
+    exclusive: &impl Fn(&str) -> bool,
+    rules: &FieldListRules<'_>,
+) -> Option<ListSnapshotRegion> {
+    const RECEIVER: &str = "self";
+    if function.receiver.is_none() || !exclusive(RECEIVER) {
+        return None;
+    }
+    let mut names = false;
+    for block in &function.blocks {
+        // A branch on a scalar field reads it where it lies.
+        let terminator = terminator_place_mentions(&block.terminator)
+            .into_iter()
+            .filter(|place| root(place) == RECEIVER)
+            .collect::<Vec<_>>();
+        names |= !terminator.is_empty();
+        let mut keeps = terminator
+            .into_iter()
+            .all(|place| (rules.scalar_field)(place));
+        for instruction in &block.instructions {
+            if mentioned_roots(instruction).contains(RECEIVER) {
+                keeps &= keeps_field_list(instruction, RECEIVER, "", rules);
+                names = true;
+            }
+        }
+        if !keeps {
+            return None;
+        }
+    }
+    names.then(|| ListSnapshotRegion {
+        list: RECEIVER.to_string(),
+        blocks: function
+            .blocks
+            .iter()
+            .map(|block| block.label.clone())
+            .collect(),
+        entries: Vec::new(),
+        writes: false,
+        temps: HashSet::new(),
+        method: true,
+    })
 }
 
 /// The strongly connected components of the graph of `nodes`, with the
@@ -821,7 +876,8 @@ impl FunctionCompiler<'_> {
     /// compiled.
     pub(super) fn snapshot_of_root(&self, name: &str) -> Option<usize> {
         self.list_snapshots.iter().position(|snapshot| {
-            (snapshot.region.list == name || snapshot.region.temps.contains(name))
+            !snapshot.region.method
+                && (snapshot.region.list == name || snapshot.region.temps.contains(name))
                 && snapshot
                     .region
                     .blocks
@@ -964,6 +1020,79 @@ impl FunctionCompiler<'_> {
         let pad = self.builder.create_block();
         self.pending_snapshot_pads.push((pad, target, entering));
         pad
+    }
+
+    /// Reads, where the body of a method that keeps its receiver begins,
+    /// whether the receiver is in its typed layout with no write-through
+    /// sink, which the copy of the whole body runs for (see
+    /// `method_region`). The MIR entry block's code then begins in a block
+    /// of its own.
+    pub(super) fn enter_method_snapshot(
+        &mut self,
+        function: &MirFunction,
+    ) -> std::result::Result<(), String> {
+        let Some(index) = self
+            .list_snapshots
+            .iter()
+            .position(|snapshot| snapshot.region.method)
+        else {
+            return Ok(());
+        };
+        let start = self.blocks[&function.entry];
+        self.builder.switch_to_block(start);
+        // The layout every field of the receiver's class lies in.
+        let mut access = None;
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                let mut mentions = Vec::new();
+                instruction_place_mentions(instruction, &mut mentions);
+                for place in mentions {
+                    if access.is_none() && root(place) == "self" {
+                        access = self.class_place(place)?.map(|(_, slot, _)| slot.access);
+                    }
+                }
+            }
+        }
+        // A class whose fields lie in a map has no layout to keep, and the
+        // body no copy.
+        let Some(access) = access else {
+            return Ok(());
+        };
+        let zero = self.builder.iconst(types::I64, 0);
+        let object = self.local_vars("self")?[0];
+        let object = self.builder.use_var(object);
+        let check_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(object, check_block, &[], join_block, &[zero]);
+        self.builder.switch_to_block(check_block);
+        self.builder.seal_block(check_block);
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let actual = self
+            .builder
+            .uload32(MemFlags::trusted(), object, layout.access_offset);
+        let same = self.builder.icmp_imm(IntCC::Equal, actual, access);
+        let same = self.builder.uextend(types::I64, same);
+        self.builder.jump(join_block, &[same]);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let mut flag = self.builder.block_params(join_block)[0];
+        if let Some(slot) = self.list_snapshots[index].sink {
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            let direct = self.builder.uextend(types::I64, direct);
+            flag = self.builder.band(flag, direct);
+        }
+        self.builder.def_var(self.list_snapshots[index].ok, flag);
+        let pad = self.builder.current_block().unwrap_or(start);
+        let body = self.builder.create_block();
+        self.builder.jump(body, &[]);
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+        self.blocks.insert(function.entry.clone(), body);
+        self.list_snapshots[index].entries.push((pad, flag, flag));
+        Ok(())
     }
 
     /// Fills the blocks the terminator just compiled jumps through to
@@ -1450,6 +1579,10 @@ impl FunctionCompiler<'_> {
             // for while every list qualifies is then tried first where the
             // loop is entered, so a list that does not qualify costs the
             // others nothing.
+            // A copy with nothing to settle gains nothing.
+            if selects.is_empty() {
+                continue;
+            }
             if !self.list_snapshots[index].scalar_entries.is_empty() {
                 let scalar_selects = group
                     .iter()

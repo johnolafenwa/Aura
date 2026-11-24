@@ -299,6 +299,7 @@ class Shelf:
     balls: list[Ball]
     seen: int64
     best: int64
+    open: bool
 
     def heavy(self, weight: float64) -> bool:
         return weight > 1.0 and self.best >= 0
@@ -348,6 +349,14 @@ class Shelf:
         self.balls[0].size += sum
         return sum
 
+    def untouched(mut self, n: int64) -> int64:
+        return n + 1
+
+    def flagged(mut self) -> int64:
+        if self.open:
+            return 1
+        return 0
+
     def peeks(self, n: int64) -> int64:
         mut sum = 0
         for i in range(n):
@@ -355,13 +364,13 @@ class Shelf:
         return sum
 
 def owner(n: int64) -> int64:
-    mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0)
+    mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0, open=true)
     mut sum = 0
     for round in range(n):
         for i in range(s.weights.len()):
             sum += s.weights[i] * round
         s.seen += 1
-    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1)
+    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1) + s.untouched(1) + s.flagged()
 
 def main():
     print(owner(2))
@@ -371,6 +380,21 @@ def main():
 /// when `keeps` says whether a callee keeps an instance and `exclusive`
 /// whether the function holds an instance alone.
 fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRegion> {
+    all_field_regions(name, keeps, exclusive)
+        .into_iter()
+        .filter(|region| !region.method)
+        .collect()
+}
+
+/// The whole body of method `name` in `FIELD_SOURCE` when it keeps its
+/// receiver (see `field_regions`).
+fn method_region(name: &str, keeps: bool, exclusive: bool) -> Option<ListSnapshotRegion> {
+    all_field_regions(name, keeps, exclusive)
+        .into_iter()
+        .find(|region| region.method)
+}
+
+fn all_field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRegion> {
     let function = lower_source_to_mir(FIELD_SOURCE)
         .expect("the source should lower")
         .functions
@@ -385,7 +409,9 @@ fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRe
             lend_temps: &lend_temps,
             candidate: &|_, _| true,
             pure_index: &|_| true,
-            scalar_field: &|place| place.ends_with(".seen") || place.ends_with(".best"),
+            scalar_field: &|place| {
+                place.ends_with(".seen") || place.ends_with(".best") || place.ends_with(".open")
+            },
             keeps_instances: &|_| keeps,
         },
     )
@@ -428,6 +454,44 @@ fn a_loop_that_may_change_the_field_or_its_list_keeps_reading_them() {
     assert_eq!(field_regions("Shelf.calls", false, true), Vec::new());
     // A loan of an element of the list anywhere in the function.
     assert_eq!(field_regions("Shelf.resizes", true, true), Vec::new());
+}
+
+#[test]
+fn a_method_that_keeps_its_receiver_in_its_layout_is_one_region() {
+    // Scalar fields, lends of field boxes, and calls of functions that
+    // only read scalar fields keep the receiver in its layout.
+    let total = method_region("Shelf.total", false, true).expect("`total` keeps `self`");
+    assert_eq!(total.list, "self");
+    assert!(total.entries.is_empty() && total.temps.is_empty() && !total.writes);
+    let function = lower_source_to_mir(FIELD_SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "Shelf.total")
+        .expect("the function should exist");
+    assert_eq!(total.blocks.len(), function.blocks.len());
+    assert!(method_region("Shelf.count_heavy", true, true).is_some());
+    // A receiver something else may reach, a call that may change it, a
+    // store of another list in a field, and a function with no receiver.
+    assert_eq!(method_region("Shelf.total", false, false), None);
+    assert_eq!(method_region("Shelf.calls", false, true), None);
+    assert_eq!(method_region("Shelf.swaps", true, true), None);
+    assert_eq!(method_region("owner", true, true), None);
+    // A method that never names its receiver has nothing to keep.
+    assert_eq!(method_region("Shelf.untouched", true, true), None);
+    // A branch on a scalar field keeps it too.
+    assert!(method_region("Shelf.flagged", true, true).is_some());
+}
+
+#[test]
+fn methods_that_keep_their_receiver_compile_with_their_copies() {
+    // A method's copy, one through a field and a list element, and a
+    // class that keeps its fields in a map, which has no copy.
+    let source = include_str!("../tests/fixtures/run-pass/methods_that_keep_their_receiver.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the methods should compile");
+    super::super::emit_host_object(&module).expect("the methods should compile optimized");
 }
 
 #[test]

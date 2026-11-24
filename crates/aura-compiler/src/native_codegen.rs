@@ -5128,6 +5128,7 @@ impl<'a> FunctionCompiler<'a> {
             HashMap::<String, HashMap<String, Vec<DirectClosureCaptureWriteback>>>::new();
         incoming_writebacks.insert(function.entry.clone(), HashMap::new());
         let mut compiled = HashSet::new();
+        self.enter_method_snapshot(function)?;
 
         for label in order {
             let block = block_by_label.get(label.as_str()).ok_or_else(|| {

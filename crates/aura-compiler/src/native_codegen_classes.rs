@@ -621,12 +621,16 @@ impl FunctionCompiler<'_> {
         }
         let slow_block;
         let mut snapshot = None;
+        let mut instance = None;
         let (object, slot) = if let Some((root, slot, _)) = self.class_place(place)? {
             if !matches!(slot.kind, SlotKind::Handle) {
                 return Ok(false);
             }
             slow_block = self.builder.create_block();
             snapshot = self.field_snapshot(place);
+            // The copy of a method's body that keeps its receiver knows
+            // the receiver's layout too.
+            instance = self.instance_snapshot(&root);
             (self.load_root(&root)?.values[0], slot)
         } else if mutable {
             return Ok(false);
@@ -647,7 +651,7 @@ impl FunctionCompiler<'_> {
         let fast_block = self.builder.create_block();
         let lent_block = self.builder.create_block();
         let join_block = self.builder.create_block();
-        self.class_check_snapshot = snapshot;
+        self.class_check_snapshot = snapshot.or(instance);
         self.emit_class_check(object, slot.access, slow_block, fast_block);
 
         self.builder.switch_to_block(fast_block);
