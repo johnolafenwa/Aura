@@ -350,6 +350,13 @@ impl FunctionChecker<'_> {
         if depth > crate::limits::RECURSION_LIMIT {
             return None;
         }
+        if let Type::Union(union) = ty {
+            let mut words = 0;
+            for member in &union.members {
+                words = words.max(self.state_words(member, depth + 1)?);
+            }
+            return words.checked_add(1);
+        }
         if ty.as_fixed_array().is_some() {
             let (bytes, _) = self.fixed_storage_shape(ty)?;
             return Some(bytes.div_ceil(8) as usize);
