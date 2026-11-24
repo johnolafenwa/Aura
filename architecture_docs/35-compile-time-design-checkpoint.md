@@ -43,6 +43,7 @@ Check all supported target configurations with `aura check --all-targets`, inclu
 | What does formatting do? | Parse and preserve both suites and format their source regardless of target. |
 | Which items appear in documentation? | Include public items active for the documented configuration. |
 | How does the editor handle discarded code? | Publish inactive source ranges for dimming. Keep best-effort syntax navigation and suppress inactive semantic errors. |
+| How do class drop hooks interact with evaluation? | Check local hooks as implicit calls and charge the initializer budget. A returned value carrying an armed hook needs a runtime owner. |
 | Does an ordinary pure failure fall back to startup? | Report the evaluation error. Only impurity preserves runtime initialization. |
 | How are repeated or missing flags handled? | Later CLI values win. A missing dictionary key follows ordinary membership and indexing semantics. |
 | Which configurations does all-targets cover? | Supported targets at the selected profile and cfg, without inventing feature combinations. |

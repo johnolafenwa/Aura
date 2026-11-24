@@ -6,7 +6,7 @@ Module bindings have a declared initialization order and a read-only ownership c
 
 ## Decision
 
-Use the typed MIR interpreter for computed initializers. The evaluator classifies reachable calls before executing an initializer. It can use local state and previously frozen bindings. An initializer with an observable effect keeps runtime initialization. Writing `const` requires a build-time value.
+Use the typed MIR interpreter for computed initializers. The evaluator classifies reachable calls before executing an initializer. It can use local state and previously frozen bindings. An initializer with an observable effect keeps runtime initialization. Writing `const` requires a build-time value. Check local drop hooks as implicit calls. Preserve a returned value’s live drop obligation by keeping the binding at runtime.
 
 Give each initializer one budget shared with its callees, comprising 100,000 MIR steps and 8 MiB of logical allocation. Report traps and exhausted budgets at compile time. Preserve Aura call frames. Integer width, floating-point rounding and the order of collection elements belong to the Aura target.
 

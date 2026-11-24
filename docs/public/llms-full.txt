@@ -6341,6 +6341,8 @@ The compiler evaluates pure module initializers, including ordinary bindings wit
 
 A pure computation can update its own local variables and collections. Reading the environment, performing I/O, consulting the clock, starting a task or calling foreign code requires runtime execution. An ordinary binding with such an initializer runs during module initialization. Writing `const` there produces `AU3025`. Move the effect into a runtime function, or use an ordinary binding if the effect belongs at startup.
 
+A local value can run a pure `__drop__` hook within the initializer’s budget. A result that still owns a drop hook needs runtime initialization. This includes a hook owned by an item in a returned collection.
+
 Integer operations obey Aura's target widths. Floating-point values round to their declared precision. A trap in a pure initializer is a compile error, even on an ordinary binding. The diagnostic names the binding and includes its Aura call frames.
 
 | Limit per initializer | Diagnostic | What to change |
