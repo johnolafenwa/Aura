@@ -4990,6 +4990,13 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => self
+                .evaluate_fixed(op, args, type_args.get("array"), env)
+                .map(RvalueOutcome::Value),
             Rvalue::Call { callee, args, .. } => Ok(RvalueOutcome::Value(
                 self.evaluate_call_for_target(callee, args, env, expected_type)?,
             )),
@@ -6246,6 +6253,11 @@ impl MirRuntime {
             }
             receiver => receiver,
         };
+        if let (Value::Int(value), Some(method)) =
+            (&receiver, aura_core::integer_bits::BitMethod::of(field))
+        {
+            return integer_bits::evaluate(method, *value, receiver_static_ty.as_ref(), args, env);
+        }
         match &receiver {
             Value::Float(value) if field == "sqrt" => {
                 if !args.is_empty() {
@@ -13322,3 +13334,8 @@ mod tests;
 #[cfg(test)]
 #[path = "mir_runtime_task_stack_tests.rs"]
 mod task_stack_tests;
+
+#[path = "mir_runtime_fixed_arrays.rs"]
+mod fixed_arrays;
+#[path = "mir_integer_bits.rs"]
+mod integer_bits;

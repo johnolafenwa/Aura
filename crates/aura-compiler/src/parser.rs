@@ -3414,11 +3414,11 @@ impl Parser {
                     let mut closed = false;
                     loop {
                         // `array[T, N]`: the length of a C array field.
-                        if name == C_ARRAY_TYPE_NAME && args.len() == 1 {
+                        if matches!(name.as_str(), C_ARRAY_TYPE_NAME | "fixed") && args.len() == 1 {
                             if let TokenKind::IntLiteral(length) = self.current_kind() {
                                 let length = length.to_string();
                                 let length_span = self.bump().span;
-                                if !self.extern_fields {
+                                if name == C_ARRAY_TYPE_NAME && !self.extern_fields {
                                     return Err(parse_error(
                                         span,
                                         "`array[T, N]` is the type of a field of an `extern \"C\"` class and names no type elsewhere; use `list[T]`",

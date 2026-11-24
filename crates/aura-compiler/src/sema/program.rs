@@ -2978,6 +2978,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         &program.module_registry,
         &program.imported_modules,
     )?;
+    super::fixed_arrays::validate_layouts(&program)?;
     Ok(program)
 }
 

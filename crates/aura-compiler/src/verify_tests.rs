@@ -4130,3 +4130,71 @@ def main():
         );
     }
 }
+
+#[test]
+fn integer_bit_methods_use_the_declared_width_in_proofs() {
+    assert_proved(include_str!(
+        "../tests/fixtures/systems-integers/verify_bits.au"
+    ));
+}
+
+#[test]
+fn rotation_requires_a_nonnegative_count() {
+    let Some(report) =
+        verify("def rotate(x: uint8, n: int64) -> uint8:\n    return x.rotate_left(n)\n")
+    else {
+        return;
+    };
+    assert!(report
+        .obligations
+        .iter()
+        .any(|check| matches!(check.status, Status::Failed { .. })
+            && check.message.contains("rotation count")));
+}
+
+#[test]
+fn proofs_stop_at_raw_writes_and_their_callers() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/typed-pointers/verify/src/main.au");
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let report = crate::verify_path(&path, &options).expect("the pointer program checks");
+    for name in ["write_raw", "relay", "use_cell"] {
+        assert!(
+            report.obligations.iter().any(|obligation| {
+                obligation.function == name
+                    && matches!(&obligation.status,
+                Status::Unsupported(reason) if reason.contains("raw memory"))
+            }),
+            "{name}: {report:#?}"
+        );
+        assert!(!report.proved_sites.iter().any(|site| site.0 == name));
+    }
+    assert!(report.obligations.iter().any(
+        |obligation| obligation.function == "untouched" && obligation.status == Status::Proved
+    ));
+}
+
+#[test]
+fn fixed_arrays_have_constant_lengths_and_zero_based_bounds() {
+    let source = r#"
+def pick(i: int64) -> uint8:
+    requires 0 <= i and i < 3
+    row: fixed[uint8, 3] = [4] * 3
+    assert len(row) == 3
+    assert row[i] == 4
+    return row[i]
+
+def bad() -> uint8:
+    row: fixed[uint8, 2] = [1, 2]
+    return row[-1]
+"#;
+    let Some(report) = verify(source) else { return };
+    assert_eq!(open_checks(&report), ["11 index in range failed"]);
+}

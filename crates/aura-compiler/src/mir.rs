@@ -14072,7 +14072,10 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
-        if is_scalar_literal_constant(constant) {
+        if is_scalar_literal_constant(constant)
+            || constant.ty.as_fixed_array().is_some()
+                && fixed_arrays::constant_initializer(&constant.decl.value)
+        {
             // The literal has no effects, so each read computes it where
             // it stands; the program still runs the initializer at startup.
             let value = self.lower_expr_with_expected(&constant.decl.value, Some(&constant.ty));
@@ -15793,6 +15796,9 @@ impl<'a> Lowerer<'a> {
             return;
         }
 
+        if self.lower_fixed_assign(assign) {
+            return;
+        }
         if self.lower_element_write_beside_loans(assign) {
             return;
         }
@@ -16528,6 +16534,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_collection_literal_with_type(&mut self, expr: &Expr, ty: &Type) -> Option<Rvalue> {
+        if let Some(value) = self.fixed_literal(expr, ty) {
+            return Some(value);
+        }
         match (&expr.kind, ty) {
             (ExprKind::List(elements), Type::Named(name, args))
                 if name == "list" && args.len() == 1 =>
@@ -19948,6 +19957,7 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
+                Some(ty) if ty.as_fixed_array().is_some() => ty.as_fixed_array().unwrap().0.clone(),
                 Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
                     if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
@@ -19988,6 +19998,17 @@ impl<'a> Lowerer<'a> {
         let mut stepped_next = dispatch_block;
 
         match iterable_ty {
+            Some(ref ty) if ty.as_fixed_array().is_some() => {
+                self.fixed_iteration(
+                    ty,
+                    iterable,
+                    simple_binding.clone().expect("fixed array loop binding"),
+                    for_stmt.span,
+                    dispatch_block,
+                    body_block,
+                    after_block,
+                );
+            }
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
                 let binding = simple_binding
                     .clone()
@@ -22070,6 +22091,9 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Index { object, index } => {
+                if let Some(value) = self.lower_fixed_read(object, index) {
+                    return value;
+                }
                 // `receiver.method[T]`: the checker registered the bound
                 // method's closure at the member; the index only fixed its
                 // type arguments.
@@ -26073,6 +26097,12 @@ impl<'a> Lowerer<'a> {
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
+                if let Some(ty) = self.infer_expr_type(&args[0].value) {
+                    if let Some((_, length)) = ty.as_fixed_array() {
+                        self.lower_expr(&args[0].value);
+                        return Operand::Int(length as u128);
+                    }
+                }
                 if let Some(len) = self.lower_span_len(&args[0].value) {
                     return len;
                 }
@@ -30314,6 +30344,9 @@ impl<'a> Lowerer<'a> {
                     {
                         args.first().cloned()
                     }
+                    ref ty if ty.as_fixed_array().is_some() => {
+                        ty.as_fixed_array().map(|(elem, _)| elem.clone())
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -32096,6 +32129,8 @@ fn mir_class_type_name(
         })
 }
 
+#[path = "mir_fixed_arrays.rs"]
+pub(crate) mod fixed_arrays;
 #[path = "mir_spans.rs"]
 mod spans;
 

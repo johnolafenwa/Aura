@@ -280,6 +280,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid static storage initializer",
     },
     DiagnosticCodeInfo {
+        code: "AU2081",
+        band: "names/types",
+        title: "invalid fixed array type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2082",
+        band: "names/types",
+        title: "invalid fixed array initializer",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2087",
+        band: "names/types",
+        title: "invalid atomic ordering",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2088",
+        band: "names/types",
+        title: "invalid rotation count type",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -350,6 +370,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "module state access",
     },
     DiagnosticCodeInfo {
+        code: "AU3031",
+        band: "ownership",
+        title: "fixed array would duplicate a non-copy element",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -403,6 +428,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4030",
         band: "runtime",
         title: "module state outside freestanding execution",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4031",
+        band: "runtime",
+        title: "fixed array index out of bounds",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4034",
+        band: "runtime",
+        title: "invalid integer operation argument",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

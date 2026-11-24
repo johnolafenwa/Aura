@@ -810,6 +810,9 @@ pub(super) fn type_needs_drop(context: &MirLoanValidationContext<'_>, ty: &Type)
                 }
             }
             Type::Named(name, args) => {
+                if let Some((element, _)) = ty.as_fixed_array() {
+                    return visit(context, element, visiting);
+                }
                 if aura_core::types::is_builtin_copy_named_type(name, args) {
                     return false;
                 }
