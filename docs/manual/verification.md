@@ -377,6 +377,19 @@ booleans, with each integer type's range as a check:
 - calls through a function value that names one function, such as
   `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
   `ensures`
+- lambdas, local `def`s, and bound methods such as `f = account.add`,
+  called in the function that makes them, directly or through a local:
+  the body runs at each call, on the arguments and on what the closure
+  captured. A capture by value has the value it had where the closure was
+  made. A capture by reference (`[mut total]`, `[values]`) is read at the
+  call and written back after it. State the closure owns and changes,
+  such as a counter it captured by value, carries from one call to the
+  next. Each check in the body is made at the call and reported in the
+  calling function. A local `def` cannot state `requires` or `ensures`,
+  and an `assert` at its top is checked against the arguments of every
+  call. A call of a bound method proves the method's `requires` and
+  assumes its `ensures`. A closure that is only called this way is not
+  verified on its own, where its captured values would be unknown
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
   over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
@@ -392,6 +405,21 @@ chosen on different paths. Such a value's `requires` is reported as
 `AU5104` where it leaves the function, and stays checked when it is
 called. A check that reads one of them is reported as not modeled
 (`AU5104`, naming the step), never as a failure with a counterexample.
+
+Of closures, these are not modeled:
+
+- a closure that leaves the function that makes it: passed as an
+  argument, returned, stored in a field or a collection, or captured by
+  another closure. Its body is verified on its own, for any captured
+  value. A local it captured by reference is unknown after every call
+- a recursive call of a local `def`, which has no contract to state what
+  it returns
+- a closure with state of its own called in a loop, and a closure that
+  captured a view a function returned
+- a decorated function. The decorated name is the function value the
+  decorator returned, so a call of it proves no `requires` and assumes no
+  `ensures`, even through a decorator that returns its argument. The
+  body is still verified against its own contract
 
 A loop that builds a list proves what it builds with a quantified
 invariant:

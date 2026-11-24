@@ -4080,7 +4080,11 @@ def main() -> None:
         assert!(report.is_proved(), "{report:#?}");
         assert_eq!(report.obligations.len(), 2);
     }
-    let bad = source.replace("assert value == 0", "assert value != 0");
+    // A local function is checked where it is called, so the call must
+    // reach the branch.
+    let bad = source
+        .replace("assert value == 0", "assert value != 0")
+        .replace("pick(2)", "pick(0)");
     if let Some(report) = verify(&bad) {
         assert!(!report.is_proved(), "the branch violates its assertion");
     }
