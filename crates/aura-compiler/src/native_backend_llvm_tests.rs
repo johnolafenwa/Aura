@@ -1434,6 +1434,132 @@ fn a_select_of_blocks_already_copied_keeps_its_false_side_in_the_copy_too() {
 }
 
 #[test]
+fn blocks_copied_for_a_weaker_condition_are_copied_again_for_a_stronger_one() {
+    // A loop reads two views. It gets a copy for while the first holds,
+    // and then one for while both hold, which the entry tries first.
+    let mut module = module();
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new((false, true)));
+    let result = std::rc::Rc::clone(&copied);
+    define(
+        &mut module,
+        "shared",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag, other_flag, address] = builder.block_params(entry)[..] else {
+                unreachable!("four parameters")
+            };
+            let total = Var(0);
+            builder.declare_var(total, types::I64);
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let body = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(total, zero);
+            let both = builder.band(flag, other_flag);
+            builder.jump(header, &[zero]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            builder.brif(more, body, &[], exit, &[]);
+
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            let seven = builder.iconst(types::I64, 7);
+            let nine = builder.iconst(types::I64, 9);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let first = builder.select(holds, seven, loaded);
+            let other_holds = builder.icmp_imm(IntCC::NotEqual, other_flag, 0);
+            let second = builder.select(other_holds, nine, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, first);
+            let added = builder.iadd(added, second);
+            builder.def_var(total, added);
+            let next = builder.iadd_imm(index, 1);
+            builder.jump(header, &[next]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            let returned = builder.use_var(total);
+            builder.return_(&[returned]);
+            let weaker =
+                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let stronger = builder.version_blocks(
+                &[header, body],
+                &[(first, None), (second, None)],
+                &[(entry, both, None)],
+            );
+            result.set((weaker, stronger));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (true, true), "{ir}");
+    // The copy for both conditions adds both constants, the copy for the
+    // first reads memory for the second, and nothing tests a condition
+    // inside the loop.
+    assert!(!ir.contains("select"), "{ir}");
+    assert!(ir.contains(", 9\n"), "{ir}");
+    assert_eq!(ir.matches(", 7\n").count(), 2, "{ir}");
+}
+
+#[test]
+fn an_entry_that_does_not_end_in_a_jump_into_the_blocks_copies_nothing() {
+    let mut module = module();
+    let copied = std::rc::Rc::new(std::cell::Cell::new((true, true)));
+    let result = std::rc::Rc::clone(&copied);
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "entries",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag] = builder.block_params(entry)[..] else {
+                unreachable!("two parameters")
+            };
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            // The entry leaves for the exit where its flag fails.
+            builder.brif(flag, header, &[zero], exit, &[]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            let next = builder.iadd_imm(index, 1);
+            builder.brif(more, header, &[next], exit, &[]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            builder.return_(&[zero]);
+            let branch = builder.version_blocks(&[header], &[], &[(entry, flag, None)]);
+            // The exit returns.
+            let returns = builder.version_blocks(&[header], &[], &[(exit, flag, None)]);
+            result.set((branch, returns));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (false, false), "{ir}");
+}
+
+#[test]
 fn versioned_blocks_keep_the_order_their_instructions_were_built_in() {
     // The latch is created before the body and built after it, and it uses
     // a value of the body. Its copy must follow the body's copy.

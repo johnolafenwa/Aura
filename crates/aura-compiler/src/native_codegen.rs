@@ -2579,6 +2579,7 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: None,
             })
@@ -2662,6 +2663,7 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: Some(field_box),
             });

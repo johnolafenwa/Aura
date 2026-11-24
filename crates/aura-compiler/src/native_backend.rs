@@ -714,7 +714,10 @@ pub(crate) trait FunctionBackend {
     /// Each `(pad, condition)` of `entries` is a block outside `blocks` that
     /// ends in a jump into them; it then jumps to the copy when
     /// `condition` is not zero, and the given value equals the given
-    /// constant, and to `blocks` otherwise. Each value of `selects` is a
+    /// constant, and to `blocks` otherwise. A pad whose jump an earlier
+    /// call already turned into a branch among copies keeps that branch
+    /// where the condition fails, and runs a copy of it among the new
+    /// copies where it holds. Each value of `selects` is a
     /// `select` in `blocks` on that condition: the copy keeps its true value,
     /// or the constant given with it, and `blocks` its false one. Nothing is
     /// copied, and

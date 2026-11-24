@@ -763,6 +763,10 @@ pub(super) struct ListSnapshot {
     /// Each block that enters the loop, with its flag and the access code
     /// it read.
     pub(super) entries: Vec<(Blk, Val, Val)>,
+    /// Each block that enters the loop, with the flag of the loop's lists
+    /// of scalars alone, when the loop also reads other lists (see
+    /// `version_snapshot_loops`).
+    pub(super) scalar_entries: Vec<(Blk, Val)>,
     /// The access codes the loop's operations check the view for.
     pub(super) expected: Vec<i64>,
     /// The element accesses that stay in range while the guards hold
@@ -978,6 +982,8 @@ impl FunctionCompiler<'_> {
             let pad = self.builder.current_block().unwrap_or(pad);
             for (index, (_, access)) in &oks {
                 let mut flag = None;
+                let mut scalars = None;
+                let mut mixed = false;
                 for (other, (ok, _)) in &oks {
                     if self.list_snapshots[*other].region.blocks
                         == self.list_snapshots[*index].region.blocks
@@ -986,12 +992,25 @@ impl FunctionCompiler<'_> {
                             None => *ok,
                             Some(flag) => self.builder.band(flag, *ok),
                         });
+                        if self.list_snapshots[*other].scalar_element().is_some() {
+                            scalars = Some(match scalars {
+                                None => *ok,
+                                Some(flag) => self.builder.band(flag, *ok),
+                            });
+                        } else {
+                            mixed = true;
+                        }
                     }
                 }
                 let flag = flag.expect("a loop's own flag is among them");
                 self.list_snapshots[*index]
                     .entries
                     .push((pad, flag, *access));
+                if let Some(scalars) = scalars.filter(|_| mixed) {
+                    self.list_snapshots[*index]
+                        .scalar_entries
+                        .push((pad, scalars));
+                }
             }
             self.builder.jump(target, &[]);
         }
@@ -1429,6 +1448,32 @@ impl FunctionCompiler<'_> {
                     .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
                     .collect()
             };
+            // A loop that reads lists of scalars and other lists first gets
+            // a copy for while the lists of scalars qualify, whose view is
+            // the cheapest to keep and the likeliest to qualify. The copy
+            // for while every list qualifies is then tried first where the
+            // loop is entered, so a list that does not qualify costs the
+            // others nothing.
+            if !overlaps && !self.list_snapshots[index].scalar_entries.is_empty() {
+                let scalar_selects = group
+                    .iter()
+                    .filter(|member| self.list_snapshots[**member].scalar_element().is_some())
+                    .flat_map(|member| {
+                        let known = code_of(&self.list_snapshots[*member]);
+                        self.list_snapshots[*member]
+                            .selects
+                            .iter()
+                            .map(move |(select, access)| (*select, known.filter(|_| *access)))
+                    })
+                    .collect::<Vec<_>>();
+                let scalar_entries = self.list_snapshots[index]
+                    .scalar_entries
+                    .iter()
+                    .map(|(pad, flag)| (*pad, *flag, None))
+                    .collect::<Vec<_>>();
+                self.builder
+                    .version_blocks(&blocks, &scalar_selects, &scalar_entries);
+            }
             if self.builder.version_blocks(&blocks, &selects, &entries) {
                 copied.extend(blocks);
             }

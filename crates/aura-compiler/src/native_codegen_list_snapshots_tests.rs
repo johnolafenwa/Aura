@@ -163,6 +163,18 @@ fn loops_that_read_views_once_compile_with_their_copies() {
         .expect("the loops should compile");
 }
 
+#[test]
+fn loops_inside_and_across_each_other_compile_with_their_copies() {
+    // A loop over a list of scalars and a list of records gets a copy for
+    // the scalars alone, and one for both.
+    let source =
+        include_str!("../tests/fixtures/run-pass/nested_and_overlapping_loops_read_views_once.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
 const ARRAY_SOURCE: &str = r#"
 def smooth(source: Array[float64], target: mut Array[float64], n: int64):
     for i in range(1, n - 1):

@@ -931,6 +931,10 @@ struct BlockIr {
     /// A copy of a loop that runs while its checks hold at entry.
     versioned: bool,
     in_layout: bool,
+    /// Holds a branch that picks among copies where they are entered:
+    /// the branch earlier copies left, which runs when a later copy's
+    /// condition fails, or a copy of such a branch.
+    version_decision: bool,
     predecessors: Vec<u32>,
     /// The value each variable last got in this block.
     definitions: HashMap<u32, Val>,
@@ -954,10 +958,14 @@ struct FunctionIr {
     /// The callee of each direct call `version_blocks` copied, once per
     /// copy.
     copied_calls: Vec<FuncRef>,
-    /// The copies `version_blocks` made of each select that was not yet
+    /// The copies `version_blocks` made of each select while it was not
     /// settled, by the select's result, so a later call for blocks that
     /// were already copied settles those copies too.
     select_copies: HashMap<Val, Vec<u32>>,
+    /// The value each select `version_blocks` settled keeps in a copy
+    /// that runs while its condition holds, by the select's result, so a
+    /// later copy of the same blocks for a stronger condition keeps it too.
+    settled_selects: HashMap<Val, Val>,
     current: Option<u32>,
     params_block: Option<u32>,
     /// The source position of the instructions built from here on.
@@ -966,6 +974,15 @@ struct FunctionIr {
     debug_vars: BTreeMap<u32, DebugVariable>,
     /// The plain class variables a debugger shows.
     debug_records: Vec<DebugRecord>,
+}
+
+/// The versions of copied blocks the branches at an entry pick among (see
+/// `FunctionIr::pick`).
+enum Pick {
+    /// A jump to a block, with its arguments.
+    Leaf(Blk, Vec<Val>),
+    /// A branch on a condition, to the first while it holds.
+    Branch(Val, Box<Pick>, Box<Pick>),
 }
 
 /// Where a variable's value comes from at a use.
@@ -1082,6 +1099,7 @@ impl FunctionIr {
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
             select_copies: HashMap::new(),
+            settled_selects: HashMap::new(),
             current: None,
             params_block: None,
             location: None,
@@ -1202,21 +1220,21 @@ impl FunctionIr {
         // their false one.
         let mut kept = HashMap::new();
         for (select, constant) in selects {
-            let Some(inst) = self.value_defs[select.0 as usize] else {
-                continue;
-            };
-            let inst = &mut self.insts[inst as usize];
-            if let Op::Select(_, if_true, if_false) = inst.op {
-                kept.insert(inst.results[0], constant.ok_or(if_true));
-                inst.op = Op::Copy(if_false);
-            }
-            // A copy of this select, in the copy of a loop that shares
-            // these blocks, reads memory as the blocks do. Left alone it
-            // would test the condition on every pass.
-            for copy in self.select_copies.remove(select).unwrap_or_default() {
-                let copy = &mut self.insts[copy as usize];
-                if let Op::Select(_, _, if_false) = copy.op {
-                    copy.op = Op::Copy(if_false);
+            // The select, and each copy of it in the copy of a loop that
+            // shares these blocks, reads memory where the blocks run. Left
+            // alone a copy would test the condition on every pass. The copy
+            // this call makes of each keeps the true value, which an earlier
+            // call for a weaker condition may have settled already.
+            let copies = self.select_copies.get(select).cloned().unwrap_or_default();
+            for inst in self.value_defs[select.0 as usize].into_iter().chain(copies) {
+                let inst = &mut self.insts[inst as usize];
+                let result = inst.results[0];
+                if let Op::Select(_, if_true, if_false) = inst.op {
+                    inst.op = Op::Copy(if_false);
+                    self.settled_selects.insert(result, if_true);
+                }
+                if let Some(if_true) = self.settled_selects.get(&result) {
+                    kept.insert(result, constant.ok_or(*if_true));
                 }
             }
         }
@@ -1233,9 +1251,7 @@ impl FunctionIr {
                 && self.blocks[pad.0 as usize]
                     .insts
                     .last()
-                    .is_some_and(|inst| {
-                        matches!(&self.insts[*inst as usize].op, Op::Jump(target, _) if set.contains(&target.0))
-                    })
+                    .is_some_and(|inst| self.pick(&self.insts[*inst as usize].op, &set).is_some())
         });
         if members.is_empty() || entries.is_empty() || escapes || !enters {
             return false;
@@ -1311,33 +1327,140 @@ impl FunctionIr {
             self.layout.push(copy);
         }
         for (pad, condition, equal) in entries {
-            let inst = *self.blocks[pad.0 as usize]
+            let last = *self.blocks[pad.0 as usize]
                 .insts
                 .last()
-                .expect("an entry ends in a jump");
-            let Op::Jump(original, args) = self.insts[inst as usize].op.clone() else {
-                unreachable!("an entry ends in a jump");
-            };
+                .expect("an entry ends in a branch");
+            let earlier = self.insts[last as usize].op.clone();
+            let pick = self.pick(&earlier, &set).expect("checked above");
             let mut condition = *condition;
             if let Some((word, constant)) = equal {
-                // The check goes in before the jump.
-                let jump = self.blocks[pad.0 as usize].insts.pop().expect("the jump");
+                // The check goes in before the pad's branch.
+                self.blocks[pad.0 as usize].insts.pop();
                 let saved = (self.current, self.location);
                 self.current = Some(pad.0);
-                self.location = self.insts[jump as usize].location;
+                self.location = self.insts[last as usize].location;
                 let same =
                     self.push_value(Op::IcmpImm(IntCC::Equal, *word, *constant), ScalarType::I8);
                 let wide = self.push_value(Op::Unary(UnaryOp::Uextend, same), ScalarType::I64);
                 condition =
                     self.push_value(Op::Binary(BinaryOp::Band, condition, wide), ScalarType::I64);
                 (self.current, self.location) = saved;
-                self.blocks[pad.0 as usize].insts.push(jump);
+                self.blocks[pad.0 as usize].insts.push(last);
             }
-            let copy = target(original);
+            let location = self.insts[last as usize].location;
+            let (copy, copy_args) = self.place_pick(pick, &block_map, &value_map, location);
             self.blocks[copy.0 as usize].predecessors.push(pad.0);
-            self.insts[inst as usize].op = Op::Brif(condition, copy, args.clone(), original, args);
+            if let Op::Jump(original, args) = earlier {
+                self.insts[last as usize].op = Op::Brif(condition, copy, copy_args, original, args);
+                continue;
+            }
+            // Earlier copies left branches that pick among them. Where
+            // this copy's condition holds, the copies of those branches
+            // pick among this copy's versions; where it fails, the
+            // branches run as they did, from a block of their own.
+            let fallback = self.blocks.len() as u32;
+            self.insts[last as usize].block = fallback;
+            self.blocks.push(BlockIr {
+                sealed: true,
+                in_layout: true,
+                version_decision: true,
+                insts: vec![last],
+                predecessors: vec![pad.0],
+                ..BlockIr::default()
+            });
+            self.layout.push(fallback);
+            self.blocks[pad.0 as usize].insts.pop();
+            let branch = self.insts.len() as u32;
+            self.insts.push(InstIr {
+                op: Op::Brif(condition, copy, copy_args, Blk(fallback), Vec::new()),
+                results: Vec::new(),
+                block: pad.0,
+                location,
+            });
+            self.blocks[pad.0 as usize].insts.push(branch);
         }
         true
+    }
+
+    /// The versions of the blocks of `set` that `op`, the branch an entry
+    /// pad ends in, picks among, or `None` when it does not enter them.
+    /// A copy an earlier call made is one for a weaker condition of the
+    /// same blocks, which a stronger copy replaces where its own condition
+    /// holds, so the pick leaves it out.
+    fn pick(&self, op: &Op, set: &HashSet<u32>) -> Option<Pick> {
+        match op {
+            Op::Jump(target, args) => self.pick_target(*target, args, set),
+            Op::Brif(condition, then_block, then_args, else_block, else_args) => {
+                let otherwise = self.pick_target(*else_block, else_args, set)?;
+                Some(match self.pick_target(*then_block, then_args, set) {
+                    Some(then) => Pick::Branch(*condition, Box::new(then), Box::new(otherwise)),
+                    None => otherwise,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// See [`FunctionIr::pick`]: a branch's target.
+    fn pick_target(&self, target: Blk, args: &[Val], set: &HashSet<u32>) -> Option<Pick> {
+        let block = &self.blocks[target.0 as usize];
+        if block.version_decision {
+            return self.pick(&self.insts[block.insts[0] as usize].op, set);
+        }
+        set.contains(&target.0)
+            .then(|| Pick::Leaf(target, args.to_vec()))
+    }
+
+    /// Builds the branches of `pick` among the copies `block_map` names,
+    /// and returns where they start.
+    fn place_pick(
+        &mut self,
+        pick: Pick,
+        block_map: &HashMap<u32, u32>,
+        value_map: &HashMap<Val, Val>,
+        location: Option<(u32, u32)>,
+    ) -> (Blk, Vec<Val>) {
+        let value = |value: Val| value_map.get(&value).copied().unwrap_or(value);
+        match pick {
+            Pick::Leaf(target, args) => (
+                Blk(block_map[&target.0]),
+                args.into_iter().map(value).collect(),
+            ),
+            Pick::Branch(condition, then, otherwise) => {
+                let (then_block, then_args) =
+                    self.place_pick(*then, block_map, value_map, location);
+                let (else_block, else_args) =
+                    self.place_pick(*otherwise, block_map, value_map, location);
+                let block = self.blocks.len() as u32;
+                let inst = self.insts.len() as u32;
+                self.insts.push(InstIr {
+                    op: Op::Brif(
+                        value(condition),
+                        then_block,
+                        then_args,
+                        else_block,
+                        else_args,
+                    ),
+                    results: Vec::new(),
+                    block,
+                    location,
+                });
+                self.blocks.push(BlockIr {
+                    sealed: true,
+                    in_layout: true,
+                    versioned: true,
+                    version_decision: true,
+                    insts: vec![inst],
+                    predecessors: Vec::new(),
+                    ..BlockIr::default()
+                });
+                self.blocks[then_block.0 as usize].predecessors.push(block);
+                self.blocks[else_block.0 as usize].predecessors.push(block);
+                self.layout.push(block);
+                (Blk(block), Vec::new())
+            }
+        }
     }
 
     /// A readable listing for verifier errors.
