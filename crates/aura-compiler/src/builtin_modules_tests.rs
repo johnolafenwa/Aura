@@ -2439,3 +2439,39 @@ fn a_derived_module_keeps_the_mut_rule_and_rejects_what_it_cannot_walk() {
         );
     }
 }
+
+#[test]
+fn build_module_exposes_the_compilation_target_and_flags() {
+    use crate::{current_build_config, with_build_config, BuildConfig};
+
+    let previous = current_build_config();
+    let mut config = BuildConfig::for_target("riscv64gc-unknown-none-elf", false).unwrap();
+    config.cfg.insert("driver".into(), "spi".into());
+    with_build_config(config.clone(), || {
+        assert_eq!(current_build_config(), config);
+        let output = crate::run_source(
+            "import build\nfrom build import pointer_width as bits\ndef main():\n    print(build.os)\n    print(build.arch)\n    print(bits)\n    print(build.endianness)\n    print(build.freestanding)\n    print(build.hosted)\n    print(build.debug)\n    print(build.release)\n    print(build.cfg[\"driver\"])\n",
+        ).unwrap();
+        assert_eq!(output.stdout, "none\nriscv64\n64\nlittle\ntrue\nfalse\nfalse\ntrue\nspi\n");
+    });
+    assert_eq!(current_build_config(), previous);
+}
+
+#[test]
+fn build_configuration_distinguishes_target_profile_and_feature_values() {
+    use crate::{current_build_config, with_build_config, BuildConfig};
+
+    assert!(BuildConfig::for_target("bogus", true).is_none());
+    let mut base = BuildConfig::for_target("x86_64-unknown-linux-gnu", true).unwrap();
+    base.cfg.insert("x".into(), "a:b".into());
+    let targets = base.supported_targets();
+    assert_eq!(targets.len(), 10);
+    for (name, target) in targets {
+        assert_eq!(target.target, name);
+        assert!(target.debug && !target.release);
+        assert_eq!(target.cfg, base.cfg);
+    }
+    let before = current_build_config();
+    let _ = std::panic::catch_unwind(|| with_build_config(base, || panic!("unwind test")));
+    assert_eq!(current_build_config(), before);
+}
