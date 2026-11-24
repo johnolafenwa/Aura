@@ -81,7 +81,7 @@ def main():
 Inside a function, its own `requires` clauses are assumed, since every call
 proves them.
 
-The verifier knows the length of a fixed array and treats target C layout queries as constants. Rotations and bit-count methods use the receiver's exact integer width. A memory or atomic load can observe a fresh value. In a program that takes raw addresses, a function that exposes a place, performs a raw store or calls an affected function receives an unsupported proof result. Check removal retains that function's checks. Device behavior and interleavings between cores remain the caller's responsibility.
+The verifier knows the length of a fixed array and treats target C layout queries as constants. Rotations and bit-count methods use the receiver's exact integer width. A memory or atomic load can observe a fresh value. In a program that takes raw addresses, a function that exposes a place, performs a raw store or can reach one through a call or destructor receives an unsupported proof result. Check removal retains that function's checks. Device behavior and interleavings between cores remain the caller's responsibility.
 
 ## Loops
 

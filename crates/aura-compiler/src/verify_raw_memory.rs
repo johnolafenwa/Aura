@@ -61,6 +61,14 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
     }
     let mut callers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut affected = BTreeSet::new();
+    let mut owners = BTreeSet::new();
+    let mut hooks: BTreeSet<_> = module
+        .classes
+        .iter()
+        .flat_map(|class| &class.methods)
+        .filter(|method| method.name == crate::sema::DROP_HOOK)
+        .map(|method| method.function_name.as_str())
+        .collect();
     for function in &module.functions {
         if crate::mir::is_builtin_wrapper(function) {
             continue;
@@ -69,6 +77,15 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
         for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
             let value = match instruction {
                 Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => value,
+                Instruction::ArmDrop { function, .. } => {
+                    hooks.insert(function.as_str());
+                    callers.entry(function.as_str()).or_default().push(name);
+                    continue;
+                }
+                Instruction::EndOwner { .. } => {
+                    owners.insert(name);
+                    continue;
+                }
                 Instruction::PushCleanup { .. } => {
                     affected.insert(name);
                     continue;
@@ -118,6 +135,11 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
             }
             callers.entry(target).or_default().push(name);
         }
+    }
+    // An owner can carry a hook armed by another function, including in an
+    // aggregate. Its exact drop target is not always visible at this point.
+    for hook in hooks {
+        callers.entry(hook).or_default().extend(&owners);
     }
     let mut pending: Vec<_> = affected.iter().copied().collect();
     while let Some(name) = pending.pop() {
