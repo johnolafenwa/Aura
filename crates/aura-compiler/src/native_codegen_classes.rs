@@ -367,12 +367,18 @@ impl FunctionCompiler<'_> {
         // An instance only this function builds and reaches through its
         // fields keeps its layout (see `confined_instances`).
         if std::mem::take(&mut self.skip_class_check) {
+            self.class_check_snapshot = None;
             self.builder.jump(fast_block, &[]);
             return;
         }
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let actual = self.emit_list_access(object, &layout);
-        let matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
+        let mut matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
+        // The copy of a loop that reads a field's list once runs while
+        // the instance keeps its layout.
+        if let Some(snapshot) = self.class_check_snapshot.take() {
+            matches = self.holds_in_copy(snapshot, matches);
+        }
         self.builder.brif(matches, fast_block, &[], slow_block, &[]);
     }
 
@@ -400,6 +406,7 @@ impl FunctionCompiler<'_> {
         let object = self.load_root(&root)?.values[0];
         let slow_block = self.builder.create_block();
         self.skip_class_check = self.confined_instances.contains(&root);
+        self.class_check_snapshot = self.instance_snapshot(&root);
         let loaded = self.load_class_slot(place, object, slow_block, &slot, ty, false);
         self.skip_class_check = false;
         loaded.map(Some)
@@ -534,6 +541,7 @@ impl FunctionCompiler<'_> {
         match &slot.kind {
             SlotKind::Leaves(leaves) => {
                 self.skip_class_check = self.confined_instances.contains(&root);
+                self.class_check_snapshot = self.instance_snapshot(&root);
                 self.emit_class_check(object, slot.access, slow_block, fast_block);
                 self.builder.switch_to_block(fast_block);
                 self.builder.seal_block(fast_block);
@@ -609,11 +617,13 @@ impl FunctionCompiler<'_> {
             return Ok(false);
         }
         let slow_block;
+        let mut snapshot = None;
         let (object, slot) = if let Some((root, slot, _)) = self.class_place(place)? {
             if !matches!(slot.kind, SlotKind::Handle) {
                 return Ok(false);
             }
             slow_block = self.builder.create_block();
+            snapshot = self.field_snapshot(place);
             (self.load_root(&root)?.values[0], slot)
         } else if mutable {
             return Ok(false);
@@ -634,16 +644,27 @@ impl FunctionCompiler<'_> {
         let fast_block = self.builder.create_block();
         let lent_block = self.builder.create_block();
         let join_block = self.builder.create_block();
+        self.class_check_snapshot = snapshot;
         self.emit_class_check(object, slot.access, slow_block, fast_block);
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
         let block = self.class_block(object);
         let field_slot = self.builder.iadd_imm(block, i64::from(slot.offset));
-        let boxed = self
+        let mut boxed = self
             .builder
             .load(types::I64, MemFlags::trusted(), field_slot, 0);
-        self.builder.brif(boxed, lent_block, &[], slow_block, &[]);
+        let mut present = self.builder.icmp_imm(IntCC::NotEqual, boxed, 0);
+        if let Some(snapshot) = snapshot {
+            // The loop's copy knows the box its entry found in the field.
+            let field_box = self.list_snapshots[snapshot]
+                .field_box
+                .expect("a field's loop keeps its box");
+            let kept = self.builder.use_var(field_box);
+            boxed = self.keep_in_copy(snapshot, kept, boxed);
+            present = self.holds_in_copy(snapshot, present);
+        }
+        self.builder.brif(present, lent_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(lent_block);
         self.builder.seal_block(lent_block);
@@ -709,7 +730,12 @@ impl FunctionCompiler<'_> {
             .builder
             .uload32(flags, boxed, ownership.ref_count_offset);
         let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
-        let unchanged = self.builder.band(kept, alone);
+        let mut unchanged = self.builder.band(kept, alone);
+        if let Some(snapshot) = self.field_snapshot(place) {
+            // The loop's copy only reads the list, which leaves the box
+            // in its field with the one holder the loop's entry found.
+            unchanged = self.holds_in_copy(snapshot, unchanged);
+        }
         // The temporary never owned the box.
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(temp_var, zero);
