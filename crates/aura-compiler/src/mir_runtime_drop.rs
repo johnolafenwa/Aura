@@ -92,6 +92,10 @@ mod tests {
     fn class_drop_hook_fixtures_release_owners_on_normal_and_trapping_exits() {
         for (source, expected) in [
             (
+                include_str!("../tests/fixtures/run-pass/class_drop_aggregate_scope.au"),
+                include_str!("../tests/fixtures/run-pass/class_drop_aggregate_scope.stdout"),
+            ),
+            (
                 include_str!("../tests/fixtures/run-pass/class_drop_mutable_writeback.au"),
                 include_str!("../tests/fixtures/run-pass/class_drop_mutable_writeback.stdout"),
             ),

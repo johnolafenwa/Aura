@@ -112,6 +112,10 @@ mod tests {
     fn class_drop_hook_emits_a_native_callback_only_for_hooked_programs() {
         for (source, expects_hook) in [
             (
+                include_str!("../tests/fixtures/run-pass/class_drop_aggregate_scope.au"),
+                true,
+            ),
+            (
                 include_str!("../tests/fixtures/run-pass/class_drop_hook.au"),
                 true,
             ),
