@@ -6,18 +6,19 @@ Last updated: 2026-11-24
 
 The 0.18 integration branch is the delivery target. The compiler, command line, editor and examples are implemented on the feature branch. Combined verification and the integration pull request are pending. [Work note](2026-11-24-compile-time.md)
 
-## Release 0.17.0-preview (in progress)
+## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and
   prepare the 0.17.0 preview. Details are in
   `2026-11-24-v0.17.0-preview-release.md`.
-- Done: everything from the integration and combined candidate branches
-  is on `main` (#310, `07337c84`). The release pull request holds the
-  version sweep, the changelog sections and the measurements against the
-  published 0.16.0 archive.
-- Next: merge the release pull request on a green run, push the
-  `v0.17.0-preview` tag from John's checkout after he approves it, and
-  check the Release run, the extension and the Linux archive.
+- Done: PR #311 merged as `6642a7c2`, tag `v0.17.0-preview` pushed on
+  2026-11-24, Release run `45367623676` green, five archives, four target
+  packs and extension 0.17.0 published. The packages are built and
+  attached but not published.
+- Follow-up: find why the command integration tests can hang on Windows
+  after they pass, find what `raytracer` and `order_book` run more of,
+  keep the set union test out of the plain dictionary lookup, and renew
+  the extension publishing token before 2026-12-01.
 
 ## Combined feature verification
 
