@@ -476,15 +476,20 @@ fn tuples_and_enums_of_words_compute_what_the_hosted_program_prints() {
     let Some(compiler) = c_compiler() else {
         return;
     };
+    for (source, expected) in [
+        (include_str!("freestanding_values.au"), "15726\n"),
+        (include_str!("freestanding_try.au"), "8544\n"),
+    ] {
+        values_match_the_hosted_run(compiler, source, expected);
+    }
+}
+
+fn values_match_the_hosted_run(compiler: &str, source: &str, expected: &str) {
     let workspace = Workspace::new();
-    workspace.write("values.au", include_str!("freestanding_values.au"));
+    workspace.write("values.au", source);
     let hosted = workspace.aura(&["run", "values.au"]);
     assert!(hosted.status.success(), "{}", stderr(&hosted));
-    assert_eq!(
-        stdout(&hosted),
-        "15726
-"
-    );
+    assert_eq!(stdout(&hosted), expected);
     let build = workspace.aura(&["build", "--freestanding", "-o", "values.o", "values.au"]);
     assert!(build.status.success(), "{}", stderr(&build));
     let harness = workspace.write(

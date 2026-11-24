@@ -257,6 +257,7 @@ fn lower_function(function: &mut MirFunction, values: &mut Values) {
     for local in &mut function.local_types {
         local.ty = values.rewritten(types.get(&local.name).unwrap_or(&local.ty));
     }
+    let returns = function.return_type.clone();
     function.return_type = values.rewritten(&function.return_type);
 
     // A temporary is named `%t` and a number, and the function's own end
@@ -271,10 +272,45 @@ fn lower_function(function: &mut MirFunction, values: &mut Values) {
         locals: Vec::new(),
     };
     let mut blocks = Vec::with_capacity(function.blocks.len());
-    for mut block in std::mem::take(&mut function.blocks) {
-        let mut instructions = Vec::with_capacity(block.instructions.len());
-        for instruction in std::mem::take(&mut block.instructions) {
+    for block in std::mem::take(&mut function.blocks) {
+        let BasicBlock {
+            label,
+            instructions: before,
+            terminator,
+        } = block;
+        // The block being filled. A `try` ends it and starts another.
+        let mut current = BasicBlock {
+            label: label.clone(),
+            instructions: Vec::with_capacity(before.len()),
+            terminator: Terminator::Unreachable,
+        };
+        let mut tries = 0;
+        for instruction in before {
             match instruction {
+                Instruction::Assign {
+                    target,
+                    value:
+                        Rvalue::Try {
+                            value: Operand::Place(result) | Operand::MovePlace(result),
+                            releases_on_error,
+                            from,
+                        },
+                } if lower_try(
+                    &target,
+                    &result,
+                    &releases_on_error,
+                    from.as_deref(),
+                    &returns,
+                    format!("{label}_value_try_{tries}"),
+                    &types,
+                    values,
+                    &mut fresh,
+                    &mut current,
+                    &mut blocks,
+                ) =>
+                {
+                    tries += 1;
+                }
                 Instruction::Assign { target, value } => {
                     let value = lower_value(
                         value,
@@ -282,15 +318,17 @@ fn lower_function(function: &mut MirFunction, values: &mut Values) {
                         &types,
                         values,
                         &mut fresh,
-                        &mut instructions,
+                        &mut current.instructions,
                     );
-                    instructions.push(Instruction::Assign { target, value });
+                    current
+                        .instructions
+                        .push(Instruction::Assign { target, value });
                 }
-                other => instructions.push(other),
+                other => current.instructions.push(other),
             }
         }
-        block.instructions = instructions;
-        lower_match(block, &types, values, &mut fresh, &mut blocks);
+        current.terminator = terminator;
+        lower_match(current, &types, values, &mut fresh, &mut blocks);
     }
     function.blocks = blocks;
     if !fresh.locals.is_empty() {
@@ -344,6 +382,174 @@ fn complete_enum_types(function: &MirFunction, types: &mut HashMap<String, Type>
             break;
         }
     }
+}
+
+/// Rewrites `target = try result` when `result` and the function's
+/// return value are both results the pass rewrote and neither needs drop.
+/// `from` names the function that converts the error when the two error
+/// types differ. The block being filled, `current`,
+/// ends in a test of the tag. On `Err` a new block returns the error in
+/// the function's own result type. On `Ok` the block `ok_label` goes on
+/// with the payload in `target`, and becomes `current`. Returns whether
+/// it rewrote the `try`.
+#[allow(clippy::too_many_arguments)]
+fn lower_try(
+    target: &str,
+    result: &str,
+    releases_on_error: &[String],
+    from: Option<&str>,
+    returns: &Type,
+    ok_label: String,
+    types: &HashMap<String, Type>,
+    values: &mut Values,
+    fresh: &mut Fresh,
+    current: &mut BasicBlock,
+    blocks: &mut Vec<BasicBlock>,
+) -> bool {
+    let is_result =
+        |ty: &Type| matches!(ty, Type::Named(name, args) if name == "Result" && args.len() == 2);
+    let Some(operand_type) = types.get(result).filter(|ty| is_result(ty)).cloned() else {
+        return false;
+    };
+    if !is_result(returns) {
+        return false;
+    }
+    let (Some(operand_class), Some(return_class)) =
+        (values.class_of(&operand_type), values.class_of(returns))
+    else {
+        return false;
+    };
+    let copy =
+        |values: &Values, class: &str| values.classes.get(class).is_some_and(|class| class.copy);
+    if !copy(values, &operand_class) || !copy(values, &return_class) {
+        return false;
+    }
+    let place = |variants: &Variants, name: &str| {
+        variants
+            .iter()
+            .position(|(variant, payloads)| variant == name && payloads.len() == 1)
+    };
+    let operand_variants = values.variants[&operand_class].clone();
+    let return_variants = values.variants[&return_class].clone();
+    let (Some(ok), Some(error), Some(return_ok), Some(return_error)) = (
+        place(&operand_variants, "Ok"),
+        place(&operand_variants, "Err"),
+        place(&return_variants, "Ok"),
+        place(&return_variants, "Err"),
+    ) else {
+        return false;
+    };
+    let error_type = operand_variants[error].1[0].clone();
+    let returned_error_type = return_variants[return_error].1[0].clone();
+    if from.is_none() && error_type != returned_error_type {
+        return false;
+    }
+    let tag = fresh.local(Type::named(TAG_TYPE));
+    let holds = fresh.local(Type::named("bool"));
+    current.instructions.push(Instruction::Assign {
+        target: tag.clone(),
+        value: Rvalue::Member {
+            object: Operand::Place(result.to_string()),
+            field: TAG_FIELD.to_string(),
+        },
+    });
+    current.instructions.push(Instruction::Assign {
+        target: holds.clone(),
+        value: Rvalue::Binary {
+            op: BinaryOp::Eq,
+            left: Operand::Place(tag),
+            right: Operand::Int(ok as u128),
+            span: crate::diag::Span::new(0, 0),
+            trap: Default::default(),
+        },
+    });
+    let error_label = format!("{ok_label}_error");
+    current.terminator = Terminator::Branch {
+        condition: Operand::Place(holds),
+        then_label: ok_label.clone(),
+        else_label: error_label.clone(),
+    };
+    let next = BasicBlock {
+        label: ok_label,
+        instructions: vec![Instruction::Assign {
+            target: target.to_string(),
+            value: Rvalue::Member {
+                object: Operand::Place(result.to_string()),
+                field: payload_field(ok, 0),
+            },
+        }],
+        terminator: Terminator::Unreachable,
+    };
+    blocks.push(std::mem::replace(current, next));
+
+    let mut instructions = Vec::new();
+    let carried = fresh.local(error_type);
+    instructions.push(Instruction::Assign {
+        target: carried.clone(),
+        value: Rvalue::Member {
+            object: Operand::Place(result.to_string()),
+            field: payload_field(error, 0),
+        },
+    });
+    // A `From` impl turns the error into the function's own.
+    let carried = match from {
+        Some(function) => {
+            let converted = fresh.local(returned_error_type);
+            instructions.push(Instruction::Assign {
+                target: converted.clone(),
+                value: Rvalue::Call {
+                    callee: CallTarget::Name(function.to_string()),
+                    args: vec![MirArg {
+                        name: None,
+                        value: Operand::Place(carried),
+                        writeback_place: None,
+                    }],
+                    type_args: Default::default(),
+                },
+            });
+            converted
+        }
+        None => carried,
+    };
+    let ok_zero = zero(
+        &return_variants[return_ok].1[0],
+        values,
+        fresh,
+        &mut instructions,
+    );
+    let returned = fresh.local(Type::named(&return_class));
+    let mut fields = vec![MirFieldInit {
+        name: TAG_FIELD.to_string(),
+        value: Operand::Int(return_error as u128),
+    }];
+    // The fields lie in the order of the variants.
+    let mut payloads = [
+        (return_ok, ok_zero),
+        (return_error, Operand::Place(carried)),
+    ];
+    payloads.sort_by_key(|(variant, _)| *variant);
+    for (variant, value) in payloads {
+        fields.push(MirFieldInit {
+            name: payload_field(variant, 0),
+            value,
+        });
+    }
+    instructions.push(Instruction::Assign {
+        target: returned.clone(),
+        value: Rvalue::Construct {
+            class_name: return_class,
+            fields,
+        },
+    });
+    instructions.extend(releases_on_error.iter().map(|place| Instruction::Release {
+        place: place.clone(),
+    }));
+    blocks.push(BasicBlock {
+        label: error_label,
+        instructions,
+        terminator: Terminator::Return(Operand::Place(returned)),
+    });
+    true
 }
 
 /// The class of the enum or tuple that `operand` names, by its type

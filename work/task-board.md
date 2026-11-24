@@ -19,7 +19,7 @@ Last updated: 2026-11-24
   RISC-V and AArch64 and prints `h=76127` and `f=0`.
 - Done after that, not yet in a pull request: tuples, enums, and `Result`
   of words in freestanding builds, kept in machine words (ADR-0129), with
-  6 compiler tests and 1 command test.
+  `try` on them, 8 compiler tests, and 1 command test.
   [Notes](2026-11-24-freestanding-values.md)
 - Remaining: `str`, `list`, enums that hold them, boxed classes, `dict`,
   and closures in freestanding builds, by route D1 of

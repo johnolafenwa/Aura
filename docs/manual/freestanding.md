@@ -91,7 +91,7 @@ def read(port: uint64) -> (Reading, uint64):
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types | Enums that hold a union, text, a collection, or an `indirect` payload, and `Lookup` |
 | `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum | `try`, `with`, tasks, queues |
+| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
@@ -339,7 +339,6 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 - No heap values of the language: no `str`, no collection, and no enum
   with an `indirect` payload. A program allocates through the
   [`mem` module](/manual/mem).
-- No `try`. Match on the `Result` instead.
 - No inline assembly and no port I/O instructions. Memory-mapped devices
   are reached with the [`mem` module](/manual/mem), and everything else
   through `extern "C"` functions.

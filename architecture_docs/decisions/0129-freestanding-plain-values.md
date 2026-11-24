@@ -41,12 +41,15 @@ fixed size and holds no reference.
 - **A type the pass cannot rewrite is left as it is.** The subset check
   then reports it as `AU2052`, as before. That covers an enum that holds
   text, a collection, a union, or an `indirect` payload.
-- **`try` stays out.** A program matches on the `Result`.
+- **`try` on such a `Result` becomes a test of the tag.** On `Err` the
+  function returns the error in its own result type, after the `From`
+  conversion the checker chose when the error types differ. Both results
+  must need no drop. Any other `try` is left and reported.
 
 ## Consequences
 
-- A freestanding program uses tuples, enums, `Result`, and `match` on them
-  with no heap and no hook.
+- A freestanding program uses tuples, enums, `Result`, `match`, and `try` on
+  them with no heap and no hook.
 - The pass is the place where the next values of the language arrive:
   values that need a heap block become calls of functions written in Aura
   over the allocation hooks.

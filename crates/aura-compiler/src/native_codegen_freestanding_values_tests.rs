@@ -187,3 +187,50 @@ export "C" def run(n: int64) -> int64:
         "{found:?}"
     );
 }
+
+#[test]
+fn try_on_a_result_of_words_becomes_a_tag_test_and_a_return() {
+    let source = include_str!("../../aura/tests/freestanding_try.au");
+    let module = prepared(source);
+    assert!(!module.contains("\"Try\""));
+    assert!(module.contains("_value_try_0_error"));
+    for target in FreestandingTarget::ALL {
+        object(source, target);
+    }
+}
+
+#[test]
+fn try_converts_its_error_through_a_from_impl() {
+    let source = r#"
+enum Small:
+    Bad
+
+enum Large:
+    Worse(int64)
+
+impl From[Small] for Large:
+    def from(value: own Small) -> Large:
+        return Large.Worse(7)
+
+def inner(n: int64) -> Result[int64, Small]:
+    if n > 0:
+        return Ok(n)
+    return Err(Small.Bad)
+
+def outer(n: int64) -> Result[int64, Large]:
+    value = try inner(n)
+    return Ok(value + 1)
+
+export "C" def run(n: int64) -> int64:
+    match outer(n):
+        case Ok(value):
+            return value
+        case Err(Large.Worse(code)):
+            return 0 - code
+"#;
+    let module = prepared(source);
+    assert!(!module.contains("\"Try\""));
+    for target in FreestandingTarget::ALL {
+        object(source, target);
+    }
+}
