@@ -100,7 +100,6 @@ def main():
                 not_modeled("the order of the elements after `sort`", 13)
             ),
             format!("has: {}", not_modeled("`contains`", 18)),
-            format!("low: {}", not_modeled("`&`", 22)),
             format!(
                 "positive: {}",
                 not_modeled("a comprehension or built-in loop", 25)
@@ -120,7 +119,7 @@ def main():
     );
     assert_eq!(
         (report.failed(), report.not_modeled(), report.undecided()),
-        (0, 10, 0)
+        (0, 9, 0)
     );
     let diagnostics = report.diagnostics();
     assert!(diagnostics

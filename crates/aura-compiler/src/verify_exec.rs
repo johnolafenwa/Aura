@@ -692,6 +692,27 @@ impl<'a> Exec<'a> {
         None
     }
 
+    /// A fresh constant equal to `term`, with what `also` says of it as
+    /// part of its definition: a check that reads only an operand of
+    /// `term` does not depend on it.
+    pub(super) fn define_with(
+        &mut self,
+        sort: &str,
+        hint: &str,
+        term: String,
+        also: impl FnOnce(&str) -> String,
+    ) -> String {
+        if let Some(name) = self.defined.get(&term) {
+            return name.clone();
+        }
+        let name = self.fresh_const(sort, hint);
+        self.definitions.insert(name.clone(), self.facts.len());
+        self.facts
+            .push(format!("(and (= {name} {term}) {})", also(&name)));
+        self.defined.insert(term, name.clone());
+        name
+    }
+
     /// A fresh constant equal to `term`, to keep terms small.
     pub(super) fn define(&mut self, sort: &str, hint: &str, term: String) -> String {
         if is_atom(&term) {
@@ -2772,11 +2793,20 @@ impl<'a> Exec<'a> {
                     ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
-                        let result = self.define("Int", "neg", format!("(- {term})"));
+                        // A negated literal stays a literal.
+                        let result = match super::integers::literal(&term) {
+                            Some(value) => lit(-value),
+                            None => self.define("Int", "neg", format!("(- {term})")),
+                        };
                         if trap.checks_overflow() {
                             self.oblige_range(state, *span, &result, ty);
                         }
                         Val::Int(result, ty)
+                    }
+                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                        let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
+                        let flipped = super::integers::bitnot(&term, ty);
+                        Val::Int(self.define("Int", "bits", flipped), ty)
                     }
                     _ => {
                         if *trap == ArithmeticTrap::Runtime {
@@ -3266,7 +3296,10 @@ impl<'a> Exec<'a> {
                         }
                         Val::Int(result, ty)
                     }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                        self.int_bitwise(op, a, b, ty)
+                    }
+                    BinaryOp::Shl | BinaryOp::Shr => self.int_shift(&pc, op, (a, b), ty, span),
                     BinaryOp::Pow if b.parse::<u32>().is_ok_and(|power| power <= 4) => {
                         let power: u32 = b.parse().expect("matched above");
                         let term = match power {

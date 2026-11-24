@@ -1140,7 +1140,6 @@ def main():
 "#,
         &[
             "22 assert unsupported",
-            "34 requires unsupported",
             "35 requires unsupported",
             "35 requires unsupported",
         ],
@@ -3301,7 +3300,8 @@ def main():
         open,
         [
             "6 overflow unsupported",
-            "9 overflow unsupported",
+            "9 overflow failed",
+            "9 overflow failed",
             "12 overflow unsupported"
         ],
         "{first:#?}"
