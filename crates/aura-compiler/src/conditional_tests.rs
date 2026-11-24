@@ -288,3 +288,36 @@ fn guard_dependencies_ignore_foreign_declarations_with_the_same_name() {
     let source = include_str!("../tests/fixtures/check-pass/conditional_local_or_foreign.au");
     assert_eq!(run_source(source).unwrap().stdout, "7\n");
 }
+
+#[test]
+fn conditional_class_dispatch_preserves_selected_getters_setters_decorators_and_delegates() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_class_dispatch.au");
+    crate::parser::parse_all_syntax(source).unwrap();
+    assert_eq!(run_source(source).unwrap().stdout, "3\n6\n");
+    let mut config = crate::current_build_config();
+    config.cfg.insert("alternate".into(), "true".into());
+    crate::with_build_config(config, || {
+        assert_eq!(run_source(source).unwrap().stdout, "14\n14\n");
+    });
+}
+
+#[test]
+fn a_discarded_getter_does_not_change_the_meaning_of_a_later_method_decorator() {
+    let source = concat!(
+        "import build\n",
+        "class Counter:\n",
+        "    if build.freestanding:\n",
+        "        @property\n",
+        "        def wrappers(self) -> int64:\n            return 0\n",
+        "    @wrappers.setter\n",
+        "    def score(self) -> int64:\n        return 1\n",
+    );
+    crate::parser::parse_all_syntax(source).unwrap();
+    let module = parse_source(source).unwrap();
+    let crate::ast::Item::Class(class) = &module.items[0] else {
+        panic!("expected Counter class");
+    };
+    assert_eq!(class.methods.len(), 1);
+    assert_eq!(class.methods[0].name, "score");
+    assert_eq!(class.methods[0].decorators[0].text, "@wrappers.setter");
+}
