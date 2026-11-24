@@ -27,6 +27,7 @@ function:
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| inline array index | `row[i]` for `fixed[T, N]` | `AU4031` when the index lies outside `0 <= i < N` |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
@@ -79,6 +80,8 @@ def main():
 
 Inside a function, its own `requires` clauses are assumed, since every call
 proves them.
+
+The verifier knows the length of a fixed array and treats target C layout queries as constants. Rotations and bit-count methods use the receiver's exact integer width. A memory or atomic load can observe a fresh value. In a program that takes raw addresses, a function that exposes a place, performs a raw store or calls an affected function receives an unsupported proof result. Check removal retains that function's checks. Device behavior and interleavings between cores remain the caller's responsibility.
 
 ## Loops
 
