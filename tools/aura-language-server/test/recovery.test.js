@@ -207,3 +207,12 @@ test("recovery locates an extern declaration named C after the ABI string", () =
     });
   }
 });
+
+test("recovery handles deeply indented declarations without stack overflow", () => {
+  const deep = Array.from({ length: 6000 }, (_, index) => `${" ".repeat(index)}class C${index}:`).join("\n");
+  const symbols = documentSymbols(deep);
+  assert.equal(symbols.length, 1);
+  assert.equal(symbols[0].name, "C0");
+  assert.equal(definitionForPosition(`${deep}\nC5999\n`, 6000, 1)?.line, 5999);
+});
+
