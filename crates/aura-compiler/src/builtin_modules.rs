@@ -3727,7 +3727,6 @@ pub(crate) fn builtin_registry_for_imports(
     imports_build: bool,
 ) -> BTreeMap<String, ModuleNamespace> {
     [
-        "build",
         "io",
         "fs",
         "net",
@@ -3758,7 +3757,7 @@ pub(crate) fn builtin_registry_for_imports(
         "sync",
     ]
     .into_iter()
-    .filter(|name| *name != "build" || imports_build)
+    .chain(imports_build.then_some("build"))
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
     .collect()
 }
