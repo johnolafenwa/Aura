@@ -12,6 +12,8 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_closures.rs"]
+mod closures;
 #[path = "verify_collections.rs"]
 mod collections;
 #[path = "verify_exec.rs"]
@@ -1179,12 +1181,19 @@ pub fn verify_module(
     let trace = options.trace;
     // The module body is verified like a function. A build that removes
     // proved checks leaves it alone.
+    let at_calls = closures::checked_at_calls(program, &cx, module);
     let top_level = module.top_level.iter().filter(|_| !options.prove_sites);
     let mut function_spans: BTreeMap<String, Span> = BTreeMap::new();
     for function in module.functions.iter().chain(top_level) {
         let is_primary = verified_function(program, &cx, function);
         let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
         if !is_primary && !is_auxiliary {
+            continue;
+        }
+        // A closure checked where it is called is run on its own only for
+        // a build, which asks which of its checks hold for any capture.
+        let at_calls = at_calls.contains(function.name.as_str());
+        if at_calls && !options.prove_sites {
             continue;
         }
         if let Some(filter) = &options.function_filter {
@@ -1309,7 +1318,7 @@ pub fn verify_module(
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
             }
-            if !is_primary && status == Status::Proved {
+            if at_calls || (!is_primary && status == Status::Proved) {
                 continue;
             }
             // A contract that can hold is not a check of the program, so
@@ -1862,6 +1871,9 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "verify_closures_tests.rs"]
+mod tests_closures;
 #[cfg(test)]
 #[path = "verify_outcomes_tests.rs"]
 mod tests_outcomes;

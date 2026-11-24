@@ -298,6 +298,9 @@ pub(super) enum Val {
     /// A `Task[T]` handle, with the value its task returns when it
     /// finishes normally.
     Task(Box<Val>),
+    /// A closure made in the function being executed: the function it
+    /// runs, and the value of each capture it holds.
+    Closure(String, Vec<Val>),
     /// A function value of a callable alias with a contract, named by the
     /// alias: a call through it has that contract.
     Contracted(String),
@@ -387,6 +390,12 @@ pub(super) struct State {
 }
 
 impl State {
+    /// The state of a function entered on the path `pc` with `env`.
+    pub(super) fn at(pc: String, env: BTreeMap<String, Val>) -> Self {
+        let loans = BTreeMap::new();
+        Self { pc, env, loans }
+    }
+
     /// Whether `local` names a view of another place.
     pub(super) fn is_view(&self, local: &str) -> bool {
         self.loans.contains_key(local)
@@ -470,7 +479,7 @@ pub(super) struct Exec<'a> {
     pub(super) obligations: Vec<Obligation>,
     /// The entry value of each scalar parameter, for counterexamples.
     pub(super) inputs: Vec<(String, String)>,
-    counter: usize,
+    pub(super) counter: usize,
     local_types: BTreeMap<String, Type>,
     /// The source position of the statement being executed.
     pub(super) span: Span,
@@ -500,7 +509,7 @@ pub(super) struct Exec<'a> {
     pub(super) captured: BTreeSet<String>,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
-    span_positions: BTreeSet<String>,
+    pub(super) span_positions: BTreeSet<String>,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -512,7 +521,7 @@ pub(super) struct Exec<'a> {
     /// `requires` clauses and what the parameters' types say.
     pub(super) entry_facts: usize,
     /// The constant each defined term is named by.
-    defined: BTreeMap<String, String>,
+    pub(super) defined: BTreeMap<String, String>,
     /// Whether specification evaluation is proving a goal rather than
     /// assuming an hypothesis.
     pub(super) proving: bool,
@@ -548,6 +557,8 @@ pub(super) struct Exec<'a> {
     branch_guards: BTreeMap<usize, String>,
     /// What the `str` models remember.
     pub(super) text: super::text::TextState,
+    /// What is known about the closures the function makes and calls.
+    pub(super) closures: super::closures::Closures<'a>,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -605,6 +616,7 @@ impl<'a> Exec<'a> {
             guarded: BTreeMap::new(),
             branch_guards: BTreeMap::new(),
             text: Default::default(),
+            closures: Default::default(),
         }
     }
 
@@ -1156,7 +1168,7 @@ impl<'a> Exec<'a> {
         );
     }
 
-    fn havoc_root(&mut self, state: &mut State, root: &str) {
+    pub(super) fn havoc_root(&mut self, state: &mut State, root: &str) {
         let value = self.fresh_local(root);
         state.env.insert(root.to_string(), value);
     }
@@ -1295,7 +1307,7 @@ impl<'a> Exec<'a> {
 
     /// `operand`, read where a function value stays one the verifier
     /// follows.
-    fn followed_operand(
+    pub(super) fn followed_operand(
         &mut self,
         state: &mut State,
         operand: &Operand,
@@ -1875,7 +1887,7 @@ impl<'a> Exec<'a> {
 
     // ----- Merging ---------------------------------------------------------
 
-    fn merge(&mut self, mut states: Vec<State>) -> State {
+    pub(super) fn merge(&mut self, mut states: Vec<State>) -> State {
         states.retain(|state| state.pc != "false");
         match states.len() {
             0 => {
@@ -2085,6 +2097,9 @@ impl<'a> Exec<'a> {
                 let mut merged = self.merge_children(pcs, values, hint);
                 Val::Held(held.clone(), Box::new(merged.remove(0)))
             }
+            Val::Closure(function, _) => {
+                Val::Closure(function.clone(), self.merge_children(pcs, values, hint))
+            }
             Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
                 Val::Opaque
             }
@@ -2123,6 +2138,7 @@ impl<'a> Exec<'a> {
                     None => self.operand(&mut state, value, None),
                 };
                 self.prove_return_invariants(&state, &result);
+                self.closure_returned(state, result);
                 Vec::new()
             }
             Terminator::Goto(label) => vec![(target(self, label), state)],
@@ -2826,7 +2842,7 @@ impl<'a> Exec<'a> {
             // An adapted function value still calls the function it names.
             Rvalue::CallableAdapt { value, .. } => {
                 match self.followed_operand(state, value, None) {
-                    value @ (Val::Func(_) | Val::Contracted(_)) => value,
+                    value @ (Val::Func(_) | Val::Contracted(_) | Val::Closure(..)) => value,
                     _ => fresh_target(self),
                 }
             }
@@ -2961,7 +2977,7 @@ impl<'a> Exec<'a> {
             }
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
-                for root in self.captured.clone() {
+                for root in self.loose_captures() {
                     self.unmodeled(
                         format!("a closure that may change `{root}`, which it captures"),
                         |exec| exec.havoc_root(state, &root),
@@ -3287,6 +3303,11 @@ impl<'a> Exec<'a> {
                 }
                 Val::Task(Box::new(result))
             }
+            Rvalue::Closure {
+                function, captures, ..
+            } => self
+                .closure_value(state, function, captures)
+                .unwrap_or_else(|| fresh_target(self)),
             _ => fresh_target(self),
         }
     }
@@ -3509,7 +3530,7 @@ impl<'a> Exec<'a> {
 
     // ----- Calls -----------------------------------------------------------
 
-    fn havoc_writebacks(&mut self, state: &mut State, args: &[MirArg]) {
+    pub(super) fn havoc_writebacks(&mut self, state: &mut State, args: &[MirArg]) {
         for arg in args {
             if let Some(place) = &arg.writeback_place {
                 self.havoc_place(state, place);
@@ -3602,6 +3623,13 @@ impl<'a> Exec<'a> {
                 } else {
                     fresh_target(self)
                 }
+            }
+            // A local function cannot state what a call of itself returns.
+            CallTarget::Name(name) if super::closures::is_closure_function(name) => {
+                self.unmodeled("a recursive call of a local function", |exec| {
+                    exec.havoc_writebacks(state, args);
+                    fresh_target(exec)
+                })
             }
             CallTarget::Name(name) => {
                 if self.cx.function(name).is_some() {
@@ -3741,6 +3769,9 @@ impl<'a> Exec<'a> {
                 })
             }
             CallTarget::Value(callee) => match self.followed_operand(state, callee, None) {
+                value if self.closure_callee(callee, &value) => {
+                    self.closure_call(state, target, callee, value, args)
+                }
                 Val::Contracted(alias) => {
                     let info = self.cx.alias_contract(&alias).expect("a contracted alias");
                     let mut pre = Vec::new();
@@ -5382,6 +5413,16 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
             }
         }
     }
+    // A captured view writes the local it is a view of.
+    if !captured.is_empty() {
+        let loans = loan_roots(&function.blocks);
+        let viewed: Vec<String> = captured
+            .iter()
+            .filter_map(|root| loans.get(root).cloned())
+            .collect();
+        captured.extend(viewed);
+    }
+    captured.extend(super::closures::stateful_holders(function));
     captured
 }
 
@@ -5610,6 +5651,7 @@ fn same_shape(a: &Val, b: &Val) -> bool {
         }
         (Val::Union(_, xs), Val::Union(_, ys)) => xs.len() == ys.len(),
         (Val::Held(x, _), Val::Held(y, _)) => x == y,
+        (Val::Closure(x, xs), Val::Closure(y, ys)) => x == y && xs.len() == ys.len(),
         _ => false,
     }
 }
@@ -5639,7 +5681,7 @@ fn tag_term(value: &Val) -> Option<&str> {
 /// The components of a compound value, in a fixed order.
 fn children(value: &Val) -> Vec<&Val> {
     match value {
-        Val::Tuple(items) | Val::Union(_, items) => items.iter().collect(),
+        Val::Tuple(items) | Val::Union(_, items) | Val::Closure(_, items) => items.iter().collect(),
         Val::Held(_, inner) => vec![inner],
         Val::Record(_, fields) => fields.iter().map(|(_, value)| value).collect(),
         Val::Enum(_, _, payloads) => payloads.iter().flatten().collect(),
