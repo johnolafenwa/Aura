@@ -34210,3 +34210,11 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         "{error:?}"
     );
 }
+
+#[test]
+fn fixed_arrays_check_element_counts_and_iteration() {
+    let good = include_str!("../tests/fixtures/run-pass/fixed_arrays.au");
+    crate::check_source(good).expect("the inline array should type check");
+    let bad = include_str!("../tests/fixtures/check-fail/fixed_array_wrong_length.au");
+    assert_eq!(crate::check_source(bad).unwrap_err().code, "AU2082");
+}

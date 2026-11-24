@@ -869,3 +869,33 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn fixed_arrays_use_inline_storage_on_every_target() {
+    let source = r#"
+def sample(index: int64) -> uint16:
+    mut row: fixed[uint16, 3] = [4, 2, 7]
+    row[0] = 9
+    return row[index]
+
+export "C" def get(index: int64) -> uint16:
+    return sample(index)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert_eq!(undefined, [TRAP_HOOK]);
+    }
+}
+
+#[test]
+fn fixed_array_constant_access_needs_no_trap_hook() {
+    let source = r#"
+export "C" def get(word: uint16) -> uint16:
+    row: fixed[uint16, 3] = [word] * 3
+    return row[2]
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
+}
