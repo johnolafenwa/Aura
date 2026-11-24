@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::exec::{
-    element_sort, loan_roots, root_of, structural_eq, terminator_targets, Exec, Goal, IntTy, State,
-    Store, Val,
+    element_sort, loan_roots, root_of, structural_eq, symbols, terminator_targets, Exec, Goal,
+    IntTy, Obligation, State, Store, Val,
 };
 use super::ObligationKind;
 use crate::ast::BinaryOp;
@@ -66,6 +66,18 @@ pub(super) fn row(
             .as_ref()
             .map(|(rows, sort)| Store::Leaf(format!("(select {rows} {index})"), sort)),
         elem: inner,
+    }
+}
+
+/// Every array of a store of arrays of its own.
+fn leaf_arrays(store: &Store) -> Vec<String> {
+    match store {
+        Store::Leaf(array, _) => vec![array.clone()],
+        Store::Items(items) => items.iter().flat_map(leaf_arrays).collect(),
+        Store::Shifted(base, _) | Store::Reversed(base, _) => leaf_arrays(base),
+        Store::Lists(lens, rows) => std::iter::once(lens.clone())
+            .chain(rows.iter().map(|(rows, _)| rows.clone()))
+            .collect(),
     }
 }
 
@@ -273,7 +285,11 @@ impl Exec<'_> {
             .zip(leaf_selects(store, &i))
             .map(|(new, old)| format!("(= {new} {old})"))
             .collect::<Vec<_>>();
-        self.fact(format!("(forall (({i} Int)) (and {}))", same.join(" ")));
+        let arrays = leaf_arrays(&copy);
+        self.lazy_fact(
+            &arrays.iter().map(String::as_str).collect::<Vec<_>>(),
+            format!("(forall (({i} Int)) (and {}))", same.join(" ")),
+        );
         copy
     }
 
@@ -297,6 +313,67 @@ impl Exec<'_> {
                     .as_ref()
                     .map(|(_, sort)| (self.fresh_rows(sort, hint), *sort));
                 Store::Lists(lens, rows)
+            }
+        }
+    }
+
+    // ----- Facts asked only where they matter --------------------------------
+
+    /// States `fact`, which says what the fresh constants `made` hold and
+    /// nothing else: whatever the rest holds, some value of them makes it
+    /// true. A quantified fact in every query makes the solver give up
+    /// where it would find a counterexample, so this one is left out of a
+    /// check that cannot reach `made`.
+    fn lazy_fact(&mut self, made: &[&str], fact: String) {
+        let made = made.iter().map(|name| name.to_string()).collect();
+        self.lazy.insert(self.facts.len(), made);
+        self.facts.push(fact);
+    }
+
+    /// The lazy facts the check `obligation` may depend on, as assertions:
+    /// those whose constants its goal or its path reach through the facts
+    /// known at the check.
+    pub(super) fn lazy_asserts(&self, obligation: &Obligation) -> String {
+        let mut text = String::new();
+        let Goal::Holds(goal) = &obligation.goal else {
+            return text;
+        };
+        if self.lazy.range(..obligation.facts).next().is_none() {
+            return text;
+        }
+        let facts: Vec<Vec<&str>> = self.facts[..obligation.facts]
+            .iter()
+            .map(|fact| symbols(fact))
+            .collect();
+        let guard = obligation.guard.as_deref().unwrap_or("");
+        let mut reached: BTreeSet<&str> = symbols(goal)
+            .into_iter()
+            .chain(symbols(&obligation.pc))
+            .chain(symbols(guard))
+            .collect();
+        let mut used = vec![false; facts.len()];
+        loop {
+            let mut changed = false;
+            for (index, names) in facts.iter().enumerate() {
+                if used[index] {
+                    continue;
+                }
+                let lazy = self.lazy.get(&index);
+                let wanted = match lazy {
+                    Some(made) => made.iter().any(|name| reached.contains(name.as_str())),
+                    None => names.iter().any(|name| reached.contains(name)),
+                };
+                if wanted {
+                    used[index] = true;
+                    changed = true;
+                    reached.extend(names.iter().copied());
+                    if lazy.is_some() {
+                        text.push_str(&format!("(assert {})\n", self.facts[index]));
+                    }
+                }
+            }
+            if !changed {
+                return text;
             }
         }
     }
@@ -470,6 +547,7 @@ impl Exec<'_> {
         // A short list of a known length has each fact once for each
         // position: the solver then decides every question about it.
         let mut facts = Vec::new();
+        let mut quantified = false;
         match len.parse::<u8>() {
             Ok(count) if count <= 16 => {
                 for position in 0..count {
@@ -482,6 +560,7 @@ impl Exec<'_> {
                 }
             }
             _ => {
+                quantified = true;
                 facts.push(format!(
                     "(forall (({i} Int)) (=> {} {}))",
                     in_result(&i),
@@ -502,11 +581,19 @@ impl Exec<'_> {
         }
         // The facts are one, about the result: a check that reads only
         // the list that was sorted does not depend on them.
-        let first = format!("(select {} 0)", first_array(&result));
-        self.definitions
-            .insert(first_array(&result), self.facts.len());
-        self.facts
-            .push(format!("(and (= {first} {first}) {})", facts.join(" ")));
+        let first = first_array(&result);
+        self.definitions.insert(first.clone(), self.facts.len());
+        let fact = format!(
+            "(and (= (select {first} 0) (select {first} 0)) {})",
+            facts.join(" ")
+        );
+        if quantified {
+            let mut made = leaf_arrays(&result);
+            made.extend([from, to]);
+            self.lazy_fact(&made.iter().map(String::as_str).collect::<Vec<_>>(), fact);
+        } else {
+            self.facts.push(fact);
+        }
         result
     }
 
@@ -543,11 +630,14 @@ impl Exec<'_> {
         let (at, k) = (self.fresh_const("Int", "at"), self.bound_name());
         let (found, other) = (holds(self, &at)?, holds(self, &k)?);
         let inside = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
-        self.fact(format!("(=> {held} (and {} {found}))", inside(&at)));
-        self.fact(format!(
-            "(=> (not {held}) (forall (({k} Int)) (=> {} (not {other}))))",
-            inside(&k)
-        ));
+        self.lazy_fact(
+            &[&held, &at],
+            format!(
+                "(and (=> {held} (and {} {found})) (=> (not {held}) (forall (({k} Int)) (=> {} (not {other})))))",
+                inside(&at),
+                inside(&k)
+            ),
+        );
         Some(Val::Bool(held))
     }
 
@@ -931,14 +1021,14 @@ impl Exec<'_> {
         let (k, witness) = (self.bound_name(), self.fresh_const("Int", "at"));
         self.fact(format!("(=> (not {moved}) (= {bound} {initial}))"));
         let inside = |k: &str| format!("(and (<= {low} {k}) (< {k} {high}))");
-        self.fact(format!(
-            "(=> {moved} (forall (({k} Int)) (=> {} ({order} {bound} (select {array} {k})))))",
-            inside(&k)
-        ));
-        self.fact(format!(
-            "(=> {moved} (and {} (= {bound} (select {array} {witness}))))",
-            inside(&witness)
-        ));
+        self.lazy_fact(
+            &[&bound, &witness],
+            format!(
+                "(=> {moved} (and (forall (({k} Int)) (=> {} ({order} {bound} (select {array} {k})))) {} (= {bound} (select {array} {witness}))))",
+                inside(&k),
+                inside(&witness)
+            ),
+        );
         havoc.env.insert(kept.clone(), Val::Int(bound, int));
         havoc.env.insert(seen.clone(), Val::Bool(moved));
     }

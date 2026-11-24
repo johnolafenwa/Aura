@@ -1682,6 +1682,11 @@ fn solve(
             let mut text = String::new();
             let mut rough_text = String::new();
             for (index, fact) in exec.facts[asserted..obligation.facts].iter().enumerate() {
+                // A fact about constants of its own is asserted only for
+                // the checks that reach them.
+                if exec.lazy.contains_key(&(asserted + index)) {
+                    continue;
+                }
                 text.push_str(&format!("(assert {fact})\n"));
                 match replaced.get(&(asserted + index)) {
                     Some(axioms) => {
@@ -1724,7 +1729,8 @@ fn solve(
             exec::Goal::Holds(goal) => goal,
         };
         let query = format!(
-            "(push 1)\n(assert {})\n",
+            "(push 1)\n{}(assert {})\n",
+            exec.lazy_asserts(obligation),
             exec::and(&obligation.pc, &exec::not(goal))
         );
         if trace {
@@ -1752,8 +1758,10 @@ fn solve(
             }
             let rows = samples.as_mut().expect("the samples were just drawn");
             let mut facts = String::from("; the check with its float inputs fixed\n");
-            for fact in &exec.facts[..obligation.facts] {
-                facts.push_str(&format!("(assert {fact})\n"));
+            for (index, fact) in exec.facts[..obligation.facts].iter().enumerate() {
+                if !exec.lazy.contains_key(&index) {
+                    facts.push_str(&format!("(assert {fact})\n"));
+                }
             }
             let goal = &query["(push 1)\n".len()..];
             for fixed in rows.iter().take(attempts) {

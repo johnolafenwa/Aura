@@ -537,6 +537,10 @@ pub(super) struct Exec<'a> {
     /// The fact that defines each constant `define` made. A constant
     /// depends on its definition, and not the other way around.
     pub(super) definitions: BTreeMap<String, usize>,
+    /// The facts that only say what constants made for them hold, each by
+    /// its position, with those constants. A check that reaches none of
+    /// them is asked without the fact: see `lazy_asserts`.
+    pub(super) lazy: BTreeMap<usize, Vec<String>>,
     /// Where the assumed term starts in each fact that holds only on some
     /// paths: the path condition before it is not what the fact is about.
     guarded: BTreeMap<usize, usize>,
@@ -595,6 +599,7 @@ impl<'a> Exec<'a> {
             unmodeled: BTreeMap::new(),
             origin: None,
             definitions: BTreeMap::new(),
+            lazy: BTreeMap::new(),
             guarded: BTreeMap::new(),
             branch_guards: BTreeMap::new(),
         }
@@ -5178,7 +5183,7 @@ pub(super) fn root_of(place: &str) -> &str {
 /// The constants an SMT term names, in order: every generated constant
 /// has a `!` in its name. A variable a quantifier binds is not one, and
 /// neither is text inside a string literal.
-fn symbols(term: &str) -> Vec<&str> {
+pub(super) fn symbols(term: &str) -> Vec<&str> {
     let mut names = Vec::new();
     let mut in_string = false;
     let mut start = None;

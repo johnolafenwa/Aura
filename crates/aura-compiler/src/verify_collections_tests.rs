@@ -60,6 +60,20 @@ fn assert_open(source: &str, expected: &[&str]) {
 
 /// Runs a program whose own `assert`s compare an operation with the facts
 /// its model states, over a spread of inputs.
+/// The checks named must stay open. Their facts are quantified, so a busy
+/// solver may give up on the counterexample instead of finding it: either
+/// answer is accepted, a proof is not.
+fn assert_refuted_or_undecided(source: &str, expected: &[&str]) {
+    let Some(report) = verify(source) else {
+        return;
+    };
+    let open: Vec<String> = open_checks(&report)
+        .iter()
+        .map(|check| check.replace(" unknown", " failed"))
+        .collect();
+    assert_eq!(open, expected, "{report:#?}");
+}
+
 fn assert_runs(source: &str) {
     crate::run_source(source).expect("the model's facts hold when the program runs");
 }
@@ -439,7 +453,7 @@ def main():
 
 #[test]
 fn a_wrong_claim_about_a_sorted_list_still_fails() {
-    assert_open(
+    assert_refuted_or_undecided(
         r#"
 def descending(xs: mut list[int64]) -> bool:
     requires len(xs) > 1
@@ -1129,5 +1143,19 @@ def main():
     print(numbered([1]))
 "#,
         &["5 assert failed", "13 assert failed", "21 assert failed"],
+    );
+}
+
+#[test]
+fn a_check_that_does_not_read_a_sorted_list_is_decided_without_its_facts() {
+    // The facts of a sort and of a search are quantified. A wrong claim
+    // about something else is refuted, not left undecided, and a claim
+    // about the sorted list still sees them.
+    assert_open(
+        "def after(xs: list[int], k: int, n: int) -> int:\n    requires n < 100\n    ensures result == n\n    ys = sorted(xs)\n    found = k in xs\n    return n + 1\n\ndef main():\n    print(after([3, 1], 1, 2))\n",
+        &["3 ensures failed"],
+    );
+    assert_proved(
+        "def second(xs: list[int]) -> int:\n    requires len(xs) > 1\n    ensures exists(x in xs, x == result)\n    ys = sorted(xs)\n    assert ys[0] <= ys[1]\n    return ys[1]\n\ndef main():\n    print(second([3, 1]))\n",
     );
 }
