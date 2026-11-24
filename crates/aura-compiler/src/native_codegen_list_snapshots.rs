@@ -540,11 +540,17 @@ pub(super) fn field_list_snapshot_regions(
     let mut regions = Vec::new();
     for list in lists {
         let instance = root(list);
+        // A loan of an element of the list, begun anywhere, may write the
+        // list while the loop runs.
+        let loans_element = |instruction: &Instruction| {
+            matches!(instruction, Instruction::BeginElementLoan { source, .. }
+                if source.strip_prefix(list).is_some_and(|rest| !rest.starts_with(char::is_alphanumeric)))
+        };
         if function
             .blocks
             .iter()
             .flat_map(|block| &block.instructions)
-            .any(|instruction| reaches_list(instruction, instance))
+            .any(|instruction| reaches_list(instruction, instance) || loans_element(instruction))
         {
             continue;
         }

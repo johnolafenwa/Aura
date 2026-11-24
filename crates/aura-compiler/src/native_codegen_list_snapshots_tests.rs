@@ -328,6 +328,13 @@ class Shelf:
             self.weights = [i + 1, i + 2]
         return sum
 
+    def resizes(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.balls[i].size
+        self.balls[0].size += sum
+        return sum
+
     def peeks(self, n: int64) -> int64:
         mut sum = 0
         for i in range(n):
@@ -341,7 +348,7 @@ def owner(n: int64) -> int64:
         for i in range(s.weights.len()):
             sum += s.weights[i] * round
         s.seen += 1
-    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.peeks(1)
+    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1)
 
 def main():
     print(owner(2))
@@ -406,6 +413,8 @@ fn a_loop_that_may_change_the_field_or_its_list_keeps_reading_them() {
     }
     // A call of a method that may change the instance.
     assert_eq!(field_regions("Shelf.calls", false, true), Vec::new());
+    // A loan of an element of the list anywhere in the function.
+    assert_eq!(field_regions("Shelf.resizes", true, true), Vec::new());
 }
 
 #[test]
