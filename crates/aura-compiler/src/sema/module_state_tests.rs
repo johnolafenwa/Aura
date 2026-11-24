@@ -199,7 +199,7 @@ fn fixed_module_elements_have_inline_storage_on_each_target() {
 #[test]
 fn packed_module_record_uses_c_offsets_alignment_and_shared_bit_storage() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/freestanding/module_state/packed/main.au");
+        .join("tests/fixtures/freestanding/module_state/packed/src/main.au");
     let source = std::fs::read_to_string(&path).unwrap();
     let mir = lower_to_mir(&check_freestanding_path(&path, None).unwrap());
     for target in FreestandingTarget::ALL {
