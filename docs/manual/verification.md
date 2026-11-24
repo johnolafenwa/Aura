@@ -25,6 +25,7 @@ function:
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| overflow | `a << n`, `a >> n`, `a ** n`, `math.floor(x)`, `math.isqrt(n)` | `AU4002` a shift count outside the width, a left shift that loses bits, or a result outside the type; `AU4001` a negative exponent or an argument outside a `math` function's domain |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
@@ -334,6 +335,21 @@ booleans, with each integer type's range as a check:
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
+- integer bit operations and shifts. `<<` and `>>` are exact, with the
+  count and lost-bits checks of the run time; `>>` keeps the sign. `&`,
+  `|`, and `^` with a literal operand, and `~`, are exact. Of two values
+  that are not literals, `&`, `|`, and `^` have only the bounds the
+  operands' signs give, such as `0 <= a & b <= a` for `a >= 0`
+- the `wrapping_` and `saturating_` methods of integers, exactly
+- integer `**` with a literal exponent up to 63, or with a literal base,
+  as in `2 ** k`. A power of two values that are not literals has only
+  its sign and the cases of exponent 0 and 1
+- `as` casts between numbers in contracts, with the same checks as in code
+- of the `math` module: `floor`, `ceil`, `trunc`, `sqrt`, `is_nan`,
+  `is_inf`, `is_finite`, `isqrt`, and `factorial` exactly, each with the
+  check of its argument; `gcd`, `lcm`, `comb`, and `perm` by their bounds;
+  `sin` and `cos` between -1 and 1, and `exp` not below 0. The overflow of
+  `lcm`, `comb`, `perm`, and `exp` is not checked
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
 - parameters, class fields, and function results of a callable alias with
   a contract ([Callable Contracts](/manual/contracts#callable-contracts)):

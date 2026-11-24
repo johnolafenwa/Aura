@@ -737,7 +737,7 @@ impl<'a> Exec<'a> {
     }
 
     /// A float `/` or `sqrt` result, defined by its own fact.
-    fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
+    pub(super) fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
         let (hint, term) = match &op {
             super::float::RoundedOp::Div(a, b) => ("arith", format!("(fp.div RNE {a} {b})")),
             super::float::RoundedOp::Add(a, b) => ("arith", format!("(fp.add RNE {a} {b})")),
@@ -4802,6 +4802,13 @@ impl<'a> Exec<'a> {
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
                 }
+            }
+            RuntimeOp::Host(_) if super::integers::math_function(op.name()).is_some() => {
+                let name = super::integers::math_function(op.name())?;
+                let values: Vec<Val> = (0..args.len())
+                    .map(|index| arg(self, state, index, None))
+                    .collect();
+                self.math_call(&pc, name, &values)
             }
             RuntimeOp::Scalar(op) if super::integers::fixed_width(op).is_some() => {
                 let kind = super::integers::fixed_width(op)?;

@@ -506,3 +506,267 @@ impl Exec<'_> {
         Ok(Val::Int(term, ty))
     }
 }
+
+// ----- The `math` module ---------------------------------------------------
+
+/// The functions of the `math` module the encoding says something about.
+const MATH: [&str; 16] = [
+    "floor",
+    "ceil",
+    "trunc",
+    "is_nan",
+    "is_inf",
+    "is_finite",
+    "sqrt",
+    "isqrt",
+    "factorial",
+    "gcd",
+    "lcm",
+    "comb",
+    "perm",
+    "sin",
+    "cos",
+    "exp",
+];
+
+/// The name inside `math` of the MIR function `name`, when it is one of
+/// those.
+pub(super) fn math_function(name: &str) -> Option<&str> {
+    let short = name.strip_prefix("math::")?;
+    MATH.contains(&short).then_some(short)
+}
+
+/// What `math.<name>` gives for some arguments, and each condition the
+/// run time checks before it gives a value, with what it is called in a
+/// report. The overflow of `lcm`, `comb`, `perm`, and `exp` is not among
+/// them: nothing checks it.
+type MathValue = (Val, Vec<(String, String)>);
+
+/// `|term|` of an integer.
+fn magnitude(term: &str) -> String {
+    format!("(ite (< {term} 0) (- {term}) {term})")
+}
+
+impl Exec<'_> {
+    /// `function` applied to `args`. The solver knows the function only
+    /// by what `facts` says of each use. With `what`, that is not all of
+    /// its value, and a check that fails by the solver's choice of it is
+    /// reported as not modeled.
+    fn applied(
+        &mut self,
+        (function, signature, sort): (&str, &str, &str),
+        args: &[&str],
+        what: Option<String>,
+        facts: impl FnOnce(&str) -> String,
+    ) -> String {
+        let decl = format!("(declare-fun {function} {signature} {sort})");
+        if !self.decls.contains(&decl) {
+            self.decls.push(decl);
+        }
+        let term = format!("({function} {})", args.join(" "));
+        match what {
+            Some(what) => self.unmodeled(what, |exec| exec.define_with(sort, "math", term, facts)),
+            None => self.define_with(sort, "math", term, facts),
+        }
+    }
+
+    /// The value of `math.<name>(args)`, for a `name` of `MATH` other
+    /// than `sqrt`, and what the run time checks first.
+    pub(super) fn math_value(&mut self, name: &str, args: &[Val]) -> Option<MathValue> {
+        let exact = |value, checks| Some((value, checks));
+        let float = FloatTy::F64;
+        let what = Some(format!("`math.{name}`"));
+        match (name, args) {
+            ("floor" | "ceil" | "trunc", [Val::Float(x, from)]) => {
+                let x = float.convert(x, *from);
+                let mode = match name {
+                    "floor" => "RTN",
+                    "ceil" => "RTP",
+                    _ => "RTZ",
+                };
+                // The rounded value is an `int64` exactly when the
+                // argument is above `-2^63 - 1` and below `2^63`.
+                let int = IntTy::INT64;
+                let fits = format!(
+                    "(and {} {})",
+                    float.above(&x, int.lo - 1),
+                    float.below(&x, int.hi + 1)
+                );
+                exact(
+                    Val::Int(
+                        format!("(to_int (fp.to_real (fp.roundToIntegral {mode} {x})))"),
+                        int,
+                    ),
+                    vec![(format!("`math.{name}` result is an `int64`"), fits)],
+                )
+            }
+            ("is_nan" | "is_inf" | "is_finite", [Val::Float(x, _)]) => {
+                let term = match name {
+                    "is_nan" => format!("(fp.isNaN {x})"),
+                    "is_inf" => format!("(fp.isInfinite {x})"),
+                    _ => format!("(not (or (fp.isNaN {x}) (fp.isInfinite {x})))"),
+                };
+                exact(Val::Bool(term), Vec::new())
+            }
+            ("isqrt", [Val::Int(a, _)]) => {
+                // The one integer whose square is at most `a` and whose
+                // successor's square is above it.
+                let root = self.applied(("isqrt!", "(Int)", "Int"), &[a], None, |r| {
+                    format!(
+                        "(=> (<= 0 {a}) (and (<= 0 {r}) (<= {r} {a}) (<= {r} 3037000499) (<= (* {r} {r}) {a}) (< {a} (* (+ {r} 1) (+ {r} 1)))))"
+                    )
+                });
+                exact(
+                    Val::Int(root, IntTy::INT64),
+                    vec![(
+                        "`math.isqrt` argument is not negative".to_string(),
+                        format!("(<= 0 {a})"),
+                    )],
+                )
+            }
+            ("factorial", [Val::Int(n, _)]) => {
+                // 20! is the largest factorial an `int64` holds.
+                let mut table = "0".to_string();
+                let mut products = vec![1i128];
+                for factor in 1..=20 {
+                    products.push(products[factor - 1] * factor as i128);
+                }
+                for (count, product) in products.iter().enumerate().rev() {
+                    table = format!("(ite (= {n} {count}) {product} {table})");
+                }
+                exact(
+                    Val::Int(table, IntTy::INT64),
+                    vec![(
+                        "`math.factorial` argument is from 0 to 20".to_string(),
+                        format!("(and (<= 0 {n}) (<= {n} 20))"),
+                    )],
+                )
+            }
+            ("gcd" | "lcm", [Val::Int(a, _), Val::Int(b, _)]) => {
+                // Both are symmetric: one order, so both name one term.
+                let (a, b) = if a <= b { (a, b) } else { (b, a) };
+                let (size_a, size_b) = (magnitude(a), magnitude(b));
+                let lo = lit(IntTy::INT64.lo);
+                if name == "gcd" {
+                    let result = self.applied(("gcd!", "(Int Int)", "Int"), &[a, b], what, |r| {
+                        format!(
+                            "(and (<= 0 {r}) (=> (= {a} 0) (= {r} {size_b})) (=> (= {b} 0) (= {r} {size_a})) (=> (not (= {a} 0)) (and (<= 1 {r}) (<= {r} {size_a}))) (=> (not (= {b} 0)) (and (<= 1 {r}) (<= {r} {size_b}))) (=> (= {size_a} {size_b}) (= {r} {size_a})) (=> (or (= {size_a} 1) (= {size_b} 1)) (= {r} 1)))"
+                        )
+                    });
+                    // Only `2^63` is a divisor that is not an `int64`.
+                    return exact(
+                        Val::Int(result, IntTy::INT64),
+                        vec![(
+                            "`math.gcd` result is an `int64`".to_string(),
+                            format!(
+                                "(not (or (and (= {a} {lo}) (or (= {b} 0) (= {b} {lo}))) (and (= {b} {lo}) (= {a} 0))))"
+                            ),
+                        )],
+                    );
+                }
+                let result = self.applied(("lcm!", "(Int Int)", "Int"), &[a, b], what, |r| {
+                    format!(
+                        "(and (<= 0 {r}) (=> (or (= {a} 0) (= {b} 0)) (= {r} 0)) (=> (not (or (= {a} 0) (= {b} 0))) (and (<= {size_a} {r}) (<= {size_b} {r}))) (=> (= {size_a} {size_b}) (= {r} {size_a})) (=> (= {size_a} 1) (= {r} {size_b})) (=> (= {size_b} 1) (= {r} {size_a})))"
+                    )
+                });
+                Some((Val::Int(result, IntTy::INT64), Vec::new()))
+            }
+            ("comb" | "perm", [Val::Int(n, _), Val::Int(k, _)]) => {
+                let function = if name == "comb" { "comb!" } else { "perm!" };
+                let result = self.applied((function, "(Int Int)", "Int"), &[n, k], what, |r| {
+                    // Choosing all of them is one way; arranging them is
+                    // not.
+                    let all = if name == "comb" {
+                        format!(
+                            "(=> (= {k} {n}) (= {r} 1)) (=> (and (<= 1 {k}) (< {k} {n})) (<= {n} {r}))"
+                        )
+                    } else {
+                        format!("(=> (and (<= 1 {k}) (<= {k} {n})) (<= {n} {r}))")
+                    };
+                    format!(
+                        "(=> (and (<= 0 {n}) (<= 0 {k})) (and (<= 0 {r}) (=> (< {n} {k}) (= {r} 0)) (=> (<= {k} {n}) (<= 1 {r})) (=> (= {k} 0) (= {r} 1)) (=> (= {k} 1) (= {r} {n})) {all}))"
+                    )
+                });
+                exact(
+                    Val::Int(result, IntTy::INT64),
+                    vec![(
+                        format!("`math.{name}` arguments are not negative"),
+                        format!("(and (<= 0 {n}) (<= 0 {k}))"),
+                    )],
+                )
+            }
+            ("sin" | "cos" | "exp", [Val::Float(x, from)]) => {
+                let x = float.convert(x, *from);
+                let (one, zero) = (FloatTy::literal(1.0), FloatTy::literal(0.0));
+                let function = format!("{name}!");
+                let bounds = |r: &str| {
+                    if name == "exp" {
+                        format!("(fp.leq {zero} {r})")
+                    } else {
+                        format!("(and (fp.leq (fp.neg {one}) {r}) (fp.leq {r} {one}))")
+                    }
+                };
+                let result = self.applied((&function, "(Float64)", "Float64"), &[&x], what, |r| {
+                    // NaN gives NaN, and nothing else does.
+                    format!(
+                        "(and (= (fp.isNaN {r}) (fp.isNaN {x})) (=> (not (fp.isNaN {x})) {}))",
+                        bounds(r)
+                    )
+                });
+                let value = Val::Float(result, float);
+                if name == "exp" {
+                    return Some((value, Vec::new()));
+                }
+                exact(
+                    value,
+                    vec![(
+                        format!("`math.{name}` argument is not infinite"),
+                        format!("(not (fp.isInfinite {x}))"),
+                    )],
+                )
+            }
+            _ => None,
+        }
+    }
+
+    /// A call of `math.<name>` in a function body.
+    pub(super) fn math_call(&mut self, pc: &str, name: &str, args: &[Val]) -> Option<Val> {
+        let span = self.span;
+        if let ("sqrt", [Val::Float(x, FloatTy::F64)]) = (name, args) {
+            // The run time refuses a negative argument; `-0.0` is not one.
+            self.oblige(
+                ObligationKind::Overflow,
+                span,
+                "`math.sqrt` argument is not negative",
+                pc,
+                Goal::Holds(format!(
+                    "(not (and (fp.isNegative {x}) (not (fp.isZero {x}))))"
+                )),
+            );
+            let root = self.define_rounded(FloatTy::F64, super::float::RoundedOp::Sqrt(x.clone()));
+            return Some(Val::Float(root, FloatTy::F64));
+        }
+        let (value, checks) = self.math_value(name, args)?;
+        let mut reached = pc.to_string();
+        for (message, check) in checks {
+            self.oblige(
+                ObligationKind::Overflow,
+                span,
+                message,
+                pc,
+                Goal::Holds(check.clone()),
+            );
+            reached = and(&reached, &check);
+        }
+        Some(match value {
+            Val::Int(term, ty) => {
+                let result = self.define("Int", "math", term);
+                // Past the call the program did not stop, so the result
+                // is a value of the type.
+                self.assume(&reached, ty.contains(&result));
+                Val::Int(result, ty)
+            }
+            value => value,
+        })
+    }
+}

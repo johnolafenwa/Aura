@@ -650,14 +650,18 @@ struct Item {
     args: String,
 }
 
-/// Adds functions to `source` that each pin the inputs of up to 16 items
-/// and run their statements. Gives the calls of those functions and the
+/// Adds functions to `source` that each pin the inputs of up to `size`
+/// items and run their statements. Gives the calls of those functions and the
 /// last line of each statement.
-fn groups(source: &mut String, prefix: &str, items: &[Item]) -> (String, Vec<usize>) {
+fn groups(
+    source: &mut String,
+    (prefix, size): (&str, usize),
+    items: &[Item],
+) -> (String, Vec<usize>) {
     let mut calls = String::new();
     let mut lines = Vec::new();
     let mut line = source.lines().count() + 1;
-    for (group, chunk) in items.chunks(16).enumerate() {
+    for (group, chunk) in items.chunks(size).enumerate() {
         let numbered = |part: fn(&Item) -> &str| -> Vec<String> {
             chunk
                 .iter()
@@ -703,6 +707,12 @@ struct Case {
 /// when run. A case that stops must have exactly one failed check, on the
 /// operation, and must stop in the interpreter.
 fn check_cases(cases: &[Case]) {
+    check_cases_by(16, cases);
+}
+
+/// `check_cases` with up to `size` cases to a function. Many float
+/// operations in one function are slow to check.
+fn check_cases_by(size: usize, cases: &[Case]) {
     let item = |case: &Case, statement: String| Item {
         params: case.params.clone(),
         pinned: case.pinned.clone(),
@@ -717,9 +727,9 @@ fn check_cases(cases: &[Case]) {
             None => bad.push(item(case, format!("print({})", case.expr))),
         }
     }
-    let mut source = String::new();
-    let (calls, _) = groups(&mut source, "good", &good);
-    let (_, lines) = groups(&mut source, "bad", &bad);
+    let mut source = String::from("import math\n\n");
+    let (calls, _) = groups(&mut source, ("good", size), &good);
+    let (_, lines) = groups(&mut source, ("bad", size), &bad);
     source.push_str(&format!("def main():\n    print(0)\n{calls}"));
     crate::run_source(&source).expect("the oracle agrees with the interpreter");
     let open: Vec<String> = lines
@@ -732,8 +742,8 @@ fn check_cases(cases: &[Case]) {
     // spread of the cases that stop, not each one.
     let step = bad.len().div_ceil(8).max(1);
     for case in bad.into_iter().step_by(step) {
-        let mut alone = String::new();
-        let (calls, _) = groups(&mut alone, "bad", &[case]);
+        let mut alone = String::from("import math\n\n");
+        let (calls, _) = groups(&mut alone, ("bad", 16), &[case]);
         alone.push_str(&format!("def main():\n{calls}"));
         assert!(crate::run_source(&alone).is_err(), "{alone}");
     }
@@ -825,11 +835,11 @@ fn bounds_of_unknown_bit_operations_allow_the_interpreter_results() {
             }
         }
         let mut run = String::new();
-        let (calls, _) = groups(&mut run, "right", &right);
+        let (calls, _) = groups(&mut run, ("right", 16), &right);
         run.push_str(&format!("def main():\n{calls}"));
         crate::run_source(&run).expect("the oracle agrees with the interpreter");
         let mut source = String::new();
-        let (_, lines) = groups(&mut source, "wrong", &wrong);
+        let (_, lines) = groups(&mut source, ("wrong", 16), &wrong);
         source.push_str("def main():\n    print(0)\n");
         let open: Vec<String> = lines
             .iter()
@@ -1273,11 +1283,11 @@ fn bounds_of_unknown_powers_allow_the_interpreter_results() {
             }
         }
         let mut run = String::new();
-        let (calls, _) = groups(&mut run, "right", &right);
+        let (calls, _) = groups(&mut run, ("right", 16), &right);
         run.push_str(&format!("def main():\n{calls}"));
         crate::run_source(&run).expect("the oracle agrees with the interpreter");
         let mut source = String::new();
-        let (_, lines) = groups(&mut source, "wrong", &wrong);
+        let (_, lines) = groups(&mut source, ("wrong", 16), &wrong);
         source.push_str("def main():\n    print(0)\n");
         let mut open = Vec::new();
         for line in lines {
@@ -1402,4 +1412,459 @@ def main():
             "30 overflow unsupported",
         ],
     );
+}
+
+// ----- The `math` module ---------------------------------------------------
+
+/// An Aura `float64` literal of a value with at most one decimal place.
+fn au_float(value: f64) -> String {
+    if value < 0.0 || (value == 0.0 && value.is_sign_negative()) {
+        format!("({value:.1})")
+    } else {
+        format!("{value:.1}")
+    }
+}
+
+/// Checks claims about results the encoding knows only bounds of. Each
+/// item is parameters, the `requires` that pins them, the arguments of a
+/// call, and a claim that is true when run. The interpreter must agree
+/// with every claim, and the verifier must not prove any claim wrong: it
+/// would if a stated bound left the true value out.
+fn check_allowed(claims: &[(String, String, String, String)]) {
+    let item = |(params, pinned, args, _): &(String, String, String, String), statement| Item {
+        params: format!("{params}, g$: bool"),
+        pinned: pinned.clone(),
+        statement,
+        args: format!("{args}, true"),
+    };
+    // Each wrong claim is behind a flag of its own: one the bounds refute
+    // would leave no path to the next.
+    let wrong: Vec<Item> = claims
+        .iter()
+        .map(|claim| item(claim, format!("if g$:\n        assert not ({})", claim.3)))
+        .collect();
+    let right: Vec<Item> = claims
+        .iter()
+        .map(|claim| item(claim, format!("assert g$ and {}", claim.3)))
+        .collect();
+    let mut run = String::from("import math\n\n");
+    let (calls, _) = groups(&mut run, ("right", 16), &right);
+    run.push_str(&format!("def main():\n{calls}"));
+    crate::run_source(&run).expect("the oracle agrees with the interpreter");
+    let mut source = String::from("import math\n\n");
+    let (_, lines) = groups(&mut source, ("wrong", 16), &wrong);
+    source.push_str("def main():\n    print(0)\n");
+    let open: Vec<String> = lines
+        .iter()
+        .map(|line| format!("{line} assert unsupported"))
+        .collect();
+    let open: Vec<&str> = open.iter().map(String::as_str).collect();
+    assert_open(&source, &open);
+}
+
+#[test]
+fn math_rounding_and_predicates_are_exact() {
+    assert_proved(
+        r#"
+import math
+
+def down(x: float64) -> int64:
+    requires 0.0 <= x and x <= 100.0
+    ensures 0 <= result and result <= 100
+    return math.floor(x)
+
+def up(x: float64) -> int64:
+    requires 0.5 <= x and x <= 100.0
+    ensures 1 <= result and result <= 100
+    return math.ceil(x)
+
+def whole(x: float64) -> int64:
+    requires -100.0 <= x and x <= 100.0
+    ensures result == x as int64
+    return math.trunc(x)
+
+def number(x: float64) -> bool:
+    requires x >= 0.0
+    ensures not result
+    return math.is_nan(x)
+
+def finite(x: float64) -> bool:
+    requires x >= 0.0 and x <= 1.0
+    ensures result
+    return math.is_finite(x) and not math.is_inf(x)
+
+def root(x: float64) -> float64:
+    requires x >= 4.0 and x <= 9.0
+    ensures result >= 2.0 and result <= 3.0
+    return math.sqrt(x)
+
+def main():
+    print(down(1.5))
+    print(up(1.5))
+    print(whole(-1.5))
+    print(number(1.0))
+    print(finite(0.5))
+    print(root(6.25))
+"#,
+    );
+    // `floor` of a value the type cannot hold stops the program, as does
+    // the root of a negative number, and `floor` rounds down.
+    assert_open(
+        r#"
+import math
+
+def down(x: float64) -> int64:
+    return math.floor(x)
+
+def root(x: float64) -> float64:
+    return math.sqrt(x)
+
+def toward_zero(x: float64) -> int64:
+    requires -100.0 <= x and x <= 100.0
+    ensures result == x as int64
+    return math.floor(x)
+
+def main():
+    print(down(1.5))
+    print(root(4.0))
+    print(toward_zero(1.5))
+"#,
+        &[
+            "5 overflow failed",
+            "8 overflow failed",
+            "12 ensures failed",
+        ],
+    );
+}
+
+#[test]
+fn math_integer_functions_have_their_checks_and_values() {
+    assert_proved(
+        r#"
+import math
+
+def root(a: int64) -> int64:
+    requires a >= 0
+    ensures result >= 0 and result * result <= a
+    return math.isqrt(a)
+
+def nine() -> int64:
+    ensures result == 9
+    return math.isqrt(99)
+
+def product(n: int64) -> int64:
+    requires 0 <= n and n <= 5
+    ensures 1 <= result and result <= 120
+    return math.factorial(n)
+
+def divisor(a: int64, b: int64) -> int64:
+    requires a > 0
+    ensures 1 <= result and result <= a
+    return math.gcd(a, b)
+
+def multiple(a: int64, b: int64) -> int64:
+    requires a > 0 and b > 0
+    ensures result >= a and result >= b
+    return math.lcm(a, b)
+
+def choose(n: int64, k: int64) -> int64:
+    requires 0 <= k and k <= n
+    ensures result >= 1
+    return math.comb(n, k)
+
+def arrange(n: int64) -> int64:
+    requires 0 <= n
+    ensures result == n
+    return math.perm(n, 1)
+
+def main():
+    print(root(17))
+    print(nine())
+    print(product(5))
+    print(divisor(4, 6))
+    print(multiple(4, 6))
+    print(choose(5, 2))
+    print(arrange(7))
+"#,
+    );
+    // Each stops the program for some argument, and a divisor is not
+    // known beyond its bounds.
+    assert_open(
+        r#"
+import math
+
+def root(a: int64) -> int64:
+    return math.isqrt(a)
+
+def product(n: int64) -> int64:
+    requires 0 <= n
+    return math.factorial(n)
+
+def divisor(a: int64, b: int64) -> int64:
+    return math.gcd(a, b)
+
+def choose(n: int64, k: int64) -> int64:
+    requires 0 <= n
+    return math.comb(n, k)
+
+def even(a: int64) -> int64:
+    requires a > 0
+    ensures result == 2
+    return math.gcd(a * 2, 4)
+
+def main():
+    print(root(17))
+    print(product(5))
+    print(divisor(4, 6))
+    print(choose(5, 2))
+    print(even(1))
+"#,
+        &[
+            "5 overflow failed",
+            "9 overflow failed",
+            "12 overflow failed",
+            "16 overflow failed",
+            "20 ensures unsupported",
+            "21 overflow failed",
+        ],
+    );
+}
+
+#[test]
+fn sines_and_exponentials_have_their_ranges() {
+    assert_proved(
+        r#"
+import math
+
+def wave(x: float64) -> float64:
+    requires 0.0 <= x and x <= 10.0
+    ensures -1.0 <= result and result <= 1.0
+    return math.sin(x)
+
+def both(x: float64) -> float64:
+    requires 0.0 <= x and x <= 10.0
+    ensures -2.0 <= result and result <= 2.0
+    return math.sin(x) + math.cos(x)
+
+def growth(x: float64) -> float64:
+    requires x <= 1.0
+    ensures result >= 0.0
+    return math.exp(x)
+
+def main():
+    print(wave(1.0))
+    print(both(1.0))
+    print(growth(1.0))
+"#,
+    );
+    // A cosine can be 1, the sine of infinity stops the program, and an
+    // exponential can round to 0.
+    assert_open(
+        r#"
+import math
+
+def half(x: float64) -> float64:
+    requires 0.0 <= x and x <= 10.0
+    ensures result <= 0.5
+    return math.cos(x)
+
+def wave(x: float64) -> float64:
+    return math.sin(x)
+
+def growth(x: float64) -> float64:
+    requires x <= 1.0
+    ensures result > 0.0
+    return math.exp(x)
+
+def main():
+    print(half(2.0))
+    print(wave(1.0))
+    print(growth(1.0))
+"#,
+        &[
+            "6 ensures unsupported",
+            "10 overflow failed",
+            "14 ensures unsupported",
+        ],
+    );
+}
+
+/// `floor`, `ceil`, `trunc`, `isqrt`, and `factorial` on edge values,
+/// against Rust's own and the interpreter, with the arguments each one
+/// refuses.
+#[test]
+fn exact_math_functions_match_the_interpreter() {
+    let limit = 9_223_372_036_854_775_808.0_f64;
+    let floats = [
+        0.0,
+        -0.0,
+        0.5,
+        -0.5,
+        1.5,
+        -1.5,
+        2.5,
+        -2.5,
+        1_000_000.5,
+        4_503_599_627_370_496.0,
+        9_223_372_036_854_774_784.0,
+        limit,
+        -limit,
+        -9_223_372_036_854_777_856.0,
+    ];
+    let mut cases = Vec::new();
+    for x in floats {
+        let results: [(&str, f64); 3] = [
+            ("floor", x.floor()),
+            ("ceil", x.ceil()),
+            ("trunc", x.trunc()),
+        ];
+        for (name, rounded) in results {
+            let fits = (-limit..limit).contains(&rounded);
+            cases.push(Case {
+                params: "x$: float64".to_string(),
+                pinned: format!("x$ == {}", au_float(x)),
+                expr: format!("math.{name}(x$)"),
+                args: au_float(x),
+                expected: fits.then_some(rounded as i128),
+            });
+        }
+    }
+    check_cases_by(3, &cases);
+    let mut cases = Vec::new();
+    let integers: [i128; 13] = [
+        0,
+        1,
+        2,
+        3,
+        4,
+        15,
+        16,
+        17,
+        99,
+        1_000_000,
+        999_999_999_999,
+        -1,
+        i64::MIN as i128,
+    ];
+    for a in integers {
+        let root = (a >= 0).then(|| {
+            let mut root = (a as f64).sqrt() as i128;
+            while root * root > a {
+                root -= 1;
+            }
+            while (root + 1) * (root + 1) <= a {
+                root += 1;
+            }
+            root
+        });
+        cases.push(Case {
+            params: "a$: int64".to_string(),
+            pinned: format!("a$ == {}", au(a)),
+            expr: "math.isqrt(a$)".to_string(),
+            args: au(a),
+            expected: root,
+        });
+    }
+    for n in [-1i128, 0, 1, 2, 5, 19, 20, 21, 1000] {
+        let product = (0..=20).contains(&n).then(|| (1..=n).product::<i128>());
+        cases.push(Case {
+            params: "n$: int64".to_string(),
+            pinned: format!("n$ == {}", au(n)),
+            expr: "math.factorial(n$)".to_string(),
+            args: au(n),
+            expected: product,
+        });
+    }
+    // The arguments `gcd`, `comb`, and `perm` refuse.
+    let least = i64::MIN as i128;
+    for (name, a, b) in [
+        ("gcd", least, 0),
+        ("gcd", 0, least),
+        ("gcd", least, least),
+        ("comb", -1, 1),
+        ("comb", 1, -1),
+        ("perm", -1, 1),
+        ("perm", 1, -1),
+    ] {
+        cases.push(Case {
+            params: "a$: int64, b$: int64".to_string(),
+            pinned: format!("a$ == {} and b$ == {}", au(a), au(b)),
+            expr: format!("math.{name}(a$, b$)"),
+            args: format!("{}, {}", au(a), au(b)),
+            expected: None,
+        });
+    }
+    check_cases(&cases);
+}
+
+/// The bounds stated for `gcd`, `lcm`, `comb`, `perm`, `sin`, `cos`, and
+/// `exp` must allow what the run time computes.
+#[test]
+fn bounds_of_math_functions_allow_the_interpreter_results() {
+    fn gcd(a: i128, b: i128) -> i128 {
+        if b == 0 {
+            a.abs()
+        } else {
+            gcd(b, a % b)
+        }
+    }
+    let least = i64::MIN as i128;
+    let most = i64::MAX as i128;
+    let mut claims = Vec::new();
+    let mut integer = |name: &str, a: i128, b: i128, value: i128| {
+        claims.push((
+            "a$: int64, b$: int64".to_string(),
+            format!("a$ == {} and b$ == {}", au(a), au(b)),
+            format!("{}, {}", au(a), au(b)),
+            format!("math.{name}(a$, b$) == {}", au(value)),
+        ));
+    };
+    let values = [0, 1, -1, 2, 6, -4, 12, 35, most, least + 1];
+    for a in values {
+        for b in values {
+            integer("gcd", a, b, gcd(a, b));
+            let multiple = if a == 0 || b == 0 {
+                Some(0)
+            } else {
+                (a.abs() / gcd(a, b)).checked_mul(b.abs())
+            };
+            if let Some(multiple) = multiple.filter(|multiple| *multiple <= most) {
+                integer("lcm", a, b, multiple);
+            }
+        }
+    }
+    integer("gcd", least, 6, 2);
+    for n in [0i128, 1, 2, 5, 10, 60] {
+        for k in [0i128, 1, 2, 5, 10, 61] {
+            let arranged: i128 = if k > n { 0 } else { (n - k + 1..=n).product() };
+            let chosen = if k > n {
+                0
+            } else {
+                (1..=k).fold(1i128, |result, step| result * (n - k + step) / step)
+            };
+            if arranged <= most {
+                integer("perm", n, k, arranged);
+            }
+            integer("comb", n, k, chosen);
+        }
+    }
+    for x in [
+        0.0_f64, -0.0, 0.5, -0.5, 1.0, 1.5, 3.0, -3.0, 100.0, 700.0, -750.0,
+    ] {
+        let results = [("sin", x.sin()), ("cos", x.cos()), ("exp", x.exp())];
+        for (name, value) in results {
+            let value = if value < 0.0 {
+                format!("({value:?})")
+            } else {
+                format!("{value:?}")
+            };
+            claims.push((
+                "x$: float64".to_string(),
+                format!("x$ == {}", au_float(x)),
+                au_float(x),
+                format!("math.{name}(x$) == {value}"),
+            ));
+        }
+    }
+    check_allowed(&claims);
 }
