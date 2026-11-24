@@ -186,3 +186,16 @@ fn selected_scopes_end_views_at_their_last_use() {
     let source = include_str!("../tests/fixtures/run-pass/conditional_view_scope.au");
     assert_eq!(run_source(source).unwrap().stdout, "old\nnew\n");
 }
+
+#[test]
+fn nested_declaration_suites_can_define_marked_bindings() {
+    let source = concat!(
+        "import build\n",
+        "if build.hosted:\n",
+        "    if build.freestanding:\n        const arguments = [\"bare\"]\n",
+        "    else:\n        const arguments = [\"host\"]\n",
+        "else:\n    const arguments = [\"other\"]\n",
+        "def main():\n    print(arguments[0])\n",
+    );
+    assert_eq!(run_source(source).unwrap().stdout, "host\n");
+}
