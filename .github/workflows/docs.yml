@@ -65,20 +65,53 @@ jobs:
           VITEPRESS_BASE: /Aura/
         run: npm run docs:build
 
+      - name: Upload built docs site
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-site
+          path: docs/.vitepress/dist
+          include-hidden-files: true
+          if-no-files-found: error
+
+  apt:
+    name: Build apt repository
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: apt-signing
+    outputs:
+      published: ${{ steps.apt.outputs.published }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       # https://johnolafenwa.github.io/Aura/apt serves the Debian packages of
       # the newest release that has them.
-      - name: Add the apt repository
-        if: github.event_name != 'pull_request'
+      - name: Build and sign apt repository
+        id: apt
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
-        run: scripts/publish-apt-repository.sh docs/.vitepress/dist/apt
+        run: |
+          scripts/publish-apt-repository.sh apt-repository
+          if [[ -d apt-repository ]]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+      - name: Upload apt repository artifact
+        if: steps.apt.outputs.published == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: docs/.vitepress/dist
+          name: apt-repository
+          path: apt-repository
+          if-no-files-found: error
 
   examples:
     name: Compile documentation examples
@@ -108,18 +141,19 @@ jobs:
         run: bash scripts/install-llvm.sh
 
       - name: Build Aura
-        run: cargo build -p aura
+        run: cargo build --locked -p aura
 
       - name: Check every aura code block
         run: python3 scripts/check_doc_examples.py
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [build, examples]
+    needs: [build, apt, examples]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     permissions:
+      contents: read
       pages: write
       id-token: write
 
@@ -128,6 +162,37 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download built docs site
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: docs-site
+          path: pages-site
+
+      - name: Refresh static installers from source
+        shell: bash
+        run: |
+          rm -rf pages-site/apt
+          rm -f pages-site/install.sh pages-site/install.ps1
+          cp docs/public/install.sh pages-site/install.sh
+          cp docs/public/install.ps1 pages-site/install.ps1
+
+      - name: Download signed apt repository
+        if: needs.apt.outputs.published == 'true'
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: apt-repository
+          path: pages-site/apt
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: pages-site
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

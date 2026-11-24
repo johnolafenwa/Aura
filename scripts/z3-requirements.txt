@@ -1,0 +1,13 @@
+# Hash-pinned binary wheels for z3-solver 5.3.3.0 across supported CI/host platforms:
+#   - macOS arm64 / x86_64
+#   - Linux manylinux x86_64 / aarch64 / riscv64
+#   - Windows win_amd64 / win_arm64 / win32
+z3-solver==5.3.3.0 \
+    --hash=sha256:814ddeb607535c211e11e1af60c9c69fe8f957b304003a562d9bfc3ceefa295c \
+    --hash=sha256:d7d337366240fd6b02ca1a68d545350c43834999b7683b24958ff4a7a9b8b112 \
+    --hash=sha256:0431023a82278dab706c02a320f63178ee0755fb8f10a5c980f0bfe3c84f6f96 \
+    --hash=sha256:701619d4995695819e150e9fa10218b67a5a2241868f31dddccfe2d3fe15f986 \
+    --hash=sha256:2db25738d963f398e2dcd25913dc80a0489a6d37e33034f04027dccbbe166323 \
+    --hash=sha256:7ae136a73ae44bfd9359883a3ee5a6819c0537de5f9c8f09b5d3463dd41572cb \
+    --hash=sha256:d189844a586242fe3d2a701c09751a80d518645931931a7c6bf29df679044215 \
+    --hash=sha256:b6db581c558022ce4ef5cff7a17c3d658eb2807fc73298a96b82a8f7afdb81dc
