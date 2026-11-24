@@ -408,7 +408,11 @@ impl<'a> FunctionChecker<'a> {
         };
         (BuiltinMember::resolve(name, member).is_some()
             && self.rng_clone_safety(ty) == RngCloneSafety::Safe
-            && self.nonrepeatable_task_result_in(ty).is_none())
+            && self.nonrepeatable_task_result_in(ty).is_none()
+            && self.noncloneable_closure_in_type(ty).is_none()
+            && self.opaque_handle_in_type(ty).is_none()
+            && self.host_resource_in_type(ty).is_none()
+            && self.trait_object_in_type(ty).is_none())
         .then_some(member)
     }
 

@@ -6621,7 +6621,16 @@ impl MirRuntime {
             if let (MirReceiverKind::Value, Value::FfiHandle(handle)) =
                 (param.passing, &argument.value)
             {
-                handle.give_up();
+                if handle.take_ptr().is_null() {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: opaque handle `{}` has already been released",
+                            call.symbol,
+                            handle.type_name()
+                        ),
+                    ));
+                }
             }
         }
 

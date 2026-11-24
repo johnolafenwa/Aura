@@ -33600,6 +33600,44 @@ fn extern_c_rejects_oversized_nested_array_structs() {
 }
 
 #[test]
+fn union_clone_rejects_collections_with_opaque_handles_or_resources() {
+    let list_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: list[Handle] | None = [open_h()]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_handle)
+        .expect_err("cloning list[Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let dict_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: dict[str, Handle] | None = {"a": open_h()}
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(dict_handle)
+        .expect_err("cloning dict[str, Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let list_resource = r#"import fs
+
+def run(f: own fs.File) -> None:
+    xs: list[fs.File] | None = [f]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_resource)
+        .expect_err("cloning list[fs.File] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"

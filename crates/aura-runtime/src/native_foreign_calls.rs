@@ -194,7 +194,16 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_handle_address(
 ) -> *mut c_void {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match value {
-            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::FfiHandle(handle) => {
+                let pointer = handle.as_ptr();
+                if pointer.is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
+                pointer
+            }
             other => runtime_error(format!(
                 "FFI argument expected opaque handle, but received `{}`",
                 value_type_name(other)
@@ -397,7 +406,16 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_nullable_handle_address(
 ) -> *mut c_void {
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| match active_member(value) {
-            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::FfiHandle(handle) => {
+                let pointer = handle.as_ptr();
+                if pointer.is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
+                pointer
+            }
             Value::Unit => std::ptr::null_mut(),
             other => runtime_error(format!(
                 "FFI argument expected opaque handle or None, but received `{}`",
@@ -559,7 +577,12 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_give_up_handle(value: *mut Opaqu
     task_runtime_boundary(|| unsafe {
         with_value(value, |value| {
             if let Value::FfiHandle(handle) = value {
-                handle.give_up();
+                if handle.take_ptr().is_null() {
+                    runtime_error(format!(
+                        "FFI opaque handle `{}` has already been released",
+                        handle.type_name()
+                    ));
+                }
             }
         })
     })

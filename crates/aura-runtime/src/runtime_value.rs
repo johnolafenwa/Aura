@@ -718,11 +718,17 @@ impl FfiHandleValue {
         })
     }
 
+    /// Ends the program's ownership of the foreign object and returns its
+    /// previous address, or null if ownership had already ended.
+    pub fn take_ptr(&self) -> *mut c_void {
+        self.core.address.swap(0, Ordering::AcqRel) as *mut c_void
+    }
+
     /// Ends the program's ownership of the foreign object: a foreign
     /// function took it, or stored another one over it. The `drop`
     /// function does not run for it.
     pub fn give_up(&self) {
-        self.core.address.store(0, Ordering::Relaxed);
+        let _ = self.take_ptr();
     }
 
     pub fn type_name(&self) -> &str {
@@ -730,7 +736,7 @@ impl FfiHandleValue {
     }
 
     pub fn as_ptr(&self) -> *mut c_void {
-        self.core.address.load(Ordering::Relaxed) as *mut c_void
+        self.core.address.load(Ordering::Acquire) as *mut c_void
     }
 }
 

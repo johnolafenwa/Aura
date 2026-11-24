@@ -999,10 +999,27 @@ fn a_handle_with_a_drop_function_releases_its_object_once() {
         aura_direct_release_value(dropped);
         assert_eq!(releases_of(address(0)), 1);
 
-        // A handle a foreign function took is not the program's to release.
+        // A handle a foreign function took is not the program's to release,
+        // and reading its address or giving it up a second time traps.
         let taken = open(1);
+        let taken_addr = taken as usize;
         aura_direct_ffi_give_up_handle(taken);
-        assert!(aura_direct_ffi_handle_address(taken).is_null());
+        let diagnostic = capture_diagnostic(move || {
+            let _ = aura_direct_ffi_handle_address(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            diagnostic.message.contains("already been released"),
+            "{}",
+            diagnostic.message
+        );
+        let second = capture_diagnostic(move || {
+            aura_direct_ffi_give_up_handle(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            second.message.contains("already been released"),
+            "{}",
+            second.message
+        );
         aura_direct_release_value(taken);
         assert_eq!(releases_of(address(1)), 0);
         let text = string_value("x");
