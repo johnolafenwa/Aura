@@ -264,6 +264,7 @@ impl FunctionChecker<'_> {
         expected: Option<&Type>,
         seed_substitutions: HashMap<String, Type>,
     ) -> Result<Type> {
+        super::atomic_order::check(function, args, span)?;
         let checked = self.type_check_callable_args_detailed(
             callee_name,
             &function.decl.type_params,

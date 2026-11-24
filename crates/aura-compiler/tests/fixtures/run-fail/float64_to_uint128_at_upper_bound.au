@@ -1,0 +1,3 @@
+def main() -> None:
+    upper: float64 = 340282366920938463463374607431768211456.0
+    print(upper as uint128)

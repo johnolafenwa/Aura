@@ -884,6 +884,49 @@ test("local function capture lists have a declaration scope", () => {
   assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });
 
+test("systems data uses layout modifiers only in declarations", async () => {
+  const source = [
+    'public extern "C" packed align(8) class Header:',
+    '    flags: uint16 bits(3)',
+    '    samples: fixed[uint8, 3]',
+    'mut slots: fixed[ptr[Header], 2] = [0 as ptr[Header]] * 2',
+    'def bits(align: int64) -> int64:',
+    '    packed = bits(align)',
+    '    fixed = packed',
+    'extern "C" align(16) class Wide:',
+    '    x: int64',
+    'extern "C" packed class Short:',
+    '    tag: uint8'
+  ].join("\n");
+  const tokens = await tokenizeAura(source);
+  for (const [line, word] of [[0, "packed"], [0, "align"], [1, "bits"], [7, "align"], [9, "packed"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("storage.modifier.layout.aura"), word);
+  }
+  for (const [line, word] of [[0, "Header"], [7, "Wide"], [9, "Short"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("entity.name.type.aura"), word);
+  }
+  for (const [line, word] of [[2, "fixed"], [3, "fixed"], [3, "ptr"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("support.type.primitive.aura"), word);
+  }
+  for (const [line, word] of [[4, "bits"], [4, "align"], [5, "packed"], [5, "bits"]]) {
+    assert.ok(!scopesAt(tokens, line, word).includes("storage.modifier.layout.aura"), word);
+  }
+  assert.ok(!scopesAt(tokens, 6, "fixed").includes("support.type.primitive.aura"));
+});
+
+test("alignment and bit-field widths retain Aura integer literal spellings", async () => {
+  const tokens = await tokenizeAura([
+    'extern "C" align(0x10) packed class Header:',
+    '    lower: uint64 bits(0b1_000)',
+  ].join("\n"));
+  for (const name of ["align", "packed"]) {
+    assert.ok(scopesAt(tokens, 0, name).includes("storage.modifier.layout.aura"));
+  }
+  assert.ok(scopesAt(tokens, 0, "0x10").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 1, "0b1_000").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 0, "Header").includes("entity.name.type.aura"));
+});
+
 test("grammar highlights class-item syntax in its declaration context", async () => {
   const tokens = await tokenizeAura([
     "impl[T: Named] Named for Car[T] by engine: # override",

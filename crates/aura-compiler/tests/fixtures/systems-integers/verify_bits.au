@@ -1,0 +1,23 @@
+def reverse_byte_order(word: int32) -> int32:
+    ensures result.swap_bytes() == word
+    return word.swap_bytes()
+
+def rotate_back(byte: uint8, amount: int64) -> uint8:
+    requires amount >= 0
+    ensures result == byte
+    return byte.rotate_left(amount).rotate_right(amount)
+
+def high_bit() -> None:
+    high: uint128 = 170141183460469231731687303715884105728
+    assert high.leading_zeros() == 0
+    assert high.trailing_zeros() == 127
+    assert high.count_ones() == 1
+
+def main() -> None:
+    signed: int8 = -2
+    assert signed.rotate_right(1) == 127
+    assert signed.count_ones() == 7
+    zero: uint16 = 0
+    assert zero.leading_zeros() == 16
+    assert zero.trailing_zeros() == 16
+    high_bit()

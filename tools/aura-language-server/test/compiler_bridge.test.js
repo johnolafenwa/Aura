@@ -7323,6 +7323,43 @@ test("compiler bridge completes ordered collection methods and their signatures"
   }
 });
 
+test("freestanding editor checks are opt-in and preserve module definitions", async () => {
+  setWorkspaceRoots([repoRoot]);
+  const uri = pointUri;
+  const lines = [
+    "mut ticks: uint64 = 0",
+    'export "C" def get() -> uint64:',
+    "    return ticks",
+    'export "C" def next_tick(ticks: uint64) -> uint64:',
+    "    return ticks"
+  ];
+  const source = lines.join("\n");
+  const previous = process.env.AURA_LSP_FREESTANDING;
+  try {
+    delete process.env.AURA_LSP_FREESTANDING;
+    const hosted = await analyzeWithCompiler(uri, source);
+    assert.ok(hosted.diagnostics.some((diagnostic) => diagnostic.code === "AU3030"));
+    process.env.AURA_LSP_FREESTANDING = "1";
+    const bare = await analyzeWithCompiler(uri, source);
+    assert.deepEqual(bare.diagnostics, []);
+    const global = findOccurrence(bare, 2, lines[2].indexOf("ticks"));
+    const local = findOccurrence(bare, 4, lines[4].indexOf("ticks"));
+    assert.match(global.hover, /module binding ticks: uint64/);
+    assert.equal(global.definition.line, 0);
+    assert.equal(local.definition.line, 3);
+    const completions = await completeWithCompiler(uri, source, 2, 4, null);
+    assert.ok(completions.some((item) => item.name === "ticks" && item.kind === "variable"));
+    const unsupported = await analyzeWithCompiler(uri, 'export "C" def entry() -> None:\n    print("text")\n');
+    assert.ok(unsupported.diagnostics.some((diagnostic) => diagnostic.code === "AU2052"));
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AURA_LSP_FREESTANDING;
+    } else {
+      process.env.AURA_LSP_FREESTANDING = previous;
+    }
+  }
+});
+
 test("compiler bridge resolves delegated members, decorated methods, and property writes", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-class-items-lsp-"));
   const lines = [

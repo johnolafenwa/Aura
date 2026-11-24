@@ -195,7 +195,7 @@ def put_number(uart: uint64, value: uint64) -> None:
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
+built from `mem.atomic_compare_exchange_uint32`, writes a sample through a typed pointer, and then overflows a
 `uint8` on purpose. Each board adds a short assembly file that sets the
 stack pointer, turns the float registers on, and calls `kernel_main`, plus
 a linker script that says where memory is.
@@ -208,10 +208,11 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+s=42
+trap 1 main.au:160:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first five lines are computed results. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
@@ -219,10 +220,11 @@ output is the same.
 ## What is missing
 
 This is the first step toward systems work in Aura, and it is honest to
-say where it stops. There is no allocator, so there are no strings or
-collections. There is no inline assembly, so startup code and x86 port
-I/O stay in an assembly file. State that outlives a function call has to
-live at an address you manage through `mem`, where `aura verify` cannot
-follow it. The
+say where it stops. Freestanding code can keep inline values in module
+storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. To address the
+second sample, use `mem.address_of(samples[1])`. The verifier leaves memory
+accesses through raw pointers outside its proofs. Strings and growable
+collections require an allocator, and startup code and x86 port I/O use
+assembly. The
 [Freestanding Builds](/manual/freestanding) and
 [Memory Module](/manual/mem) pages have the exact rules.

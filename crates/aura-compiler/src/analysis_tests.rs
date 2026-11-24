@@ -6257,6 +6257,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             doc: None,
             c_layout: false,
             c_arrays: Default::default(),
+            layout_controls: Default::default(),
             c_union: None,
         },
         type_param_bounds: Default::default(),
@@ -11665,6 +11666,9 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
     assert!(read.hover.contains("index: int64"));
     assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
 }
+
+#[path = "analysis/systems_data_tests.rs"]
+mod systems_data_tests;
 
 #[test]
 fn property_setter_edits_navigate_to_source_names_and_hide_cleanup_hooks() {

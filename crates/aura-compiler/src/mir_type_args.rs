@@ -335,6 +335,20 @@ pub(crate) fn validate_call_type_args(module: &MirModule) -> std::result::Result
             else {
                 continue;
             };
+            if matches!(callee, CallTarget::Name(name) if super::fixed_arrays::is_operation(name)) {
+                if type_args.len() == 1
+                    && type_args
+                        .get("array")
+                        .and_then(Type::as_fixed_array)
+                        .is_some()
+                {
+                    continue;
+                }
+                return Err(format!(
+                    "invalid fixed array type in MIR function `{}`",
+                    function.name
+                ));
+            }
             let expected = match callee {
                 CallTarget::Name(name) => generic.get(name.as_str()).map(|(_, params)| params),
                 _ => None,

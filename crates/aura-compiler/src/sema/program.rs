@@ -160,6 +160,7 @@ impl AliasInfo {
 
 #[derive(Clone, Debug)]
 pub struct ConstantInfo {
+    pub state: Option<std::sync::Arc<super::StateImage>>,
     pub module_name: String,
     pub decl: crate::ast::ConstantDecl,
     pub ty: Type,
@@ -567,7 +568,24 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    check_with_profile(module, context, false)
+}
+
+pub(crate) fn check_with_profile(
+    module: Module,
+    context: ModuleContext,
+    freestanding: bool,
+) -> Result<Program> {
+    if !freestanding {
+        if let Some(cell) = module.constants.iter().find(|decl| decl.mutable) {
+            return Err(Diagnostic::coded_at("AU3030", cell.span, "hosted module bindings are immutable")
+                .with_help("share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"));
+        }
+    }
     let mut module = module;
+    if freestanding {
+        module.use_freestanding_c_layout();
+    }
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
     // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a
@@ -697,6 +715,12 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     name.clone(),
                     format!("{}.{}", class_info.module_name, class_info.decl.name),
                 );
+                if class_info.decl.c_layout {
+                    type_names.c_class_names.insert(format!(
+                        "{}.{}",
+                        class_info.module_name, class_info.decl.name
+                    ));
+                }
                 type_names.insert(name.clone(), class_info.decl.span);
                 type_arities.insert(name.clone(), class_info.decl.type_params.len());
                 item_names.insert(name.clone(), ("class", class_info.decl.span));
@@ -785,6 +809,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                             class_decl.name, kind, existing
                         ),
                     ));
+                }
+                if class_decl.c_layout {
+                    type_names.c_class_names.insert(class_decl.name.clone());
                 }
                 type_names.insert(class_decl.name.clone(), class_decl.span);
                 type_arities.insert(class_decl.name.clone(), class_decl.type_params.len());
@@ -1415,6 +1442,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
 
     // A union's class holds as many bytes as the C union has. The parser
     // wrote the default of that field for a length it could not know.
+    super::c_union_writes::complete_lengths(&mut classes);
     let union_sizes = classes
         .iter()
         .filter(|(_, class)| class.decl.c_union.is_some())
@@ -2324,11 +2352,19 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         checker.consume_value_expr(&constant.value, &mut scope)?;
         constant_closure_infos.extend(checker.closure_infos.borrow().clone());
         constant_comprehension_infos.extend(checker.comprehension_infos.borrow().clone());
+        let folded = super::c_layout_queries::folded_binding(constant, &imported_modules, &classes);
         constants.insert(
             constant.name.clone(),
             ConstantInfo {
                 module_name: module_name.clone(),
-                decl: constant.clone(),
+                state: constant
+                    .mutable
+                    .then(|| {
+                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &folded.value)
+                    })
+                    .transpose()?
+                    .map(std::sync::Arc::new),
+                decl: folded,
                 ty: expected.unwrap_or(inferred),
             },
         );
@@ -2995,6 +3031,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         &program.module_registry,
         &program.imported_modules,
     )?;
+    super::fixed_arrays::validate_layouts(&program)?;
     Ok(program)
 }
 
@@ -3104,6 +3141,9 @@ pub(super) fn register_module_namespace_types(
     }
     for class in namespace.classes.values() {
         let qualified_name = format!("{}.{}", namespace.path, class.decl.name);
+        if class.decl.c_layout {
+            type_names.c_class_names.insert(qualified_name.clone());
+        }
         type_names.insert(qualified_name.clone(), class.decl.span);
         type_arities.insert(qualified_name, class.decl.type_params.len());
     }
@@ -3124,6 +3164,9 @@ pub(super) fn register_module_namespace_types(
     for class in namespace.all_classes.values() {
         if !class.module_name.is_empty() && class.module_name != namespace.path {
             let qualified_name = format!("{}.{}", class.module_name, class.decl.name);
+            if class.decl.c_layout {
+                type_names.c_class_names.insert(qualified_name.clone());
+            }
             type_names.insert(qualified_name.clone(), class.decl.span);
             type_arities.insert(qualified_name, class.decl.type_params.len());
         }

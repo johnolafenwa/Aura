@@ -209,8 +209,10 @@ fn float_expr_from_bits(bits: u64) -> Expr {
 
 fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::sema::ConstantInfo {
     crate::sema::ConstantInfo {
+        state: None,
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            mutable: false,
             public: true,
             name: name.to_string(),
             annotation: Some(type_ref("float64", Vec::new())),
@@ -406,6 +408,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             doc: None,
             c_layout: false,
             c_arrays: BTreeMap::new(),
+            layout_controls: Default::default(),
             c_union: None,
         },
         type_param_bounds: BTreeMap::new(),
@@ -2560,6 +2563,35 @@ fn mem_namespace() -> ModuleNamespace {
     let none = || type_ref("None", Vec::new());
     let address = || value_param("address", unsigned(64));
     let mut functions = Vec::new();
+    functions.push(function_info(
+        "mem",
+        "__pointer_offset",
+        vec![
+            address(),
+            value_param("count", type_ref("int64", Vec::new())),
+            value_param("stride", unsigned(64)),
+        ],
+        unsigned(64),
+    ));
+    for kind in [
+        "bool", "int8", "int16", "int32", "int64", "float32", "float64",
+    ] {
+        let ty = || type_ref(kind, Vec::new());
+        for prefix in ["", "volatile_"] {
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}read_{kind}"),
+                vec![address()],
+                ty(),
+            ));
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}write_{kind}"),
+                vec![address(), value_param("value", ty())],
+                none(),
+            ));
+        }
+    }
     for bits in [8, 16, 32, 64] {
         for prefix in ["", "volatile_"] {
             functions.push(function_info(
@@ -2576,30 +2608,43 @@ fn mem_namespace() -> ModuleNamespace {
             ));
         }
     }
-    for bits in [32, 64] {
+    let atomic_function = |name: &str, mut params: Vec<Param>, result| {
+        let order_param = |name: &str, default: &str| {
+            value_param_with_default(
+                name,
+                type_ref("str", Vec::new()),
+                Expr {
+                    kind: ExprKind::String(default.to_owned()),
+                    span: builtin_span(),
+                },
+            )
+        };
+        params.push(order_param("order", "seq_cst"));
+        if name.starts_with("atomic_compare_exchange") {
+            params.push(order_param("failure_order", ""));
+        }
+        function_info("mem", name, params, result)
+    };
+    for bits in [8, 16, 32, 64] {
         let value = || value_param("value", unsigned(bits));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_load_uint{bits}"),
             vec![address()],
             unsigned(bits),
         ));
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_store_uint{bits}"),
             vec![address(), value()],
             none(),
         ));
         for name in ["atomic_swap", "atomic_add"] {
-            functions.push(function_info(
-                "mem",
+            functions.push(atomic_function(
                 &format!("{name}_uint{bits}"),
                 vec![address(), value()],
                 unsigned(bits),
             ));
         }
-        functions.push(function_info(
-            "mem",
+        functions.push(atomic_function(
             &format!("atomic_compare_exchange_uint{bits}"),
             vec![
                 address(),
@@ -2609,7 +2654,7 @@ fn mem_namespace() -> ModuleNamespace {
             unsigned(bits),
         ));
     }
-    functions.push(function_info("mem", "fence", Vec::new(), none()));
+    functions.push(atomic_function("fence", Vec::new(), none()));
     function_only_namespace("mem", functions)
 }
 

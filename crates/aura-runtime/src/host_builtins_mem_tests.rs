@@ -51,7 +51,12 @@ fn reads_and_writes_reach_the_address_at_each_width() {
 fn atomic_operations_give_the_previous_value() {
     let mut block = [0_u64; 2];
     let base = block.as_mut_ptr() as u64;
-    for (bits, address, top) in [(32, base, u64::from(u32::MAX)), (64, base + 8, u64::MAX)] {
+    for (bits, address, top) in [
+        (8, base, 255),
+        (16, base + 2, 65535),
+        (32, base, u64::from(u32::MAX)),
+        (64, base + 8, u64::MAX),
+    ] {
         let call = |name: &str, args: &[u64]| mem(&format!("atomic_{name}_uint{bits}"), args);
         unit(call("store", &[address, 5]));
         assert_eq!(word(call("load", &[address])), 5);
@@ -102,4 +107,42 @@ fn a_call_with_the_wrong_arguments_is_an_error() {
         None,
     ));
     assert_eq!(cell, 44);
+}
+
+#[test]
+fn ordered_atomics_check_order_and_arguments_before_writing() {
+    let mut cell = 7_u16;
+    let address = Value::Int(IntegerValue::from_u64((&mut cell as *mut u16) as u64));
+    let store = host_builtin_function("mem::atomic_store_uint16").unwrap();
+    let value = Value::Int(IntegerValue::from_u64(19));
+    for args in [
+        vec![address.clone(), value.clone(), Value::string("acquire")],
+        vec![address.clone(), value.clone(), Value::Bool(true)],
+        vec![
+            address.clone(),
+            Value::Bool(false),
+            Value::string("release"),
+        ],
+        vec![Value::Int(IntegerValue::from_i64(-1)), value.clone()],
+    ] {
+        assert!(store(args, None).is_err());
+        assert_eq!(cell, 7);
+    }
+    unit(store(
+        vec![address.clone(), value, Value::string("release")],
+        None,
+    ));
+    assert_eq!(cell, 19);
+    let cas = host_builtin_function("mem::atomic_compare_exchange_uint16").unwrap();
+    let mut args = vec![
+        address,
+        Value::Int(IntegerValue::from_u64(19)),
+        Value::Int(IntegerValue::from_u64(23)),
+        Value::string("acq_rel"),
+        Value::string("release"),
+    ];
+    assert_eq!(cas(args.clone(), None).unwrap_err().code, "AU4034");
+    args[4] = Value::string("acquire");
+    assert_eq!(word(cas(args, None)), 19);
+    assert_eq!(cell, 23);
 }

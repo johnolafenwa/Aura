@@ -76,7 +76,14 @@ fn main() {
                 .collect::<Vec<_>>();
             let input = read_input(&mut input_args.into_iter());
             if freestanding {
-                report_freestanding_problems(&input, diagnostic_format);
+                checked_freestanding_program(&input, diagnostic_format);
+                match diagnostic_format {
+                    DiagnosticFormat::Human => write_stdout("ok\n"),
+                    DiagnosticFormat::Json => {
+                        write_stdout("{\"schema_version\":1,\"diagnostics\":[]}\n")
+                    }
+                }
+                return;
             }
             let result = if input.from_stdin {
                 check_path_with_source(Path::new(&input.path), &input.source)
@@ -1851,8 +1858,14 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
     let overlays = lsp_source_overlays(request)?;
 
-    aura_compiler::with_source_overlays(overlays, || {
-        lsp_method_result(method, path, source, request)
+    let freestanding = request
+        .get("freestanding")
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(false);
+    aura_compiler::analysis::with_freestanding_analysis(freestanding, || {
+        aura_compiler::with_source_overlays(overlays, || {
+            lsp_method_result(method, path, source, request)
+        })
     })
 }
 
@@ -4506,6 +4519,7 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// reports each check it could not prove. Exits 1 unless every check was
 /// proved.
 fn handle_verify_command(args: Vec<String>) {
+    let mut freestanding = false;
     let (diagnostic_format, args) = parse_diagnostic_format(args);
     let mut options = aura_compiler::verify::Options {
         cache_dir: verify_cache_root(),
@@ -4520,6 +4534,10 @@ fn handle_verify_command(args: Vec<String>) {
                 .unwrap_or_else(|| print_usage_and_exit(2))
         };
         match args[index].as_str() {
+            "--freestanding" => {
+                freestanding = true;
+                index += 1;
+            }
             "--solver" => {
                 options.solver = Some(value());
                 index += 2;
@@ -4543,7 +4561,10 @@ fn handle_verify_command(args: Vec<String>) {
         }
     }
     let input = read_input(&mut rest.into_iter());
-    let result = if input.from_stdin {
+    let result = if freestanding {
+        let program = checked_freestanding_program(&input, diagnostic_format);
+        aura_compiler::verify_program(&program, &options)
+    } else if input.from_stdin {
         aura_compiler::verify_path_with_source(Path::new(&input.path), &input.source, &options)
     } else {
         aura_compiler::verify_path(Path::new(&input.path), &options)
@@ -4677,21 +4698,26 @@ fn emit_diagnostic(format: DiagnosticFormat, path: &str, source: &str, error: &D
 /// Reports what a freestanding build of `input` cannot compile, and exits
 /// when it finds anything (ADR-0094). A program an ordinary check rejects
 /// reports that error.
-fn report_freestanding_problems(input: &Input, format: DiagnosticFormat) {
-    let path = Path::new(&input.path);
-    let lowered = if input.from_stdin {
-        lower_path_with_source_to_mir_with_source_locations(path, &input.source)
-    } else {
-        lower_path_to_mir_with_source_locations(path)
-    };
-    let problems = match lowered {
-        Ok(mir) => aura_compiler::check_freestanding(&mir),
-        Err(error) => vec![error],
-    };
+fn checked_freestanding_program(
+    input: &Input,
+    format: DiagnosticFormat,
+) -> aura_compiler::sema::Program {
+    let result = aura_compiler::check_freestanding_path(
+        Path::new(&input.path),
+        input.from_stdin.then_some(input.source.as_str()),
+    );
+    let program = result.unwrap_or_else(|error| {
+        emit_diagnostics(format, &input.path, &input.source, vec![error]);
+        process::exit(1);
+    });
+    let problems = aura_compiler::check_freestanding(
+        &aura_compiler::mir::lower_with_source_locations(&program),
+    );
     if !problems.is_empty() {
         emit_diagnostics(format, &input.path, &input.source, problems);
         process::exit(1);
     }
+    program
 }
 
 /// Reports `errors` together: each as text, or all in one JSON report. An
@@ -4773,35 +4799,28 @@ fn build_freestanding(args: Vec<String>) {
         process::exit(2);
     }
     let input = read_input(&mut input_args.into_iter());
-    report_freestanding_problems(&input, diagnostic_format);
-    let path = Path::new(&input.path);
+    let program = checked_freestanding_program(&input, diagnostic_format);
     let lowered = if remove_proved_checks {
         let options = aura_compiler::verify::Options {
             cache_dir: verify_cache_root(),
             ..aura_compiler::verify::Options::default()
         };
-        aura_compiler::lower_path_to_mir_with_proved_checks(
-            path,
-            input.from_stdin.then_some(input.source.as_str()),
-            false,
-            &options,
-        )
-        .map(|(mir, removed)| {
-            if diagnostic_format == DiagnosticFormat::Human {
-                eprintln!(
+        aura_compiler::lower_program_to_mir_with_proved_checks(&program, false, &options).map(
+            |(mir, removed)| {
+                if diagnostic_format == DiagnosticFormat::Human {
+                    eprintln!(
                     "aura: {} checks proved and removed ({} bounds, {} arithmetic, {} assertion)",
                     removed.total(),
                     removed.bounds,
                     removed.arithmetic,
                     removed.assertions
                 );
-            }
-            mir
-        })
-    } else if input.from_stdin {
-        lower_path_with_source_to_mir(path, &input.source)
+                }
+                mir
+            },
+        )
     } else {
-        lower_path_to_mir(path)
+        Ok(aura_compiler::lower_to_mir(&program))
     };
     let object = lowered.map_err(|error| vec![error]).and_then(|mir| {
         aura_compiler::emit_freestanding_object(&mir, &input.path, &input.source, target)
@@ -6089,7 +6108,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
-       or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
+       or: aura verify [--freestanding] [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

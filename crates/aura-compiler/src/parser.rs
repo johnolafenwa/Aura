@@ -1,3 +1,4 @@
+mod module_state;
 mod property_setters;
 
 use crate::ast::{
@@ -317,8 +318,13 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 }
 
 pub fn parse(source: &str) -> Result<Module> {
+    parse_with_module_scope(source, false)
+}
+
+pub(crate) fn parse_with_module_scope(source: &str, declaration_module: bool) -> Result<Module> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
+    parser.module_storage = declaration_module || parser.has_explicit_entry();
     parser.source_lines = source.lines().map(str::to_owned).collect();
     let mut module = parser.parse_module()?;
     check_module_documentation_limit(&module)?;
@@ -436,6 +442,8 @@ fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -
     Ok(expr)
 }
 
+mod layout_controls;
+
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
@@ -447,11 +455,13 @@ struct Parser {
     /// Whether the fields being parsed are those of an `extern "C"` class,
     /// where `array[T, N]` spells a fixed-size C array.
     extern_fields: bool,
+    c_bit_widths: std::collections::BTreeMap<String, u8>,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
+    module_storage: bool,
     source_lines: Vec<String>,
     /// The `ghost` locals of the function being parsed. Reads of one in a
     /// ghost value, an `assert`, or a loop clause name it `ghost <name>`.
@@ -471,7 +481,9 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            c_bit_widths: Default::default(),
             generated_items: Vec::new(),
+            module_storage: false,
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
         }
@@ -575,6 +587,8 @@ impl Parser {
 
     fn at_module_constant_start(&self) -> bool {
         match self.current_kind() {
+            TokenKind::KwMut => self.module_storage,
+            TokenKind::KwPublic if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) => true,
             // `_ = expr` discards a value; it is a statement, not a constant.
             TokenKind::Identifier(name) if name == "_" => false,
             TokenKind::Identifier(_) => {
@@ -597,6 +611,7 @@ impl Parser {
 
     fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let (name, span) = self.expect_identifier_with_span()?;
         let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
             Some(self.parse_type()?)
@@ -607,6 +622,7 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            mutable,
             public,
             name,
             annotation,
@@ -848,6 +864,9 @@ impl Parser {
             }));
         }
 
+        if self.at_layout_modifier() {
+            return self.parse_controlled_c_class(public).map(Item::Class);
+        }
         if self.at_simple(&TokenKind::KwClass) {
             return Ok(Item::Class(self.parse_extern_class(public)?));
         }
@@ -974,7 +993,7 @@ impl Parser {
             if matches!(kind, TokenKind::Star) {
                 return Err(parse_error(
                     self.tokens[index].span,
-                    "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
+                    "use `ptr[T]` for a typed pointer in an extern declaration",
                 ));
             }
             index += 1;
@@ -1215,6 +1234,7 @@ impl Parser {
             doc,
             c_layout: false,
             c_arrays: std::collections::BTreeMap::new(),
+            layout_controls: Default::default(),
             c_union: None,
         })
     }
@@ -1226,6 +1246,9 @@ impl Parser {
         let class = self.parse_class(public);
         self.extern_fields = outer;
         let mut class = class?;
+        class.layout_controls.bit_widths = std::mem::take(&mut self.c_bit_widths);
+        class.layout_controls.microsoft_bit_fields =
+            cfg!(windows) && !class.layout_controls.bit_widths.is_empty();
         let name = &class.name;
         let rejected = if !class.type_params.is_empty() {
             Some((
@@ -1289,6 +1312,13 @@ impl Parser {
                 .replace("at least one field", "at least one member");
             error
         })?;
+        if !members.layout_controls.bit_widths.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2085",
+                members.span,
+                "declare bit-fields inside a C class",
+            ));
+        }
         let holder = crate::ast::c_union_members_class(&members.name);
         let name = std::mem::replace(&mut members.name, holder);
         if let Some(member) = members
@@ -1315,7 +1345,7 @@ impl Parser {
             // A member that is a class crosses as itself. A scalar or an
             // array crosses as the one field of a class declared for it.
             let boxed = members.c_arrays.contains_key(member)
-                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
+                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if name == "fixed" || C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
             let copy = if members.c_arrays.contains_key(member) {
                 "[:]"
             } else {
@@ -1333,6 +1363,9 @@ impl Parser {
             class_text.push_str(&format!(
                 "    @property\n    {visible}def {member}(self) -> uint8:\n        return __{name}_get_{member}(self){read}\n\
                  \x20   {visible}def from_{member}(value: uint8) -> {name}:\n        return __{name}_set_{member}({stored})\n"
+            ));
+            class_text.push_str(&format!(
+                "    {visible}def __write_{member}(mut self, value: uint8) -> None:\n        updated = __{name}_set_{member}({stored})\n        for i in range(0):\n            self.bytes[i] = updated.bytes[i]\n"
             ));
             if boxed {
                 items_text.push_str(&format!(
@@ -1361,10 +1394,11 @@ impl Parser {
         for mut item in generated.items {
             match &mut item {
                 Item::Class(class) if class.name == name => {
-                    for (pair, member) in class.methods.chunks_mut(2).zip(&members.fields) {
+                    for (pair, member) in class.methods.chunks_mut(3).zip(&members.fields) {
                         pair[0].return_type = member.ty.clone();
                         pair[0].doc = member.doc.clone();
                         pair[1].params[0].ty = member.ty.clone();
+                        pair[2].params[0].ty = member.ty.clone();
                     }
                     class.span = members.span;
                     class.doc = members.doc.take();
@@ -1513,6 +1547,9 @@ impl Parser {
         self.expect_simple(TokenKind::Colon)?;
         self.reject_view_field()?;
         let ty = self.parse_type()?;
+        if self.extern_fields {
+            self.parse_field_width(&name, &ty)?;
+        }
         let default = if self.eat_simple(&TokenKind::Equal).is_some() {
             Some(self.parse_expr()?)
         } else {
@@ -3450,11 +3487,11 @@ impl Parser {
                     let mut closed = false;
                     loop {
                         // `array[T, N]`: the length of a C array field.
-                        if name == C_ARRAY_TYPE_NAME && args.len() == 1 {
+                        if matches!(name.as_str(), C_ARRAY_TYPE_NAME | "fixed") && args.len() == 1 {
                             if let TokenKind::IntLiteral(length) = self.current_kind() {
                                 let length = length.to_string();
                                 let length_span = self.bump().span;
-                                if !self.extern_fields {
+                                if name == C_ARRAY_TYPE_NAME && !self.extern_fields {
                                     return Err(parse_error(
                                         span,
                                         "`array[T, N]` is the type of a field of an `extern \"C\"` class and names no type elsewhere; use `list[T]`",
@@ -4369,7 +4406,7 @@ impl Parser {
         // is an ordinary name.
         let starts_array = matches!(
             self.peek_kind(1),
-            Some(TokenKind::Identifier(name)) if name == "Array"
+            Some(TokenKind::Identifier(name)) if matches!(name.as_str(), "Array" | "ptr")
         ) && matches!(self.peek_kind(2), Some(TokenKind::LBracket));
         starts_trait_object
             || starts_array

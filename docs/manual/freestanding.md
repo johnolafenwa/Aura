@@ -62,21 +62,21 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Nothing lives on a heap.
+Scalar and aggregate values live in registers, stack frames or static storage. A fixed array stores its elements inline.
 
 | Available | Not available |
 | --- | --- |
-| `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
+| `bool`, `int8` to `int128`, `uint8` to `uint128`, `float32`, `float64` | `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
-| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
+| `extern "C"` classes, `fixed[T, N]` arrays and typed raw pointers | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
 | `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
+| `if`, `while`, `for` over a fixed array, a range or a generator call, `match` on a union | `try`, `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
-| Module constants with a literal value | Module constants computed when the program starts |
-| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+| Module constants and mutable module cells with static initializers | Module storage computed when the program starts |
+| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -88,6 +88,12 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+## Module Storage
+
+A module declaration such as `mut samples: fixed[uint16, 2] = [40, 0]` creates one writable cell shared by all exports that use it. A zero-initialized cell occupies `.bss`. Other initializers occupy `.data`. The startup code must clear `.bss` and, on boards that load writable data from ROM, copy the initial contents of `.data` to RAM before calling an export.
+
+Use `samples[0]` to read or assign one element and `len(samples)` for its constant length. An unconstrained index is checked before the access. Ordinary hosted packages share mutable data through immutable bindings to synchronization handles. [Names and scopes](/manual/names-and-scopes) · [Fixed arrays](/manual/types)
 
 ## Failed Checks
 
@@ -110,6 +116,7 @@ void aura_trap(uint32_t code, const char *file, size_t file_length,
 | 6 | Shift count out of range |
 | 7 | A foreign `bool` that is neither 0 nor 1 |
 | 8 | Unreachable code was reached |
+| 9 | Fixed-array index out of bounds |
 
 - `file` is the source file's path relative to the directory of the file
   that was built. It is not NUL-terminated. `file_length` is its length in
@@ -164,8 +171,7 @@ architecture of the machine that runs the compiler.
 
 Every target writes an ELF object, on every host.
 
-- Code is position independent and uses no thread-local or global state,
-  so every function is reentrant.
+- Code is position independent. Functions that access mutable module state require synchronization when called from multiple cores or interrupt handlers.
 - There are no unwind tables and no stack probes.
 - Floats use the hardware float registers. Startup code must enable them
   before the first Aura function runs: SSE on x86-64, FP and NEON on
@@ -212,22 +218,16 @@ image does not use.
 
 ## Size And Speed
 
-`benchmarks/freestanding` builds five routines with Aura, C, and Rust
-without its standard library, and links each with one harness. On an
-x86-64 Linux machine:
+The freestanding benchmark builds six routines with Aura, C and Rust, including a 16-element inline array updated over twenty million iterations. On x86-64 Linux, each executable ran on the same dedicated CPU core. The table gives the best elapsed time from nine runs per routine with the same C harness. The ratio compares Aura with the faster of C and Rust with overflow checks off. All four builds returned the same results.
 
-| Routine | Aura | C (`clang -O2`) | Rust | Rust with overflow checks |
-| --- | --- | --- | --- | --- |
-| `crc32` | 50 ms | 195 ms | 50 ms | 54 ms |
-| `collatz` | 231 ms | 157 ms | 139 ms | 302 ms |
-| `isqrt_sum` | 98 ms | 105 ms | 145 ms | 164 ms |
-| `gcd_sum` | 201 ms | 131 ms | 156 ms | 175 ms |
-| `orbit` | 832 ms | 882 ms | 778 ms | 756 ms |
-
-Aura keeps its overflow and divisor checks, and `%` rounds toward negative
-infinity, which costs a few instructions over C's remainder. The five
-functions are 993 bytes of code against 914 for C. The Aura object also
-holds 115 bytes of memory routines and the file name for the trap hook.
+| Routine | Aura | C | Rust | Rust with overflow checks | Aura / fastest C or Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `crc32` | 45.6 ms | 144.8 ms | 45.2 ms | 46.1 ms | 1.01× |
+| `collatz` | 158.9 ms | 122.3 ms | 121.4 ms | 228.1 ms | 1.31× |
+| `isqrt_sum` | 120.0 ms | 119.8 ms | 139.9 ms | 129.0 ms | 1.00× |
+| `gcd_sum` | 171.7 ms | 120.2 ms | 121.7 ms | 136.4 ms | 1.43× |
+| `orbit` | 880.5 ms | 1007.6 ms | 883.6 ms | 884.7 ms | 1.00× |
+| `ring_mix` | 19.5 ms | 17.9 ms | 19.7 ms | 16.5 ms | 1.09× |
 
 ## Current Limits
 
@@ -235,6 +235,4 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 - No inline assembly and no port I/O instructions. Memory-mapped devices
   are reached with the [`mem` module](/manual/mem), and everything else
   through `extern "C"` functions.
-- No mutable module-level state. Keep state in the entry function's locals,
-  behind `mut` parameters, or in C.
 - 32-bit targets are not supported.
