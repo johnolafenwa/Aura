@@ -825,6 +825,18 @@ pub(crate) fn ffi_drop_symbol(
         [param] if param.mode == ParamMode::Own
             && matches!(&param.ty.kind, crate::ast::TypeRefKind::Named { name, args } if *name == class.name && args.is_empty())
     );
+    if let crate::ast::TypeRefKind::Named { name: ret, args } = &function.return_type.kind {
+        if args.is_empty() && matches!(ret.as_str(), "float32" | "float64") {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                *span,
+                format!(
+                    "`drop` function `{name}` of opaque class `{}` cannot return a floating-point type `{ret}`; it must return an integer scalar, `bool`, or `None`",
+                    class.name
+                ),
+            ));
+        }
+    }
     let result_is_plain = matches!(
         &function.return_type.kind,
         crate::ast::TypeRefKind::Named { name, args }

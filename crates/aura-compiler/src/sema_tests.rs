@@ -33834,6 +33834,23 @@ extern "C" def rows(cursor: Cursor) -> int32
 }
 
 #[test]
+fn ffi_drop_rejects_float_return_types() {
+    for ret in ["float32", "float64"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> {ret}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop returning `{ret}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(
+            error.message.contains("floating-point"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
 fn file_line_and_chunk_reads_type_check_on_a_shared_handle() {
     crate::check_source(
         r#"import fs
