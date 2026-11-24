@@ -6798,7 +6798,12 @@ impl<'a> FunctionCompiler<'a> {
             if let Rvalue::Use(Operand::Int(value)) = rvalue {
                 return Ok(self.wide_literal(*value, target));
             }
-            if let Rvalue::Unary { op: UnaryOp::Neg, value: Operand::Int(magnitude), .. } = rvalue {
+            if let Rvalue::Unary {
+                op: UnaryOp::Neg,
+                value: Operand::Int(magnitude),
+                ..
+            } = rvalue
+            {
                 return Ok(self.wide_literal(magnitude.wrapping_neg(), target));
             }
         }
@@ -12806,7 +12811,10 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
-        if value.ty != *target && wide_numbers::signed(target).is_some() && value.ty.scalar_kind().is_some() {
+        if value.ty != *target
+            && wide_numbers::signed(target).is_some()
+            && value.ty.scalar_kind().is_some()
+        {
             return self.wide_cast(value, target, span);
         }
         if &value.ty == target {
@@ -17232,6 +17240,9 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             ScalarOp::ToFloat => {
+                if wide_numbers::signed(&object.ty).is_some() {
+                    return self.wide_float(&object, ScalarKind::Float64, false, None);
+                }
                 // A scalar integer converts inline; a boxed one calls the
                 // helper.
                 if let Some(kind) = object.ty.scalar_kind() {

@@ -23309,11 +23309,18 @@ mod tests;
 mod union_injection_security_tests;
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_integer_bits(value: *mut OpaqueValue, count: i64, opcode: i64) -> *mut OpaqueValue {
+pub extern "C-unwind" fn aura_direct_integer_bits(
+    value: *mut OpaqueValue,
+    count: i64,
+    opcode: i64,
+) -> *mut OpaqueValue {
     use aura_core::integer_bits::BitMethod;
     task_runtime_boundary(|| {
         if count < 0 {
-            runtime_diagnostic_error(Diagnostic::coded("AU4034", "rotation count must be nonnegative"));
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4034",
+                "rotation count must be nonnegative",
+            ));
         }
         let Some(method) = BitMethod::ALL.get(opcode as usize) else {
             runtime_error("unknown integer bit method");
@@ -23322,7 +23329,9 @@ pub extern "C-unwind" fn aura_direct_integer_bits(value: *mut OpaqueValue, count
             runtime_error("integer bit method requires an integer");
         };
         let kind = integer.runtime_kind().unwrap_or(IntegerKind::Int64);
-        let result = method.apply(integer, kind, count).unwrap_or_else(|msg| runtime_error(msg));
+        let result = method
+            .apply(integer, kind, count)
+            .unwrap_or_else(|msg| runtime_error(msg));
         boxed_value(Value::Int(result))
     })
 }

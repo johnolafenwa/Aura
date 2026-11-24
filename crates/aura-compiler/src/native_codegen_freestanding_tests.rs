@@ -895,6 +895,49 @@ fn load_rejects_release_order_during_checking() {
 }
 
 #[test]
+fn rotation_count_type_diagnostic() {
+    let source = include_str!("../tests/fixtures/check-fail/rotation_count_type.au");
+    let error = crate::check_source(source).err().expect("invalid count");
+    assert_eq!(error.code, "AU2088");
+}
+
+#[test]
+fn integer_bit_methods_run_on_the_interpreter() {
+    let source = include_str!("../tests/fixtures/run-pass/integer_bit_methods.au");
+    let want = include_str!("../tests/fixtures/run-pass/integer_bit_methods.stdout");
+    let run = crate::run_source(source).expect("bit operations execute");
+    assert_eq!(run.stdout, want);
+}
+
+#[test]
+fn atomic_order_diagnostics_cover_aliases_and_dynamic_orders() {
+    for (import, stmt) in [
+        ("import mem", "mem.fence(\"relaxed\")"),
+        (
+            "from mem import atomic_load_uint16 as load",
+            "load(address, order)",
+        ),
+        (
+            "import mem",
+            "mem.atomic_store_uint16(address, 1, \"acquire\")",
+        ),
+        (
+            "import mem",
+            "mem.atomic_compare_exchange_uint8(address, 0, 1, \"relaxed\", \"acquire\")",
+        ),
+        ("import mem", "f = mem.atomic_add_uint8"),
+    ] {
+        let source =
+            format!("{import}\n\ndef check(address: uint64, order: str) -> None:\n    {stmt}\n");
+        let parsed = crate::parse_source(&source).expect("ordering test source parses");
+        let error = crate::check_module_with_builtin_imports(parsed)
+            .err()
+            .expect("invalid ordering");
+        assert_eq!(error.code, "AU2087", "{stmt}: {error}");
+    }
+}
+
+#[test]
 fn constant_scale_guard_requires_matching_checked_operations() {
     let source = "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n";
     let module = lower(source);

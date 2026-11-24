@@ -7,3 +7,21 @@ export "C" def high_product(a: uint64, b: uint64) -> uint64:
 export "C" def divide(a: int64, b: int64) -> int64:
     wide = (a as int128) << 64
     return ((wide // (b as int128)) >> 64) as int64
+
+export "C" def mix_wide(hi: uint64, lo: uint64, count: int64) -> int64:
+    upper = (hi as uint128) << 64
+    word = upper | (lo as uint128)
+    rotated = word.rotate_right(count).swap_bytes()
+    return rotated.leading_zeros() + rotated.trailing_zeros() + rotated.count_ones()
+
+export "C" def narrow_float(value: float64) -> float64:
+    wide = value as int128
+    return (wide as float32) as float64
+
+export "C" def lowest(a: int64, b: int64) -> int64:
+    wide = min(a as int128, b as int128)
+    return abs(wide) as int64
+
+export "C" def round_wide(value: uint64) -> float64:
+    upper = (value as uint128) << 64
+    return (upper | (value as uint128)).to_float()

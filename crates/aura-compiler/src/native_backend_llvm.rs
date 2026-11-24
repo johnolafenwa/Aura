@@ -185,7 +185,11 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
-        if self.freestanding.is_some() && module.get_function(crate::native_codegen::wide_numbers::SYMBOL).is_some() {
+        if self.freestanding.is_some()
+            && module
+                .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+                .is_some()
+        {
             link_wide_integer_helpers(context, &module)?;
         }
         if let Some(debug) = &lowerer.debug {
@@ -803,7 +807,12 @@ enum Op {
     Iconst(i64),
     Fconst(f64),
     Unary(UnaryOp, Val),
-    IntegerBits(aura_core::integer_bits::BitMethod, aura_core::integer::IntegerKind, Val, Val),
+    IntegerBits(
+        aura_core::integer_bits::BitMethod,
+        aura_core::integer::IntegerKind,
+        Val,
+        Val,
+    ),
     Binary(BinaryOp, Val, Val),
     BinaryImm(BinaryOp, Val, i64),
     Icmp(IntCC, Val, Val),
@@ -1035,7 +1044,9 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
         Op::Iconst(constant) => Op::Iconst(*constant),
         Op::Fconst(constant) => Op::Fconst(*constant),
         Op::Unary(unary, source) => Op::Unary(*unary, value(*source)),
-        Op::IntegerBits(method, kind, word, count) => Op::IntegerBits(*method, *kind, value(*word), value(*count)),
+        Op::IntegerBits(method, kind, word, count) => {
+            Op::IntegerBits(*method, *kind, value(*word), value(*count))
+        }
         Op::Binary(binary, left, right) => Op::Binary(*binary, value(*left), value(*right)),
         Op::BinaryImm(binary, left, imm) => Op::BinaryImm(*binary, value(*left), *imm),
         Op::Icmp(cc, left, right) => Op::Icmp(*cc, value(*left), value(*right)),
@@ -1487,6 +1498,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.blocks[block.0 as usize].cold = true;
     }
 
+    fn source_location(&self) -> Option<(u32, u32)> {
+        self.ir.location
+    }
+
     fn set_source_location(&mut self, line: u32, column: u32) {
         self.ir.location = Some((line, column));
     }
@@ -1913,8 +1928,15 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.unary(UnaryOp::Fneg, ty, value)
     }
 
-    fn integer_bits(&mut self, method: aura_core::integer_bits::BitMethod, kind: aura_core::integer::IntegerKind, value: Val, count: Val) -> Val {
-        self.ir.push_value(Op::IntegerBits(method, kind, value, count), ScalarType::I64)
+    fn integer_bits(
+        &mut self,
+        method: aura_core::integer_bits::BitMethod,
+        kind: aura_core::integer::IntegerKind,
+        value: Val,
+        count: Val,
+    ) -> Val {
+        self.ir
+            .push_value(Op::IntegerBits(method, kind, value, count), ScalarType::I64)
     }
 
     fn fsqrt(&mut self, value: Val) -> Val {
@@ -2965,7 +2987,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
                 widen(previous.into_int_value())
             }
-            MemoryAccess::Ordered(op, success, failure) => self.ordered_atomic(op, success, failure, width, operands),
+            MemoryAccess::Ordered(op, success, failure) => {
+                self.ordered_atomic(op, success, failure, width, operands)
+            }
             MemoryAccess::Fence => unreachable!("a fence was lowered above"),
         }
     }
@@ -3752,15 +3776,22 @@ mod ordered_atomics;
 mod integer_bits;
 
 /// Supplies wide arithmetic in the target object, with no compiler support library.
-fn link_wide_integer_helpers<'ctx>(context: &'ctx Context, module: &Module<'ctx>) -> Result<(), String> {
+fn link_wide_integer_helpers<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+) -> Result<(), String> {
     use inkwell::memory_buffer::MemoryBuffer;
     let ir = include_str!("freestanding_i128.ll");
     let buffer = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "freestanding_i128");
-    let helpers = context.create_module_from_ir(buffer).map_err(|e| e.to_string())?;
+    let helpers = context
+        .create_module_from_ir(buffer)
+        .map_err(|e| e.to_string())?;
     helpers.set_triple(&module.get_triple());
     helpers.set_data_layout(&module.get_data_layout());
     module.link_in_module(helpers).map_err(|e| e.to_string())?;
-    module.get_function(crate::native_codegen::wide_numbers::SYMBOL)
-        .expect("linked wide arithmetic function").set_linkage(LlvmLinkage::Internal);
+    module
+        .get_function(crate::native_codegen::wide_numbers::SYMBOL)
+        .expect("linked wide arithmetic function")
+        .set_linkage(LlvmLinkage::Internal);
     Ok(())
 }

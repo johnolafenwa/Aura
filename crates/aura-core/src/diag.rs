@@ -275,6 +275,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2087",
+        band: "names/types",
+        title: "invalid atomic ordering",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2088",
+        band: "names/types",
+        title: "invalid rotation count type",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -388,6 +398,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4034",
+        band: "runtime",
+        title: "invalid integer operation argument",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

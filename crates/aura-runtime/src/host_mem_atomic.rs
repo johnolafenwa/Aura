@@ -1,27 +1,42 @@
 use super::*;
 use aura_core::atomic_order::AtomicOperation;
-use std::sync::atomic::{fence, AtomicU8, AtomicU16, AtomicU32, AtomicU64};
+use std::sync::atomic::{fence, AtomicU16, AtomicU32, AtomicU64, AtomicU8};
 
 pub(super) fn execute(name: &str, op: AtomicOperation, args: &[Value]) -> Result<Value> {
     let arity = op.arity();
-    let max = arity + if op == AtomicOperation::CompareExchange { 2 } else { 1 };
+    let max = arity
+        + if op == AtomicOperation::CompareExchange {
+            2
+        } else {
+            1
+        };
     if !(arity..=max).contains(&args.len()) {
-        return Err(Diagnostic::coded("AU4034", format!("{name} expects {arity} to {max} arguments")));
+        return Err(Diagnostic::coded(
+            "AU4034",
+            format!("{name} expects {arity} to {max} arguments"),
+        ));
     }
     let order = |index| match args.get(index) {
         None => Ok(None),
         Some(Value::String(text)) => Ok(Some(text.as_str())),
-        _ => Err(Diagnostic::coded("AU4034", "atomic ordering expects a string")),
+        _ => Err(Diagnostic::coded(
+            "AU4034",
+            "atomic ordering expects a string",
+        )),
     };
     // A missing failure order is represented by the empty default in checked MIR.
-    let (success, failure) = op.orders(order(arity)?, order(arity + 1)?.filter(|s| !s.is_empty()))
+    let (success, failure) = op
+        .orders(order(arity)?, order(arity + 1)?.filter(|s| !s.is_empty()))
         .map_err(|msg| Diagnostic::coded("AU4034", msg))?;
     if op == AtomicOperation::Fence {
         fence(success);
         return Ok(Value::Unit);
     }
     let word = |index: usize| match &args[index] {
-        Value::Int(n) => n.as_i128().and_then(|n| u64::try_from(n).ok()).ok_or_else(|| mem_argument_error(name)),
+        Value::Int(n) => n
+            .as_i128()
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or_else(|| mem_argument_error(name)),
         _ => Err(mem_argument_error(name)),
     };
     let address = word(0)? as usize;

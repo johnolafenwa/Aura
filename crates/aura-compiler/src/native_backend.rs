@@ -177,7 +177,11 @@ pub enum MemoryAccess {
     /// Stores the replacement if the cell holds the expected value, and
     /// gives the previous one either way.
     AtomicCompareExchange,
-    Ordered(aura_core::atomic_order::AtomicOperation, std::sync::atomic::Ordering, std::sync::atomic::Ordering),
+    Ordered(
+        aura_core::atomic_order::AtomicOperation,
+        std::sync::atomic::Ordering,
+        std::sync::atomic::Ordering,
+    ),
     /// Orders every earlier access before every later one.
     Fence,
 }
@@ -186,7 +190,11 @@ impl MemoryAccess {
     /// Whether the access gives a value.
     pub fn has_result(self) -> bool {
         if let Self::Ordered(op, _, _) = self {
-            return !matches!(op, aura_core::atomic_order::AtomicOperation::Store | aura_core::atomic_order::AtomicOperation::Fence);
+            return !matches!(
+                op,
+                aura_core::atomic_order::AtomicOperation::Store
+                    | aura_core::atomic_order::AtomicOperation::Fence
+            );
         }
         !matches!(
             self,
@@ -740,6 +748,7 @@ pub(crate) trait FunctionBackend {
     fn set_cold_block(&mut self, block: Blk);
     /// The source position of the instructions built from here on, for a
     /// debug build's line table.
+    fn source_location(&self) -> Option<(u32, u32)>;
     fn set_source_location(&mut self, line: u32, column: u32);
     /// Shows `var` in a debugger as `variable`, in a debug build.
     fn describe_var(&mut self, var: Var, variable: DebugVariable);
@@ -802,7 +811,13 @@ pub(crate) trait FunctionBackend {
 
     fn iconst(&mut self, ty: ScalarType, value: i64) -> Val;
     fn f64const(&mut self, value: f64) -> Val;
-    fn integer_bits(&mut self, method: aura_core::integer_bits::BitMethod, kind: aura_core::integer::IntegerKind, value: Val, count: Val) -> Val;
+    fn integer_bits(
+        &mut self,
+        method: aura_core::integer_bits::BitMethod,
+        kind: aura_core::integer::IntegerKind,
+        value: Val,
+        count: Val,
+    ) -> Val;
     fn iadd(&mut self, left: Val, right: Val) -> Val;
     /// The address `offset` bytes past the address `base`: the same word
     /// as `iadd`, which a load or a store through it reaches as an offset
