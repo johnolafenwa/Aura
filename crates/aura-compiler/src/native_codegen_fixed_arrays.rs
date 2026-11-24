@@ -210,7 +210,7 @@ impl FunctionCompiler<'_> {
                 Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut)
             )
         {
-            let place = arg.writeback_place.as_deref().or_else(|| match &arg.value {
+            let place = arg.writeback_place.as_deref().or(match &arg.value {
                 Operand::Place(place) => Some(place.as_str()),
                 _ => None,
             });

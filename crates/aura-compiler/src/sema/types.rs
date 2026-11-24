@@ -691,7 +691,7 @@ pub(super) fn lower_type_with_self(
             self_type,
         )?;
         reject_nested_span_type(&element, type_ref.span)?;
-        let ty = Type::Named(name.clone(), vec![element, Type::named(&count.to_string())]);
+        let ty = Type::Named(name.clone(), vec![element, Type::named(count.to_string())]);
         type_names.fixed_arrays.borrow_mut().insert((type_ref.span.line, type_ref.span.column), ty.clone());
         return Ok(ty);
     }
