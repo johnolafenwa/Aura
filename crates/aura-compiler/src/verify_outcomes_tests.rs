@@ -95,7 +95,6 @@ def main():
         [
             format!("parts: {}", not_modeled("`split`", 4)),
             format!("fmt: {}", not_modeled("an f-string", 8)),
-            format!("low: {}", not_modeled("`&`", 22)),
             format!(
                 "positive: {}",
                 not_modeled("a comprehension or built-in loop", 25)
@@ -108,13 +107,12 @@ def main():
                 "total: {}",
                 not_modeled("a comprehension or built-in loop", 35)
             ),
-            format!("next: {}", not_modeled("`saturating_add`", 39)),
         ],
         "{report:#?}"
     );
     assert_eq!(
         (report.failed(), report.not_modeled(), report.undecided()),
-        (0, 7, 0)
+        (0, 5, 0)
     );
     let diagnostics = report.diagnostics();
     assert!(diagnostics

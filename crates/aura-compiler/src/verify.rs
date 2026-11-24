@@ -23,6 +23,8 @@ mod float;
 mod frame;
 #[path = "verify_guard.rs"]
 mod guard;
+#[path = "verify_integers.rs"]
+mod integers;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -1837,6 +1839,10 @@ mod tests_classes;
 #[cfg(test)]
 #[path = "verify_collections_tests.rs"]
 mod tests_collections;
+
+#[cfg(test)]
+#[path = "verify_integers_tests.rs"]
+mod tests_integers;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

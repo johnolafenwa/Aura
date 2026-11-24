@@ -196,7 +196,7 @@ impl FloatTy {
 
     /// The largest integer below which every integer has an exact value
     /// of this type.
-    fn exact_ints(self) -> u64 {
+    pub(super) fn exact_ints(self) -> u64 {
         match self {
             Self::F32 => 1 << 24,
             Self::F64 => 1 << 53,
@@ -228,7 +228,7 @@ impl FloatTy {
     }
 
     /// `term > value`, for an integer `value` this type may not hold.
-    fn above(self, term: &str, value: i128) -> String {
+    pub(super) fn above(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             // No value of the type lies between `value` and a nearest one
             // above it.
@@ -238,7 +238,7 @@ impl FloatTy {
     }
 
     /// `term < value`, for an integer `value` this type may not hold.
-    fn below(self, term: &str, value: i128) -> String {
+    pub(super) fn below(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             (near, std::cmp::Ordering::Less) => format!("(fp.leq {term} {near})"),
             (near, _) => format!("(fp.lt {term} {near})"),
@@ -704,6 +704,27 @@ impl<'a> Exec<'a> {
         None
     }
 
+    /// A fresh constant equal to `term`, with what `also` says of it as
+    /// part of its definition: a check that reads only an operand of
+    /// `term` does not depend on it.
+    pub(super) fn define_with(
+        &mut self,
+        sort: &str,
+        hint: &str,
+        term: String,
+        also: impl FnOnce(&str) -> String,
+    ) -> String {
+        if let Some(name) = self.defined.get(&term) {
+            return name.clone();
+        }
+        let name = self.fresh_const(sort, hint);
+        self.definitions.insert(name.clone(), self.facts.len());
+        self.facts
+            .push(format!("(and (= {name} {term}) {})", also(&name)));
+        self.defined.insert(term, name.clone());
+        name
+    }
+
     /// A fresh constant equal to `term`, to keep terms small.
     pub(super) fn define(&mut self, sort: &str, hint: &str, term: String) -> String {
         if is_atom(&term) {
@@ -728,7 +749,7 @@ impl<'a> Exec<'a> {
     }
 
     /// A float `/` or `sqrt` result, defined by its own fact.
-    fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
+    pub(super) fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
         let (hint, term) = match &op {
             super::float::RoundedOp::Div(a, b) => ("arith", format!("(fp.div RNE {a} {b})")),
             super::float::RoundedOp::Add(a, b) => ("arith", format!("(fp.add RNE {a} {b})")),
@@ -2818,11 +2839,25 @@ impl<'a> Exec<'a> {
                     ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
-                        let result = self.define("Int", "neg", format!("(- {term})"));
+                        // A negated literal stays a literal.
+                        let result = match super::integers::literal(&term) {
+                            Some(value) => lit(-value),
+                            None => self.define("Int", "neg", format!("(- {term})")),
+                        };
                         if trap.checks_overflow() {
                             self.oblige_range(state, *span, &result, ty);
                         }
                         Val::Int(result, ty)
+                    }
+                    (UnaryOp::BitNot, Val::Int(term, _))
+                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                    {
+                        let ty = target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .expect("checked above");
+                        let flipped = super::integers::bitnot(&term, ty);
+                        Val::Int(self.define("Int", "bits", flipped), ty)
                     }
                     _ => {
                         if *trap == ArithmeticTrap::Runtime {
@@ -3258,6 +3293,7 @@ impl<'a> Exec<'a> {
         let right_ty = self.operand_int_ty(right);
         let target_int = target_type.and_then(IntTy::of);
         let hint = left_ty.or(right_ty).or(target_int);
+        let sized = hint.is_some();
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -3312,18 +3348,17 @@ impl<'a> Exec<'a> {
                         }
                         Val::Int(result, ty)
                     }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
-                    BinaryOp::Pow if b.parse::<u32>().is_ok_and(|power| power <= 4) => {
-                        let power: u32 = b.parse().expect("matched above");
-                        let term = match power {
-                            0 => "1".to_string(),
-                            1 => a.clone(),
-                            _ => format!("(* {})", vec![a.as_str(); power as usize].join(" ")),
-                        };
-                        let result = self.define("Int", "pow", term);
-                        self.oblige_range_at(&pc, span, &result, ty);
-                        Val::Int(result, ty)
+                    // A literal of a type the encoding has no range for,
+                    // such as `int128`, reads as an `int64`; its bits and
+                    // width are not those.
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if sized => {
+                        self.int_bitwise(op, a, b, hint.unwrap_or(ty))
                     }
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
+                    BinaryOp::Shl | BinaryOp::Shr if sized => {
+                        self.int_shift(&pc, op, (a, b), hint.unwrap_or(ty), span)
+                    }
+                    BinaryOp::Pow if sized => self.int_pow(&pc, a, b, hint.unwrap_or(ty), span),
                     _ => {
                         if trap == ArithmeticTrap::Runtime {
                             self.oblige(
@@ -4828,6 +4863,24 @@ impl<'a> Exec<'a> {
                         Some(self.merge_vals(&pcs, &[&value, &default], "outcome"))
                     }
                 }
+            }
+            RuntimeOp::Host(_) if super::integers::math_function(op.name()).is_some() => {
+                let name = super::integers::math_function(op.name())?;
+                let values: Vec<Val> = (0..args.len())
+                    .map(|index| arg(self, state, index, None))
+                    .collect();
+                self.math_call(&pc, name, &values)
+            }
+            RuntimeOp::Scalar(op) if super::integers::fixed_width(op).is_some() => {
+                let kind = super::integers::fixed_width(op)?;
+                // The result has the receiver's type. Without a range
+                // for it, as for `int128`, the method is not modeled.
+                let ty = target
+                    .and_then(|target| self.place_type(target))
+                    .as_ref()
+                    .and_then(IntTy::of)?;
+                let rhs = arg(self, state, 0, Some(ty));
+                self.int_method(&pc, kind, ty, (receiver, rhs))
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {

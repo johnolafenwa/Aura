@@ -652,11 +652,18 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, ty))
                     }
+                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                        Ok(Val::Int(super::integers::bitnot(&term, ty), ty))
+                    }
                     _ => Err("this unary operator is not modeled in contracts yet".into()),
                 }
             }
             ExprKind::Binary { op, left, right } => {
                 self.spec_binary(*op, left, right, env, wd, depth)
+            }
+            ExprKind::Cast { expr: inner, ty } => {
+                let value = self.spec(inner, env, wd, depth)?;
+                super::integers::spec_cast(value, ty, wd)
             }
             ExprKind::CompareChain { first, links } => {
                 let mut previous = self.spec(first, env, wd, depth)?;
@@ -1183,6 +1190,18 @@ impl Exec<'_> {
                 };
                 wd.push(ty.contains(&term));
                 Ok(Val::Int(term, ty))
+            }
+            BinaryOp::Pow => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_pow(&lhs, &rhs, literal_left, wd)
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_bits(op, &lhs, &rhs, literal_left, wd)
             }
             _ => Err(format!("`{op:?}` is not modeled in contracts yet")),
         }
