@@ -59,3 +59,8 @@ pair err plain
 twice err 8
 twice ok 32
 twice ok 160
+positive err None
+positive ok 42
+quartered err negative
+quartered err negative
+quartered ok 2.0

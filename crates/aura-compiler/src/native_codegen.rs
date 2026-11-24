@@ -15506,16 +15506,8 @@ impl<'a> FunctionCompiler<'a> {
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_lookup = false;
         let payload_form = self.lookup_payload.take() == Some(true);
-        let compiled = self.ensure_opaque(compiled?)?;
-        let payload = if payload_form {
-            compiled
-        } else {
-            let lookup = self.transfer_owned_opaque_value(&compiled);
-            let inst = self
-                .builder
-                .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
-            self.owned_opaque_result(inst.results, direct_type_to_type(&target_ty))
-        };
+        let payload =
+            self.lookup_payload_box(compiled?, payload_form, direct_type_to_type(&target_ty))?;
         self.store_place(
             target,
             ValueRef {
@@ -18053,6 +18045,29 @@ impl<'a> FunctionCompiler<'a> {
                     self.store_receiver_back(receiver_place, &object)?;
                 }
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Index if dict_index_scalar(&value_direct_ty).is_some() => {
+                // A scalar comes back as itself, with no box made for it.
+                let int64 = DirectType::Scalar(ScalarKind::Int64);
+                let (key, entry) = match dict_index_scalar(&value_direct_ty) {
+                    Some(RuntimeFn::MapIndexInt64) if key_direct_ty == int64 => (
+                        self.load_word(args[0], ScalarKind::Int64, true)?,
+                        RuntimeFn::MapIndexInt64Pair,
+                    ),
+                    entry => {
+                        let key =
+                            self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                        (key.values[0], entry.unwrap_or(RuntimeFn::MapIndexInt64))
+                    }
+                };
+                let line = self.load_word(args[1], int32, false)?;
+                let column = self.load_word(args[2], int32, false)?;
+                let values =
+                    self.runtime_call_results(self.runtime[entry], &[map, key, line, column]);
+                self.normalize_scalar_value(ValueRef {
+                    values,
+                    ty: value_direct_ty,
+                })
             }
             DictOp::Index => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
@@ -20715,6 +20730,27 @@ fn declare_frame_descriptor_table(
     Ok(id)
 }
 
+/// The helper that reads `map[key]` as the scalar `value`, with no box:
+/// none for `None`, which has no word to read.
+fn dict_index_scalar(value: &DirectType) -> Option<RuntimeFn> {
+    let DirectType::Scalar(kind) = value else {
+        return None;
+    };
+    Some(match kind {
+        ScalarKind::Int64 => RuntimeFn::MapIndexInt64,
+        ScalarKind::Uint64 => RuntimeFn::MapIndexU64,
+        ScalarKind::Float32 | ScalarKind::Float64 => RuntimeFn::MapIndexF64,
+        ScalarKind::Bool => RuntimeFn::MapIndexBool,
+        ScalarKind::Unit => return None,
+        ScalarKind::Int8
+        | ScalarKind::Int16
+        | ScalarKind::Int32
+        | ScalarKind::Uint8
+        | ScalarKind::Uint16
+        | ScalarKind::Uint32 => RuntimeFn::MapIndexI64,
+    })
+}
+
 fn signature_for(
     function: &MirFunction,
     classes: &HashMap<String, MirClass>,
@@ -20766,12 +20802,8 @@ fn result_twin_signature(
     classes: &HashMap<String, MirClass>,
 ) -> std::result::Result<Signature, String> {
     let mut signature = signature_for(function, classes)?;
-    let Some((ok, err)) = result_slots::slot_parts(&function.return_type, classes) else {
-        return Err(format!(
-            "direct backend cannot return the `Result` of `{}` as words",
-            function.name
-        ));
-    };
+    let (ok, err) = result_slots::slot_parts(&function.return_type, classes)
+        .expect("a function with a twin returns a `Result` a slot can hold");
     signature
         .returns
         .splice(0..1, result_slots::twin_results(&ok, &err));

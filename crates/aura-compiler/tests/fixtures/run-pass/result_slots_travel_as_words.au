@@ -95,6 +95,20 @@ def twice(value: int64) -> Result[int64, int64]:
     doubled = try second
     return Result.Ok(doubled * 2)
 
+def positive(value: int64) -> Result[int64, None]:
+    if value <= 0:
+        return Result.Err(None)
+    return Result.Ok(value)
+
+def doubled_positive(value: int64) -> Result[int64, None]:
+    found = try positive(value)
+    return Result.Ok(found * 2)
+
+def quartered(value: float64) -> Result[float64, str]:
+    half = try halves(value)
+    again = try halves(half - 1.0)
+    return Result.Ok(again)
+
 def chain(value: int64) -> Result[int64, int64]:
     doubled = try scalar(value)
     again = try scalar(doubled - 10)
@@ -288,3 +302,15 @@ def main():
                 print(f"twice ok {found}")
             case Result.Err(code):
                 print(f"twice err {code}")
+    for value in [-1, 21]:
+        match doubled_positive(value):
+            case Result.Ok(found):
+                print(f"positive ok {found}")
+            case Result.Err(nothing):
+                print(f"positive err {nothing}")
+    for value in [-4.0, 1.0, 10.0]:
+        match quartered(value):
+            case Result.Ok(found):
+                print(f"quartered ok {found}")
+            case Result.Err(message):
+                print(f"quartered err {message}")

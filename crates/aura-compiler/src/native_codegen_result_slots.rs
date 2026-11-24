@@ -40,6 +40,8 @@ pub(super) struct ResultSlotPlan {
 /// One result slot: where its tag and its payloads are kept.
 #[derive(Clone, Debug)]
 pub(super) struct ResultSlot {
+    /// The local the slot stands for.
+    name: String,
     /// 0 while the slot holds `Ok`, 1 while it holds `Err`.
     tag: Var,
     /// The root that holds the `Ok` payload.
@@ -108,6 +110,14 @@ fn static_callee(callee: &CallTarget) -> Option<&str> {
             dispatch: Some(MethodDispatch::Static { function }),
             ..
         } => Some(function),
+        _ => None,
+    }
+}
+
+/// The function `value` runs when it is a call that names one.
+fn called_function(value: &Rvalue) -> Option<&str> {
+    match value {
+        Rvalue::Call { callee, .. } => static_callee(callee),
         _ => None,
     }
 }
@@ -201,15 +211,11 @@ fn function_slots<'a>(
                     }
                     match value {
                         Rvalue::Use(source)
-                            if gives(source)
-                                .is_some_and(|source| candidates.contains_key(source)) =>
+                            if candidates.contains_key(target.as_str())
+                                && gives(source)
+                                    .is_some_and(|source| candidates.contains_key(source)) =>
                         {
-                            let source = gives(source).unwrap_or_default();
-                            if candidates.contains_key(target.as_str()) {
-                                moves.push((target, source));
-                            } else {
-                                rejected.insert(source);
-                            }
+                            moves.push((target, gives(source).unwrap_or_default()));
                             continue;
                         }
                         Rvalue::VariantPayload {
@@ -247,16 +253,10 @@ fn function_slots<'a>(
                 scrutinee: Operand::Place(place),
                 arms,
                 ..
-            } if candidates.contains_key(place.as_str()) => {
-                let tests_tag = arms.iter().all(|arm| {
-                    arm.wildcard
-                        || (matches!(arm.enum_name.as_deref(), None | Some("Result"))
-                            && matches!(arm.variant_name.as_deref(), Some("Ok" | "Err")))
-                });
-                if !tests_tag {
-                    rejected.insert(place);
-                }
-            }
+            } if candidates.contains_key(place.as_str())
+                && arms.iter().all(|arm| {
+                    !arm.wildcard && matches!(arm.variant_name.as_deref(), Some("Ok" | "Err"))
+                }) => {}
             Terminator::Return(operand)
                 if gives(operand)
                     .is_some_and(|place| candidates.get(place) == Some(&&function.return_type)) => {
@@ -308,15 +308,13 @@ pub(super) fn plan(
     let mut called = HashSet::new();
     let mut candidates = Vec::new();
     for function in &module.functions {
-        let Some(locals) = explicit_locals.get(&function.name) else {
-            continue;
-        };
+        let locals = explicit_locals.get(&function.name);
         let (slots, returns_slots) = function_slots(
             function,
             |name, ty| {
                 slot_parts(ty, classes).is_some_and(|(ok, err)| {
                     // A box in a slot is released where the module says.
-                    locals.tracked.contains(name)
+                    locals.is_some_and(|locals| locals.tracked.contains(name))
                         || !(layout_owns_handles(&ok) || layout_owns_handles(&err))
                 })
             },
@@ -370,12 +368,10 @@ pub(super) fn declare_slots(
 ) -> HashMap<String, ResultSlot> {
     let mut slots = HashMap::new();
     for name in names {
-        let Some((ok_ty, err_ty)) = variable_types
+        let (ok_ty, err_ty) = variable_types
             .get(name)
             .and_then(|ty| slot_parts(&direct_type_to_type(ty), classes))
-        else {
-            continue;
-        };
+            .expect("a planned slot is a local of a `Result` type a slot can hold");
         let tag = Var(*variable_index as u32);
         *variable_index += 1;
         builder.declare_var(tag, types::I64);
@@ -395,7 +391,13 @@ pub(super) fn declare_slots(
             );
             tracked.insert(root.clone());
         }
-        slots.insert(name.clone(), ResultSlot { tag, ok, err });
+        let slot = ResultSlot {
+            name: name.clone(),
+            tag,
+            ok,
+            err,
+        };
+        slots.insert(name.clone(), slot);
     }
     slots
 }
@@ -421,44 +423,47 @@ impl FunctionCompiler<'_> {
         Ok(vec![self.transfer_owned_opaque_value(&boxed)])
     }
 
+    /// The variables of `root`, a root a slot declared.
+    fn part_vars(&self, root: &str) -> Vec<Var> {
+        self.local_vars(root)
+            .expect("a slot declares its payload roots")
+    }
+
+    /// The type of `root`, a root a slot declared.
+    fn part_type(&self, root: &str) -> DirectType {
+        self.local_type(root)
+            .expect("a slot declares its payload roots")
+    }
+
     /// A payload of a slot, from the root that holds it: taken when the
     /// read `moves` the slot. A slot that is read whole and not moved owns
     /// no box, so its words are the whole of the payload.
-    fn read_result_part(
-        &mut self,
-        root: &str,
-        moves: bool,
-    ) -> std::result::Result<ValueRef, String> {
-        if moves {
+    fn read_result_part(&mut self, root: &str, moves: bool) -> ValueRef {
+        let read = if moves {
             self.take_place(root)
         } else {
             self.load_root(root)
-        }
+        };
+        read.expect("a slot declares its payload roots")
     }
 
     /// Makes `slot`, which is empty, hold the variant `ok` names with the
     /// payload `words`.
-    fn fill_result_slot(
-        &mut self,
-        slot: &ResultSlot,
-        ok: bool,
-        words: Vec<Val>,
-    ) -> std::result::Result<(), String> {
+    fn fill_result_slot(&mut self, slot: &ResultSlot, ok: bool, words: Vec<Val>) {
         let (held, other) = if ok {
             (&slot.ok, &slot.err)
         } else {
             (&slot.err, &slot.ok)
         };
-        for (var, word) in self.local_vars(held)?.into_iter().zip(words) {
+        for (var, word) in self.part_vars(held).into_iter().zip(words) {
             self.builder.def_var(var, word);
         }
-        let zeros = self.local_type(other)?.zero_values(&mut *self.builder);
-        for (var, zero) in self.local_vars(other)?.into_iter().zip(zeros) {
+        let zeros = self.part_type(other).zero_values(&mut *self.builder);
+        for (var, zero) in self.part_vars(other).into_iter().zip(zeros) {
             self.builder.def_var(var, zero);
         }
         let tag = self.builder.iconst(types::I64, i64::from(!ok));
         self.builder.def_var(slot.tag, tag);
-        Ok(())
     }
 
     /// Whether `slot` holds `Ok`, as a flag.
@@ -484,33 +489,33 @@ impl FunctionCompiler<'_> {
                 ..
             } => {
                 let ok = variant_name == "Ok";
-                let ty = self.local_type(if ok { &slot.ok } else { &slot.err })?;
+                let ty = self.part_type(if ok { &slot.ok } else { &slot.err });
                 let loaded = self.load_operand_for_target(&payloads[0], &ty)?;
                 let coerced = self.coerce_value(loaded, &ty)?;
                 let words = self.result_part_words(coerced)?;
-                self.fill_result_slot(&slot, ok, words)
+                self.fill_result_slot(&slot, ok, words);
+                Ok(())
             }
             Rvalue::Use(operand) => {
                 let moves = matches!(operand, Operand::MovePlace(_));
-                let Some(source) = self.result_slot_of(operand) else {
-                    return Err(format!(
-                        "direct backend expected `{target}` to take a result slot"
-                    ));
-                };
+                let source = self
+                    .result_slot_of(operand)
+                    .expect("the plan moves a slot only into a slot");
                 let tag = self.builder.use_var(source.tag);
                 self.builder.def_var(slot.tag, tag);
                 for (from, to) in [(&source.ok, &slot.ok), (&source.err, &slot.err)] {
-                    let moved = self.read_result_part(from, moves)?;
+                    let moved = self.read_result_part(from, moves);
                     let words = self.transfer_values(&moved);
-                    for (var, word) in self.local_vars(to)?.into_iter().zip(words) {
+                    for (var, word) in self.part_vars(to).into_iter().zip(words) {
                         self.builder.def_var(var, word);
                     }
                 }
                 Ok(())
             }
-            Rvalue::Call { callee, .. } => {
+            // The plan leaves only a call.
+            call => {
                 let ty = self.type_of_place(target)?;
-                self.result_twin_request = static_callee(callee)
+                self.result_twin_request = called_function(call)
                     .filter(|name| self.result_twin_refs.contains_key(*name))
                     .map(str::to_string);
                 let compiled = self.compile_rvalue_for_target(value, &ty);
@@ -522,25 +527,19 @@ impl FunctionCompiler<'_> {
                         // The call's own result is the null the twin's
                         // words went in place of.
                         self.clear_temporary_opaque_owned(&compiled);
-                        self.fill_result_slot_from_twin(&slot, &words)
+                        self.fill_result_slot_from_twin(&slot, &words);
+                        Ok(())
                     }
                     None => self.unbox_into_result_slot(&slot, compiled),
                 }
             }
-            _ => Err(format!(
-                "direct backend cannot keep `{target}` as a result slot"
-            )),
         }
     }
 
     /// Makes `slot` hold the `Result` a twin returned as `words`.
-    fn fill_result_slot_from_twin(
-        &mut self,
-        slot: &ResultSlot,
-        words: &[Val],
-    ) -> std::result::Result<(), String> {
-        let ok_ty = self.local_type(&slot.ok)?;
-        let err_ty = self.local_type(&slot.err)?;
+    fn fill_result_slot_from_twin(&mut self, slot: &ResultSlot, words: &[Val]) {
+        let ok_ty = self.part_type(&slot.ok);
+        let err_ty = self.part_type(&slot.err);
         let (ok_abi, err_abi) = (part_abi(&ok_ty), part_abi(&err_ty));
         let tag = words[0];
         self.builder.def_var(slot.tag, tag);
@@ -562,22 +561,18 @@ impl FunctionCompiler<'_> {
             } else {
                 words
             };
-            for (var, word) in self.local_vars(root)?.into_iter().zip(words) {
+            for (var, word) in self.part_vars(root).into_iter().zip(words) {
                 self.builder.def_var(var, word);
             }
         }
-        Ok(())
     }
 
     /// The words a twin returns for the `Result` `slot` holds. The slot's
     /// boxes go with them.
-    fn result_slot_twin_words(
-        &mut self,
-        slot: &ResultSlot,
-    ) -> std::result::Result<Vec<Val>, String> {
+    fn result_slot_twin_words(&mut self, slot: &ResultSlot) -> Vec<Val> {
         let tag = self.builder.use_var(slot.tag);
-        let ok = self.take_place(&slot.ok)?;
-        let err = self.take_place(&slot.err)?;
+        let ok = self.read_result_part(&slot.ok, true);
+        let err = self.read_result_part(&slot.err, true);
         let (ok_abi, err_abi) = (part_abi(&ok.ty), part_abi(&err.ty));
         let ok_words = self.transfer_values(&ok);
         let err_words = self.transfer_values(&err);
@@ -586,14 +581,11 @@ impl FunctionCompiler<'_> {
             let is_ok = self.builder.icmp_imm(IntCC::Equal, tag, 0);
             words.push(self.builder.select(is_ok, ok_words[0], err_words[0]));
         } else {
-            if !ok_abi.is_empty() {
-                words.extend(ok_words);
-            }
-            if !err_abi.is_empty() {
-                words.extend(err_words);
-            }
+            // `None` travels in no word.
+            words.extend(ok_words.into_iter().take(ok_abi.len()));
+            words.extend(err_words.into_iter().take(err_abi.len()));
         }
-        Ok(words)
+        words
     }
 
     /// The body a call of `name` enters: its twin, when the call's result
@@ -602,13 +594,9 @@ impl FunctionCompiler<'_> {
         if self.result_twin_request.as_deref() != Some(name) {
             return callee;
         }
-        match self.result_twin_refs.get(name) {
-            Some(twin) => {
-                self.result_twin_called = true;
-                *twin
-            }
-            None => callee,
-        }
+        // Only a function with a twin is asked for.
+        self.result_twin_called = true;
+        self.result_twin_refs[name]
     }
 
     /// Takes the words of the `Result` out of the results of a call that
@@ -668,7 +656,7 @@ impl FunctionCompiler<'_> {
             } else {
                 (&slot.err, "Err")
             };
-            let ty = self.local_type(root)?;
+            let ty = self.part_type(root);
             let payload = self.compile_try_payload(&value, variant, &ty, owned)?;
             if owned {
                 self.clear_temporary_opaque_owned(&value);
@@ -676,7 +664,7 @@ impl FunctionCompiler<'_> {
             }
             let coerced = self.coerce_value(payload, &ty)?;
             let words = self.result_part_words(coerced)?;
-            self.fill_result_slot(slot, ok, words)?;
+            self.fill_result_slot(slot, ok, words);
             self.release_all_temporary_owned();
             self.builder.jump(join_block, &[]);
         }
@@ -702,10 +690,7 @@ impl FunctionCompiler<'_> {
         } else {
             &slot.err
         };
-        let payload = match scrutinee {
-            Operand::MovePlace(_) => self.take_place(root)?,
-            _ => self.load_root(root)?,
-        };
+        let payload = self.read_result_part(root, matches!(scrutinee, Operand::MovePlace(_)));
         // The payload took its type's tag when it went into the slot.
         if let (DirectType::Opaque(_), [word]) = (&payload.ty, payload.values.as_slice()) {
             self.shaped_boxes.insert(*word);
@@ -720,12 +705,12 @@ impl FunctionCompiler<'_> {
             return Ok(false);
         };
         for root in [&slot.ok, &slot.err] {
-            if !layout_owns_handles(&self.local_type(root)?) {
+            if !layout_owns_handles(&self.part_type(root)) {
                 continue;
             }
             // Only one of the two holds a box, and which one is known only
             // when the program runs.
-            let var = self.local_vars(root)?[0];
+            let var = self.part_vars(root)[0];
             let held = self.builder.use_var(var);
             let release_block = self.builder.create_block();
             let done_block = self.builder.create_block();
@@ -756,11 +741,8 @@ impl FunctionCompiler<'_> {
         let Some(slot) = self.result_slot_of(try_value) else {
             return Ok(false);
         };
-        let (Operand::MovePlace(source) | Operand::Place(source)) = try_value else {
-            return Ok(false);
-        };
         let moves = matches!(try_value, Operand::MovePlace(_));
-        let source_ty = self.type_of_place(source)?;
+        let source_ty = self.type_of_place(&slot.name)?;
         let (source_error_ty, target_error_ty) = self.try_error_types(target, &source_ty)?;
         let is_ok = self.result_slot_is_ok(&slot);
         let ok_block = self.builder.create_block();
@@ -770,7 +752,7 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(ok_block);
         self.builder.seal_block(ok_block);
-        let payload = self.read_result_part(&slot.ok, moves)?;
+        let payload = self.read_result_part(&slot.ok, moves);
         if let (DirectType::Opaque(_), [word]) = (&payload.ty, payload.values.as_slice()) {
             self.shaped_boxes.insert(*word);
         }
@@ -781,7 +763,7 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(err_block);
         self.builder.seal_block(err_block);
-        let error = self.read_result_part(&slot.err, moves)?;
+        let error = self.read_result_part(&slot.err, moves);
         self.compile_result_error_return(
             error,
             &source_error_ty,
@@ -793,6 +775,28 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(true)
+    }
+
+    /// The box of variant `variant` of the function's `Result`, which holds
+    /// `payload`.
+    fn box_returned_result(
+        &mut self,
+        variant: &str,
+        payload: ValueRef,
+    ) -> std::result::Result<ValueRef, String> {
+        let return_type = self.return_type.clone();
+        let built = self.construct_variant_in_place_from_values(
+            &return_type,
+            variant,
+            std::slice::from_ref(&payload),
+        )?;
+        match built {
+            Some(built) => Ok(built),
+            // A `Result` that is not kept in place is built by the runtime.
+            None => {
+                self.compile_enum_variant_from_values("Result", variant, vec![payload], return_type)
+            }
+        }
     }
 
     /// Returns `Result.Err(error)` from the function, with `error`
@@ -809,28 +813,11 @@ impl FunctionCompiler<'_> {
         let error = if source_error_ty == target_error_ty {
             error
         } else {
-            let from = from.ok_or_else(|| {
-                format!(
-                    "direct backend `try` names no `From[{source_error_ty}] for {target_error_ty}` conversion"
-                )
-            })?;
+            let from = from.ok_or("direct backend `try` names no `From` conversion")?;
             self.convert_try_error_via_from(error, from, source_error_ty)?
         };
         let Some((ok_ty, err_ty)) = self.result_twin_body.clone() else {
-            let return_type = self.return_type.clone();
-            let built = match self.construct_variant_in_place_from_values(
-                &return_type,
-                "Err",
-                std::slice::from_ref(&error),
-            )? {
-                Some(built) => built,
-                None => self.compile_enum_variant_from_values(
-                    "Result",
-                    "Err",
-                    vec![error],
-                    return_type,
-                )?,
-            };
+            let built = self.box_returned_result("Err", error)?;
             return self.emit_return_value(built, releases_on_error);
         };
         let coerced = self.coerce_value(error, &err_ty)?;
@@ -839,12 +826,10 @@ impl FunctionCompiler<'_> {
         if shares_word(&part_abi(&ok_ty), &part_abi(&err_ty)) {
             words.extend(err_words);
         } else {
-            if !part_abi(&ok_ty).is_empty() {
-                words.extend(ok_ty.zero_values(&mut *self.builder));
-            }
-            if !part_abi(&err_ty).is_empty() {
-                words.extend(err_words);
-            }
+            // `None` travels in no word.
+            let zeros = ok_ty.zero_values(&mut *self.builder);
+            words.extend(zeros.into_iter().take(part_abi(&ok_ty).len()));
+            words.extend(err_words.into_iter().take(part_abi(&err_ty).len()));
         }
         self.release_union_read_buffers();
         self.emit_return_words(words, releases_on_error)
@@ -865,7 +850,7 @@ impl FunctionCompiler<'_> {
             self.mark_temporary_opaque_owned(value);
         }
         let source_error = direct_type(source_error_ty, &self.classes)
-            .unwrap_or_else(|| DirectType::Opaque(source_error_ty.clone()));
+            .unwrap_or(DirectType::Opaque(source_error_ty.clone()));
         let payload = self.compile_try_payload(value, "Err", &source_error, source_is_owned)?;
         if source_is_owned {
             self.clear_temporary_opaque_owned(value);
@@ -896,10 +881,6 @@ impl FunctionCompiler<'_> {
         self.release_all_temporary_owned();
         for arm in arms {
             let arm_block = self.compiled_block(&arm.label)?;
-            if arm.wildcard {
-                self.builder.jump(arm_block, &[]);
-                return Ok(true);
-            }
             let is_ok = self.result_slot_is_ok(&slot);
             let next_block = self.builder.create_block();
             if arm.variant_name.as_deref() == Some("Ok") {
@@ -939,7 +920,7 @@ impl FunctionCompiler<'_> {
         self.flush_deferred_traps();
         self.release_unconsumed_retains();
         if self.result_twin_body.is_some() {
-            let words = self.result_slot_twin_words(&slot)?;
+            let words = self.result_slot_twin_words(&slot);
             self.release_union_read_buffers();
             self.emit_return_words(words, &[])?;
             return Ok(true);
@@ -954,20 +935,8 @@ impl FunctionCompiler<'_> {
         for (block, root, variant) in [(ok_block, &slot.ok, "Ok"), (err_block, &slot.err, "Err")] {
             self.builder.switch_to_block(block);
             self.builder.seal_block(block);
-            let payload = self.take_place(root)?;
-            let built = match self.construct_variant_in_place_from_values(
-                &return_type,
-                variant,
-                std::slice::from_ref(&payload),
-            )? {
-                Some(built) => built,
-                None => self.compile_enum_variant_from_values(
-                    "Result",
-                    variant,
-                    vec![payload],
-                    return_type.clone(),
-                )?,
-            };
+            let payload = self.read_result_part(root, true);
+            let built = self.box_returned_result(variant, payload)?;
             let handle = self.transfer_opaque_arg(&built);
             self.release_all_temporary_owned();
             self.builder.jump(join_block, &[handle]);

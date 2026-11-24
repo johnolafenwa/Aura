@@ -12996,6 +12996,112 @@ pub extern "C-unwind" fn aura_direct_map_index(
     })
 }
 
+/// Reports that `map[key]` found no `key`, whose rendering is
+/// `rendered_key`, at `line:column`.
+fn missing_dict_key(rendered_key: &str, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{rendered_key}` was not present");
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// `map[key]` for a dict of scalar values: `read` gives the found value as
+/// the scalar generated code keeps, so the value never goes in a box. A
+/// missing key reports what `aura_direct_map_index` reports.
+fn map_index_scalar<T>(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    read: fn(&Value) -> T,
+) -> T {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(read)
+                    .ok_or_else(|| key.render())
+            })
+        });
+        found.unwrap_or_else(|rendered_key| missing_dict_key(&rendered_key, line, column))
+    })
+}
+
+/// `map[key]` for a dict of `int64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_int64_of)
+}
+
+/// `map[key]` for a dict of integer values narrower than 64 bits.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_i64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_i64_of)
+}
+
+/// `map[key]` for a dict of `uint64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_u64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> u64 {
+    map_index_scalar(map, key, line, column, unbox_u64_of)
+}
+
+/// `map[key]` for a dict of float values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_f64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> f64 {
+    map_index_scalar(map, key, line, column, unbox_f64_of)
+}
+
+/// `map[key]` for a dict of `bool` values, as 0 or 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_bool(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_bool_of)
+}
+
+/// `map[key]` for a dict from `int64` to `int64`: neither the key nor the
+/// found value goes in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| map.entries.value_of_i64(key).map(unbox_int64_of));
+        found.unwrap_or_else(|| {
+            let rendered_key = Value::Int(IntegerValue::from_i64(key)).render();
+            missing_dict_key(&rendered_key, line, column)
+        })
+    })
+}
+
 /// `map[key] = value`. It returns null, which releases as nothing: the
 /// statement has no value, and a boxed unit would cost an allocation.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -14409,21 +14515,22 @@ fn unbox_u64_of(value: &Value) -> u64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    task_runtime_boundary(|| {
-        let value = unsafe { value_ref(value) };
-        // A trait object holds a float beside its width.
-        let held = match &value {
-            Value::TraitObject(object) => &object.value,
-            other => other,
-        };
-        match held {
-            Value::Float(value) => *value,
-            _ => runtime_error(format!(
-                "direct backend expected `float64`, found `{}`",
-                value_type_name(&value)
-            )),
-        }
-    })
+    task_runtime_boundary(|| unbox_f64_of(&unsafe { value_ref(value) }))
+}
+
+fn unbox_f64_of(value: &Value) -> f64 {
+    // A trait object holds a float beside its width.
+    let held = match value {
+        Value::TraitObject(object) => &object.value,
+        other => other,
+    };
+    match held {
+        Value::Float(value) => *value,
+        _ => runtime_error(format!(
+            "direct backend expected `float64`, found `{}`",
+            value_type_name(value)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
