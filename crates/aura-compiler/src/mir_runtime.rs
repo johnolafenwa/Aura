@@ -92,6 +92,7 @@ macro_rules! io_timeout_or_return {
 }
 
 mod const_eval;
+mod const_memory;
 pub(crate) use const_eval::evaluate_constants;
 
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
@@ -2780,12 +2781,17 @@ impl MirRuntime {
                 None => {}
             }
         }
-        if let Some(frozen) = self.module.constants.iter()
+        if let Some(frozen) = self
+            .module
+            .constants
+            .iter()
             .find(|constant| constant.key == key)
             .and_then(|constant| constant.frozen.as_ref())
         {
             let value = Arc::new(frozen.thaw());
-            self.constant_states.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+            self.constant_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .insert(key.to_string(), MirConstantState::Ready(value.clone()));
             return Ok(value);
         }
