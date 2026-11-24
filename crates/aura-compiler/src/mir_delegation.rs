@@ -89,29 +89,153 @@ impl Lowerer<'_> {
 /// Scale[int64]). Reconstruct the target from the MIR declarations when
 /// selection by the trait's name alone is ambiguous.
 pub(super) fn specialized_dispatch(
-    context: &MirLoanValidationContext<'_>, caller: &MirFunction, receiver: &Type, parts: &MemberCallParts<'_>,
+    context: &MirLoanValidationContext<'_>,
+    caller: &MirFunction,
+    receiver: &Type,
+    parts: &MemberCallParts<'_>,
 ) -> Option<MethodDispatch> {
     let trait_name = parts.trait_name?;
     let owner = context.trait_impls.iter().find(|implementation| {
-        implementation.trait_name == trait_name && implementation.methods.iter().any(|method|
-            method.name == parts.field && method.function_name == caller.name)
+        implementation.trait_name == trait_name
+            && implementation
+                .methods
+                .iter()
+                .any(|method| method.name == parts.field && method.function_name == caller.name)
     })?;
     let bound_args = &owner.trait_args;
     let mut candidates = context.trait_impls.iter().filter_map(|implementation| {
-        if implementation.trait_name != trait_name || implementation.trait_args.len() != bound_args.len() {
+        if implementation.trait_name != trait_name
+            || implementation.trait_args.len() != bound_args.len()
+        {
             return None;
         }
         let mut params = BTreeSet::new();
         collect_type_params_from_type(&implementation.for_type, &mut params);
-        for arg in &implementation.trait_args { collect_type_params_from_type(arg, &mut params); }
+        for arg in &implementation.trait_args {
+            collect_type_params_from_type(arg, &mut params);
+        }
         let mut substitutions = HashMap::new();
-        if !crate::sema::type_pattern_matches(&implementation.for_type, receiver, &params, &mut substitutions) ||
-            !implementation.trait_args.iter().zip(bound_args).all(|(pattern, actual)| crate::sema::type_pattern_matches(pattern, actual, &params, &mut substitutions)) { return None }
-        let method = implementation.methods.iter().find(|method| method.name == parts.field)?;
-        if method.receiver == Some(MirReceiverKind::BorrowMut) && parts.receiver_place.is_none() { return None }
+        if !crate::sema::type_pattern_matches(
+            &implementation.for_type,
+            receiver,
+            &params,
+            &mut substitutions,
+        ) || !implementation
+            .trait_args
+            .iter()
+            .zip(bound_args)
+            .all(|(pattern, actual)| {
+                crate::sema::type_pattern_matches(pattern, actual, &params, &mut substitutions)
+            })
+        {
+            return None;
+        }
+        let method = implementation
+            .methods
+            .iter()
+            .find(|method| method.name == parts.field)?;
+        if method.receiver == Some(MirReceiverKind::BorrowMut) && parts.receiver_place.is_none() {
+            return None;
+        }
         Some(method)
     });
     let method = candidates.next()?;
-    if candidates.next().is_some() { return None }
-    Some(MethodDispatch::Static { function: method.function_name.clone() })
+    if candidates.next().is_some() {
+        return None;
+    }
+    Some(MethodDispatch::Static {
+        function: method.function_name.clone(),
+    })
+}
+
+impl Lowerer<'_> {
+    /// Follow receiverless forwarders after substitution. Each step selects a
+    /// field by its concrete class layout and checks its exact trait bound.
+    /// The leaf names an existing implementation function on both back ends.
+    pub(super) fn associated_alias<'m>(
+        &'m self,
+        mut owner: &'m crate::sema::TraitImplInfo,
+        method: &crate::sema::TraitImplMethodInfo,
+        actual: Type,
+    ) -> Option<String> {
+        let name = &method.decl.name;
+        let mut actual = actual;
+        let mut seen = BTreeSet::new();
+        loop {
+            let method = owner.methods.get(name)?;
+            if !crate::sema::delegation::deferred_associated(owner, method) {
+                return Some(format!(
+                    "{}{} for {}.{}",
+                    owner.trait_name,
+                    format_trait_args(&owner.trait_args),
+                    owner.for_type,
+                    name
+                ));
+            }
+            if !seen.insert((
+                owner.module_name.clone(),
+                owner.trait_name.clone(),
+                actual.to_string(),
+            )) {
+                return None;
+            }
+            let field = &owner.decl.delegation.as_ref()?.0;
+            let Type::Named(class_name, arguments) = &actual else {
+                return None;
+            };
+            let class = self.resolve_class_info(class_name)?;
+            let field_ty = substitute_type(
+                &class.fields.get(field)?.ty,
+                &crate::sema::substitutions_from_decl_type_args(&class.decl.type_params, arguments),
+            );
+            let substitutions = self.trait_impl_substitutions(owner, &actual)?;
+            let bound = TraitBound {
+                trait_name: owner.trait_name.clone(),
+                trait_args: owner
+                    .trait_args
+                    .iter()
+                    .map(|arg| substitute_type(arg, &substitutions))
+                    .collect(),
+            };
+            owner = self
+                .trait_impls_in_scope()
+                .filter(|candidate| {
+                    self.trait_impl_substitutions_for_bound(candidate, &field_ty, &bound)
+                        .is_some()
+                })
+                .max_by_key(|candidate| crate::sema::trait_impl_specificity(candidate))?;
+            actual = field_ty;
+        }
+    }
+}
+
+pub(super) fn associated_alias_for_bound(
+    program: &Program,
+    trait_name: &str,
+    ty: &Type,
+    name: &str,
+) -> Option<String> {
+    let mut candidates = program.trait_impls.iter().chain(program.module_registry.values().flat_map(|namespace| &namespace.trait_impls));
+    if !candidates.any(|owner| owner.decl.delegation.is_some()
+        && owner.methods.get(name).is_some_and(|method| crate::sema::delegation::deferred_associated(owner, method))) {
+        return None;
+    }
+    let resolver = Lowerer::new(
+        program,
+        "",
+        &program.module_name,
+        Type::Unit,
+        BTreeMap::new(),
+    );
+    let owner = resolver
+        .trait_impls_in_scope()
+        .filter(|candidate| {
+            runtime_trait_name(program, &candidate.module_name, &candidate.trait_name) == trait_name
+                && resolver.trait_impl_substitutions(candidate, ty).is_some()
+        })
+        .max_by_key(|candidate| crate::sema::trait_impl_specificity(candidate))?;
+    let method = owner.methods.get(name)?;
+    crate::sema::delegation::deferred_associated(owner, method)
+        .then(|| resolver.associated_alias(owner, method, ty.clone()))
+        .flatten()
 }

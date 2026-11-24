@@ -1866,7 +1866,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
-        let (trait_args, impl_type_params) = if impl_decl.delegation.is_none() && open_assoc_types.is_empty() {
+        let (trait_args, impl_type_params) = if impl_decl.delegation.is_none()
+            && open_assoc_types.is_empty()
+        {
             (trait_args, impl_type_params)
         } else {
             let checker = FunctionChecker::new(
@@ -1885,8 +1887,16 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             );
             let found = if impl_decl.delegation.is_some() {
                 super::delegation::elaborate(
-                    &checker.with_type_params(impl_type_param_scope.clone(), impl_type_param_bounds.clone()),
-                    &mut impl_decl, trait_info, &for_type, &trait_args, &open_assoc_types, &mut forwarded_span,
+                    &checker.with_type_params(
+                        impl_type_param_scope.clone(),
+                        impl_type_param_bounds.clone(),
+                    ),
+                    &mut impl_decl,
+                    trait_info,
+                    &for_type,
+                    &trait_args,
+                    &open_assoc_types,
+                    &mut forwarded_span,
                 )?
             } else {
                 checker.inherited_assoc_types(trait_info, &trait_args, &for_type, &open_assoc_types)

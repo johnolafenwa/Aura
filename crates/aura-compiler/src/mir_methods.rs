@@ -355,7 +355,8 @@ impl Resolver<'_, '_> {
             writes_back: parts.receiver_place.is_some(),
         };
         let dispatch = self.dispatch(&receiver, &call).or_else(|reason| {
-            super::delegation::specialized_dispatch(self.context, function, &receiver, &parts).ok_or(reason)
+            super::delegation::specialized_dispatch(self.context, function, &receiver, &parts)
+                .ok_or(reason)
         })?;
         Ok((dispatch, receiver))
     }
