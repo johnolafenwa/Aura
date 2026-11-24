@@ -28,14 +28,41 @@ case "$arch" in
     ;;
 esac
 
-headers="${AURA_KERNEL_HEADERS_DIR:-${TMPDIR:-/tmp}/aura-kernel-headers-$arch}"
+if [[ -n "${AURA_KERNEL_HEADERS_DIR:-}" ]]; then
+  headers="$AURA_KERNEL_HEADERS_DIR"
+elif [[ -n "${XDG_CACHE_HOME:-}" ]]; then
+  headers="$XDG_CACHE_HOME/aura/kernel-headers-$arch"
+elif [[ -n "${HOME:-}" ]]; then
+  headers="$HOME/.cache/aura/kernel-headers-$arch"
+else
+  headers="$(mktemp -d "${TMPDIR:-/tmp}/aura-kernel-headers-$arch.XXXXXX")"
+fi
+
+if [[ "$headers" == *[[:space:][:cntrl:]]* ]]; then
+  echo "cross-target-env: header directory path must not contain whitespace or control characters" >&2
+  exit 1
+fi
+if [[ -L "$headers" ]]; then
+  echo "cross-target-env: refusing symlink header directory $headers" >&2
+  exit 1
+fi
+if [[ -e "$headers" && ! -d "$headers" ]]; then
+  echo "cross-target-env: header path is not a directory: $headers" >&2
+  exit 1
+fi
 mkdir -p "$headers"
+chmod 0700 "$headers"
+if [[ ! -O "$headers" ]]; then
+  echo "cross-target-env: header directory is not owned by the current user: $headers" >&2
+  exit 1
+fi
+
 for name in linux asm-generic; do
   ln -sfn "/usr/include/$name" "$headers/$name"
 done
 ln -sfn "/usr/include/$arch-linux-gnu/asm" "$headers/asm"
 
-echo "export CC_${arch}_unknown_linux_musl=musl-gcc"
-echo "export CFLAGS_${arch}_unknown_linux_musl='-idirafter $headers'"
-echo "export CC_${other}_unknown_linux_gnu=${other}-linux-gnu-gcc"
-echo "export AURA_TEST_CROSS_TARGETS=${arch}-unknown-linux-musl,${other}-unknown-linux-gnu"
+printf 'export CC_%s_unknown_linux_musl=musl-gcc\n' "$arch"
+printf 'export CFLAGS_%s_unknown_linux_musl=%q\n' "$arch" "-idirafter $headers"
+printf 'export CC_%s_unknown_linux_gnu=%s-linux-gnu-gcc\n' "$other" "$other"
+printf 'export AURA_TEST_CROSS_TARGETS=%s-unknown-linux-musl,%s-unknown-linux-gnu\n' "$arch" "$other"

@@ -1463,6 +1463,69 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 os.kill(stubborn_pid, signal.SIGKILL)
                 self.fail(f"archive smoke left descendant process {stubborn_pid} running")
 
+    def test_cross_target_env_uses_private_directory_and_quotes_exports(self) -> None:
+        script = REPO_ROOT / "scripts/cross-target-env.sh"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            env = dict(os.environ)
+            env["HOME"] = str(tmp_path / "home")
+            env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
+            env["TMPDIR"] = str(tmp_path / "tmp")
+            env.pop("AURA_KERNEL_HEADERS_DIR", None)
+
+            result = subprocess.run(
+                ["bash", str(script)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertNotIn(str(tmp_path / "tmp" / "aura-kernel-headers"), result.stdout)
+            headers_dir = tmp_path / "cache" / "aura" / f"kernel-headers-{os.uname().machine}"
+            self.assertTrue(headers_dir.is_dir())
+            self.assertEqual(headers_dir.stat().st_mode & 0o777, 0o700)
+
+            # A path with a single quote must never break out of shell quoting under eval.
+            quoted_dir = tmp_path / "dir'with'quote"
+            env_quoted = dict(env)
+            env_quoted["AURA_KERNEL_HEADERS_DIR"] = str(quoted_dir)
+            quoted_run = subprocess.run(
+                ["bash", str(script)],
+                env=env_quoted,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            eval_check = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'eval "$1"; printf "%s" "$CFLAGS_{os.uname().machine}_unknown_linux_musl"',
+                    "_",
+                    quoted_run.stdout,
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertEqual(eval_check.stdout, f"-idirafter {quoted_dir}")
+
+            # A pre-existing symlink at AURA_KERNEL_HEADERS_DIR must be rejected.
+            symlink_target = tmp_path / "target"
+            symlink_target.mkdir()
+            symlink_path = tmp_path / "symlink-headers"
+            symlink_path.symlink_to(symlink_target)
+            env_symlink = dict(env)
+            env_symlink["AURA_KERNEL_HEADERS_DIR"] = str(symlink_path)
+            symlink_run = subprocess.run(
+                ["bash", str(script)],
+                env=env_symlink,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(symlink_run.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
