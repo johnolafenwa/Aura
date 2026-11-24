@@ -97,7 +97,7 @@ fn frozen_projection_fixture_emits_without_hosted_symbols() {
 
 #[test]
 fn unsupported_frozen_operations_keep_the_freestanding_subset_diagnostic() {
-    let source = "const table = [11, 13]\nexport \"C\" def copy_size() -> int64:\n    return table.clone().len()\n";
+    let source = "const table = [11, 13]\nexport \"C\" def copy_size() -> int64:\n    return table.count(11)\n";
     let mir = crate::lower_source_to_mir(source).unwrap();
     let errors = crate::native_codegen::check_freestanding(&mir);
     assert!(
