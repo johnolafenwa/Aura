@@ -79,6 +79,15 @@ impl FunctionCompiler<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn class_drop_stamps_a_decorated_callable_without_leaving_temporaries() {
+        let module = crate::lower_source_to_mir(include_str!(
+            "../tests/fixtures/run-pass/class_items_together.au"
+        ))
+        .unwrap();
+        super::emit_host_object(&module).expect("an owned inline callable can enter its body");
+    }
+
+    #[test]
     fn class_drop_nested_records_preserve_each_owned_field_as_a_handle() {
         use aura_core::layout::LayoutKind;
         let module = crate::lower_source_to_mir(include_str!(
@@ -232,6 +241,9 @@ impl FunctionCompiler<'_> {
         let Some(rank) = self.class_owners.ranks.get(place).copied() else {
             return Ok(());
         };
+        // Boxing an inline callable or union for this borrowed runtime call
+        // creates a temporary. Its lifetime ends with the rank update.
+        let baseline = self.layout_scratch.clone();
         let owner = self.load_root(place)?;
         let owner = self.ensure_opaque(owner)?;
         let previous = self.builder.use_var(rank);
@@ -244,6 +256,7 @@ impl FunctionCompiler<'_> {
         let stamp = self.builder.import_function(id);
         let result = self.builder.call(stamp, &[owner.values[0], previous]);
         self.builder.def_var(rank, result.results[0]);
+        self.release_temporary_owned_since(&baseline);
         Ok(())
     }
 
