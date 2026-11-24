@@ -3279,6 +3279,7 @@ pub fn with_array_allocation_budget<T>(
 }
 
 pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    crate::builtin_limit::check((len as u64).saturating_mul(std::mem::size_of::<T>() as u64))?;
     #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
@@ -11838,6 +11839,7 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > limit {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -11867,6 +11869,7 @@ pub fn append_text_checked_with(output: &mut Text, text: &str, ascii: bool) -> R
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > MAX_STRING_BYTES {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -20109,6 +20112,14 @@ fn json_parse_success_value(value: ParsedJson) -> Result<Value> {
 fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     let error = json_parse_error_value(error)?;
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
+}
+
+/// Parses on the caller's stack, preserving its resource budget. The compiler
+/// provides a dedicated bounded-evaluation stack for this entry point.
+pub fn json_parse_on_caller(source: &str) -> Result<Value> {
+    json_parse_outcome_to_runtime(
+        json_parse_runtime(source, false).map_err(JsonCodecServiceError::Codec),
+    )
 }
 
 pub fn json_parse_owned_to_runtime(
