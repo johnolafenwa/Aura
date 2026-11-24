@@ -7,6 +7,8 @@
 //! payload's box in it instead, or null for `Lookup.Missing`. The match
 //! then tests the word for null, and the payload is a new reference to the
 //! same box. No `Lookup` is built, tagged, matched by name, or copied.
+//! `table.remove(key)` is kept the same way, with the removed value's box:
+//! a `remove` whose result is dropped builds nothing.
 //!
 //! A queue receive (`queue.get()` or a `for` loop over a queue) is kept the
 //! same way when its match tests only `QueueReceive.Item`: the slot holds
@@ -28,9 +30,19 @@ use crate::mir::{
 };
 use crate::runtime_ops::{DictOp, FunctionOp, HostBuiltin, ListOp, QueueOp, RuntimeOp};
 
-/// Whether `value` looks a key up in a `dict` with `get`.
+/// Whether `value` looks a key up in a `dict` with `get`. A `remove` makes
+/// a `Lookup` too, but its value has left the dict, so nothing lends it.
 pub(super) fn is_dict_get(value: &Rvalue) -> bool {
-    slot_kind(value) == Some(SlotKind::Lookup)
+    matches!(
+        value,
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64),
+                ..
+            },
+            ..
+        }
+    )
 }
 
 /// What a slot's temporary would otherwise hold.
@@ -116,7 +128,7 @@ fn slot_kind(value: &Rvalue) -> Option<SlotKind> {
             callee: CallTarget::Runtime { op, .. },
             ..
         } => match op {
-            RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64) => {
+            RuntimeOp::Dict(DictOp::Get | DictOp::GetStr | DictOp::GetInt64 | DictOp::Remove) => {
                 Some(SlotKind::Lookup)
             }
             RuntimeOp::Queue(
@@ -378,6 +390,59 @@ fn payload_slots(
         .map(|name| (*name).to_owned())
         .collect();
     (slots.into_iter().map(str::to_string).collect(), words)
+}
+
+/// The lookup slots of `function` that hold a `remove` nothing reads: each
+/// is assigned only from `remove` and is otherwise only released or
+/// evaluated and dropped. Native code drops the removed entry where it
+/// removes it and keeps null in the slot.
+pub(super) fn dropped_removes(function: &MirFunction, slots: &HashSet<String>) -> HashSet<String> {
+    let mut dropped = HashSet::<&str>::new();
+    let mut read = HashSet::<&str>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::Assign {
+                    target,
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    op: RuntimeOp::Dict(DictOp::Remove),
+                                    ..
+                                },
+                            ..
+                        },
+                } if slots.contains(target) => {
+                    dropped.insert(target);
+                    // The call's own operands are not reads of its target.
+                    let mut mentions = Vec::new();
+                    instruction_place_mentions(instruction, &mut mentions);
+                    read.extend(mentions.into_iter().filter(|place| place != target));
+                }
+                Instruction::Release { place }
+                | Instruction::Eval {
+                    value: Operand::Place(place) | Operand::MovePlace(place),
+                } if slots.contains(place) => {}
+                other => {
+                    let mut mentions = Vec::new();
+                    instruction_place_mentions(other, &mut mentions);
+                    if let Instruction::Assign { target, .. }
+                    | Instruction::ReadLoan { target, .. } = other
+                    {
+                        mentions.push(target);
+                    }
+                    read.extend(mentions);
+                }
+            }
+        }
+        read.extend(terminator_place_mentions(&block.terminator));
+    }
+    dropped
+        .into_iter()
+        .filter(|slot| !read.contains(slot))
+        .map(str::to_string)
+        .collect()
 }
 
 #[cfg(test)]
