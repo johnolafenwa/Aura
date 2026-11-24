@@ -1656,25 +1656,42 @@ impl<'a> Exec<'a> {
                 collect_writes(&blocks[block], &loan_roots, true, &mut lp.writes);
             }
             lp.writes.extend(self.captured.iter().cloned());
-            let mut defs: BTreeMap<&str, Vec<&Rvalue>> = BTreeMap::new();
-            for &block in &lp.body {
-                for instruction in &blocks[block].instructions {
-                    if let Instruction::Assign { target, value } = instruction {
-                        defs.entry(target.as_str()).or_default().push(value);
-                    }
-                }
-            }
             let mut steps: BTreeMap<String, Option<Step>> = BTreeMap::new();
             for &block in &lp.body {
-                for instruction in &blocks[block].instructions {
+                let mut block_defs: BTreeMap<&str, (usize, &Rvalue)> = BTreeMap::new();
+                for (pos, instruction) in blocks[block].instructions.iter().enumerate() {
                     if let Instruction::Assign { target, value } = instruction {
-                        if target.contains('.') {
-                            continue;
+                        if !target.contains('.') {
+                            let step = counter_step(target, value, pos, &block_defs, 0);
+                            let slot = steps.entry(target.clone()).or_insert(step);
+                            if *slot != step {
+                                *slot = None;
+                            }
                         }
-                        let step = counter_step(target, value, &defs, 0);
-                        let slot = steps.entry(target.clone()).or_insert(step);
-                        if *slot != step {
-                            *slot = None;
+                    }
+                    let mut written = BTreeSet::new();
+                    collect_instruction_writes(instruction, &loan_roots, true, &mut written);
+                    for name in &written {
+                        block_defs.remove(name.as_str());
+                    }
+                    if let Instruction::Assign { target, value } = instruction {
+                        if !target.contains('.')
+                            && !self.captured.contains(target)
+                            && !loan_roots.values().any(|roots| roots.contains(target))
+                        {
+                            // Keep the plain assignment only when the rvalue itself did not also
+                            // write back into `target`.
+                            let mut rvalue_written = BTreeSet::new();
+                            rvalue_writes(value, &mut |place| {
+                                let root = root_of(place);
+                                rvalue_written.insert(root.to_string());
+                                if let Some(sources) = loan_roots.get(root) {
+                                    rvalue_written.extend(sources.iter().cloned());
+                                }
+                            });
+                            if !rvalue_written.contains(target) {
+                                block_defs.insert(target.as_str(), (pos, value));
+                            }
                         }
                     }
                 }
@@ -1684,11 +1701,12 @@ impl<'a> Exec<'a> {
                 .filter_map(|(name, step)| step.map(|step| (name, step)))
                 .filter(|(name, _)| {
                     lp.writes.contains(name)
+                        && !self.captured.contains(name)
                         && !loan_roots.values().any(|roots| roots.contains(name))
                 })
                 .collect();
-            // A local some other instruction writes is no counter.
-            let mut other = BTreeSet::new();
+            // A local some other instruction or closure writes is no counter.
+            let mut other = self.captured.clone();
             for &block in &lp.body {
                 let mut writes = BTreeSet::new();
                 collect_writes(&blocks[block], &loan_roots, false, &mut writes);
@@ -5471,14 +5489,17 @@ fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, BTreeSet<String>> {
     roots
 }
 
-/// The direction a write `target = value` steps `target`, when `value`
-/// is a value `target` had in the loop plus or minus a constant. `defs`
-/// holds every assignment the loop makes, by target, so a chain of
-/// temporaries such as `t = i; k = 1; s = t + k; i = s` counts.
+/// The direction a write `target = value` at instruction `pos` steps `target`,
+/// when `value` is a value `target` had earlier in the same block plus or minus
+/// a non-negative constant. `block_defs` maps each local to its most recent
+/// dominating same-block assignment, so a chain of temporaries such as
+/// `t = i; k = 1; s = t + k; i = s` counts only when every temporary was defined
+/// in the same block strictly before its use.
 fn counter_step(
     target: &str,
     value: &Rvalue,
-    defs: &BTreeMap<&str, Vec<&Rvalue>>,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
     depth: usize,
 ) -> Option<Step> {
     if depth > 8 {
@@ -5490,7 +5511,9 @@ fn counter_step(
             left,
             right,
             ..
-        } if reads_target(target, left, defs, 0) && is_constant(right, defs, 0) => {
+        } if reads_target(target, left, max_pos, block_defs, 0)
+            && is_constant(right, max_pos, block_defs, 0) =>
+        {
             Some(if *op == BinaryOp::Add {
                 Step::Up
             } else {
@@ -5498,27 +5521,23 @@ fn counter_step(
             })
         }
         Rvalue::Use(Operand::Place(temp) | Operand::MovePlace(temp)) if temp != target => {
-            let values = defs.get(temp.as_str())?;
-            let mut step = None;
-            for value in values {
-                let next = counter_step(target, value, defs, depth + 1)?;
-                if step.is_some() && step != Some(next) {
-                    return None;
-                }
-                step = Some(next);
+            let &(def_pos, def_value) = block_defs.get(temp.as_str())?;
+            if def_pos >= max_pos {
+                return None;
             }
-            step
+            counter_step(target, def_value, def_pos, block_defs, depth + 1)
         }
         _ => None,
     }
 }
 
-/// Whether `operand` holds a value `target` had: `target` itself, or a
-/// temporary every assignment of which copies one.
+/// Whether `operand` holds the value `target` had: `target` itself, or a
+/// temporary assigned from it earlier in the same block.
 fn reads_target(
     target: &str,
     operand: &Operand,
-    defs: &BTreeMap<&str, Vec<&Rvalue>>,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
     depth: usize,
 ) -> bool {
     let (Operand::Place(place) | Operand::MovePlace(place)) = operand else {
@@ -5530,26 +5549,37 @@ fn reads_target(
     if depth > 8 {
         return false;
     }
-    match defs.get(place.as_str()) {
-        Some(values) if !values.is_empty() => values.iter().all(|value| match value {
-            Rvalue::Use(operand) => reads_target(target, operand, defs, depth + 1),
-            _ => false,
-        }),
+    let Some(&(def_pos, value)) = block_defs.get(place.as_str()) else {
+        return false;
+    };
+    if def_pos >= max_pos {
+        return false;
+    }
+    match value {
+        Rvalue::Use(inner) => reads_target(target, inner, def_pos, block_defs, depth + 1),
         _ => false,
     }
 }
 
 /// Whether `operand` is a non-negative constant, directly or through
-/// temporaries the loop sets only to constants.
-fn is_constant(operand: &Operand, defs: &BTreeMap<&str, Vec<&Rvalue>>, depth: usize) -> bool {
+/// temporaries set to a non-negative constant earlier in the same block.
+fn is_constant(
+    operand: &Operand,
+    max_pos: usize,
+    block_defs: &BTreeMap<&str, (usize, &Rvalue)>,
+    depth: usize,
+) -> bool {
     match operand {
         Operand::Int(_) => true,
         Operand::Place(place) | Operand::MovePlace(place) if depth <= 8 => {
-            match defs.get(place.as_str()) {
-                Some(values) if !values.is_empty() => values.iter().all(|value| match value {
-                    Rvalue::Use(operand) => is_constant(operand, defs, depth + 1),
-                    _ => false,
-                }),
+            let Some(&(def_pos, value)) = block_defs.get(place.as_str()) else {
+                return false;
+            };
+            if def_pos >= max_pos {
+                return false;
+            }
+            match value {
+                Rvalue::Use(inner) => is_constant(inner, def_pos, block_defs, depth + 1),
                 _ => false,
             }
         }
@@ -5557,10 +5587,8 @@ fn is_constant(operand: &Operand, defs: &BTreeMap<&str, Vec<&Rvalue>>, depth: us
     }
 }
 
-/// Every root local `block` may write. With `root_assigns` false, a plain
-/// `Assign` to a root local does not count.
-fn collect_writes(
-    block: &BasicBlock,
+fn collect_instruction_writes(
+    instruction: &Instruction,
     loan_roots: &BTreeMap<String, BTreeSet<String>>,
     root_assigns: bool,
     writes: &mut BTreeSet<String>,
@@ -5572,25 +5600,40 @@ fn collect_writes(
             writes.extend(sources.iter().cloned());
         }
     };
-    for instruction in &block.instructions {
-        match instruction {
-            Instruction::Assign { target, value } => {
-                if root_assigns || target.contains('.') {
-                    place(target);
-                }
-                rvalue_writes(value, &mut place);
+    match instruction {
+        Instruction::Assign { target, value } => {
+            if root_assigns || target.contains('.') {
+                place(target);
             }
-            Instruction::WriteLoan { loan, value } => {
-                place(loan);
-                rvalue_writes(value, &mut place);
-            }
-            Instruction::ReadLoan { target, .. } => place(target),
-            Instruction::PopCleanup { place: p, .. } => place(p),
-            _ => {}
+            rvalue_writes(value, &mut place);
         }
+        Instruction::WriteLoan { loan, value } => {
+            place(loan);
+            rvalue_writes(value, &mut place);
+        }
+        Instruction::ReadLoan { target, .. } => place(target),
+        Instruction::PopCleanup { place: p, .. } => place(p),
+        _ => {}
+    }
+}
+
+/// Every root local `block` may write. With `root_assigns` false, a plain
+/// `Assign` to a root local does not count.
+fn collect_writes(
+    block: &BasicBlock,
+    loan_roots: &BTreeMap<String, BTreeSet<String>>,
+    root_assigns: bool,
+    writes: &mut BTreeSet<String>,
+) {
+    for instruction in &block.instructions {
+        collect_instruction_writes(instruction, loan_roots, root_assigns, writes);
     }
     if let Terminator::ForRange { binding, .. } = &block.terminator {
-        place(binding);
+        let root = root_of(binding);
+        writes.insert(root.to_string());
+        if let Some(sources) = loan_roots.get(root) {
+            writes.extend(sources.iter().cloned());
+        }
     }
 }
 

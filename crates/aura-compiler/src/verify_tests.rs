@@ -4462,3 +4462,98 @@ def main():
     let output = crate::run_source(source).expect("runtime must agree with verifier on float32");
     assert_eq!(output.stdout.trim(), "42");
 }
+
+#[test]
+fn loop_counter_monotonicity_rejects_preloop_and_captured_mutations() {
+    let cases: [(&str, &str); 4] = [
+        (
+            "pre-loop negative step variable assigned after use",
+            r#"
+def f(n: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    mut i = 0
+    mut k = -100
+    while i < n:
+        i = i + k
+        k = 1
+    assert i >= 0
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "pre-loop negative temp variable assigned after use",
+            r#"
+def f(n: int64) -> int64:
+    mut i = 0
+    mut t = -999
+    while i < n:
+        i = t + 1
+        t = i
+    assert i >= 0
+    return i
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "conditionally assigned step variable",
+            r#"
+def f(n: int64, flag: bool) -> int64:
+    mut i = 0
+    mut k = -100
+    while i < n:
+        if flag:
+            k = 1
+        i = i + k
+    assert i >= 0
+    return i
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure-mutated loop counter",
+            r#"
+def set_neg(x: mut int64):
+    x = -100
+
+def f(n: int64, xs: list[int64]) -> int64:
+    requires n >= 0 and len(xs) == n
+    mut i = 0
+    mut total = 0
+    while i < n:
+        assert i >= 0
+        total = xs[i]
+        mut corrupt: def(int64) -> None = lambda [mut i] _: set_neg(i)
+        corrupt(0)
+        i = i + 1
+    return total
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    let mut falsely_proved = Vec::new();
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let assert_open = report
+            .obligations
+            .iter()
+            .any(|ob| ob.kind == ObligationKind::Assert && !matches!(ob.status, Status::Proved));
+        if !assert_open {
+            falsely_proved.push(label);
+        }
+    }
+    assert!(
+        falsely_proved.is_empty(),
+        "loop counter monotonicity falsely proved: {falsely_proved:?}"
+    );
+}
