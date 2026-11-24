@@ -288,3 +288,13 @@ fn static_initializer_uses_the_imported_record_definition() {
     )
     .unwrap();
 }
+
+#[test]
+fn inline_union_fields_contribute_their_tag_and_payload_to_outer_unions() {
+    let source = "copy class Reading:\n    value: int32 | None\nmut current: Reading | None = Reading(value=-7)\nexport \"C\" def clear():\n    current = None\n";
+    let checked = program(source).unwrap();
+    let bytes = &checked.constants["current"].state.as_ref().unwrap().bytes;
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(&bytes[16..], &(-7_i64).to_le_bytes());
+    emit_freestanding_object(&lower_to_mir(&checked),"nested.au", source, FreestandingTarget::X86_64).unwrap();
+}
