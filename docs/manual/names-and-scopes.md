@@ -279,7 +279,7 @@ Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `proc
 
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment, separate from module storage. They run in source order after the reachable module constants finish initializing.
 
-A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
+In a hosted entry script without an export or an explicit `main`, a `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
 A bare assignment to a new name depends on where it appears:
 
@@ -298,7 +298,7 @@ total = scores.len()              # immutable top-level local
 print(f"{total} of {limit}")
 ```
 
-A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
+A `public` binding belongs to module scope. A declaration such as `public name = value` after the first executable statement produces `AU1101`. Functions can see module bindings. Top-level script locals belong to the entry statements.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 

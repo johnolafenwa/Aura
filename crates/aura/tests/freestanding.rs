@@ -531,6 +531,39 @@ fn proved_checks_are_removed_from_a_freestanding_object() {
     assert!(!object
         .windows(b"aura_trap".len())
         .any(|window| window == b"aura_trap"));
+
+    workspace.write(
+        "state.au",
+        r#"
+mut tick: uint64 = 0
+
+def update(value: uint64):
+    tick = value
+
+export "C" def snapshot(value: uint64):
+    before = tick
+    update(value)
+    assert tick == before
+"#,
+    );
+    let output = workspace.aura(&[
+        "build",
+        "--freestanding",
+        "--remove-proved-checks",
+        "-o",
+        "state.o",
+        "state.au",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("0 checks proved and removed"),
+        "{}",
+        stderr(&output)
+    );
+    let object = fs::read(workspace.path.join("state.o")).unwrap();
+    assert!(object
+        .windows(b"aura_trap".len())
+        .any(|name| name == b"aura_trap"));
 }
 
 const MEMORY_MANIFEST: &str =
@@ -710,6 +743,12 @@ fn module_state_keeps_its_value_between_calls() {
         "state.au",
         include_str!("../../aura-compiler/tests/fixtures/freestanding/module_state/counter.au"),
     );
+    for backend in ["mir", "direct"] {
+        let output = workspace.aura(&["run", "--backend", backend, "state.au"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("AU3030"), "{}", stderr(&output));
+        assert!(stderr(&output).contains("sync.Mutex"));
+    }
     let output = workspace.aura(&["build", "--freestanding", "-o", "state.o", "state.au"]);
     assert!(output.status.success(), "{}", stderr(&output));
     if cfg!(target_os = "linux") {

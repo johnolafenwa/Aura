@@ -2473,13 +2473,13 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
         }
         let retained = initialized
             .iter()
-            .filter_map(|(index, _)| {
+            .filter(|(index, _)| {
                 object.data[*index]
                     .contents
-                    .as_ref()?
-                    .preserve_address
-                    .then(|| globals[*index].as_pointer_value())
+                    .as_ref()
+                    .is_some_and(|data| data.preserve_address)
             })
+            .map(|(index, _)| globals[*index].as_pointer_value())
             .collect::<Vec<_>>();
         if !retained.is_empty() {
             let pointers = context
