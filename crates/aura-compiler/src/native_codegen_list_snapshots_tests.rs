@@ -53,8 +53,19 @@ def iterates(ps: list[Point]) -> float64:
         i += 1
     return total
 
+def scalars(xs: list[int64], ys: mut list[float64], n: int64) -> int64:
+    mut total: int64 = 0
+    mut i = 0
+    while i < n:
+        total += xs[i * 2] + len(ys)
+        ys[i * 2] = 1.5
+        i += 1
+    return total
+
 def main():
     mut ps = [Point(x=1.0, y=2.0)]
+    mut ys = [0.5, 0.25, 0.125]
+    print(scalars([1, 2, 3], ys, 2))
     print(reads(ps))
     print(loans(3))
     print(grows(3))
@@ -120,6 +131,28 @@ fn a_for_loop_over_a_list_reads_its_view_once_too() {
     assert_eq!(
         list_snapshot_regions(&function, |_| false, |_| true),
         Vec::new()
+    );
+}
+
+#[test]
+fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
+    use crate::runtime_ops::ScalarElement;
+    let scalars = function("scalars");
+    let found = regions("scalars", true);
+    let kind = |list: &str| {
+        let region = found
+            .iter()
+            .find(|region| region.list == list)
+            .unwrap_or_else(|| panic!("`{list}` should have a loop"));
+        super::region_scalar_element(&scalars, region)
+    };
+    assert_eq!(kind("xs"), Some(ScalarElement::Int64));
+    assert_eq!(kind("ys"), Some(ScalarElement::Float64));
+    // A loop that reads plain records names no scalar kind.
+    let reads = regions("reads", true);
+    assert_eq!(
+        super::region_scalar_element(&function("reads"), &reads[0]),
+        None
     );
 }
 

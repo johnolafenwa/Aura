@@ -731,6 +731,8 @@ struct NativeCodegen<'a> {
     /// check the machine stack, and count the task's call fuel unless
     /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
+    /// The functions a frameless function may call (see `total_leaves`).
+    total_leaves: HashSet<String>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -1049,6 +1051,7 @@ impl<'a> NativeCodegen<'a> {
                 _ => None,
             })
             .collect::<HashSet<_>>();
+        let total_leaves = total_leaves(module, &classes);
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1104,7 +1107,10 @@ impl<'a> NativeCodegen<'a> {
                 if small_leaf(function) {
                     object.mark_inline(sinkless_id);
                 }
-            } else if small_leaf(function) && frameless_leaf(function, &classes) {
+            } else if small_leaf(function)
+                && (frameless_leaf(function, &classes)
+                    || frameless_caller(function, &classes, &total_leaves))
+            {
                 object.mark_inline(func_id);
             }
             if freestanding.is_none()
@@ -1218,8 +1224,10 @@ impl<'a> NativeCodegen<'a> {
                 .functions
                 .iter()
                 .filter(|function| {
+                    // A total leaf is passed words, never the box.
                     boxed_receiver_fields(function, &classes).is_some()
-                        && leaf_body(function, &classes)
+                        && (leaf_body(function, &classes)
+                            || frameless_caller(function, &classes, &total_leaves))
                 })
                 .map(|function| function.name.clone())
                 .collect(),
@@ -1250,6 +1258,7 @@ impl<'a> NativeCodegen<'a> {
             reachable_blocks,
             safepoints_enabled,
             recursive_functions,
+            total_leaves,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
@@ -1676,10 +1685,12 @@ impl<'a> NativeCodegen<'a> {
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
         let checked_entry = self.recovery_functions.get(&function.name) == Some(&func_id);
+        let calls_total_leaves = frameless_caller(function, &self.classes, &self.total_leaves);
         let frameless = checked_entry
             || self.freestanding.is_some()
             || frameless_leaf(function, &self.classes)
-            || (without_sinks && leaf_body(function, &self.classes));
+            || (without_sinks && leaf_body(function, &self.classes))
+            || calls_total_leaves;
         let (mut body, entered_in_runtime) = if frameless {
             (entry, builder.iconst(types::I64, 0))
         } else {
@@ -1692,7 +1703,12 @@ impl<'a> NativeCodegen<'a> {
         // This entry admits only total scalar work and failed checks. It
         // cannot reenter Aura, even when the conservative call graph marks
         // the ordinary entry as a possible target of a callback.
-        if !checked_entry && self.recursive_functions.contains(&function.name) {
+        // A function that only calls total leaves is on no cycle, whatever
+        // the conservative call graph says of the names in its body.
+        if !checked_entry
+            && !calls_total_leaves
+            && self.recursive_functions.contains(&function.name)
+        {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -2532,9 +2548,14 @@ impl<'a> NativeCodegen<'a> {
                 }),
             };
             let sink = mutable_param_indices.get(&region.list).copied();
+            let scalar = match array {
+                Some(_) => None,
+                None => list_snapshots::region_scalar_element(function, &region),
+            };
             Some(list_snapshots::ListSnapshot {
                 array,
                 range,
+                scalar,
                 sink,
                 region,
                 ok,
@@ -9215,6 +9236,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(is_zero, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        // A frameless function divides floats, and the call chain of the
+        // failure names it.
+        self.push_frameless_frame();
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
@@ -13868,6 +13892,9 @@ impl<'a> FunctionCompiler<'a> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
+        // The runtime call serves a list in another form and reports an
+        // index out of range.
+        self.builder.set_cold_block(slow_block);
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
@@ -14094,6 +14121,9 @@ impl<'a> FunctionCompiler<'a> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let (access, stride) = scalar_list_slot(kind);
         let slow_block = self.builder.create_block();
+        // The runtime call serves a list in another form and reports an
+        // index out of range.
+        self.builder.set_cold_block(slow_block);
         let fast_block = self.builder.create_block();
         let store_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -14254,28 +14284,35 @@ impl<'a> FunctionCompiler<'a> {
         slow: Blk,
     ) -> Val {
         let len = self.list_view_word(list, list_snapshots::ViewWord::Len);
-        let zero = self.builder.iconst(types::I64, 0);
-        let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
-        let from_end = self.builder.iadd(len, index);
-        let mut position = self.builder.select(negative, from_end, index);
-        // One unsigned compare also rejects a position below zero.
-        let mut out_of_range = self
-            .builder
-            .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        // One unsigned compare passes an index from zero up to the length.
+        // Any other is counted from the end off the hot path, where the
+        // same compare rejects one out of range: a sum that is not below
+        // the length, also when the index is far above it and the sum
+        // wraps.
+        let mut forward = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
         if let Some(snapshot) = self.range_covered(list) {
             // The loop's copy for a qualifying view checked the whole
             // range where it was entered, so the index is the position
             // there.
-            let outside = self.builder.uextend(types::I64, out_of_range);
-            let outside = self.keep_in_copy(snapshot, zero, outside);
-            out_of_range = self.builder.icmp_imm(IntCC::NotEqual, outside, 0);
-            position = self.keep_in_copy(snapshot, index, position);
+            let inside = self.builder.uextend(types::I64, forward);
+            let one = self.builder.iconst(types::I64, 1);
+            let inside = self.keep_in_copy(snapshot, one, inside);
+            forward = self.builder.icmp_imm(IntCC::NotEqual, inside, 0);
         }
         let in_range = self.builder.create_block();
-        self.builder.brif(out_of_range, slow, &[], in_range, &[]);
+        self.builder.append_block_param(in_range, types::I64);
+        let wrap = self.builder.create_block();
+        self.builder.set_cold_block(wrap);
+        self.builder.brif(forward, in_range, &[index], wrap, &[]);
+        self.builder.switch_to_block(wrap);
+        self.builder.seal_block(wrap);
+        let from_end = self.builder.iadd(len, index);
+        let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
+        self.builder
+            .brif(counted, in_range, &[from_end], slow, &[]);
         self.builder.switch_to_block(in_range);
         self.builder.seal_block(in_range);
-        position
+        self.builder.block_params(in_range)[0]
     }
 
     fn emit_vec_index_failure_guard(
@@ -19916,6 +19953,69 @@ fn reads_numeric_c_union_member(instruction: &Instruction) -> bool {
 
 /// The body rule of `frameless_leaf`.
 fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    leaf_body_calling(function, classes, None)
+}
+
+/// The functions of `module` a frameless function may call and stay
+/// frameless: a frameless leaf that only reads its words and that nothing
+/// can stop, so it has no trap path that would push its own frame record
+/// with its caller's missing below it, and no safepoint to wait at. Its
+/// instructions are copies, field reads, constructions, the float forms of
+/// `abs` and `sqrt`, and arithmetic with no check.
+fn total_leaves(module: &MirModule, classes: &HashMap<String, MirClass>) -> HashSet<String> {
+    let total = |function: &&MirFunction| {
+        frameless_leaf(function, classes)
+            && !takes_mutable(function)
+            && boxed_receiver_fields(function, classes).is_none()
+            && function.blocks.iter().all(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .all(|instruction| match instruction {
+                        Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                        Instruction::Assign { value, .. } => match value {
+                            Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. } => {
+                                *trap == ArithmeticTrap::None
+                            }
+                            Rvalue::Use(_)
+                            | Rvalue::Member { .. }
+                            | Rvalue::Construct { .. }
+                            | Rvalue::Call { .. } => true,
+                            _ => false,
+                        },
+                        _ => false,
+                    })
+            })
+    };
+    module
+        .functions
+        .iter()
+        .filter(total)
+        .map(|function| function.name.clone())
+        .collect()
+}
+
+/// Whether `function` keeps no frame record although it calls functions:
+/// each call is a direct one of a function of `total` (see `total_leaves`),
+/// and the rest of its body is a leaf's (see `frameless_leaf`). Such a
+/// callee reads no frame and cannot stop the program, so the only trap
+/// paths are the function's own, which push its record as a leaf's do. It
+/// is on no call cycle, since its callees call nothing.
+fn frameless_caller(
+    function: &MirFunction,
+    classes: &HashMap<String, MirClass>,
+    total: &HashSet<String>,
+) -> bool {
+    !takes_mutable(function) && leaf_body_calling(function, classes, Some(total))
+}
+
+/// The body rule of `frameless_leaf`, which with `total` also admits a
+/// direct call of a function it names.
+fn leaf_body_calling(
+    function: &MirFunction,
+    classes: &HashMap<String, MirClass>,
+    total: Option<&HashSet<String>>,
+) -> bool {
     fn words_only(ty: &DirectType) -> bool {
         match ty {
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
@@ -20025,6 +20125,27 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
                         args,
                         ..
                     } => matches!(args.as_slice(), [argument] if float_operand(&argument.value)),
+                    Rvalue::Call {
+                        callee,
+                        args,
+                        type_args,
+                    } => {
+                        let callee = match callee {
+                            CallTarget::Name(name) => Some(name),
+                            CallTarget::Member {
+                                object,
+                                dispatch: Some(MethodDispatch::Static { function }),
+                                ..
+                            } if plain_operand(object) => Some(function),
+                            _ => None,
+                        };
+                        callee.is_some_and(|name| total.is_some_and(|total| total.contains(name)))
+                            && type_args.is_empty()
+                            && args.iter().all(|argument| {
+                                argument.writeback_place.is_none()
+                                    && plain_operand(&argument.value)
+                            })
+                    }
                     Rvalue::Unary { value, .. } => plain_operand(value),
                     Rvalue::UnionTagTest { .. } => true,
                     Rvalue::UnionTakePayload { .. } => true,

@@ -107,6 +107,45 @@ def lanes(xs: list[float64]) -> float64:
         acc = acc + F64x4.load(xs, i)
     return acc.sum()
 
+def pairs(xs: mut list[float64], ms: list[float64]):
+    for i in range(5):
+        for j in range(i + 1, 5):
+            xs[i] -= ms[j]
+            xs[j] += ms[i]
+
+def pairs_before(xs: list[int64], n: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(n):
+        for j in range(i - 1, 4):
+            total += xs[j]
+    return total
+
+def pairs_from(xs: list[int64], n: int64, start: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(n):
+        for j in range(start, n):
+            total += xs[j]
+    return total
+
+def chained(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for i in range(6):
+        for j in range(i + 1, 7):
+            for k in range(j + 1, 8):
+                total += xs[k]
+    return total
+
+def deep(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for a in range(2):
+        for b in range(a + 1, 3):
+            for c in range(b + 1, 4):
+                for d in range(c + 1, 5):
+                    for e in range(d + 1, 6):
+                        for f in range(e + 1, 7):
+                            total += xs[f] + xs[b]
+    return total
+
 def main():
     mut ys = [1.0, 2.0, 3.0]
     xs = [0.5, 0.25, 0.125]
@@ -127,6 +166,13 @@ def main():
     print(reset_from_local(ints, 9, 9))
     print(two_tests(ints, 9, 2000))
     print(stepped(ints))
+    mut ps = [1.0, 2.0, 3.0, 4.0, 5.0]
+    pairs(ps, [0.5, 0.25, 0.125, 2.0, 4.0])
+    print(ps)
+    print(pairs_before(ints, 3))
+    print(pairs_from(ints, 3, 1))
+    print(chained(ints))
+    print(deep(ints))
 "#;
 
 fn function(name: &str) -> MirFunction {
@@ -356,4 +402,61 @@ fn a_lane_load_asks_for_one_guard_of_each_kind() {
     // inside the list from the entry and from the advance.
     assert_eq!(at_least(&xs.guards), vec![0]);
     assert_eq!(within(&xs.guards), vec![4, 7]);
+}
+
+#[test]
+fn an_inner_loop_that_starts_beside_the_outer_counter_is_covered() {
+    // `xs[i]` and `xs[j]`, each read and written. The inner counter starts
+    // at `i + 1` and stops at a constant the outer loop sets on each round.
+    let xs = proof("pairs", "xs");
+    assert_eq!(xs.covered.len(), 4, "{xs:?}");
+    assert!(at_least(&xs.guards).iter().all(|least| *least == 0));
+    assert!(within(&xs.guards).iter().all(|distance| *distance == 0));
+    assert!(xs.guards.iter().any(|guard| matches!(
+        guard,
+        RangeGuard::Within {
+            bound: RangeBound::Int(5),
+            distance: 0
+        }
+    )));
+    let ms = proof("pairs", "ms");
+    assert_eq!(ms.covered.len(), 2, "{ms:?}");
+
+    // Three deep: `k` starts beside `j`, which starts beside `i`.
+    let chained = proof("chained", "xs");
+    assert_eq!(chained.covered.len(), 1, "{chained:?}");
+    assert!(at_least(&chained.guards).iter().all(|least| *least <= 0));
+}
+
+#[test]
+fn an_inner_start_below_the_outer_counter_guards_the_outer_counter() {
+    // `j` starts at `i - 1`, so `xs[j]` needs `i` to start at 1 or more.
+    let xs = proof("pairs_before", "xs");
+    assert_eq!(xs.covered.len(), 1, "{xs:?}");
+    assert_eq!(at_least(&xs.guards), vec![0, 1]);
+    assert!(xs.guards.iter().any(|guard| matches!(
+        guard,
+        RangeGuard::Within {
+            bound: RangeBound::Int(4),
+            distance: 0
+        }
+    )));
+}
+
+#[test]
+fn a_start_is_followed_through_a_few_counters_only() {
+    // `b` rests on `a`. `f` rests on five counters, which is more than a
+    // lower bound is followed through, so `xs[f]` keeps its check.
+    let xs = proof("deep", "xs");
+    assert_eq!(xs.covered.len(), 1, "{xs:?}");
+}
+
+#[test]
+fn an_inner_start_nothing_bounds_is_not_a_counter() {
+    let found = proofs("pairs_from");
+    assert!(!found.is_empty());
+    assert!(
+        found.iter().all(|(_, proof)| proof.is_none()),
+        "{found:?}"
+    );
 }

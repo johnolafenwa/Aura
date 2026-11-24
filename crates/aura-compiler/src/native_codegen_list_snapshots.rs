@@ -52,7 +52,7 @@ use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MirFunction,
     Operand, Rvalue,
 };
-use crate::runtime_ops::{ArrayOp, ListOp, RuntimeOp};
+use crate::runtime_ops::{ArrayOp, ListOp, RuntimeOp, ScalarElement};
 
 /// One loop that reads the view of `list` once.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -236,6 +236,42 @@ pub(super) fn array_region_rank(
         }
     }
     rank
+}
+
+/// The kind of scalar the element reads and writes of `region`'s list
+/// name, when the loop has such accesses. A list has one element type, so
+/// they all name one kind, and each checks the view for that kind's access
+/// code.
+pub(super) fn region_scalar_element(
+    function: &MirFunction,
+    region: &ListSnapshotRegion,
+) -> Option<ScalarElement> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| region.blocks.contains(&block.label))
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op:
+                                    RuntimeOp::List(
+                                        ListOp::IndexScalar(kind)
+                                        | ListOp::IndexScalarUnchecked(kind)
+                                        | ListOp::SetIndexScalar(kind),
+                                    ),
+                                receiver: Some(Operand::Place(receiver)),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } if *receiver == region.list => Some(*kind),
+            _ => None,
+        })
 }
 
 /// Whether `instruction` lets something other than this function's own
@@ -500,6 +536,10 @@ pub(super) struct ListSnapshot {
     /// The element accesses that stay in range while the guards hold
     /// (see `native_codegen_range_loops`).
     pub(super) range: Option<super::range_loops::RangeProof>,
+    /// The kind of scalar the loop's element accesses name (see
+    /// `region_scalar_element`). The loop's copy runs only for that
+    /// kind's access code, which the copy then knows.
+    pub(super) scalar: Option<ScalarElement>,
     /// The call slot of the mutable parameter that holds the list, whose
     /// write-through sink must be absent for the loop's copy to run.
     pub(super) sink: Option<usize>,
@@ -518,6 +558,16 @@ pub(super) struct ArraySnapshot {
     pub(super) rank: usize,
     /// The extent of each of the first `rank` axes.
     pub(super) extents: [Var; aura_runtime::native_runtime::DIRECT_ARRAY_MAX_RANK],
+}
+
+impl ListSnapshot {
+    /// The kind of scalar whose access code the loop's copy runs for.
+    fn scalar_element(&self) -> Option<ScalarElement> {
+        self.range
+            .as_ref()
+            .map(|proof| proof.element)
+            .or(self.scalar)
+    }
 }
 
 impl FunctionCompiler<'_> {
@@ -780,33 +830,43 @@ impl FunctionCompiler<'_> {
         let elements = self
             .builder
             .load(types::I64, flags, handle, layout.elements_offset);
-        // A list of scalars other than `str` views, of boxes, or of plain
-        // records.
-        let scalar_form = self
-            .builder
-            .iadd_imm(access, -(DirectListAccess::Int64 as i64));
-        let scalar = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            scalar_form,
-            DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
-        );
-        let not_str = self
-            .builder
-            .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
-        let scalar = self.builder.band(scalar, not_str);
-        let boxes = self
-            .builder
-            .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
-        let typed_form = self
-            .builder
-            .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
-        let typed = self.builder.icmp_imm(
-            IntCC::UnsignedLessThan,
-            typed_form,
-            i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
-        );
-        let form = self.builder.bor(scalar, boxes);
-        let mut qualifies = self.builder.bor(form, typed);
+        let mut qualifies = match snapshot.scalar_element() {
+            // The loop's scalar accesses check for one access code, a
+            // scalar form, and the copy runs for that one.
+            Some(element) => {
+                let (code, _) = super::scalar_list_slot(element);
+                self.builder.icmp_imm(IntCC::Equal, access, code as i64)
+            }
+            None => {
+                // A list of scalars other than `str` views, of boxes, or
+                // of plain records.
+                let scalar_form = self
+                    .builder
+                    .iadd_imm(access, -(DirectListAccess::Int64 as i64));
+                let scalar = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    scalar_form,
+                    DirectListAccess::Float32 as i64 - DirectListAccess::Int64 as i64 + 1,
+                );
+                let not_str =
+                    self.builder
+                        .icmp_imm(IntCC::NotEqual, access, DirectListAccess::Str as i64);
+                let scalar = self.builder.band(scalar, not_str);
+                let boxes =
+                    self.builder
+                        .icmp_imm(IntCC::Equal, access, DirectListAccess::Boxes as i64);
+                let typed_form = self
+                    .builder
+                    .iadd_imm(access, -i64::from(FIRST_PLAIN_ACCESS));
+                let typed = self.builder.icmp_imm(
+                    IntCC::UnsignedLessThan,
+                    typed_form,
+                    i64::from(FIRST_CLASS_ACCESS - FIRST_PLAIN_ACCESS),
+                );
+                let form = self.builder.bor(scalar, boxes);
+                self.builder.bor(form, typed)
+            }
+        };
         if snapshot.region.writes {
             let room = self.builder.uload32(flags, handle, layout.capacity_offset);
             let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
@@ -820,9 +880,6 @@ impl FunctionCompiler<'_> {
             qualifies = self.builder.band(qualifies, direct);
         }
         if let Some(proof) = &snapshot.range {
-            let (code, _) = super::scalar_list_slot(proof.element);
-            let exact = self.builder.icmp_imm(IntCC::Equal, access, code as i64);
-            qualifies = self.builder.band(qualifies, exact);
             for guard in &proof.guards {
                 use super::range_loops::{RangeBound, RangeGuard};
                 let holds = match guard {
@@ -996,13 +1053,12 @@ impl FunctionCompiler<'_> {
                 .collect::<Vec<_>>();
             // A loop over one list whose operations all check for one
             // access code runs its copy only for that code, which the copy
-            // then knows. A loop with a range proof checked the code where
-            // it was entered.
+            // then knows. A loop with scalar element accesses checked the
+            // code where it was entered.
             let code_of = |snapshot: &ListSnapshot| {
                 snapshot
-                    .range
-                    .as_ref()
-                    .map(|proof| super::scalar_list_slot(proof.element).0 as i64)
+                    .scalar_element()
+                    .map(|element| super::scalar_list_slot(element).0 as i64)
             };
             let expected = match group.as_slice() {
                 [only] if code_of(&self.list_snapshots[*only]).is_none() => {
