@@ -278,3 +278,48 @@ test("typing at the end of an unfinished assembly string suppresses suggestions"
   const complete = '    asm("ret")';
   assert.ok(completionsForDocument(complete, 0, complete.length).length > 0);
 });
+
+test("recovery navigates C layout and public module storage declarations", () => {
+  const lines = [
+    'public extern "C" packed align(8) class Header:',
+    "    tag: uint8 bits(3)",
+    "public mut ring: fixed[uint16, 2] = [0] * 2",
+    'extern "C" packed class Payload:',
+    "    bytes: fixed[uint8, 8]",
+    'extern "C" align(16) class Wide:',
+    "    value: int64",
+    "def head(h: Header) -> uint16:",
+    "    mut temporary = ring[0]",
+    "    return temporary"
+  ];
+  const source = lines.join("\n");
+  const symbols = documentSymbols(source);
+  assert.deepEqual(symbols.map((s) => [s.name, s.kind]), [
+    ["Header", "class"], ["ring", "variable"], ["Payload", "class"], ["Wide", "class"], ["head", "function"]
+  ]);
+  for (const [line, use, declaration] of [[7, "Header", 0], [8, "ring", 2]]) {
+    const column = lines[line].indexOf(use);
+    const start = lines[declaration].indexOf(use);
+    assert.deepEqual(definitionForPosition(source, line, column), {
+      line: declaration, startCharacter: start, endCharacter: start + use.length
+    });
+    assert.ok(hoverForPosition(source, line, column).value.includes(use));
+  }
+  const items = completionsForDocument(source, 9, 4, null);
+  for (const name of ["fixed", "ptr", "ring", "Header"]) {
+    assert.ok(items.some((item) => item.name === name), name);
+  }
+  assert.ok(!items.some((item) => item.name === "temporary"));
+  assert.deepEqual(diagnosticsForDocument(source), []);
+});
+
+test("recovery keeps top-level script locals out of module symbols", () => {
+  assert.deepEqual(documentSymbols("mut result = 0\nprint(result)"), []);
+  const source = 'mut count: uint64 = 0\nexport "C" def tick() -> uint64:\n    return count';
+  assert.deepEqual(documentSymbols(source).map((symbol) => symbol.name), ["count", "tick"]);
+});
+
+test("recovery recognizes alignment followed by packing and base-prefixed lengths", () => {
+  const source = 'extern "C" align(0x10) packed class Header:\n    value: uint32 bits(0b1_00)';
+  assert.deepEqual(documentSymbols(source).map((s) => s.name), ["Header"]);
+});

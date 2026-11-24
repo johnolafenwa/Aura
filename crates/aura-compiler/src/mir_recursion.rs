@@ -23,8 +23,8 @@ use super::{CallTarget, Instruction, MethodDispatch, MirFunction, MirModule, Rva
 /// The names of the functions of `module` that lie on a call cycle,
 /// including a function that calls itself.
 pub fn recursive_functions(module: &MirModule) -> HashSet<String> {
-    let (functions, edges) = call_graph(module);
-    cyclic_nodes(&edges)
+    let (functions, edges, opaque, escaping) = call_graph_parts(module);
+    cyclic_functions(edges, &opaque, escaping)
         .into_iter()
         .map(|position| functions[position].name.clone())
         .collect()
@@ -34,6 +34,13 @@ pub fn recursive_functions(module: &MirModule) -> HashSet<String> {
 /// top-level entry. Both recursion detection and machine-code proofs must
 /// follow calls through function values, cleanup handlers and method dispatch.
 pub(crate) fn call_graph(module: &MirModule) -> (Vec<&MirFunction>, Vec<Vec<usize>>) {
+    let (functions, edges, opaque, escaping) = call_graph_parts(module);
+    (functions, with_dispatch_edges(edges, &opaque, escaping))
+}
+
+type CallGraphParts<'a> = (Vec<&'a MirFunction>, Vec<Vec<usize>>, Vec<bool>, Vec<usize>);
+
+fn call_graph_parts(module: &MirModule) -> CallGraphParts<'_> {
     let functions = module
         .functions
         .iter()
@@ -111,15 +118,31 @@ pub(crate) fn call_graph(module: &MirModule) -> (Vec<&MirFunction>, Vec<Vec<usiz
     let escaping = (0..functions.len())
         .filter(|&position| escaping[position])
         .collect::<Vec<_>>();
-    for (position, callees) in edges.iter_mut().enumerate() {
-        if opaque[position] {
-            callees.extend(escaping.iter().copied());
-            callees.sort_unstable();
-            callees.dedup();
+    (functions, edges, opaque, escaping)
+}
+
+fn cyclic_functions(edges: Vec<Vec<usize>>, opaque: &[bool], escaping: Vec<usize>) -> Vec<usize> {
+    let dispatch = edges.len();
+    let mut cyclic = cyclic_nodes(&with_dispatch_edges(edges, opaque, escaping));
+    cyclic.retain(|&node| node != dispatch);
+    cyclic
+}
+
+fn with_dispatch_edges(
+    mut edges: Vec<Vec<usize>>,
+    opaque: &[bool],
+    escaping: Vec<usize>,
+) -> Vec<Vec<usize>> {
+    // Every opaque call can call back into any escaping function. Route all
+    // such edges through one node to avoid expanding their Cartesian product.
+    let dispatch = edges.len();
+    for (callees, &calls_back) in edges.iter_mut().zip(opaque) {
+        if calls_back {
+            callees.push(dispatch);
         }
     }
-
-    (functions, edges)
+    edges.push(escaping);
+    edges
 }
 
 fn is_static_dispatch(dispatch: &MethodDispatch) -> bool {

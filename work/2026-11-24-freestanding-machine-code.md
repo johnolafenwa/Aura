@@ -26,3 +26,7 @@ compiles the same source with proved-check removal enabled.
 The x86-64 interrupt board printed `breakpoint`, `timer` and `ok`
 and exited QEMU with status 33. Both virt boards exited with status 0.
 The interrupt table and two event bytes use C-backed storage.
+
+The systems-data merge supplied mutable module storage. Its section and
+alignment attributes apply to the actual writable object cell. The object
+test checks initialized data, alignment and a single definition.

@@ -12471,6 +12471,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Widget".to_string(),
         MirClass {
+            c_layout: None,
             name: "Widget".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12989,6 +12990,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Empty".to_string(),
         MirClass {
+            c_layout: None,
             name: "Empty".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -12999,6 +13001,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Broken".to_string(),
         MirClass {
+            c_layout: None,
             name: "Broken".to_string(),
             type_params: Vec::new(),
             fields: Vec::new(),
@@ -13369,6 +13372,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
     std::sync::Arc::make_mut(&mut runtime.classes).insert(
         "Counter".to_string(),
         MirClass {
+            c_layout: None,
             name: "Counter".to_string(),
             type_params: Vec::new(),
             fields: vec![crate::mir::MirClassField {
@@ -14216,6 +14220,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18400,6 +18405,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Pair".to_string(),
                 type_params: vec!["T".to_string(), "U".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -18819,6 +18825,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         }],
     };
     let managed_class = MirClass {
+        c_layout: None,
         name: "Managed".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -18833,6 +18840,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let borrow_managed_class = MirClass {
+        c_layout: None,
         name: "BorrowManaged".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18844,6 +18852,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let worker_class = MirClass {
+        c_layout: None,
         name: "Worker".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -18851,6 +18860,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         copy: false,
     };
     let broken_class = MirClass {
+        c_layout: None,
         name: "Broken".to_string(),
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -19407,6 +19417,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
             constants: Vec::new(),
             functions: Vec::new(),
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -19452,6 +19463,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
                 }],
             }],
             classes: vec![MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -24645,6 +24657,7 @@ def main() -> int32:
             field("on", CFieldKind::Scalar(FfiScalar::Bool)),
             field("level", CFieldKind::Scalar(FfiScalar::F32)),
         ],
+        layout_controls: Default::default(),
         union: false,
     };
     let outer = CStruct {
@@ -24653,6 +24666,7 @@ def main() -> int32:
             field("id", CFieldKind::Scalar(FfiScalar::I16)),
             field("flagged", CFieldKind::Struct(inner.clone())),
         ],
+        layout_controls: Default::default(),
         union: false,
     };
     let param = |passing| MirExternParam {
@@ -24886,6 +24900,7 @@ def main() -> int32:
             name: "key".to_string(),
             kind: crate::c_layout::CFieldKind::Scalar(crate::ffi::FfiScalar::I32),
         }],
+        layout_controls: Default::default(),
         union: false,
     };
     let param = |passing| MirExternParam {
@@ -25426,4 +25441,233 @@ def main():
         assert_eq!(error.code, code, "{body}");
         assert!(error.message.contains(message), "{body}: {}", error.message);
     }
+}
+
+#[test]
+fn fixed_array_address_validates_the_index_address_and_source_location() {
+    use crate::mir::fixed_arrays::ADDRESS;
+    let ty = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("2")],
+    );
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut address = |base, index, stride| {
+        let args = [base, index, Operand::Int(7), Operand::Int(12), stride]
+            .map(|value| mir_arg(None, value));
+        runtime.evaluate_fixed(ADDRESS, &args, Some(&ty), &mut env)
+    };
+
+    let wrapped = address(
+        Operand::Int(u64::MAX.into()),
+        Operand::Int(1),
+        Operand::Int(2),
+    )
+    .unwrap();
+    assert!(matches!(wrapped, Value::Int(value) if value.as_i128() == Some(1)));
+    let out_of_bounds = address(Operand::Int(0), Operand::Int(2), Operand::Int(2)).unwrap_err();
+    assert_eq!(out_of_bounds.code, "AU4031");
+    assert_eq!(out_of_bounds.span, Some(Span::new(7, 12)));
+    let invalid_base =
+        address(Operand::Int(u128::MAX), Operand::Int(0), Operand::Int(2)).unwrap_err();
+    assert_eq!(invalid_base.code, "AU4032");
+    assert_eq!(
+        address(Operand::Bool(false), Operand::Int(0), Operand::Int(2))
+            .unwrap_err()
+            .message,
+        "invalid array element address"
+    );
+    assert_eq!(
+        address(Operand::Int(0), Operand::Int(0), Operand::Unit)
+            .unwrap_err()
+            .message,
+        "missing array stride or position"
+    );
+}
+
+#[test]
+fn fixed_array_access_rejects_mismatched_runtime_storage_and_malformed_mir() {
+    use crate::mir::fixed_arrays::{LITERAL, READ};
+    let ty = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("2")],
+    );
+    let mut env = Env::default();
+    let mut runtime = test_runtime();
+    let args = [4, 7].map(|n| mir_arg(None, Operand::Int(n)));
+    let array = runtime
+        .evaluate_fixed(LITERAL, &args, Some(&ty), &mut env)
+        .unwrap();
+    env.values.insert("lanes".into(), array);
+    let mut read = |base, index, line, ty| {
+        let args = [base, index, line, Operand::Int(1)].map(|value| mir_arg(None, value));
+        runtime.evaluate_fixed(READ, &args, ty, &mut env)
+    };
+    let lanes = Operand::Place("lanes".into());
+    let wrong_length = Type::Named(
+        "fixed".into(),
+        vec![Type::named("uint16"), Type::named("3")],
+    );
+    assert_eq!(
+        read(
+            lanes.clone(),
+            Operand::Int(0),
+            Operand::Int(1),
+            Some(&wrong_length)
+        )
+        .unwrap_err()
+        .message,
+        "MIR fixed array has the wrong length"
+    );
+    assert_eq!(
+        read(
+            lanes.clone(),
+            Operand::Bool(true),
+            Operand::Int(1),
+            Some(&ty)
+        )
+        .unwrap_err()
+        .message,
+        "MIR array index must be an integer"
+    );
+    assert_eq!(
+        read(lanes.clone(), Operand::Int(9), Operand::Unit, Some(&ty))
+            .unwrap_err()
+            .message,
+        "MIR array access needs a source position"
+    );
+    assert_eq!(
+        read(
+            Operand::Bool(false),
+            Operand::Int(0),
+            Operand::Int(1),
+            Some(&ty)
+        )
+        .unwrap_err()
+        .message,
+        "MIR array access needs an inline array"
+    );
+    assert_eq!(
+        read(lanes, Operand::Int(0), Operand::Int(1), None)
+            .unwrap_err()
+            .message,
+        "missing fixed array type in MIR"
+    );
+    assert_eq!(
+        runtime
+            .evaluate_fixed(LITERAL, &args[..1], Some(&ty), &mut env)
+            .unwrap_err()
+            .message,
+        format!("invalid arguments to {LITERAL}")
+    );
+}
+
+#[test]
+fn fixed_array_assignment_projects_a_class_field_and_preserves_its_neighbors() {
+    let source = r#"FLOOR: fixed[int16, 2] = [(-2)] * 2
+
+class Cell:
+    number: int16
+
+def update(i: int64) -> int16:
+    mut cells: fixed[Cell, 2] = [Cell(number=6), Cell(number=9)]
+    cells[i].number = FLOOR[i]
+    return cells[0].number + cells[1].number
+
+def main():
+    print(update(0))
+    print(update(1))
+"#;
+    assert_eq!(crate::run_source(source).unwrap().stdout, "7\n4\n");
+}
+
+#[test]
+fn ffi_numeric_array_writeback_keeps_shape_and_every_element_bit() {
+    use crate::ffi::{FfiScalar, FfiValue};
+
+    let f32_words = [(-0.0_f32).to_bits(), 0x7fc0_1234];
+    let f64_words = [(-0.0_f64).to_bits(), 0x7ff8_0000_0000_1234];
+    for (kind, scalar, storage, words) in [
+        (
+            "int32",
+            FfiScalar::I32,
+            ArrayStorage::Int32(vec![i32::MIN, -1].into()),
+            [u64::from(i32::MIN as u32), u64::from(u32::MAX)],
+        ),
+        (
+            "int64",
+            FfiScalar::I64,
+            ArrayStorage::Int64(vec![i64::MIN, -1].into()),
+            [i64::MIN as u64, u64::MAX],
+        ),
+        (
+            "float32",
+            FfiScalar::F32,
+            ArrayStorage::Float32(f32_words.map(f32::from_bits).to_vec().into()),
+            f32_words.map(u64::from),
+        ),
+        (
+            "float64",
+            FfiScalar::F64,
+            ArrayStorage::Float64(f64_words.map(f64::from_bits).to_vec().into()),
+            f64_words,
+        ),
+    ] {
+        let ty = Type::Named("Array".into(), vec![Type::named(kind)]);
+        let input = ArrayValue::new(vec![1, 2].into_boxed_slice(), storage).unwrap();
+        let before = super::ffi_elements_from_runtime(&Value::Array(input.clone()), &ty).unwrap();
+        assert_eq!(before, FfiValue::Elements(scalar, words.to_vec()));
+        let swapped = [words[1], words[0]];
+        let after = super::array_elements_runtime_value(scalar, &swapped, &input).unwrap();
+        let Value::Array(ref array) = after else {
+            panic!("an Array argument keeps its shape");
+        };
+        assert_eq!(array.shape, input.shape);
+        assert_eq!(
+            super::ffi_elements_from_runtime(&after, &ty).unwrap(),
+            FfiValue::Elements(scalar, swapped.to_vec())
+        );
+        assert!(super::array_elements_runtime_value(scalar, &swapped[..1], &input).is_err());
+    }
+
+    let input = ArrayValue::new(
+        vec![1].into_boxed_slice(),
+        ArrayStorage::Bool(vec![true].into()),
+    )
+    .unwrap();
+    let error = super::array_elements_runtime_value(FfiScalar::Bool, &[1], &input).unwrap_err();
+    assert_eq!(error.code, "AU4005");
+    let ty = Type::Named("Array".into(), vec![Type::named("int32")]);
+    assert_eq!(
+        super::ffi_elements_from_runtime(&Value::Array(input), &ty)
+            .unwrap_err()
+            .code,
+        "AU4005"
+    );
+}
+
+#[test]
+fn mir_rotation_checks_counts_and_falls_back_to_the_value_width() {
+    use aura_core::integer_bits::BitMethod;
+    let byte = IntegerValue::from_typed_signed(-2, IntegerKind::Int8).unwrap();
+    let mut env = Env::default();
+    let rotate = |args: &[MirArg], env: &mut Env| {
+        super::integer_bits::evaluate(BitMethod::RotateLeft, byte, Some(&Type::Unit), args, env)
+    };
+    assert_eq!(
+        rotate(&[mir_arg(None, Operand::Int(9))], &mut env).unwrap(),
+        Value::Int(IntegerValue::from_typed_signed(-3, IntegerKind::Int8).unwrap())
+    );
+    env.define_typed(
+        "count",
+        Type::named("int64"),
+        Value::Int(IntegerValue::from_i64(-1)),
+    );
+    let negative = rotate(&[mir_arg(None, Operand::Place("count".into()))], &mut env).unwrap_err();
+    assert_eq!(negative.code, "AU4034");
+    let args = [
+        mir_arg(None, Operand::Int(0)),
+        mir_arg(None, Operand::Int(1)),
+    ];
+    assert_eq!(rotate(&args, &mut env).unwrap_err().code, "AU4034");
 }

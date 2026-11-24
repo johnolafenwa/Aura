@@ -405,6 +405,7 @@ impl RngOp {
 /// A method of an integer, `float64`, or `Duration` value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum ScalarOp {
+    Bits(aura_core::integer_bits::BitMethod),
     WrappingAdd,
     WrappingSub,
     WrappingMul,
@@ -427,6 +428,12 @@ pub enum ScalarOp {
 
 impl ScalarOp {
     pub const ALL: &'static [ScalarOp] = &[
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::RotateLeft),
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::RotateRight),
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::CountOnes),
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::LeadingZeros),
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::TrailingZeros),
+        ScalarOp::Bits(aura_core::integer_bits::BitMethod::SwapBytes),
         ScalarOp::WrappingAdd,
         ScalarOp::WrappingSub,
         ScalarOp::WrappingMul,
@@ -449,6 +456,7 @@ impl ScalarOp {
         // Operation: 0 add, 1 sub, 2 mul, 3 shl, 4 shr. Mode: 1 wrapping,
         // 2 saturating.
         Some(match self {
+            ScalarOp::Bits(_) => return None,
             ScalarOp::WrappingAdd => &[0, 1],
             ScalarOp::WrappingSub => &[1, 1],
             ScalarOp::WrappingMul => &[2, 1],
@@ -3140,6 +3148,7 @@ impl RuntimeOp {
             M::RngNextInt => RuntimeOp::Rng(RngOp::NextInt),
             M::RngNextFloat => RuntimeOp::Rng(RngOp::NextFloat),
             M::RngShuffle => RuntimeOp::Rng(RngOp::Shuffle),
+            M::IntegerBits(method) => RuntimeOp::Scalar(ScalarOp::Bits(method)),
             M::IntegerWrappingAdd => RuntimeOp::Scalar(ScalarOp::WrappingAdd),
             M::IntegerWrappingSub => RuntimeOp::Scalar(ScalarOp::WrappingSub),
             M::IntegerWrappingMul => RuntimeOp::Scalar(ScalarOp::WrappingMul),
@@ -3182,6 +3191,7 @@ impl RuntimeOp {
             RuntimeOp::Rng(RngOp::NextInt) => M::RngNextInt,
             RuntimeOp::Rng(RngOp::NextFloat) => M::RngNextFloat,
             RuntimeOp::Rng(RngOp::Shuffle) => M::RngShuffle,
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => M::IntegerBits(method),
             RuntimeOp::Scalar(ScalarOp::WrappingAdd) => M::IntegerWrappingAdd,
             RuntimeOp::Scalar(ScalarOp::WrappingSub) => M::IntegerWrappingSub,
             RuntimeOp::Scalar(ScalarOp::WrappingMul) => M::IntegerWrappingMul,
@@ -3565,6 +3575,20 @@ impl RuntimeOp {
                 span: true,
                 layout_words: 0,
             }),
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => {
+                use aura_core::integer_bits::BitMethod::*;
+                // The boxed helper takes the receiver, a count and the operation.
+                // Unary methods supply zero in the unused count slot.
+                let words: &'static [i64] = match method {
+                    RotateLeft => &[RotateLeft as i64],
+                    RotateRight => &[RotateRight as i64],
+                    CountOnes => &[0, CountOnes as i64],
+                    LeadingZeros => &[0, LeadingZeros as i64],
+                    TrailingZeros => &[0, TrailingZeros as i64],
+                    SwapBytes => &[0, SwapBytes as i64],
+                };
+                call(RuntimeFn::IntegerBits, words)
+            }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => call(RuntimeFn::IntegerToFloat, &[]),
             RuntimeOp::Scalar(ScalarOp::Sqrt) => call(RuntimeFn::SqrtF64, &[]),
             RuntimeOp::Scalar(ScalarOp::DurationToMilliseconds) => {
@@ -3618,6 +3642,7 @@ impl RuntimeOp {
                 | ScalarOp::DurationToMilliseconds
                 | ScalarOp::DurationToSeconds,
             ) => Type::named("float64"),
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) if method.counts() => Type::named("int64"),
             RuntimeOp::Scalar(_) | RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => {
                 receiver?.clone()
             }

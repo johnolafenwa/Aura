@@ -162,7 +162,12 @@
           "type": "string",
           "default": "",
           "enum": ["", "x86_64-unknown-none", "aarch64-unknown-none", "riscv64gc-unknown-none-elf"],
-          "markdownDescription": "Target for freestanding language-server diagnostics and operand types. Leave empty for hosted code."
+          "markdownDescription": "Selecting a target enables freestanding diagnostics, navigation and verification for that architecture. Leave empty to use the workspace’s Aura: Freestanding setting."
+        },
+        "aura.freestanding": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Check and navigate source using the freestanding compiler profile. Enable for a kernel or firmware workspace."
         },
         "aura.verifyOnSave": {
           "type": "boolean",

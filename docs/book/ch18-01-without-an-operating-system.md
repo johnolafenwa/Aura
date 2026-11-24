@@ -195,7 +195,7 @@ def put_number(uart: uint64, value: uint64) -> None:
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
+built from `mem.atomic_compare_exchange_uint32`, writes a sample through a typed pointer, and then overflows a
 `uint8` on purpose. Each board adds a short assembly file that sets the
 stack pointer, turns the float registers on, and calls `kernel_main`, plus
 a linker script that says where memory is.
@@ -208,10 +208,11 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+s=42
+trap 1 main.au:160:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first five lines are computed results. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
@@ -243,3 +244,7 @@ stack below the interrupted stack pointer. The board keeps persistent
 storage in C and accesses it through `mem`. Verification stops at the
 assembly and cannot reason about the contents of raw memory. The
 freestanding profile has no allocator. [Freestanding Builds](/manual/freestanding)
+
+In a freestanding program, fixed arrays can also live in mutable module
+storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. Use
+`mem.address_of(samples[1])` to get a pointer to the second element.

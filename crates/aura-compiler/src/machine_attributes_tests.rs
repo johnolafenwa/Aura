@@ -451,3 +451,43 @@ fn imported_placement_and_entry_conventions_follow_the_defining_symbol() {
         "AU2096"
     );
 }
+
+#[test]
+fn mutable_module_placement_preserves_the_one_writable_cell() {
+    let source = include_str!("../tests/fixtures/freestanding/module_state/placement.au");
+    for target in FreestandingTarget::ALL {
+        let _mode = crate::enter_freestanding_target(target);
+        let program =
+            crate::check_freestanding_path(std::path::Path::new("placement.au"), Some(source))
+                .unwrap();
+        let bytes = emit_freestanding_object(
+            &crate::lower_to_mir(&program),
+            "placement.au",
+            source,
+            target,
+        )
+        .unwrap();
+        let file = object::File::parse(bytes.as_slice()).unwrap();
+        let counters = file.section_by_name(".irq.counters").unwrap();
+        assert_eq!(counters.data().unwrap(), [2, 0, 3, 0, 5, 0, 7, 0]);
+        assert_eq!(counters.align(), 64);
+        assert_eq!(counters.kind(), object::SectionKind::Data);
+        let unused = file.section_by_name(".board.reserve").unwrap();
+        assert_eq!(unused.data().unwrap(), 19u64.to_le_bytes());
+        assert_eq!(unused.align(), 8);
+        assert_eq!(unused.kind(), object::SectionKind::Data);
+        let cells = file
+            .symbols()
+            .filter(|s| {
+                s.kind() == object::SymbolKind::Data
+                    && s.name().is_ok_and(|n| {
+                        n.starts_with("__aura_state_") || n.starts_with("__aura_data.")
+                    })
+            })
+            .count();
+        assert_eq!(
+            cells, 2,
+            "{target:?} emits one writable definition per declaration"
+        );
+    }
+}

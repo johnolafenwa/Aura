@@ -16,7 +16,11 @@ pub struct DataPlacement {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacedData {
     pub symbol: String,
+    /// Immutable literal bytes. Mutable declarations use the existing
+    /// checked image carried by the MIR module constant.
     pub bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_key: Option<String>,
     pub placement: DataPlacement,
 }
 
@@ -102,7 +106,7 @@ pub(crate) fn check(info: &ConstantInfo) -> Result<()> {
             "machine attributes require a freestanding build",
         ));
     }
-    if scalar_bytes(&info.decl.value, &info.ty).is_none() {
+    if info.state.is_none() && scalar_bytes(&info.decl.value, &info.ty).is_none() {
         return Err(Diagnostic::coded_at(
             "AU2095",
             info.decl.value.span,
@@ -118,9 +122,26 @@ pub(crate) fn collect(program: &Program) -> Vec<PlacedData> {
         .iter()
         .filter_map(|c| {
             let placement = c.decl.placement.as_deref()?.clone();
+            let (symbol, bytes, state_key) = if c.state.is_some() {
+                use std::fmt::Write;
+                let key = format!("{}::{}", c.module_name, c.decl.name);
+                // Match the stable symbol of an unannotated module cell.
+                let mut symbol = String::from("__aura_state_");
+                for byte in key.bytes() {
+                    write!(symbol, "{byte:02x}").unwrap();
+                }
+                (symbol, Vec::new(), Some(key))
+            } else {
+                (
+                    format!("__aura_data.{}.{}", c.module_name, c.decl.name),
+                    scalar_bytes(&c.decl.value, &c.ty)?,
+                    None,
+                )
+            };
             Some(PlacedData {
-                symbol: format!("__aura_data.{}.{}", c.module_name, c.decl.name),
-                bytes: scalar_bytes(&c.decl.value, &c.ty)?,
+                symbol,
+                bytes,
+                state_key,
                 placement,
             })
         })

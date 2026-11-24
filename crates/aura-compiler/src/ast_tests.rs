@@ -55,6 +55,7 @@ fn item_name_matches_decl_name() {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     });
     let enum_item = Item::Enum(EnumDecl {

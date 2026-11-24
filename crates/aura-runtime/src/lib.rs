@@ -37,6 +37,7 @@ pub mod numbers_host;
 #[cfg(any(windows, test))]
 mod pipe_bridge;
 pub mod randomness;
+pub mod raw_wide_memory;
 pub mod runtime_config;
 pub mod runtime_reactor;
 pub mod runtime_value;

@@ -102,7 +102,7 @@ function documentHighlights(analysis, source, line, character) {
 }
 
 function semanticTokenType(occurrence, textBefore) {
-  const signature = hoverSignature(occurrence.hover).replace(/^module constant /, "constant ");
+  const signature = hoverSignature(occurrence.hover).replace(/^module (constant|binding) /, "$1 ");
   const word = signature.split(" ")[0];
   if (Object.prototype.hasOwnProperty.call(TOKEN_TYPE_BY_HOVER_WORD, word)) {
     return TOKEN_TYPE_BY_HOVER_WORD[word];
@@ -302,7 +302,7 @@ function fuzzyMatches(name, query) {
   return true;
 }
 
-const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12 };
+const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12, variable: 13 };
 
 function workspaceSymbols(query, sources) {
   const results = [];

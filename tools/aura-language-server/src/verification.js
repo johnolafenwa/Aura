@@ -41,7 +41,11 @@ function runVerifier(
   return new Promise((resolve) => {
     let child;
     try {
-      const targetArgs = freestandingTarget ? ["--freestanding", "--target", freestandingTarget] : [];
+      const targetArgs = [];
+      if (freestandingTarget || process.env.AURA_LSP_FREESTANDING === "1") {
+        targetArgs.push("--freestanding");
+      }
+      if (freestandingTarget) targetArgs.push("--target", freestandingTarget);
       child = spawnImpl(
         command.cmd,
         [...command.args, "verify", ...targetArgs, "--format", "json", "--stdin", filePath],

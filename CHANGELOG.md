@@ -12,6 +12,9 @@ in this file.
   `mem`. The new x86-64 `--kernel` profile disables the red zone and
   vector registers. The QEMU kernel example now boots an x86-64 board
   and returns from breakpoint and timer interrupts.
+- Freestanding modules can keep writable state in `.data` and `.bss`. Use `fixed[T, N]` for inline arrays and `ptr[T]` for typed access to cells, elements and C fields.
+- C records support packing, explicit alignment, unsigned bit-fields, C layout queries and writable union members.
+- Integers gain rotations, bit counts and byte swapping. Freestanding functions can use 128-bit integers. Memory atomics support 8-, 16-, 32- and 64-bit cells and explicit memory orders.
 - Forward a trait and its supertraits to an owned field with `impl Trait for Class by field`. A suite can override individual methods.
 - Pair a computed getter with `@name.setter` to accept assignment and compound assignment on a mutable receiver.
 - Define `__drop__(mut self)` to run cleanup when ownership ends, including collection release and trap recovery.

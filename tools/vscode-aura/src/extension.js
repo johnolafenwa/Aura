@@ -11,13 +11,14 @@ let client;
 
 // `aura.compilerPath` reaches the server as `AURA_LSP_AURA_PATH`, which wins
 // over `aura` on PATH, and `aura.verifyOnSave` as `AURA_LSP_VERIFY`.
-function serverEnvironment(configuredPath, verifyOnSave = true, freestandingTarget = "") {
+function serverEnvironment(configuredPath, verifyOnSave = true, freestandingTarget = "", freestanding = false) {
   const env = { ...process.env };
   if (configuredPath) {
     env.AURA_LSP_AURA_PATH = configuredPath;
   }
   env.AURA_LSP_FREESTANDING_TARGET = freestandingTarget;
   env.AURA_LSP_VERIFY = verifyOnSave ? "1" : "0";
+  env.AURA_LSP_FREESTANDING = freestanding || freestandingTarget ? "1" : "0";
   return env;
 }
 
@@ -26,7 +27,8 @@ function createClient(context) {
   const configuredPath = vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim();
   const verifyOnSave = vscode.workspace.getConfiguration("aura").get("verifyOnSave", true);
   const freestandingTarget = vscode.workspace.getConfiguration("aura").get("freestandingTarget", "");
-  const env = serverEnvironment(configuredPath, verifyOnSave, freestandingTarget);
+  const freestanding = vscode.workspace.getConfiguration("aura").get("freestanding", false);
+  const env = serverEnvironment(configuredPath, verifyOnSave, freestandingTarget, freestanding);
   const serverOptions = {
     run: { module: serverModule, transport: TransportKind.ipc, options: { env } },
     debug: {
@@ -70,7 +72,8 @@ async function activate(context) {
       if (
         event.affectsConfiguration("aura.compilerPath") ||
         event.affectsConfiguration("aura.freestandingTarget") ||
-        event.affectsConfiguration("aura.verifyOnSave")
+        event.affectsConfiguration("aura.verifyOnSave") ||
+        event.affectsConfiguration("aura.freestanding")
       ) {
         void restartClient(context);
       }

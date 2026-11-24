@@ -248,7 +248,7 @@ docstring = TRIPLE_STRING, NEWLINE ;
 module-element = import-declaration | module-constant | module-asm | item | statement ;
 
 module-constant
-    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
+    = [ "public" ], [ "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -263,6 +263,8 @@ import-alias = IDENT ;
 identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
+
+In a declaration module or a file with an explicit entry function, a leading `mut` binding declares writable module storage. Freestanding builds accept these cells. In an entry script without an explicit entry function, a plain `mut` starts the executable statements and declares a script local.
 
 Imports, module constants, items, and executable top-level statements may be
 interleaved syntactically. They still run in a fixed category order:
@@ -297,8 +299,8 @@ machine-attribute = "@", "machine", ".", identifier, [ "(", literal, ")" ], NEWL
 ```
 
 An output expression must name a mutable scalar. A machine attribute
-precedes a module function or, for section and alignment, a typed scalar
-constant. The allowed attribute names, argument values and target
+precedes a module function or, for section and alignment, a module cell
+or typed scalar constant. The allowed attribute names, argument values and target
 constraints appear in [Freestanding Builds](/manual/freestanding).
 
 ## Items
@@ -331,11 +333,13 @@ extern-opaque-declaration
       [ "drop", identifier ], NEWLINE ;
 
 extern-aggregate-declaration
-    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+    = "extern", STRING, ( { c-layout-modifier }, "class" | "union" ), identifier, ":", NEWLINE,
       INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
 
+c-layout-modifier = "packed" | "align", "(", INTEGER, ")" ;
+
 extern-member
-    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    = [ "public" ], identifier, ":", extern-field-type, [ "bits", "(", INTEGER, ")" ], NEWLINE, [ docstring ]
     | "pass", NEWLINE ;
 
 extern-field-type
@@ -383,7 +387,8 @@ type-atom
       [ "?" ] ;
 
 type-primary
-    = identifier-path, [ "[", type-list, "]" ]
+    = "fixed", "[", type, ",", INTEGER, "]"
+    | identifier-path, [ "[", type-list, "]" ]
     | trait-object-type
     | grouped-type
     | tuple-type
@@ -1292,10 +1297,12 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.17. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.17
+## Syntax Not In Aura
 
 The grammar intentionally excludes:
 
+- task-local declaration syntax, pointer dereference operators and lexical `unsafe` blocks
+- variable-length inline arrays, zero-width C bit-fields and anonymous C bit-fields
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings

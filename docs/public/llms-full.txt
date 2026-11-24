@@ -2062,14 +2062,20 @@ evaluation-order, diagnostic, and backend rules.
 | `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
 | `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
+A fixed-width integer supports `rotate_left(count)`, `rotate_right(count)`, `count_ones()`, `leading_zeros()`, `trailing_zeros()` and `swap_bytes()`. Counts return `int64`. Rotations and byte swaps return the receiver type.
+
 ## Memory
 
 [Memory Module](/manual/mem) has the rules for alignment, ordering, and
 undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
-32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
+32 or 64 for unsigned plain, volatile and atomic access.
 
 | API | Signature | Contract |
 | --- | --- | --- |
+| `mem.address_of` | `address_of(place) -> ptr[T]` | Address of writable module storage, a fixed-array element or a C field. |
+| `ptr[T]` methods | `read()`, `write(value)`, `volatile_read()`, `volatile_write(value)`, `offset(count)` | Access a typed value or step by a signed count of elements. |
+| C layout | `mem.size_of(T)`, `mem.align_of(T)`, `mem.offset_of(T, field)` | Compile-time size, alignment and member byte offset. |
+| Signed and floating-point access | `mem.read_intN`, `mem.read_floatN` and matching write and volatile forms | Signed widths are 8 through 64. Floating widths are 32 and 64. |
 | `mem.in_uintN`, `mem.out_uintN` | `in_uintN(port: uint16) -> uintN`, `out_uintN(port: uint16, value: uintN) -> None` | x86-64 port transfer for N = 8, 16 or 32. |
 | `mem.read_msr`, `mem.write_msr` | `read_msr(index: uint32) -> uint64`, `write_msr(index: uint32, value: uint64) -> None` | x86-64 model-specific register access. |
 | Named control and system registers | `read_<name>() -> uint64`, `write_<name>(value: uint64) -> None` | [Register names and access directions by target](/manual/mem). |
@@ -2078,12 +2084,12 @@ undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |
 | `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | One write the compiler never merges or drops. |
-| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
-| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
-| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
-| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
-| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
-| `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64, order="seq_cst") -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN, order="seq_cst") -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN, order="seq_cst", failure_order=…) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
+| `mem.fence` | `fence(order="seq_cst") -> None` | Orders earlier memory accesses before later ones. |
 
 ## Randomness
 
@@ -8492,7 +8498,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A returned view of a list element or dictionary entry holds the whole collection at the call site. The caller cannot read a different element while it is live.
 - Beside a live element view of the same list, `set(index, value)` works only for a Copy element type. For other element types it is refused with `AU3011`, because it would move the old element out through the collection.
 - In a top-level script, an immutable binding above the first top-level statement is a module constant and cannot be the source of a view (`AU3004`). Bind it with `mut`, below the first statement, or inside a function.
-- View-bearing aggregates, module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
+- View-bearing aggregates, views into module storage, multi-origin results, returned loan closures, and lifetime-parameterized structural callable types are not available.
 - Views and loan closures are never Transfer.
 
 ### Function Values
@@ -8537,6 +8543,12 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Keyed `sort`, `map`, and `filter` accept only their exact bare or shared callback parameter capabilities. The callback may be a named function, a repeatable closure, or a packed Shared callable value.
 - There is no comparator-form sort, lazy map or filter, parallel traversal, mutable standard-library algorithm callback contract, or algorithm callback with mutable or owned element access.
 
+### Static Storage and Fixed Arrays
+
+- Freestanding module cells require a static initializer. Hosted tasks can share an immutable binding to a synchronization handle. Task-local storage declarations are outside this release.
+- A fixed array has a positive compile-time length up to 1,048,576. The inline representation must fit in 2,147,483,647 bytes. Array parameters borrow storage for the call.
+- `mem.address_of` takes a writable module cell, fixed-array element or addressable C field. The caller controls the lifetime of raw addresses. A bit-field has no independent address.
+
 ### Numeric Arrays
 
 - Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
@@ -8562,7 +8574,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Calls run synchronously on the current worker.
 - The ABI accepts fixed-width scalars, pointers to one scalar, pointers to scalar or struct arrays, C structs and unions, temporary text and byte views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
 - A callback is a named top-level function. Its parameters can be scalars, pointers to one scalar, or NUL-terminated UTF-8 text declared as `cstr`. Declare a handle parameter as `uint64`. The result is a scalar or `None`.
-- Variadic functions, pointer arithmetic, returned views, C bit-fields, and asynchronous foreign calls are unavailable. C union members are read-only.
+- Variadic functions, returned views and asynchronous foreign calls are unavailable. Raw pointers support element offsets. Named unsigned C bit-fields support checked assignment. A writable C union member overlaps the other members.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
 - The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
@@ -8868,7 +8880,7 @@ String and format-specification diagnostics are described under
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
-| `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
+| `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, or a hosted builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
 | `AU2060` | unknown delegation field | The name after `by` does not name a field of the class. | Name the stored field that supplies the trait. |
 | `AU2061` | unsatisfied delegation trait | The field type does not implement the requested trait specialization. | Implement that trait on the field type, or add the required generic bound. |
 | `AU2062` | duplicate trait delegation | Two declarations delegate the same trait specialization for one class. | Keep one delegation and put the overrides in its suite. |
@@ -8876,6 +8888,15 @@ String and format-specification diagnostics are described under
 | `AU2064` | invalid property setter | A setter is duplicated, lacks a matching getter, or has the wrong name, receiver, parameter, or result. | Pair it with the same-name getter and write `def name(mut self, value: T):` for a getter returning `T`. |
 | `AU2065` | invalid drop hook declaration | The hook is on a Copy class or has an invalid signature or precondition. | Use `def __drop__(mut self):` in an ordinary class. |
 | `AU2066` | explicit drop hook reference | A program calls or binds the automatic hook. | Let the owner release it, or put an explicit operation in another method. |
+| `AU2080` | invalid static storage initializer | A module cell has a runtime initializer. | Supply a literal or supported structural initializer. |
+| `AU2081` | invalid fixed array type | An inline array has an invalid length or element representation. | Choose an inline type and a positive length within the size limits. |
+| `AU2082` | invalid fixed array initializer | The literal or repeat length differs from the destination array. | Supply exactly the declared number of elements. |
+| `AU2083` | invalid raw pointer operation | A pointer method, cast or comparison has incompatible types. | Use an eligible pointee and the method's declared operand type. |
+| `AU2084` | raw pointer requires FFI permission | Code uses a typed raw pointer without the package capability. | Set `allow_ffi = true` in the package manifest to opt in. |
+| `AU2085` | invalid C layout declaration | An alignment, layout modifier or bit width is invalid. | Use a supported power-of-two alignment and a width within the unsigned field type. |
+| `AU2086` | invalid C layout query | A layout query names an ineligible type or field. | Use an addressable C member for `offset_of`. |
+| `AU2087` | invalid atomic ordering | An atomic operation requests an incompatible order or a computed order name. | Use a supported ordering string literal for that operation. |
+| `AU2088` | invalid rotation count type | A rotation count has an incompatible type. | Pass an `int64` count. |
 | `AU2090` | assembly target | Assembly requires freestanding mode. | Select a freestanding target. |
 | `AU2091` | assembly operand type | The register cannot hold this scalar type or width. | Match the operand type and register. |
 | `AU2092` | assembly register | A register is unknown, reserved or overlaps another constraint. | Choose distinct registers supported by the target. |
@@ -9106,6 +9127,10 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3011` | collection mutation under a live element view | `append`, `remove`, dictionary assignment, or another structural change of a collection while a view of one of its elements or entries is live, or a write to an element the view may select. | End the view first, or write a different literal position. |
 | `AU3012` | definite initialization | Inside `__init__`, a read of a field before it is set, an assignment to a field set on only some paths, or a use, escape, or return of `self` before every field is set. | Set the field on every path first, or move the use after the last field assignment. |
 | `AU3020` | partial move from a class with a drop hook | A move would leave the hook with an uninitialized field. | Move the complete owner or borrow the field. |
+| `AU3030` | module state access | A hosted module declares a mutable cell, or an operation borrows mutable module storage. | Use an immutable synchronization handle in a hosted module. Snapshot a cell before borrowing it. |
+| `AU3031` | fixed array would duplicate a non-copy element | An operation would duplicate an element that is not Copy. | Construct each element individually or use a Copy element type. |
+| `AU3032` | place has no writable stable address | A writable pointer is requested for an immutable place, temporary or bit-field. | Take the address of stable, writable storage. |
+| `AU3033` | borrow of a C bit-field | A borrow requires an independent address for a bit-field. | Read its value into a local or assign to the field directly. |
 | `AU3035` | assembly output binding | An output lacks a distinct writable scalar destination. | Bind each output to its own mutable scalar. |
 
 The guidance these diagnostics carry is described under
@@ -9253,6 +9278,11 @@ owner's region.
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
 | `AU4007` | numeric Array shape or reduction violation | Array shapes that do not broadcast, an axis outside the rank, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
 | `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
+| `AU4030` | module state outside freestanding execution | Hosted execution encounters a freestanding module cell. | Build the entry point with the freestanding profile. |
+| `AU4031` | fixed array index out of bounds | An inline array index lies outside its length. | Use an index from zero through length minus one. |
+| `AU4032` | invalid raw pointer value | A raw pointer operation encounters an invalid runtime value. | Check the pointer representation and validity of the access. |
+| `AU4033` | value exceeds C bit-field width | The assigned integer exceeds the bit-field width. | Store an unsigned value that fits the declared width. |
+| `AU4034` | invalid integer operation argument | A rotation receives a negative count. | Supply a nonnegative count. |
 
 Each runtime code's precise causes are listed under
 [Runtime Traps And Backtraces](#runtime-traps-and-backtraces).
@@ -12943,7 +12973,7 @@ the call depth rule.
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers.
+code. Raw pointer values use the same package permission.
 
 ## Package Opt-In
 
@@ -13236,8 +13266,7 @@ rejects an `own` scalar with `AU3004`.
 ### Array Pointers
 
 `ptr[T]` is a pointer to the first of a run of scalars, such as
-`const double *` in C. The name is a type only in an extern parameter. The
-argument is a `list[T]`, and its elements are laid out as a C array of `T`.
+`const double *` in C. An extern pointer parameter accepts a typed pointer or a `list[T]`. A list passes its elements as a C array for the duration of the call.
 
 ```aura fragment
 extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
@@ -13263,7 +13292,7 @@ def main() -> int32:
 - **Lifetime.** The pointer is valid only during the call. The callee must
   not keep it.
 - **Empty lists.** An empty list passes a null pointer.
-- **Reads.** A function must not write through a `ptr[T]`. Declare the
+- **Reads.** A C function receiving a list view must not write through a `ptr[T]`. Declare the
   parameter `mut ptr[T]` if it does.
 - **Writes.** What the function writes through a `mut ptr[T]` is in the list
   when the call returns. The list keeps its length. A `mut ptr[bool]` list
@@ -13273,13 +13302,31 @@ A built program passes the address of the list's own storage, with no copy,
 when the list keeps its elements unboxed. Lists of scalars do. A `ptr[T]`
 parameter accepts fixed-width scalars, `extern "C"` classes and `extern "C"`
 unions as its element type. Other element types produce `AU2002`, and
-`own ptr[T]` produces `AU3004`. `ptr[T]` cannot be a result, and
+`own ptr[T]` produces `AU3004`. A `ptr[T]` result returns a raw address, and
 `list[uint8]` remains the form for bytes with a length.
 
 `T` is also an `extern "C"` class. A `ptr[Name]` parameter takes a
 `list[Name]` and passes a C array of `struct name`, as a vertex buffer or a
 list of points is passed. [Arrays Of Structs](#arrays-of-structs) has the
 rules.
+
+### Raw Pointer Values
+
+Use `ptr[T]` for a typed address supplied by C or by the platform. Copying a pointer copies its address. The C library specifies how long the storage stays valid and who releases it. The null value is `0 as ptr[T]`. Compare two pointers of the same type with `==` or `!=`.
+
+```aura fragment
+extern "C" def malloc(size: uint64) -> ptr[uint8]
+extern "C" def free(block: mut ptr[uint8]) -> None
+
+def example() -> None:
+    p = malloc(8)
+    if p != (0 as ptr[uint8]):
+        p.offset(7).write(42)
+        assert p.offset(7).read() == 42
+        free(p)
+```
+
+A raw pointer passed to a `mut ptr[T]` parameter lets C write the pointee. The pointer binding can be immutable. A list argument still needs a mutable list. Contracts on an extern list view use the list's bounds and require a list argument.
 
 ### Arrays
 
@@ -13357,10 +13404,7 @@ def main() -> int32:
   or a fixed-size [array](#array-fields) of values with those layouts.
   Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** A struct is Copy when each field is a scalar or
-  another Copy struct. A struct that contains an array or a union moves on
-  assignment. Construct it with keyword arguments, read and assign its fields,
-  and keep it in a list or another class. It has no C identity until it crosses.
+- **An ordinary value.** A struct copies when each field copies, including a `fixed[T, N]` field with Copy elements. A hosted union or a list-backed `array[T, N]` field moves with its containing struct. Construct a struct with keyword arguments, read and assign its fields, and keep it in a list or another class.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -13372,10 +13416,7 @@ def main() -> int32:
 - **Booleans.** A `bool` field that comes back with a byte other than `0` or
   `1` fails with `AU4001`.
 
-`own Name` is `AU3004`, and `Name | None` is `AU2010`. C
-bit-fields, pointer fields, and packed or over-aligned structs have no
-spelling. Declare a pointer field as `uint64` only when the code never
-dereferences it.
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. Use `bits(N)` for a bit-field, `packed` for byte packing, and `align(N)` for explicit record alignment.
 
 Struct layout and passing follow the System V convention on x86-64 and the
 standard procedure call convention on AArch64, for Linux and macOS. A
@@ -13481,6 +13522,35 @@ def main() -> int32:
 `own ptr[Name]` is `AU3004`. Lists of C unions follow the same pointer
 rules as lists of C structs.
 
+#### Packing, Alignment And Bit-Fields
+
+Use `packed` for one-byte member packing and `align(N)` to request a minimum alignment for the whole class. The final size includes the padding required for an array of the class.
+
+```aura fragment
+import mem
+
+extern "C" packed align(8) class Header:
+    kind: uint8
+    serial: uint32
+    count: uint16 bits(5)
+    mode: uint16 bits(3)
+
+def field_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+| Form | Rule |
+| --- | --- |
+| `extern "C" packed class Header:` | Caps member alignment at one byte. A nested record retains its own internal layout. |
+| `align(N)` before `class` | Takes a literal power of two from 1 to 8192. Natural alignment still applies unless the record is packed. |
+| `field: uintN bits(W)` | Declares an unsigned bit-field. A positive literal width must fit the 8-, 16-, 32- or 64-bit base type. |
+| `mem.size_of(T)`, `mem.align_of(T)` | Give the target size and alignment in bytes as `uint64` constants. Use a C scalar, class, union, typed pointer or fixed array. |
+| `mem.offset_of(T, field)` | Gives the byte offset of an addressable field as a `uint64` constant. Union members start at zero. |
+
+A bit-field read returns its declared unsigned type. A write checks the value fits before updating the field. The platform C ABI determines bit allocation. In particular, Windows starts a new allocation unit when adjacent fields have different base widths. Use matching declarations in C and Aura.
+
+`AU2085` reports an invalid alignment or field width. Use a supported power of two for alignment and an unsigned field type with sufficient bits. `AU2086` reports a layout query whose type or field lacks the requested layout. For a bit-field, query an enclosing record or an addressable sibling. A borrow of a bit-field reports `AU3033`. Copy it to a local and assign the result back. A value too large for a bit-field reports `AU4033`.
+
 #### Unions
 
 `extern "C" union Name:` declares a C union. Every member starts at offset
@@ -13525,15 +13595,16 @@ parts:
 | Part | Meaning |
 | --- | --- |
 | `Name()` | a union of zero bytes |
-| `value.member` | a read-only property: the leading bytes of the union, read as the member's type |
+| `value.member` | the leading bytes of the union, read as the member's type |
+| `value.member = item` | stores the member in a mutable union, preserving bytes beyond that member |
 | `Name.from_member(value)` | a union that holds `value` in that member, with every other byte zero |
 | `value.bytes` | the bytes themselves, which the program can read and write |
 
 - **A member read makes a new value.** `event.key` is a `KeyEvent` built
   from the bytes at that moment. Changing it does not change the union.
-- **Members cannot be assigned.** `event.kind = 2` and
-  `event.key.code = 2` are `AU2045`, because a member is a property. Build a new union with `from_member`, or write
-  `bytes`.
+- **Assignment writes one member.** `event.kind = 2` sets the bytes of
+  `kind`. To update a nested field, read the member into a mutable
+  local, edit it and assign the member back.
 - **No member is the active one.** A C union carries no tag, and neither
   does this one. Which member holds meaning is the library's convention,
   usually a first field every member shares. Reading another member
@@ -13543,9 +13614,7 @@ parts:
 - **The bytes keep their length.** A union whose `bytes` list is not
   exactly as long as the C union fails with `AU4005` when it crosses or
   when a member is read.
-- **A union is not `Copy`.** It holds a list, so assignment moves it, as
-  for a class with an array field. A class that holds a union is not
-  `Copy` either.
+- **Assignment follows the storage profile.** In a hosted build a union moves with its backing byte list. In a freestanding build it copies its inline bytes.
 - **A member cannot be named `bytes`.**
 
 A union crosses wherever an `extern "C"` class does: by value, as `mut
@@ -13740,14 +13809,9 @@ classes, enum payloads, and generic specializations.
 - Consuming operations such as `pop`, `remove`, and replacement are allowed.
 - Equality and inequality are rejected for an opaque handle or any value that
   structurally contains one.
-- Arithmetic and ordering operators on a handle are rejected with dedicated
-  diagnostics. Raw pointer arithmetic and ordering by foreign address are not
-  language capabilities.
+- Opaque handles support neither arithmetic nor ordering. A first-class `ptr[T]` supports element offsets and equality.
 
-FFI does not expose foreign addresses. It does not assume that address
-identity is the native API's identity. When callers need to compare foreign
-objects, a binding should expose reviewed extern operations or a stable scalar
-or `str` key.
+An opaque handle keeps its foreign address private. To compare the objects it refers to, use the foreign API's identity operation or a stable key.
 
 ## Runtime Semantics
 
@@ -13870,13 +13934,11 @@ still name the host's actual C symbol.
 
 FFI does not:
 
-- define C bit-fields, or pass enums
-- assign one member of a union in place
+- pass enums
 - pass a struct that holds a pointer Aura can follow
-- allocate foreign memory or expose pointer arithmetic
+- allocate foreign memory
 - return views, or free a `cstr` result
-- pass typed pointers to anything but one scalar, one struct, one handle,
-  or the elements of a list of scalars or structs
+- marshal lists whose elements lack a C representation
 - accept variadics
 - pass a closure as a callback, pass a list or struct to one, or return
   text from one
@@ -13910,7 +13972,7 @@ Implemented:
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
+Reserved or unavailable: closures as callbacks, variadics, returned views,
 other nullable shapes, and Aura union types such as `int32 | float64`.
 Aura does not infer them from current syntax.
 
@@ -14269,21 +14331,21 @@ object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Nothing lives on a heap.
+Scalar and aggregate values live in registers, stack frames or static storage. A fixed array stores its elements inline.
 
 | Available | Not available |
 | --- | --- |
-| `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
+| `bool`, `int8` to `int128`, `uint8` to `uint128`, `float32`, `float64` | `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
-| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
+| `extern "C"` classes, `fixed[T, N]` arrays and typed raw pointers | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
 | `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
+| `if`, `while`, `for` over a fixed array, a range or a generator call, `match` on a union | `try`, `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
-| Module constants with a literal value | Module constants computed when the program starts |
-| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+| Module constants and mutable module cells with static initializers | Module storage computed when the program starts |
+| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -14295,6 +14357,12 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+## Module Storage
+
+A module declaration such as `mut samples: fixed[uint16, 2] = [40, 0]` creates one writable cell shared by all exports that use it. A zero-initialized cell occupies `.bss`. Other initializers occupy `.data`. The startup code must clear `.bss` and, on boards that load writable data from ROM, copy the initial contents of `.data` to RAM before calling an export.
+
+Use `samples[0]` to read or assign one element and `len(samples)` for its constant length. An unconstrained index is checked before the access. Ordinary hosted packages share mutable data through immutable bindings to synchronization handles. [Names and scopes](/manual/names-and-scopes) · [Fixed arrays](/manual/types)
 
 ## Failed Checks
 
@@ -14317,6 +14385,7 @@ void aura_trap(uint32_t code, const char *file, size_t file_length,
 | 6 | Shift count out of range |
 | 7 | A foreign `bool` that is neither 0 nor 1 |
 | 8 | Unreachable code was reached |
+| 9 | Fixed-array index out of bounds |
 
 - `file` is the source file's path relative to the directory of the file
   that was built. It is not NUL-terminated. `file_length` is its length in
@@ -14443,10 +14512,11 @@ needs the same operation can call a helper shared with the handler.
 | `@machine.used` | Keep a function and its section when linking with `--gc-sections`. |
 | `@machine.noinline`, `@machine.always_inline` | Set the function's inlining policy. Choose one. |
 
-Section and alignment also apply to an explicitly typed scalar module
-constant with a literal initializer. For example,
+Section and alignment also apply to mutable module storage and to explicitly
+typed scalar module constants with literal initializers. For example,
 `@machine.section(".board.config")` and `@machine.align(64)` above
-`MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary.
+`MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary. A mutable cell keeps at least
+its natural alignment and remains writable.
 
 ## Targets
 
@@ -14462,6 +14532,7 @@ architecture of the machine that runs the compiler.
 Every target writes an ELF object, on every host.
 
 - The default build emits position-independent code.
+- Synchronize access to mutable module state shared between cores or interrupt handlers.
 - There are no unwind tables and no stack probes.
 - Floats use the hardware float registers. Startup code must enable them
   before the first Aura function runs: SSE on x86-64, FP and NEON on
@@ -14533,28 +14604,20 @@ image does not use.
 
 ## Size And Speed
 
-`benchmarks/freestanding` builds five routines with Aura, C, and Rust
-without its standard library, and links each with one harness. On an
-x86-64 Linux machine:
+The freestanding benchmark builds six routines with Aura, C and Rust, including a 16-element inline array updated over twenty million iterations. On x86-64 Linux, each executable ran on the same dedicated CPU core. The table gives the best elapsed time from nine runs per routine with the same C harness. The ratio compares Aura with the faster of C and Rust with overflow checks off. All four builds returned the same results.
 
-| Routine | Aura | C (`clang -O2`) | Rust | Rust with overflow checks |
-| --- | --- | --- | --- | --- |
-| `crc32` | 50 ms | 195 ms | 50 ms | 54 ms |
-| `collatz` | 231 ms | 157 ms | 139 ms | 302 ms |
-| `isqrt_sum` | 98 ms | 105 ms | 145 ms | 164 ms |
-| `gcd_sum` | 201 ms | 131 ms | 156 ms | 175 ms |
-| `orbit` | 832 ms | 882 ms | 778 ms | 756 ms |
-
-Aura keeps its overflow and divisor checks, and `%` rounds toward negative
-infinity, which costs a few instructions over C's remainder. The five
-functions are 993 bytes of code against 914 for C. The Aura object also
-holds 115 bytes of memory routines and the file name for the trap hook.
+| Routine | Aura | C | Rust | Rust with overflow checks | Aura / fastest C or Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `crc32` | 45.6 ms | 144.8 ms | 45.2 ms | 46.1 ms | 1.01× |
+| `collatz` | 158.9 ms | 122.3 ms | 121.4 ms | 228.1 ms | 1.31× |
+| `isqrt_sum` | 120.0 ms | 119.8 ms | 139.9 ms | 129.0 ms | 1.00× |
+| `gcd_sum` | 171.7 ms | 120.2 ms | 121.7 ms | 136.4 ms | 1.43× |
+| `orbit` | 880.5 ms | 1007.6 ms | 883.6 ms | 884.7 ms | 1.00× |
+| `ring_mix` | 19.5 ms | 17.9 ms | 19.7 ms | 16.5 ms | 1.09× |
 
 ## Current Limits
 
 - No heap values. A freestanding program cannot allocate.
-- No mutable module-level state. Keep state in the entry function's locals,
-  behind `mut` parameters, or in C.
 - 32-bit targets are not supported.
 
 ## Source: docs/manual/functions.md
@@ -16859,7 +16922,7 @@ docstring = TRIPLE_STRING, NEWLINE ;
 module-element = import-declaration | module-constant | module-asm | item | statement ;
 
 module-constant
-    = [ "public" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
+    = [ "public" ], [ "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -16874,6 +16937,8 @@ import-alias = IDENT ;
 identifier-path = identifier, { ".", identifier } ;
 identifier      = IDENT | "from" ;
 ```
+
+In a declaration module or a file with an explicit entry function, a leading `mut` binding declares writable module storage. Freestanding builds accept these cells. In an entry script without an explicit entry function, a plain `mut` starts the executable statements and declares a script local.
 
 Imports, module constants, items, and executable top-level statements may be
 interleaved syntactically. They still run in a fixed category order:
@@ -16908,8 +16973,8 @@ machine-attribute = "@", "machine", ".", identifier, [ "(", literal, ")" ], NEWL
 ```
 
 An output expression must name a mutable scalar. A machine attribute
-precedes a module function or, for section and alignment, a typed scalar
-constant. The allowed attribute names, argument values and target
+precedes a module function or, for section and alignment, a module cell
+or typed scalar constant. The allowed attribute names, argument values and target
 constraints appear in [Freestanding Builds](/manual/freestanding).
 
 ## Items
@@ -16942,11 +17007,13 @@ extern-opaque-declaration
       [ "drop", identifier ], NEWLINE ;
 
 extern-aggregate-declaration
-    = "extern", STRING, ( "class" | "union" ), identifier, ":", NEWLINE,
+    = "extern", STRING, ( { c-layout-modifier }, "class" | "union" ), identifier, ":", NEWLINE,
       INDENT, [ docstring ], extern-member, { extern-member }, DEDENT ;
 
+c-layout-modifier = "packed" | "align", "(", INTEGER, ")" ;
+
 extern-member
-    = [ "public" ], identifier, ":", extern-field-type, NEWLINE, [ docstring ]
+    = [ "public" ], identifier, ":", extern-field-type, [ "bits", "(", INTEGER, ")" ], NEWLINE, [ docstring ]
     | "pass", NEWLINE ;
 
 extern-field-type
@@ -16994,7 +17061,8 @@ type-atom
       [ "?" ] ;
 
 type-primary
-    = identifier-path, [ "[", type-list, "]" ]
+    = "fixed", "[", type, ",", INTEGER, "]"
+    | identifier-path, [ "[", type-list, "]" ]
     | trait-object-type
     | grouped-type
     | tuple-type
@@ -17903,10 +17971,12 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.17. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.17
+## Syntax Not In Aura
 
 The grammar intentionally excludes:
 
+- task-local declaration syntax, pointer dereference operators and lexical `unsafe` blocks
+- variable-length inline arrays, zero-width C bit-fields and anonymous C bit-fields
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
@@ -20382,11 +20452,12 @@ diagnostics.
 
 # Memory Module
 
-The `mem` module reads and writes integers at a raw address. It is for
+The `mem` module reads and writes scalars at a raw address. It is for
 device registers, memory shared with C, and the lock-free cells a kernel or
 a driver needs. The raw-address functions work in hosted and
 [freestanding](/manual/freestanding) builds. A freestanding target also
 provides the machine operations below.
+Hosted and freestanding builds use the same target memory ordering rules.
 
 ```aura fragment
 import mem
@@ -20406,8 +20477,7 @@ functions](/manual/ffi) need.
 
 ## Public API
 
-`N` is 8, 16, 32, or 64 for the plain and volatile functions, and 32 or 64
-for the atomic ones.
+`N` is 8, 16, 32 or 64 for unsigned plain, volatile and atomic access.
 
 | API | Signature | Result |
 | --- | --- | --- |
@@ -20415,12 +20485,14 @@ for the atomic ones.
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | Reads once, exactly where the program says. |
 | `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | Writes once, exactly where the program says. |
-| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
-| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
-| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
-| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
-| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
-| `mem.fence` | `fence() -> None` | Orders every earlier memory access before every later one. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64, order="seq_cst") -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN, order="seq_cst") -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN, order="seq_cst", failure_order=…) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
+| `mem.fence` | `fence(order="seq_cst") -> None` | Orders every earlier memory access before every later one. |
+
+The `order` argument takes a string literal. Loads allow `"relaxed"`, `"acquire"` or `"seq_cst"`. Stores allow `"relaxed"`, `"release"` or `"seq_cst"`. Read-modify-write operations allow all five orders, including `"acq_rel"`. A fence accepts all except `"relaxed"`. A compare-exchange failure order must permit a load and must be no stronger than the success order. Omitting it drops release semantics from the success order.
 
 ## Rules
 
@@ -20434,17 +20506,43 @@ for the atomic ones.
   in program order, and the compiler never merges, drops, or splits it.
   Use it for device registers. The address must be a multiple of `N / 8`.
 - **Atomic access.** Each call is one indivisible step with respect to
-  every other atomic call on the same cell, on every core. All atomic
-  functions use sequentially consistent ordering. The address must be a
+  every other atomic call on the same cell, on every core. Atomic operations default to sequentially consistent ordering. The address must be a
   multiple of `N / 8`.
 - **`atomic_add` wraps.** It is the one place an Aura addition does not
   check for overflow, because a failed check could not undo the step.
-- **Aura values have no address.** There is no way to take the address of a
-  local, a field, or a list element. Addresses come from the platform, a
-  linker symbol read through C, or a foreign function.
+- **Field addresses.** `mem.address_of(point.x)` returns a typed pointer to the field of a mutable C class. The pointer expires with its enclosing storage.
 - **Verification.** `aura verify` treats a read as an unknown value of its
   type and does not model writes. A write to memory that an Aura value
   occupies is outside what a proof covers.
+
+Compile-time queries accept C layout types. `mem.size_of(T)` returns the storage size, `mem.align_of(T)` the alignment, and `mem.offset_of(T, member)` the byte offset of an addressable member. Results are `uint64` constants for the selected target.
+
+## Typed Access
+
+Use `ptr[T]` to keep the memory representation with the address. The package must opt in to FFI even if the file uses only pointer casts and methods.
+
+```aura fragment
+p = address as ptr[float32]
+p.write(-1.5)
+next_value = p.offset(1).read()
+raw_bytes = p as ptr[uint8]
+address_again = raw_bytes as uint64
+```
+
+| Operation | Result |
+| --- | --- |
+| `mem.address_of(place)` | Address a mutable module binding, a fixed array element, or an addressable C field. Selecting an array element checks its index. |
+| `p.read()`, `p.write(value)` | Read or write one value of the pointee type. |
+| `p.volatile_read()`, `p.volatile_write(value)` | Read or write at the program point. A scalar uses one naturally aligned access. |
+| `p.offset(count)` | Advance by a signed number of elements. The unit is the size of the pointee. |
+| `p as ptr[U]` | Interpret the same address as a pointer to U. |
+| `p as uint64`, `address as ptr[T]` | Convert between an address word and a typed pointer. |
+
+A pointer to `fixed[T, N]` reads and writes a complete inline array. For example, `p.offset(1)` advances past all `N` elements, including padding in the element type. A pointer to an `extern "C"` class uses the C layout of the whole record. Ordinary accesses accept unaligned addresses, including fields in packed records. Aggregate volatile operations access each byte in order. Each volatile scalar operation requests the width of the scalar, including `int128` and `uint128`. Whether the hardware implements that width in a single bus transaction depends on the target.
+
+Use `0 as ptr[T]` for null. Comparing pointers of the same type with `==` or `!=` compares their address words. The caller is responsible for the lifetime, alignment and access rights of a pointer obtained through FFI or `mem.address_of`. An address into a local expires when its storage goes out of scope. A bit-field shares its storage unit with other members and has no pointer.
+
+The signed forms `mem.read_intN` and `mem.write_intN` use 8, 16, 32 or 64 bits. The floating forms `mem.read_floatN` and `mem.write_floatN` use 32 or 64 bits. Prefix either form with `volatile_` for a volatile access. A floating read interprets the stored bits in the target's floating-point representation.
 
 ## Ports And Processor Registers
 
@@ -20518,10 +20616,6 @@ def main() -> None:
 
 ## Current Limits
 
-- Unsigned integers only. Convert with `as` for a signed or float value's
-  bits.
-- No atomic access to 8-bit and 16-bit cells.
-- One ordering, sequentially consistent.
 - Port numbers are 16 bits. The largest single port transfer is 32 bits.
 
 ## Source: docs/manual/names-and-scopes.md
@@ -20554,7 +20648,7 @@ One `.au` file defines one module scope. These kinds of name share its top-level
 - functions
 - extern functions and extern opaque handle types
 - traits
-- module constants
+- module constants and freestanding mutable bindings
 - imported names
 - imported module aliases
 
@@ -20585,7 +20679,23 @@ Constants become available in declaration order. An initializer may read an earl
 
 **Reads.** Reading a Copy-typed constant produces an ordinary copy. Reading a non-Copy constant gives shared access to the one value stored by its defining module. That read cannot move the value into owned storage, pass it to an `own` parameter, or request mutable access. When you need independent owned data, use an explicit supported `.clone()` or a constructor.
 
-**Immutability.** Module storage is immutable. Module-level `mut`, reassignment, compound assignment, and mutable access are `AU3003` errors. Keep stateful application data in a local value owned by `main` or another explicit owner.
+**Immutability.** Reassigning an immutable module binding is `AU3003`. A hosted module can share a `sync.AtomicInt` or `sync.Mutex` through an immutable binding. A hosted `mut` module declaration is `AU3030`.
+
+## Freestanding Module State
+
+Declare a mutable binding at module scope to preserve a value across exported calls.
+
+```aura fragment
+mut ticks: uint64 = 0
+
+export "C" def tick() -> uint64:
+    ticks += 1
+    return ticks
+```
+
+A `public mut` binding exposes the same storage to importers. Each read snapshots the value. Take a local copy before forming a view. Freestanding callers coordinate access across cores and interrupts. A hosted script can still declare a `mut` local in its entry statements.
+
+Scalar literals, fixed array literals, repeated elements and structural class constructors can initialize storage without startup code. An initialized C record in module storage has the target C field offsets and alignment. A literal address such as `0 as ptr[uint8]` can initialize a pointer in a package with FFI permission. A call to a user-defined initializer requires a computed value and produces `AU2080`.
 
 **Script locals.** An entry script's top-level locals live apart from module storage. [Top-Level Statement Scope](#top-level-statement-scope) covers them.
 
@@ -20791,7 +20901,7 @@ Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `proc
 
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment, separate from module storage. They run in source order after the reachable module constants finish initializing.
 
-A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
+In a hosted entry script without an export or an explicit `main`, a `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
 A bare assignment to a new name depends on where it appears:
 
@@ -20810,7 +20920,7 @@ total = scores.len()              # immutable top-level local
 print(f"{total} of {limit}")
 ```
 
-A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
+A `public` binding belongs to module scope. A declaration such as `public name = value` after the first executable statement produces `AU1101`. Functions can see module bindings. Top-level script locals belong to the entry statements.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 
@@ -20859,7 +20969,8 @@ Comprehension clause scopes enter one at a time. A target is established only af
 | `AU2999` | A duplicate, reserved, private, ambiguous, or otherwise invalid name or scope declaration that has no narrower code. |
 | `AU3001` | A read of a moved place, or an attempted move out of non-Copy module storage. |
 | `AU3002` | A borrow conflict. |
-| `AU3003` | An immutable place, or a request for mutable module storage. |
+| `AU3003` | An immutable place. |
+| `AU3030` | A hosted mutable module binding or a safe view of freestanding module state. |
 | `AU3004` | An invalid ownership mode. |
 | `AU4001` | Runtime re-entry into module initialization. |
 
@@ -21358,6 +21469,21 @@ square root accept 1 to 1,000,000 significant digits. A normalized decimal
 exponent must lie between −2⁶² and 2⁶² inclusive. An exponent outside that
 range traps with `AU4002`. A requested power, shift, factorial or decimal
 scale which exceeds the runtime's construction limit traps with `AU4005`.
+
+## Fixed-Width Integer Methods
+
+Every fixed-width integer has these methods, including `int128`, `uint128`, `intsize` and `uintsize`. Signed values use their two's-complement representation. The methods need no import.
+
+| Method | Result |
+| --- | --- |
+| `x.rotate_left(count)`, `x.rotate_right(count)` | Rotate by a nonnegative `int64`, reduced modulo the receiver's width. Bits leaving one end enter the other end. |
+| `x.count_ones()` | The number of set bits, as an `int64`. |
+| `x.leading_zeros()`, `x.trailing_zeros()` | The number of zero bits before the highest or after the lowest set bit, as an `int64`. Both return the receiver's width for zero. |
+| `x.swap_bytes()` | The bytes of the receiver in reverse order. An eight-bit receiver keeps its value. |
+
+Rotations and byte swaps preserve the integer type. A rotation of a negative count fails with `AU4034`. A count with a type other than `int64` is `AU2088`. Convert an integer count with `as int64`.
+
+<<< ../../examples/numbers/register_bits.au{aura}
 
 ## Source: docs/manual/numeric-arrays.md
 
@@ -28039,7 +28165,7 @@ See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned tool
 
 The `sync` module holds the values several tasks can change: a lock around
 a value, atomic integers and booleans, and a shared map. Everything else
-in Aura has one owner, and module constants never change, so these four
+in Aura has one owner, and hosted module bindings are immutable, so these four
 types are how tasks share state.
 
 ```aura
@@ -28221,7 +28347,7 @@ NEXT_ID = sync.AtomicInt(1)
 ```
 
 Every task in the program reaches the same map and the same counter
-through these names.
+through these names. A hosted module declaration such as `mut NEXT_ID = sync.AtomicInt(1)` produces `AU3030`. Keep the binding immutable and call `NEXT_ID.add(1)`. Replacing the handle would race with a task reading that name.
 
 ## Typing Rules
 
@@ -29564,6 +29690,41 @@ This rule stops a nested handle such as `Task[Task[str]]` from being copied to d
 
 **Runtime.** The pinned-worker runtime uses this classification at its task boundary. Queue and Task handle state is synchronized for cross-worker use. All other task captures and results stay owned, structural `Transfer` values. So the boundary stays share-nothing even when sibling task bodies run on different pinned workers.
 
+## Fixed Arrays
+
+`fixed[T, N]` stores N consecutive elements of T inline. Use a list literal
+in a fixed destination or repeat one Copy value.
+
+```aura
+def clear(words: mut fixed[uint16, 4]) -> None:
+    words[0] = 0
+
+def main() -> None:
+    mut words: fixed[uint16, 4] = [1, 2, 3, 4]
+    clear(words)
+    for word in words:
+        print(word)
+    empty: fixed[uint16, 4] = [0] * 4
+    print(len(empty))
+```
+
+The length is a literal integer from 1 through 1048576. The complete object
+must fit in 2147483647 bytes. Elements can be fixed-width scalars, inline
+classes, or further fixed arrays. A C field requires an element with C
+layout. A fixed array is Copy when its element is Copy.
+
+Index zero selects the first element. The last index is `len(words) - 1`.
+Negative indexes and indexes at or above the length raise `AU4031`. A
+freestanding build reports trap code 9 at that index. The compiler folds
+the length to a constant and removes a bounds test when it can prove the
+access is in range.
+
+A bare fixed array parameter borrows its argument. A `mut` parameter
+requires a mutable place and can replace its elements. For a C struct
+that needs an inline `uint16_t words[4]` field, declare
+`words: fixed[uint16, 4]`. Existing `array[T, N]` fields have the
+list-based interface described in the [FFI manual](/manual/ffi#array-fields).
+
 ## Builtin Generic Types
 
 Ordinary absence is the union `T | None`, not a generic wrapper type. The builtin generic enums below cover outcomes that must stay distinct from a present `None` payload.
@@ -29960,6 +30121,7 @@ function:
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| inline array index | `row[i]` for `fixed[T, N]` | `AU4031` when the index lies outside `0 <= i < N` |
 | key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
@@ -30010,6 +30172,8 @@ def main():
 
 Inside a function, its own `requires` clauses are assumed, since every call
 proves them.
+
+The verifier knows the length of a fixed array and treats target C layout queries as constants. Rotations and bit-count methods use the receiver's exact integer width. A memory or atomic load can observe a fresh value. In a program that takes raw addresses, a function that exposes a place, performs a raw store or can reach one through a call or destructor receives an unsupported proof result. Check removal retains that function's checks. Device behavior and interleavings between cores remain the caller's responsibility.
 
 ## Loops
 
@@ -32762,6 +32926,19 @@ def main():
 
 The underscores are only for the reader; `8_100_000_000` and `8100000000` are
 the same number. `0x` is hexadecimal, `0o` is octal, and `0b` is binary.
+
+### Reading bits in a register
+
+A device might set one bit for each event waiting to be handled. If the
+16-bit status word contains `0x8100`, bits 15 and 8 are set. We can count
+the events with `count_ones()` and find the lowest event number with
+`trailing_zeros()`.
+
+<<< ../../examples/numbers/register_bits.au{aura}
+
+The first two lines print `2` and `8`. Rotating the word left moves bit 15
+into bit 0, producing `513`. Swapping the two bytes changes `0x8100` into
+`0x0081`, which prints as `129`.
 
 ### Overflow is an error
 
@@ -39456,9 +39633,9 @@ error[AU3003]: cannot assign through immutable place `settings.bar_width`
    |     ^
 ```
 
-and a module can't declare a mutable top-level binding in the first place:
+A hosted module also rejects a mutable top-level binding.
 
-```aura check-fail:AU3003
+```aura check-fail:AU3030
 mut pages_read: int64 = 0
 
 def main():
@@ -39467,19 +39644,19 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU3003]: module bindings are immutable; `mut` module state is not supported
+error[AU3030]: hosted module bindings are immutable
  --> src/main.au:1:5
   |
 1 | mut pages_read: int64 = 0
   |     ^
-  = help: put mutable state in a local value owned by `main` or another explicit owner
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task
 ```
 
-The help line is the whole design in one sentence. Python modules are a
+Python modules are a
 common place to keep global state: a cache, a counter, a configuration
 object that gets patched in tests. Every function that touches that state is
 quietly coupled to every other one, and once tasks run in parallel (Chapter
-15), shared mutable globals become data races. Aura removes the option.
+15), unsynchronized reads and writes can race. A hosted Aura module can bind a synchronization handle such as `sync.AtomicInt` for a shared counter.
 Mutable state lives in a value with an owner, usually created in `main`, and
 it's passed to the functions that need it, where their signatures say whether
 they read it or change it.
@@ -40718,6 +40895,38 @@ Each pattern matches lists of one exact length, except the last, where
 `*rest` collects whatever the other positions leave into a new list. The arms
 are tried in order, so the specific lengths go first. The
 [Manual](/manual/enums-and-match) has the full rules for sequence patterns.
+
+## Recording a fixed number of scores
+
+Suppose a competition has exactly three rounds. We can give each round a
+slot when we create the scorecard and update a slot when its round ends.
+
+```aura
+def adjust(scores: mut fixed[uint8, 3], index: int64, score: uint8):
+    scores[index] = score
+
+def main():
+    mut scores: fixed[uint8, 3] = [0] * 3
+    adjust(scores, 1, 85)
+    print(len(scores))
+    for score in scores:
+        print(score)
+```
+
+```console
+$ aura run examples/collections/fixed_scores.au
+3
+0
+85
+0
+```
+
+The type `fixed[uint8, 3]` sets aside three consecutive bytes. The repeat
+initializer fills each byte with zero. Passing `scores` to `adjust` lets
+the function borrow those bytes for the duration of the call. The `mut`
+in its parameter gives it permission to update the scorecard. The index
+must be 0, 1, or 2, and Aura checks a round selected at run time before
+writing to its slot.
 
 ## Making new lists from old ones
 
@@ -53384,10 +53593,9 @@ returns a view. We can decorate a class method with the same syntax. For an inst
 <<< ../../examples/classes/method_decorators.au{aura}
 
 Python programmers sometimes use a decorator to register a function in a
-global table as a side effect. That doesn't carry over, because Aura modules
-have no mutable state:
+global table as a side effect. A hosted module rejects a plain mutable counter shared across tasks.
 
-```aura check-fail:AU3003
+```aura check-fail:AU3030
 mut calls = 0
 
 def main():
@@ -53396,12 +53604,12 @@ def main():
 
 ```console
 $ aura check tools.au
-error[AU3003]: module bindings are immutable; `mut` module state is not supported
+error[AU3030]: hosted module bindings are immutable
  --> tools.au:1:5
   |
 1 | mut calls = 0
   |     ^
-  = help: put mutable state in a local value owned by `main` or another explicit owner
+  = help: share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task
 ```
 
 A decorator in Aura transforms one function and nothing else. When we need a
@@ -61458,8 +61666,7 @@ error[AU2002]: an extern function cannot return a str view because no foreign li
 The message says exactly what is missing. A returned pointer and length
 could describe static memory, a buffer the caller must free, or something
 that will change on the next call, and the declaration has no way to say
-which. Raw pointers are refused for the same reason, with a parser error
-that suggests the alternatives:
+which. Write a typed pointer as `ptr[T]`. Using C’s `*T` spelling produces a parser diagnostic.
 
 ```aura fragment
 extern "C" def strlen(text: *uint8) -> uint64
@@ -61467,7 +61674,7 @@ extern "C" def strlen(text: *uint8) -> uint64
 
 ```console
 $ aura check src/bad.au
-error[AU1101]: FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle
+error[AU1101]: use `ptr[T]` for a typed pointer in an extern declaration
  --> src/bad.au:1:29
   |
 1 | extern "C" def strlen(text: *uint8) -> uint64
@@ -61811,14 +62018,12 @@ as `mut` too, and pass a `mut` variable.
 
 Our `Timespec` has only scalar fields, so assignment copies it. We can
 build one with keyword arguments, read its fields, and keep it in a list.
-C lays out nested structs inline. If a field contains a fixed-size array or
-a union, even inside a nested struct, assignment moves the value. An
+C lays out nested structs inline. A `fixed[T, N]` field copies when `T` copies. A hosted C union or a list-backed `array[T, N]` field moves with its containing struct. An
 `extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C
-bit-fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. Declare an unsigned C bit-field with its width, as in `code: uint16 bits(3)`.
 
 ### Arrays of structs
 
@@ -61901,6 +62106,30 @@ boundary. A `Material` that comes back from C always has four elements in
 `AU4005` before C sees anything. One more thing changes: a class that
 holds a list cannot be a `copy class`, so a `Material` moves when we assign
 it, like any other class with a list inside.
+
+### Matching a packed C header
+
+A packet header often puts a four-byte field immediately after a byte. In
+this declaration the serial number starts at byte 1. The fields `urgent`
+and `channel` share the next byte.
+
+```aura fragment
+import mem
+
+extern "C" packed class Header:
+    kind: uint8
+    serial: uint32
+    urgent: uint8 bits(1)
+    channel: uint8 bits(7)
+
+def serial_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+Assigning `header.urgent = 1` sets a single bit and preserves all seven
+channel bits. A C declaration on the other side must specify the same
+packing and bit widths. Use `mem.size_of(Header)` and `mem.align_of(Header)`
+to compare with the C compiler's `sizeof` and `_Alignof` for the target.
 
 ### Unions
 
@@ -61988,11 +62217,10 @@ member to read, and checking it first is our job.
 
 Reading a member gives us a copy. `event.key` builds a new `KeyboardEvent`
 each time, which is why the loop binds it to `pressed` and reads two
-fields from that. For the same reason Aura rejects `event.kind = 1` and
-`event.key.state = 0` with `AU2045`: a member is read-only. To change a
-union, build a new one with a `from_` function. The
-bytes themselves are also there, as the list `event.bytes`, for the rare
-case where nothing else will do.
+fields from that. Assign the whole member to change a mutable union.
+For example, `event.kind = 1` writes the tag and preserves the rest of
+the bytes. To update the key state, read `event.key` into a mutable
+local, update its `state`, then assign the local back to `event.key`.
 
 ## Callbacks
 
@@ -62345,7 +62573,7 @@ The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
 variadic functions such as `printf`, no
-raw pointers or pointer arithmetic, no returned views, no freeing of
+returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
 signature, built as a library the package links, or a separate helper program driven
@@ -62575,7 +62803,7 @@ def put_number(uart: uint64, value: uint64) -> None:
 
 The complete program is in *examples/freestanding/kernel*. Its
 `kernel_main` counts primes, runs a float computation, takes a spin lock
-built from `mem.atomic_compare_exchange_uint32`, and then overflows a
+built from `mem.atomic_compare_exchange_uint32`, writes a sample through a typed pointer, and then overflows a
 `uint8` on purpose. Each board adds a short assembly file that sets the
 stack pointer, turns the float registers on, and calls `kernel_main`, plus
 a linker script that says where memory is.
@@ -62588,10 +62816,11 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+s=42
+trap 1 main.au:160:13
 ```
 
-The first four lines are computed results. The last is our `aura_trap`
+The first five lines are computed results. The last is our `aura_trap`
 hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
@@ -62623,6 +62852,10 @@ stack below the interrupted stack pointer. The board keeps persistent
 storage in C and accesses it through `mem`. Verification stops at the
 assembly and cannot reason about the contents of raw memory. The
 freestanding profile has no allocator. [Freestanding Builds](/manual/freestanding)
+
+In a freestanding program, fixed arrays can also live in mutable module
+storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. Use
+`mem.address_of(samples[1])` to get a pointer to the second element.
 
 ## Source: docs/book/ch19-00-final-project.md
 
@@ -72655,12 +72888,7 @@ shared, which the compiler checks (Chapter 15).
 
 ## Module state
 
-Top-level bindings in a file with `main` are immutable module storage. A
-`mut` binding at the top level is rejected with `AU3003`, and moving a value
-out of one is `AU3001`. Mutable state belongs to an owner, which is usually `main`
-or an object it creates. This rules out the module-level caches and counters
-that Python code tends to accumulate, and with them a whole class of
-"who changed this?" bugs.
+Hosted modules can share a counter through an immutable binding such as `NEXT_ID = sync.AtomicInt(1)`. Each task calls `NEXT_ID.add(1)` on the same handle. A hosted `mut` module binding produces `AU3030`. A freestanding module can declare `mut ticks: uint64 = 0` to keep a counter between exported calls. The caller coordinates access across cores. [Freestanding builds](/manual/freestanding)
 
 ## Where to go next
 

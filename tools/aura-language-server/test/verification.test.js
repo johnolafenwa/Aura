@@ -248,3 +248,25 @@ test("verify-on-save supplies the selected freestanding target", async () => {
     "--format", "json", "--stdin", "irq.au"
   ]);
 });
+
+test("the verifier uses the freestanding profile when selected", async () => {
+  const { spawnImpl, calls } = fakeSpawn();
+  const previous = process.env.AURA_LSP_FREESTANDING;
+  try {
+    process.env.AURA_LSP_FREESTANDING = "1";
+    await runVerifier({ cmd: "aura", args: [] }, "kernel.au", "", spawnImpl);
+    assert.deepEqual(calls[0].args, [
+      "verify", "--freestanding", "--format", "json", "--stdin", "kernel.au"
+    ]);
+    await runVerifier({ cmd: "aura", args: [] }, "kernel.au", "", spawnImpl, 1000, {
+      freestandingTarget: "x86_64-unknown-none"
+    });
+    assert.deepEqual(calls[1].args, [
+      "verify", "--freestanding", "--target", "x86_64-unknown-none",
+      "--format", "json", "--stdin", "kernel.au"
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.AURA_LSP_FREESTANDING;
+    else process.env.AURA_LSP_FREESTANDING = previous;
+  }
+});

@@ -570,6 +570,7 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::TraitObjectTake { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::Try { value: operand, .. } => roles.push((operand, Consume)),
+        Rvalue::ModuleStore { value, .. } => roles.push((value, Borrow)),
         // A projection's result is a fresh owned copy of the part it reads.
         Rvalue::NoneTest { value: operand }
         | Rvalue::TraitObjectHolds { value: operand, .. }
@@ -582,9 +583,16 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::Member {
             object: operand, ..
         } => roles.push((operand, Borrow)),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            roles.push((address, Borrow));
+            roles.extend(store.iter().map(|value| (value, Borrow)));
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -812,6 +820,9 @@ pub(super) fn type_needs_drop(context: &MirLoanValidationContext<'_>, ty: &Type)
                 }
             }
             Type::Named(name, args) => {
+                if let Some((element, _)) = ty.as_fixed_array() {
+                    return visit(context, element, visiting);
+                }
                 if aura_core::types::is_builtin_copy_named_type(name, args) {
                     return false;
                 }
@@ -2364,6 +2375,7 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
 /// Every operand of `value`, as `rvalue_roles` lists them.
 fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
     match value {
+        Rvalue::ModuleStore { value, .. } => operands.push(value),
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
         | Rvalue::TraitObject { value: operand, .. }
@@ -2381,9 +2393,16 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
         | Rvalue::Member {
             object: operand, ..
         } => operands.push(operand),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            operands.push(address);
+            operands.extend(store.iter_mut());
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             operands.extend(captures.iter_mut().map(|capture| &mut capture.value))

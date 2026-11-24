@@ -12,11 +12,15 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_bits.rs"]
+mod bits;
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
 #[path = "verify_float.rs"]
 mod float;
+#[path = "verify_raw_memory.rs"]
+mod raw_memory;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -998,13 +1002,16 @@ fn reached_assembly(program: &Program, module: &MirModule) -> Option<Diagnostic>
         .enumerate()
         .filter(|(_, function)| function.module_name == program.module_name)
         .collect();
-    let mut visited = vec![false; functions.len()];
+    let mut visited = vec![false; callees.len()];
     while let Some((index, root)) = pending.pop() {
         if std::mem::replace(&mut visited[index], true) {
             continue;
         }
-        if let Some(span) = assembly.get(functions[index].name.as_str()) {
-            let function = functions[index];
+        if let Some((function, span)) = functions.get(index).and_then(|function| {
+            assembly
+                .get(function.name.as_str())
+                .map(|span| (*function, span))
+        }) {
             if function.module_name == program.module_name {
                 return Some(assembly_boundary(*span));
             }
@@ -1052,6 +1059,7 @@ pub fn verify_module(
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
+    let raw_effects = raw_memory::affected_functions(module);
     for function in &module.functions {
         let is_primary = verified_function(program, &cx, function);
         let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
@@ -1074,12 +1082,16 @@ pub fn verify_module(
         };
         let mut exec = exec::Exec::new(&cx, function);
         exec.prove_sites = options.prove_sites;
-        let entry = exec.entry_state();
-        exec.prove_weakened_requires(&entry);
-        exec.assume_entry_requires(&entry);
-        exec.assume_entry_invariant(&entry);
-        exec.assume_entry_parameters(&entry);
-        exec.run(entry);
+        if raw_effects.contains(function.name.as_str()) {
+            exec.unsupported = Some("raw memory effects may change an aliased Aura value".into());
+        } else {
+            let entry = exec.entry_state();
+            exec.prove_weakened_requires(&entry);
+            exec.assume_entry_requires(&entry);
+            exec.assume_entry_invariant(&entry);
+            exec.assume_entry_parameters(&entry);
+            exec.run(entry);
+        }
         if let Some(reason) = exec.unsupported.clone() {
             if !is_primary {
                 erased_open |= cx.decl(&function.name).is_some_and(|decl| decl.lemma);
