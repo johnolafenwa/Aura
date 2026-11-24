@@ -13,7 +13,12 @@ pub enum AtomicOperation {
 
 impl AtomicOperation {
     pub fn of(name: &str) -> Option<Self> {
-        match name.strip_prefix("mem::").unwrap_or(name).split("_uint").next()? {
+        match name
+            .strip_prefix("mem::")
+            .unwrap_or(name)
+            .split("_uint")
+            .next()?
+        {
             "atomic_load" => Some(Self::Load),
             "atomic_store" => Some(Self::Store),
             "atomic_add" => Some(Self::Add),
@@ -33,7 +38,11 @@ impl AtomicOperation {
         }
     }
 
-    pub fn orders(self, success: Option<&str>, failure: Option<&str>) -> Result<(Ordering, Ordering), &'static str> {
+    pub fn orders(
+        self,
+        success: Option<&str>,
+        failure: Option<&str>,
+    ) -> Result<(Ordering, Ordering), &'static str> {
         use Ordering::*;
         let success = parse(success.unwrap_or("seq_cst"))?;
         match (self, success) {
@@ -50,8 +59,12 @@ impl AtomicOperation {
             },
             Some(name) => {
                 let failure = parse(name)?;
-                if self != Self::CompareExchange || !matches!((failure, success),
-                    (Relaxed, _) | (Acquire, Acquire | AcqRel | SeqCst) | (SeqCst, SeqCst)) {
+                if self != Self::CompareExchange
+                    || !matches!(
+                        (failure, success),
+                        (Relaxed, _) | (Acquire, Acquire | AcqRel | SeqCst) | (SeqCst, SeqCst)
+                    )
+                {
                     return Err("failure ordering cannot release or exceed the success ordering");
                 }
                 failure
@@ -80,16 +93,33 @@ mod tests {
     fn order_pairs_follow_the_atomic_operation() {
         use AtomicOperation::*;
         assert_eq!(Load.orders(None, None), Ok((SeqCst, SeqCst)));
-        for (op, name) in [(Load, "release"), (Store, "acq_rel"), (Fence, "relaxed"), (Add, "unknown")] {
+        for (op, name) in [
+            (Load, "release"),
+            (Store, "acq_rel"),
+            (Fence, "relaxed"),
+            (Add, "unknown"),
+        ] {
             assert!(op.orders(Some(name), None).is_err());
         }
-        assert_eq!(CompareExchange.orders(Some("release"), None), Ok((Release, Relaxed)));
-        assert_eq!(CompareExchange.orders(Some("acq_rel"), None), Ok((AcqRel, Acquire)));
+        assert_eq!(
+            CompareExchange.orders(Some("release"), None),
+            Ok((Release, Relaxed))
+        );
+        assert_eq!(
+            CompareExchange.orders(Some("acq_rel"), None),
+            Ok((AcqRel, Acquire))
+        );
         for failure in ["release", "acq_rel", "seq_cst", "bad"] {
-            assert!(CompareExchange.orders(Some("acquire"), Some(failure)).is_err());
+            assert!(CompareExchange
+                .orders(Some("acquire"), Some(failure))
+                .is_err());
         }
-        assert!(CompareExchange.orders(Some("release"), Some("acquire")).is_err());
-        assert!(CompareExchange.orders(Some("acq_rel"), Some("relaxed")).is_ok());
+        assert!(CompareExchange
+            .orders(Some("release"), Some("acquire"))
+            .is_err());
+        assert!(CompareExchange
+            .orders(Some("acq_rel"), Some("relaxed"))
+            .is_ok());
         assert!(Swap.orders(None, Some("relaxed")).is_err());
     }
 }

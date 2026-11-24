@@ -1517,8 +1517,12 @@ impl BuiltinMember {
     }
 
     pub fn resolve(receiver_base: &str, name: &str) -> Option<Self> {
+        if is_builtin_integer_name(receiver_base) {
+            if let Some(method) = aura_core::integer_bits::BitMethod::of(name) {
+                return Some(Self::IntegerBits(method));
+            }
+        }
         match (receiver_base, name) {
-            (name, method) if is_builtin_integer_name(name) && aura_core::integer_bits::BitMethod::of(method).is_some() => aura_core::integer_bits::BitMethod::of(method).map(Self::IntegerBits),
             ("float64", "sqrt") => Some(Self::FloatSqrt),
             ("int8", "to_float")
             | ("int16", "to_float")
@@ -2925,7 +2929,11 @@ impl BuiltinMember {
     const fn call_shape(self) -> BuiltinCallShape {
         match self {
             Self::IntegerBits(method) => {
-                if matches!(method, aura_core::integer_bits::BitMethod::RotateLeft | aura_core::integer_bits::BitMethod::RotateRight) {
+                if matches!(
+                    method,
+                    aura_core::integer_bits::BitMethod::RotateLeft
+                        | aura_core::integer_bits::BitMethod::RotateRight
+                ) {
                     BuiltinCallShape::fixed(&SHIFT_COUNT_PARAMS, CallConvention::PositionalOrNamed)
                 } else {
                     BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)

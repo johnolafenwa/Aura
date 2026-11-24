@@ -56,6 +56,19 @@ def main():
 The underscores are only for the reader; `8_100_000_000` and `8100000000` are
 the same number. `0x` is hexadecimal, `0o` is octal, and `0b` is binary.
 
+### Reading bits in a register
+
+A device might set one bit for each event waiting to be handled. If the
+16-bit status word contains `0x8100`, bits 15 and 8 are set. We can count
+the events with `count_ones()` and find the lowest event number with
+`trailing_zeros()`.
+
+<<< ../../examples/numbers/register_bits.au{aura}
+
+The first two lines print `2` and `8`. Rotating the word left moves bit 15
+into bit 0, producing `513`. Swapping the two bytes changes `0x8100` into
+`0x0081`, which prints as `129`.
+
 ### Overflow is an error
 
 A fixed-size integer has a largest value. What should happen when a

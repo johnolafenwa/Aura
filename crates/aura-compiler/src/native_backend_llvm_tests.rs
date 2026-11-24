@@ -1905,3 +1905,45 @@ fn hosted_targets_name_their_triple_and_architecture() {
     assert_eq!(crate::native_backend::hosted_target(), None);
     assert_eq!(crate::native_backend::target_arch(), std::env::consts::ARCH);
 }
+
+#[test]
+fn ordered_subword_operations_keep_their_llvm_order_and_width() {
+    use crate::native_backend::MemoryAccess::Ordered;
+    use aura_core::atomic_order::AtomicOperation::*;
+    use std::sync::atomic::Ordering::*;
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "ordered", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let words = builder.block_params(entry);
+        let (cell, word) = (words[0], words[1]);
+        builder.memory_access(Ordered(Store, Release, Relaxed), types::I8, &[cell, word]);
+        builder.memory_access(Ordered(Add, Relaxed, Relaxed), types::I16, &[cell, word]);
+        let previous = builder
+            .memory_access(
+                Ordered(CompareExchange, AcqRel, Acquire),
+                types::I8,
+                &[cell, word, word],
+            )
+            .unwrap();
+        builder.memory_access(Ordered(Load, Acquire, Acquire), types::I16, &[cell]);
+        builder.memory_access(Ordered(Fence, SeqCst, SeqCst), types::I64, &[]);
+        builder.return_(&[previous]);
+    });
+    let ir = ir(&module);
+    for text in [
+        "store atomic i8",
+        "release, align 1",
+        "i16 %",
+        "monotonic",
+        "cmpxchg",
+        "acq_rel acquire",
+        "load atomic i16",
+        "acquire, align 2",
+        "fence seq_cst",
+    ] {
+        assert!(ir.contains(text), "missing {text} in {ir}");
+    }
+}

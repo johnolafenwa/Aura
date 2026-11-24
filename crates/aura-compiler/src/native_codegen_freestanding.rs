@@ -980,7 +980,10 @@ impl FunctionCompiler<'_> {
                 Some(Operand::String(text)) => Ok(Some(text.as_str())),
                 other => Err(format!("expected a constant atomic order, found {other:?}")),
             };
-            let (success, failure) = op.orders(order(arity)?, order(arity + 1)?.filter(|text| !text.is_empty()))?;
+            let (success, failure) = op.orders(
+                order(arity)?,
+                order(arity + 1)?.filter(|text| !text.is_empty()),
+            )?;
             (MemoryAccess::Ordered(op, success, failure), &args[..arity])
         } else {
             (access, args)
@@ -1067,7 +1070,14 @@ fn check_call(
             receiver: None,
             ..
         } => None,
-        CallTarget::Runtime { op: RuntimeOp::Scalar(ScalarOp::Bits(_)), .. } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::Bits(_)),
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::ToFloat),
+            ..
+        } => None,
         // A `mem` function is one instruction.
         CallTarget::Runtime {
             op: RuntimeOp::Host(builtin),

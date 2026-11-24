@@ -3575,7 +3575,20 @@ impl RuntimeOp {
                 span: true,
                 layout_words: 0,
             }),
-            RuntimeOp::Scalar(ScalarOp::Bits(_)) => call(RuntimeFn::IntegerBits, &[]),
+            RuntimeOp::Scalar(ScalarOp::Bits(method)) => {
+                use aura_core::integer_bits::BitMethod::*;
+                // The boxed helper takes the receiver, a count and the operation.
+                // Unary methods supply zero in the unused count slot.
+                let words: &'static [i64] = match method {
+                    RotateLeft => &[RotateLeft as i64],
+                    RotateRight => &[RotateRight as i64],
+                    CountOnes => &[0, CountOnes as i64],
+                    LeadingZeros => &[0, LeadingZeros as i64],
+                    TrailingZeros => &[0, TrailingZeros as i64],
+                    SwapBytes => &[0, SwapBytes as i64],
+                };
+                call(RuntimeFn::IntegerBits, words)
+            }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => call(RuntimeFn::IntegerToFloat, &[]),
             RuntimeOp::Scalar(ScalarOp::Sqrt) => call(RuntimeFn::SqrtF64, &[]),
             RuntimeOp::Scalar(ScalarOp::DurationToMilliseconds) => {

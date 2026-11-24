@@ -51,7 +51,12 @@ fn reads_and_writes_reach_the_address_at_each_width() {
 fn atomic_operations_give_the_previous_value() {
     let mut block = [0_u64; 2];
     let base = block.as_mut_ptr() as u64;
-    for (bits, address, top) in [(8, base, 255), (16, base + 2, 65535), (32, base, u64::from(u32::MAX)), (64, base + 8, u64::MAX)] {
+    for (bits, address, top) in [
+        (8, base, 255),
+        (16, base + 2, 65535),
+        (32, base, u64::from(u32::MAX)),
+        (64, base + 8, u64::MAX),
+    ] {
         let call = |name: &str, args: &[u64]| mem(&format!("atomic_{name}_uint{bits}"), args);
         unit(call("store", &[address, 5]));
         assert_eq!(word(call("load", &[address])), 5);
