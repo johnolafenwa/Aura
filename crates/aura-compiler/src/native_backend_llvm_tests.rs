@@ -664,17 +664,13 @@ fn optimized_ir(module: &LlvmModule) -> String {
 }
 
 #[test]
-fn task_invariant_imports_let_llvm_merge_their_calls() {
+fn read_only_imports_merge_without_intervening_writes() {
     let mut module = module();
     let getter = signature(CallConv::C, &[], &[types::I64]);
-    let effect = signature(CallConv::C, &[types::I64], &[]);
     let stack = module
         .declare_function("aura_direct_frame_stack", Linkage::Import, &getter)
         .expect("the import should declare");
-    module.mark_task_invariant(stack);
-    let opaque = module
-        .declare_function("opaque_effect", Linkage::Import, &effect)
-        .expect("the import should declare");
+    module.mark_read_only(stack);
     let sig = signature(CallConv::C, &[], &[types::I64]);
     define(
         &mut module,
@@ -685,9 +681,7 @@ fn task_invariant_imports_let_llvm_merge_their_calls() {
             let entry = builder.create_block();
             builder.switch_to_block(entry);
             let stack = builder.import_function(stack);
-            let opaque = builder.import_function(opaque);
             let first = builder.call(stack, &[]).results[0];
-            builder.call(opaque, &[first]);
             let second = builder.call(stack, &[]).results[0];
             let sum = builder.iadd(first, second);
             builder.return_(&[sum]);
@@ -700,16 +694,75 @@ fn task_invariant_imports_let_llvm_merge_their_calls() {
         "{ir}"
     );
     assert!(
-        ir.contains("memory(none)") && ir.contains("nounwind") && ir.contains("willreturn"),
+        ir.contains("memory(read)") && ir.contains("nounwind") && ir.contains("willreturn"),
         "{ir}"
     );
+    assert!(!ir.contains("memory(none)"), "{ir}");
     let optimized = optimized_ir(&module);
     assert_eq!(
         optimized
             .matches("call i64 @aura_direct_frame_stack()")
             .count(),
         1,
-        "a call between them does not keep both: {optimized}"
+        "back-to-back read-only calls should merge: {optimized}"
+    );
+}
+
+#[test]
+fn frame_stack_import_is_not_merged_across_recovery_boundary() {
+    let mut module = module();
+    let getter = signature(CallConv::C, &[], &[types::I64]);
+    let recover_begin_sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    let stack = module
+        .declare_function(
+            crate::runtime_abi::RuntimeFn::FrameStack.symbol(),
+            Linkage::Import,
+            &getter,
+        )
+        .expect("the import should declare");
+    if crate::runtime_abi::RuntimeFn::FrameStack.is_read_only() {
+        module.mark_read_only(stack);
+    }
+    let recover_begin = module
+        .declare_function(
+            crate::runtime_abi::RuntimeFn::RecoverBegin.symbol(),
+            Linkage::Import,
+            &recover_begin_sig,
+        )
+        .expect("the import should declare");
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "across_recover",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let params = builder.block_params(entry).to_vec();
+            let stack = builder.import_function(stack);
+            let recover_begin = builder.import_function(recover_begin);
+            let before = builder.call(stack, &[]).results[0];
+            builder.call(recover_begin, &[params[0], params[1]]);
+            let after = builder.call(stack, &[]).results[0];
+            let sum = builder.iadd(before, after);
+            builder.return_(&[sum]);
+        },
+    );
+
+    let ir = ir(&module);
+    assert!(
+        ir.contains("memory(read)") && !ir.contains("memory(none)"),
+        "aura_direct_frame_stack must be marked memory(read), not memory(none): {ir}"
+    );
+    let optimized = optimized_ir(&module);
+    assert_eq!(
+        optimized
+            .matches("call i64 @aura_direct_frame_stack()")
+            .count(),
+        2,
+        "aura_direct_frame_stack must not be merged across aura_direct_recover_begin: {optimized}"
     );
 }
 

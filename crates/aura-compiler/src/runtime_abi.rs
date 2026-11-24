@@ -636,10 +636,11 @@ runtime_functions! {
 }
 
 impl RuntimeFn {
-    /// Whether every call from one task returns the same value without
-    /// touching memory the caller sees, so a code generator may merge the
-    /// calls. The frame stack keeps one address for a task's lifetime.
-    pub(crate) fn is_task_invariant(self) -> bool {
+    /// Whether calls to this helper only read runtime state without writing
+    /// memory visible to callers, cannot unwind, and return. Calls may be
+    /// merged when nothing between them writes memory, but not across runtime
+    /// calls such as recovery boundaries that switch the active frame stack.
+    pub(crate) fn is_read_only(self) -> bool {
         matches!(self, RuntimeFn::FrameStack)
     }
 }

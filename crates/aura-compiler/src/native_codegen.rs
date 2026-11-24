@@ -19120,9 +19120,10 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.coerce_value(loaded, expected)?;
             if matches!(value.ty, DirectType::Opaque(_)) {
                 let handle = self.transfer_opaque_arg(&value);
-                handles.push(handle);
                 if kept.get(index) == Some(&MirReceiverKind::Borrow) {
                     borrowed.push(handle);
+                } else {
+                    handles.push(handle);
                 }
                 words.push(handle);
             } else {
@@ -19131,6 +19132,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let (Some(callee), Some(slot)) = (checked_body, success_slot) {
             let call = self.builder.call(callee, &words);
+            for handle in borrowed {
+                self.release_opaque_handle(handle);
+            }
             self.builder.def_var(slot, call.results[0]);
             return Ok(Some(
                 self.owned_opaque_result(vec![call.results[1]], result_type.clone()),
@@ -19171,9 +19175,6 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
         let call = self.builder.call_indirect(signature, callee, &words);
-        for handle in borrowed {
-            self.release_opaque_handle(handle);
-        }
         let (returned, _) = self.split_call_results(name, call.results)?;
         // The box the function returned moves to this function's ledger
         // as the call ends, and the `Result` is built here like any other.
@@ -19184,6 +19185,9 @@ impl<'a> FunctionCompiler<'a> {
         };
         self.builder
             .call(self.runtime[RuntimeFn::RecoverEnd], &[moved]);
+        for handle in &borrowed {
+            self.release_opaque_handle(*handle);
+        }
         self.mark_temporary_opaque_owned(&returned);
         if let Some(slot) = success_slot {
             self.builder.def_var(slot, returned.values[0]);
@@ -19210,6 +19214,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(trap_block);
         self.builder.seal_block(trap_block);
         self.builder.set_cold_block(trap_block);
+        for handle in &borrowed {
+            self.release_opaque_handle(*handle);
+        }
         let err = self
             .builder
             .call(self.runtime[RuntimeFn::RecoverTrapped], &[]);
@@ -19439,8 +19446,8 @@ fn declare_runtime_helper(
         &params,
         function.result().map(abi_type),
     )?;
-    if function.is_task_invariant() {
-        module.mark_task_invariant(handle);
+    if function.is_read_only() {
+        module.mark_read_only(handle);
     }
     Ok(handle)
 }
