@@ -18,22 +18,24 @@ Last updated: 2026-11-24
   4 runtime tests for the heap pass. The example kernel boots under QEMU on
   RISC-V and AArch64 and prints `h=76127` and `f=0`.
 - Remaining: `str`, `list`, enums with payloads, boxed classes, `dict`,
-  and closures in freestanding builds. The route is the owner's call in
-  [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md).
+  and closures in freestanding builds, by route D1 of
+  [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
+  a lean value layer written in Aura, which the owner chose.
   [Notes](2026-11-24-freestanding-heap.md)
 
-## Release 0.17.0-preview (in progress)
+## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and
   prepare the 0.17.0 preview. Details are in
   `2026-11-24-v0.17.0-preview-release.md`.
-- Done: everything from the integration and combined candidate branches
-  is on `main` (#310, `07337c84`). The release pull request holds the
-  version sweep, the changelog sections and the measurements against the
-  published 0.16.0 archive.
-- Next: merge the release pull request on a green run, push the
-  `v0.17.0-preview` tag from John's checkout after he approves it, and
-  check the Release run, the extension and the Linux archive.
+- Done: PR #311 merged as `6642a7c2`, tag `v0.17.0-preview` pushed on
+  2026-11-24, Release run `45367623676` green, five archives, four target
+  packs and extension 0.17.0 published. The packages are built and
+  attached but not published.
+- Follow-up: find why the command integration tests can hang on Windows
+  after they pass, find what `raytracer` and `order_book` run more of,
+  keep the set union test out of the plain dictionary lookup, and renew
+  the extension publishing token before 2026-12-01.
 
 ## Combined feature verification
 
