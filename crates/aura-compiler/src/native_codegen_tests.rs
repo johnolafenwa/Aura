@@ -15993,8 +15993,8 @@ def main():
     let object = emit_host_object(&mir).expect("the lookups should compile directly");
     let referenced = exact_referenced_symbols(&object);
     for required in [
-        "aura_direct_map_contains_str",
-        "aura_direct_set_contains_str",
+        "aura_direct_map_contains_view",
+        "aura_direct_set_contains_view",
         "aura_direct_map_get_str_payload",
         "aura_direct_vec_str_element",
     ] {

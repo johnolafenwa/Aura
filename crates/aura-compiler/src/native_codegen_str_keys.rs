@@ -246,9 +246,9 @@ impl FunctionCompiler<'_> {
         }
         let receiver = self.load_root(&test.receiver)?.values[0];
         let (in_place, boxed) = if test.set {
-            (RuntimeFn::SetContainsStr, RuntimeFn::SetContains)
+            (RuntimeFn::SetContainsView, RuntimeFn::SetContains)
         } else {
-            (RuntimeFn::MapContainsStr, RuntimeFn::MapContainsKey)
+            (RuntimeFn::MapContainsView, RuntimeFn::MapContainsKey)
         };
         let found = self.call_with_lent_str_key(
             words,

@@ -18073,7 +18073,7 @@ impl<'a> FunctionCompiler<'a> {
                 let mut words = vec![map];
                 if let Some(key) = args.first() {
                     if let Some(lent) = self.lent_str_key(&key.value)? {
-                        let in_place = self.runtime[RuntimeFn::MapContainsStr];
+                        let in_place = self.runtime[RuntimeFn::MapContainsView];
                         let found = self.call_with_lent_str_key(lent, map, in_place, function);
                         return Ok(ValueRef {
                             values: vec![found],
@@ -18307,7 +18307,7 @@ impl<'a> FunctionCompiler<'a> {
                     // A `str` needle lent from a list is looked up where it
                     // lies.
                     Some(lent) => {
-                        let in_place = self.runtime[RuntimeFn::SetContainsStr];
+                        let in_place = self.runtime[RuntimeFn::SetContainsView];
                         self.call_with_lent_str_key(lent, set, in_place, function)
                     }
                     None => {

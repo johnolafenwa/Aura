@@ -27854,22 +27854,22 @@ fn direct_str_membership_agrees_with_boxed_membership() {
     for key in ["age", "clé", "", "ключ", "missing", "ag", "agee"] {
         let boxed = string_value(key);
         assert_eq!(
-            super::aura_direct_map_contains_str(map, key.as_ptr(), key.len()),
+            super::aura_direct_map_contains_view(map, key.as_ptr(), key.len()),
             super::aura_direct_map_contains_key(map, boxed),
             "dict has `{key}`"
         );
         assert_eq!(
-            super::aura_direct_set_contains_str(set, key.as_ptr(), key.len()),
+            super::aura_direct_set_contains_view(set, key.as_ptr(), key.len()),
             super::aura_direct_set_contains(set, boxed),
             "set has `{key}`"
         );
     }
     assert_eq!(
-        super::aura_direct_map_contains_str(map, "age".as_ptr(), 3),
+        super::aura_direct_map_contains_view(map, "age".as_ptr(), 3),
         1
     );
     assert_eq!(
-        super::aura_direct_set_contains_str(set, "clé".as_ptr(), 4),
+        super::aura_direct_set_contains_view(set, "clé".as_ptr(), 4),
         0
     );
 }

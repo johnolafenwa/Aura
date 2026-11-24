@@ -12906,7 +12906,7 @@ pub extern "C-unwind" fn aura_direct_map_contains_int64(map: *mut OpaqueValue, k
 /// place as `key_len` bytes at `key_ptr`, which is hashed and compared
 /// without a box.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_map_contains_str(
+pub extern "C-unwind" fn aura_direct_map_contains_view(
     map: *mut OpaqueValue,
     key_ptr: *const u8,
     key_len: usize,
@@ -14115,7 +14115,7 @@ pub extern "C-unwind" fn aura_direct_set_contains_int64(set: *mut OpaqueValue, v
 /// place as `len` bytes at `ptr`, which is hashed and compared without a
 /// box.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_set_contains_str(
+pub extern "C-unwind" fn aura_direct_set_contains_view(
     set: *mut OpaqueValue,
     ptr: *const u8,
     len: usize,

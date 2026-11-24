@@ -303,11 +303,11 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapValueAt,
             RuntimeFn::MapKeyInt64At,
             RuntimeFn::MapValueInt64At,
-            RuntimeFn::MapContainsStr,
+            RuntimeFn::MapContainsView,
             RuntimeFn::MapSetIndexInt64,
             RuntimeFn::MapSetIndexInt64Key,
             RuntimeFn::MapSetIndexInt64Pair,
-            RuntimeFn::SetContainsStr,
+            RuntimeFn::SetContainsView,
         ]
     );
 }
