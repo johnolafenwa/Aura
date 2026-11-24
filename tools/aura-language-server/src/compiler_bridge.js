@@ -175,9 +175,9 @@ class CompilerService {
       });
       return;
     }
-    this.child = spawn(command.cmd, [...command.args, "lsp"], {
+    this.child = spawn(command.cmd, [...command.args, "lsp", "--offline"], {
       cwd: command.cwd,
-      env: { AURA_OFFLINE: "1", ...process.env },
+      env: { ...process.env, AURA_OFFLINE: "1" },
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.child.stdin.on("error", (error) => {

@@ -93,10 +93,28 @@ test("the verifier runs on the document text and its report is read", async () =
   const result = await runVerifier(command, "/work/a.au", "source", spawnImpl);
   assert.deepEqual(result, REPORT);
   assert.equal(calls[0].cmd, "aura");
-  assert.deepEqual(calls[0].args, ["--x", "verify", "--format", "json", "--stdin", "/work/a.au"]);
+  assert.deepEqual(calls[0].args, ["--x", "verify", "--offline", "--format", "json", "--stdin", "/work/a.au"]);
   assert.equal(calls[0].options.cwd, "/work");
   assert.equal(calls[0].options.env.AURA_OFFLINE, "1");
   assert.equal(calls[0].input, "source");
+});
+
+test("the verifier keeps AURA_OFFLINE=1 and passes --offline when AURA_OFFLINE is 0 in the environment", async () => {
+  const previousOffline = process.env.AURA_OFFLINE;
+  process.env.AURA_OFFLINE = "0";
+  try {
+    const { spawnImpl, calls } = fakeSpawn({ stdout: `${JSON.stringify(REPORT)}\n` });
+    const result = await runVerifier({ cmd: "aura", args: [], cwd: "/work" }, "/work/a.au", "", spawnImpl);
+    assert.deepEqual(result, REPORT);
+    assert.equal(calls[0].options.env.AURA_OFFLINE, "1");
+    assert.ok(calls[0].args.includes("--offline"));
+  } finally {
+    if (previousOffline === undefined) {
+      delete process.env.AURA_OFFLINE;
+    } else {
+      process.env.AURA_OFFLINE = previousOffline;
+    }
+  }
 });
 
 test("a verifier that cannot start, fails, exceeds stdout cap, aborts, or runs too long gives no report", async () => {

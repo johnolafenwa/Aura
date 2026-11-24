@@ -43,10 +43,10 @@ function runVerifier(
     try {
       child = spawnImpl(
         command.cmd,
-        [...command.args, "verify", "--format", "json", "--stdin", filePath],
+        [...command.args, "verify", "--offline", "--format", "json", "--stdin", filePath],
         {
           cwd: command.cwd,
-          env: { AURA_OFFLINE: "1", ...process.env },
+          env: { ...process.env, AURA_OFFLINE: "1" },
           stdio: ["pipe", "pipe", "pipe"]
         }
       );

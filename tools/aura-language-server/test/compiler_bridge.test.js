@@ -7251,7 +7251,7 @@ test("without aura on PATH the server uses an installed compiler or reports it m
   }
 });
 
-test("persistent compiler service sets AURA_OFFLINE=1 by default without overriding explicit env", async () => {
+test("persistent compiler service enforces AURA_OFFLINE=1 and passes --offline even when process.env.AURA_OFFLINE is 0", async () => {
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -7259,7 +7259,7 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     "  const request = JSON.parse(line);",
     `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
       SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
-    )}, result: { offline: process.env.AURA_OFFLINE } }) + '\\n');`,
+    )}, result: { offline: process.env.AURA_OFFLINE, argv: process.argv.slice(1) } }) + '\\n');`,
     "});"
   ].join("\n");
   const savedOffline = process.env.AURA_OFFLINE;
@@ -7272,7 +7272,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await defaultService.request("analyze", {}), { offline: "1" });
+    assert.deepEqual(await defaultService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     defaultService.dispose();
 
     process.env.AURA_OFFLINE = "0";
@@ -7281,7 +7284,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await overrideService.request("analyze", {}), { offline: "0" });
+    assert.deepEqual(await overrideService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     overrideService.dispose();
   } finally {
     if (defaultService) {
