@@ -164,6 +164,7 @@ struct ResolvedMember {
 
 pub fn analyze_source(source: &str) -> AnalysisOutput {
     analyze_with_checker(
+        None,
         source,
         |error| error.render_path.is_none(),
         crate::check_source,
@@ -179,12 +180,7 @@ pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
             .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
     };
     let (mut output, reads) = crate::with_source_reads(|| {
-        // The outline parse must select the same branches as the loader. Let the
-        // normal path checker report a malformed manifest as a compiler diagnostic.
-        let _config = crate::BuildConfig::for_path(path)
-            .ok()
-            .map(crate::BuildConfig::enter);
-        analyze_with_checker(source, is_local, |candidate| {
+        analyze_with_checker(Some(path), source, is_local, |candidate| {
             crate::check_path_with_source_without_lockfile(path, candidate)
         })
     });
@@ -203,7 +199,6 @@ pub fn complete_path_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
-    let _config = crate::BuildConfig::for_path(path)?.enter();
     let analyzed = crate::absolutize(path);
     let is_local = |error: &Diagnostic| {
         error
@@ -248,12 +243,17 @@ pub fn complete_source(
     )
 }
 
-fn analyze_with_checker<L, F>(source: &str, is_local: L, mut check_program: F) -> AnalysisOutput
+fn analyze_with_checker<L, F>(
+    path: Option<&Path>,
+    source: &str,
+    is_local: L,
+    mut check_program: F,
+) -> AnalysisOutput
 where
     L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
 {
-    match parser::parse(source) {
+    match parser::parse_all_syntax(source) {
         Err(error) => {
             if let Some(program) =
                 recover_checked_program_after_parse_error_with(source, &error, &mut check_program)
@@ -280,10 +280,17 @@ where
                 }
             }
         }
-        Ok(module) => {
-            let symbols = symbols_from_module(&module, source);
+        Ok(syntax) => {
             match check_program(source) {
                 Err(error) => {
+                    // A bad active declaration can prevent checking, but the selected
+                    // outline and inactive suites still belong to this configuration.
+                    let module = match path {
+                        Some(path) => crate::parse_path_with_source(path, source),
+                        None => parser::parse(source),
+                    }
+                    .unwrap_or(syntax);
+                    let symbols = symbols_from_module(&module, source);
                     // Keep hover, definitions, and references alive in the
                     // rest of the file while one statement is wrong.
                     if let Some((program, later)) =
@@ -305,6 +312,22 @@ where
                     }
                 }
                 Ok(program) => {
+                    // The checked module contains generated declarations for decorators.
+                    // Show the user's source declarations that survived branch selection.
+                    let mut symbols = symbols_from_module(&syntax, source);
+                    if !program.module.inactive_lines.is_empty() {
+                        let active = |symbol: &AnalysisSymbol| {
+                            !program
+                                .module
+                                .inactive_lines
+                                .iter()
+                                .any(|lines| lines.contains(&symbol.line))
+                        };
+                        symbols.retain(&active);
+                        for symbol in &mut symbols {
+                            symbol.children.retain(&active);
+                        }
+                    }
                     let mut output = AnalysisBuilder::new(source, &program, symbols).build();
                     output
                         .diagnostics
@@ -2453,7 +2476,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let doc = crate::read_source_file(Path::new(&source_path))
             .ok()
-            .and_then(|source| parser::parse(&source).ok())
+            .and_then(|source| parser::parse_all_syntax(&source).ok())
             .and_then(|module| module.doc);
         self.module_docs
             .borrow_mut()
@@ -8975,7 +8998,7 @@ fn recover_checked_program_after_member_errors_with(
             continue;
         }
 
-        match parser::parse(&candidate) {
+        match parser::parse_all_syntax(&candidate) {
             Ok(_) => match check_program(&candidate) {
                 Ok(program) => return Some(program),
                 Err(error) => {
@@ -9153,7 +9176,7 @@ where
         ));
     }
     for candidate in candidates {
-        let result = match parser::parse(&candidate) {
+        let result = match parser::parse_all_syntax(&candidate) {
             Ok(_) => check_program(&candidate),
             Err(error) => Err(error),
         };
@@ -9274,7 +9297,7 @@ where
     let mut candidate = source.to_string();
     let mut later = Vec::new();
     let mut lost_bindings = BTreeSet::new();
-    let check = |candidate: &str, check_program: &mut F| match parser::parse(candidate) {
+    let check = |candidate: &str, check_program: &mut F| match parser::parse_all_syntax(candidate) {
         Ok(_) => check_program(candidate),
         Err(error) => Err(error),
     };
