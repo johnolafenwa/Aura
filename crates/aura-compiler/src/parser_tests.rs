@@ -1722,18 +1722,15 @@ fn parse_module_accepts_a_public_copy_class_beside_a_public_constant() {
 }
 
 #[test]
-fn parse_preserves_top_level_mutable_bindings_for_contextual_entry_checking() {
+fn parse_preserves_module_mutability_beside_an_explicit_entry() {
     let module = parse("mut counter = 0\ndef main():\n    pass\n")
-        .expect("parsing must preserve the script statement until the entry style is known");
-    assert!(module.constants.is_empty());
-    assert!(matches!(
-        module.top_level_stmts.as_slice(),
-        [Stmt::Assign(AssignStmt {
-            mutable: true,
-            target: AssignTarget::Name(name),
-            ..
-        })] if name == "counter"
-    ));
+        .expect("the explicit entry permits a module binding");
+    let [counter] = module.constants.as_slice() else {
+        panic!("expected one module binding");
+    };
+    assert_eq!(counter.name, "counter");
+    assert!(counter.mutable);
+    assert!(module.top_level_stmts.is_empty());
 }
 
 #[test]

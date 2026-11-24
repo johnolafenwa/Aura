@@ -62,7 +62,7 @@ impl<'a> FunctionCompiler<'a> {
         let ty = ensure_direct_type(&ty, &self.classes, "module state")?;
         let mut values = Vec::with_capacity(slots.len());
         for (offset, ty) in slots {
-            if matches!(ty,Type::Named(name,_) if name == "fixed") {
+            if ty.as_fixed_array().is_some() {
                 let storage =
                     ensure_direct_type(ty, &self.classes, "fixed array storage")?.abi_types()[0];
                 values.push(
@@ -93,7 +93,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err("module storage layout disagrees with its value".into());
         }
         for ((offset, ty), word) in slots.iter().zip(value.values) {
-            if matches!(ty,Type::Named(name,_) if name == "fixed") {
+            if ty.as_fixed_array().is_some() {
                 self.builder
                     .store(MemFlags::trusted(), word, address, *offset);
             } else {
