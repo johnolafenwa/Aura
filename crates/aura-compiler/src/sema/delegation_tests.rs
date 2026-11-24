@@ -93,3 +93,50 @@ fn trait_delegation_concrete_dispatch_is_static() {
         dispatch: Some(MethodDispatch::Static { function }), ..
     }] if function == "Left for Inner.pick"));
 }
+
+#[test]
+fn trait_delegation_open_args_resolve_in_every_native_body() {
+    use crate::mir::{CallTarget, Instruction, MethodDispatch, Rvalue};
+
+    let mir = crate::lower_source_to_mir(include_str!(
+        "../../tests/fixtures/run-pass/trait_delegation_open_specialization.au"
+    ))
+    .unwrap();
+    for name in [
+        "Scale[T] for Car[E, T].scale",
+        "Scale[T] for Car[E, T].scale[Engine, str]",
+    ] {
+        let method = mir
+            .functions
+            .iter()
+            .find(|method| method.name == name)
+            .unwrap();
+        let [call] = method
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter_map(|i| match i {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::TraitMember { dispatch, .. },
+                            ..
+                        },
+                    ..
+                } => Some(dispatch),
+                _ => None,
+            })
+            .collect::<Vec<_>>()[..]
+        else {
+            panic!("expected a forwarded call in {name}")
+        };
+        assert!(
+            matches!(
+                call,
+                Some(MethodDispatch::Static { .. } | MethodDispatch::Candidates { .. })
+            ),
+            "{name} has no callee"
+        );
+    }
+    crate::native_codegen::emit_host_object(&mir).expect("both bodies should emit machine code");
+}
