@@ -782,6 +782,8 @@ pub(crate) trait FunctionBackend {
     fn append_block_param(&mut self, block: Blk, ty: ScalarType) -> Val;
     fn append_block_params_for_function_params(&mut self, block: Blk);
 
+    fn bind_array_parameter(&mut self, var: Var, index: usize);
+    fn borrow_array_argument(&mut self, value: Val, address: Val) -> Val;
     fn var_addr(&mut self, var: Var) -> Val;
     fn declare_var(&mut self, var: Var, ty: ScalarType);
     fn def_var(&mut self, var: Var, value: Val);

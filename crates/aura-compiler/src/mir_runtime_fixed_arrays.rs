@@ -14,6 +14,7 @@ impl MirRuntime {
         let (element, count) = ty
             .and_then(Type::as_fixed_array)
             .ok_or_else(|| Diagnostic::new("missing fixed array type in MIR"))?;
+        let op = crate::mir::fixed_arrays::checked_form(op);
         match op {
             LITERAL if args.len() == count => {
                 let values = args
@@ -77,5 +78,26 @@ mod tests {
         let error = crate::run_source(source).unwrap_err();
         assert_eq!(error.code, "AU4031");
         assert_eq!(error.span.unwrap().line, 3);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn nested_and_wide_fixed_arrays_preserve_each_lane() {
+    for (source, expected) in [
+        (
+            include_str!("../tests/fixtures/run-pass/nested_fixed_arrays.au"),
+            include_str!("../tests/fixtures/run-pass/nested_fixed_arrays.stdout"),
+        ),
+        (
+            include_str!("../tests/fixtures/run-pass/wide_fixed_arrays.au"),
+            include_str!("../tests/fixtures/run-pass/wide_fixed_arrays.stdout"),
+        ),
+        (
+            include_str!("../../../examples/collections/fixed_scores.au"),
+            "3\n0\n85\n0\n",
+        ),
+    ] {
+        assert_eq!(crate::run_source(source).unwrap().stdout, expected);
     }
 }

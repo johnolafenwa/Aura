@@ -1,0 +1,5 @@
+error[AU2081]: fixed[T, N] needs an element type and a literal length from 1 to 1048576
+ --> crates/aura-compiler/tests/fixtures/check-fail/fixed_array_length_zero.au:2:12
+  |
+2 |     slots: fixed[int64, 0] = []
+  |            ^

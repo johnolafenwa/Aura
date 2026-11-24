@@ -15,6 +15,7 @@ impl Exec<'_> {
         };
         let len = n.to_string();
         let hint = IntTy::of(elem);
+        let op = crate::mir::fixed_arrays::checked_form(op);
         match op {
             LITERAL => {
                 let mut data = self.fresh_store(elem, "fixed");
@@ -61,6 +62,7 @@ impl Exec<'_> {
                     &state.pc,
                     Goal::Holds(format!("(and (<= 0 {index}) (< {index} {len}))")),
                 );
+                self.oblige_site(state, span, &len, &index);
                 if op == READ {
                     return self.element(&array, &index, "element");
                 }

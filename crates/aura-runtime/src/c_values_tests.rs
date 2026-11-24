@@ -370,3 +370,33 @@ fn bit_field_pack_checks_width_and_keeps_the_other_bits() {
     assert_eq!(problem.code(), "AU4033");
     assert!(problem.to_string().contains("3-bit"));
 }
+
+#[test]
+fn fixed_array_wide_element_codecs_preserve_all_bits() {
+    for (name, integer, bits) in [
+        (
+            "int128",
+            IntegerValue::from_signed(i128::MIN),
+            i128::MIN as u128,
+        ),
+        ("uint128", IntegerValue::from_literal(u128::MAX), u128::MAX),
+    ] {
+        let kind = CFieldKind::Struct(layout(
+            &format!("#fixed.{name}"),
+            false,
+            vec![("low", scalar(U64)), ("high", scalar(U64))],
+        ));
+        let mut bytes = [0; 16];
+        assert_eq!(kind_type(&kind), Type::named(name));
+        pack_kind(&Value::Int(integer), &kind, "words", &mut bytes).unwrap();
+        assert_eq!(u128::from_le_bytes(bytes), bits);
+        let Value::Int(round_trip) = unpack_kind(&kind, &bytes).unwrap() else {
+            panic!("expected integer")
+        };
+        assert_eq!(round_trip, integer);
+        assert!(matches!(
+            pack_kind(&Value::Bool(false), &kind, "words", &mut bytes),
+            Err(CValueError::Shape { .. })
+        ));
+    }
+}
