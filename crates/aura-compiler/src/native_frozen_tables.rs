@@ -11,6 +11,7 @@ const INDEX: &str = "$frozen.index";
 const INDEX_REF: &str = "$frozen.index.ref";
 const LEN: &str = "$frozen.len";
 const EMPTY: &str = "$frozen.empty";
+const IS_TAG: &str = "$frozen.tag_is";
 const BYTE_LEN: &str = "$frozen.byte_len";
 const MAP_INDEX: &str = "$frozen.map.index";
 const MAP_REF: &str = "$frozen.map.ref";
@@ -18,9 +19,19 @@ const MAP_HAS: &str = "$frozen.map.has";
 const SET_HAS: &str = "$frozen.set.has";
 
 pub(in crate::native_codegen) fn is_projection(name: &str) -> bool {
+    let name = name.strip_suffix(".text").unwrap_or(name);
     matches!(
         name,
-        INDEX | INDEX_REF | LEN | EMPTY | BYTE_LEN | MAP_INDEX | MAP_REF | MAP_HAS | SET_HAS
+        INDEX
+            | INDEX_REF
+            | LEN
+            | EMPTY
+            | BYTE_LEN
+            | IS_TAG
+            | MAP_INDEX
+            | MAP_REF
+            | MAP_HAS
+            | SET_HAS
     )
 }
 
@@ -80,7 +91,16 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                     let Instruction::Assign { target, value } = ins else {
                         continue;
                     };
-                    if types.get(target).is_some_and(is_word) {
+                    let eligible = match types.get(target) {
+                        Some(Type::Tuple(_) | Type::Union(_)) => true,
+                        Some(Type::Named(n, _)) => {
+                            matches!(n.as_str(), "list" | "str" | "set" | "dict" | "bytes")
+                                || classes.contains_key(n.as_str())
+                                || module.enums.iter().any(|e| e.name == *n)
+                        }
+                        _ => false,
+                    };
+                    if !eligible {
                         continue;
                     }
                     let static_read = match value {
@@ -101,6 +121,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
             continue;
         }
         let mut unsupported = false;
+        let mut branches = Vec::new();
         for block in &mut function.blocks {
             // A borrow of static storage owns no reference to retain or drop.
             block.instructions.retain(|instruction| match instruction {
@@ -135,10 +156,19 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                 crate::mir::instruction_place_mentions(instruction, &mut mentions);
                 unsupported |= mentions.iter().any(|place| addresses.contains(*place));
             }
+            lower_match(
+                block,
+                &addresses,
+                &types,
+                &module.enums,
+                &mut function.local_types,
+                &mut branches,
+            );
             unsupported |= crate::mir::terminator_place_mentions(&block.terminator)
                 .iter()
                 .any(|place| addresses.contains(*place));
         }
+        function.blocks.extend(branches);
         if unsupported {
             let mut error = Diagnostic::coded_at(
                 UNSUPPORTED,
@@ -156,6 +186,84 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                 local.ty = Type::named("uint64");
             }
         }
+    }
+}
+
+/// Branch directly on the discriminant stored after the payload slots.
+fn lower_match(
+    block: &mut crate::mir::BasicBlock,
+    addresses: &HashSet<String>,
+    types: &HashMap<String, Type>,
+    enums: &[MirEnum],
+    locals: &mut Vec<crate::mir::MirLocalType>,
+    branches: &mut Vec<crate::mir::BasicBlock>,
+) {
+    let Terminator::Match {
+        scrutinee,
+        arms,
+        otherwise,
+    } = &block.terminator
+    else {
+        return;
+    };
+    let Some(Type::Named(ty, _)) = address(scrutinee, addresses).and_then(|place| types.get(place))
+    else {
+        return;
+    };
+    let Some(enumeration) = enums.iter().find(|e| e.name == *ty) else {
+        return;
+    };
+    let root = scrutinee.clone();
+    let mut otherwise = otherwise.clone();
+    for arm in arms.iter().rev() {
+        if arm.wildcard {
+            otherwise = arm.label.clone();
+            continue;
+        }
+        let Some(tag) = enumeration
+            .variants
+            .iter()
+            .position(|v| Some(&v.name) == arm.variant_name.as_ref())
+        else {
+            return;
+        };
+        let id = locals.len();
+        let test = format!("%frozen.tag.{id}");
+        let name = format!("$frozen.match.{id}");
+        locals.push(crate::mir::MirLocalType {
+            name: test.clone(),
+            ty: Type::named("bool"),
+        });
+        let query = Rvalue::Call {
+            callee: CallTarget::Name(IS_TAG.into()),
+            args: [root.clone(), Operand::Int(tag as u128)]
+                .into_iter()
+                .map(argument)
+                .collect(),
+            type_args: Default::default(),
+        };
+        branches.push(crate::mir::BasicBlock {
+            label: name.clone(),
+            instructions: vec![Instruction::Assign {
+                target: test.clone(),
+                value: query,
+            }],
+            terminator: Terminator::Branch {
+                condition: Operand::Place(test),
+                then_label: arm.label.clone(),
+                else_label: otherwise,
+            },
+        });
+        otherwise = name;
+    }
+    block.terminator = Terminator::Goto(otherwise);
+}
+
+fn argument(value: Operand) -> MirArg {
+    MirArg {
+        name: None,
+        value,
+        writeback_place: None,
     }
 }
 
@@ -177,8 +285,37 @@ fn projection(
     classes: &HashMap<&str, &MirClass>,
     returns_address: bool,
 ) -> Option<Rvalue> {
-    let mut key_type = None;
+    let mut text_key = false;
     let index_op = if returns_address { INDEX_REF } else { INDEX };
+    // Unions use the same trailing discriminant as enums.
+    if let Rvalue::UnionTagTest {
+        place,
+        member_index,
+        ..
+    }
+    | Rvalue::UnionTakePayload {
+        place,
+        member_index,
+        ..
+    } = value
+    {
+        if !addresses.contains(place) {
+            return None;
+        }
+        let (op, index) = if matches!(value, Rvalue::UnionTagTest { .. }) {
+            (IS_TAG, *member_index)
+        } else {
+            (index_op, 0)
+        };
+        return Some(Rvalue::Call {
+            callee: CallTarget::Name(op.into()),
+            args: vec![
+                argument(Operand::Place(place.clone())),
+                argument(Operand::Int(index as u128)),
+            ],
+            type_args: Default::default(),
+        });
+    }
     let (receiver, op, operands) = match value {
         Rvalue::TupleElement { tuple, index, .. } => {
             (tuple, index_op, vec![Operand::Int(*index as u128)])
@@ -236,7 +373,7 @@ fn projection(
                         {
                             return None;
                         }
-                        key_type = Some(key.clone());
+                        text_key = true;
                     } else if !is_word(key) {
                         return None;
                     }
@@ -260,17 +397,40 @@ fn projection(
     address(receiver, addresses)?;
     let args = std::iter::once(receiver.clone())
         .chain(operands)
-        .map(|value| MirArg {
-            name: None,
-            value,
-            writeback_place: None,
-        })
+        .map(argument)
         .collect();
     Some(Rvalue::Call {
-        callee: CallTarget::Name(op.into()),
+        callee: CallTarget::Name(if text_key {
+            format!("{op}.text")
+        } else {
+            op.into()
+        }),
         args,
-        type_args: key_type.map(|ty| ("key".into(), ty)).into_iter().collect(),
+        type_args: Default::default(),
     })
+}
+
+fn wide_payload(value: &FrozenValue) -> Option<[u8; 16]> {
+    use crate::integer::IntegerKind;
+    match value {
+        FrozenValue::Duration(n) => Some(n.to_le_bytes()),
+        FrozenValue::Int(i) => {
+            let wide = matches!(
+                i.runtime_kind(),
+                Some(IntegerKind::Int128 | IntegerKind::Uint128)
+            );
+            match i.representation() {
+                IntegerRepresentation::Signed(n) if wide || i64::try_from(n).is_err() => {
+                    Some(n.to_le_bytes())
+                }
+                IntegerRepresentation::Unsigned(n) if wide || u64::try_from(n).is_err() => {
+                    Some(n.to_le_bytes())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Encode one node. Children are appended after all slots of their parent,
@@ -279,8 +439,16 @@ fn append_node(
     bytes: &mut Vec<u8>,
     value: &FrozenValue,
     classes: &HashMap<String, MirClass>,
+    enums: &HashMap<String, MirEnum>,
 ) -> usize {
     let start = bytes.len();
+    let tag = match value {
+        FrozenValue::Enum(name, variant, _) => enums
+            .get(name)
+            .and_then(|e| e.variants.iter().position(|v| v.name == *variant)),
+        FrozenValue::Union(_, ordinal, _) => Some(*ordinal),
+        _ => None,
+    };
     let mut elements = Vec::new();
     let length = match value {
         FrozenValue::Bytes(data) => {
@@ -334,8 +502,17 @@ fn append_node(
     bytes.extend_from_slice(&(length as u64).to_le_bytes());
     let slots = bytes.len();
     bytes.resize(slots + elements.len() * 8, 0);
+    if let Some(tag) = tag {
+        bytes.extend_from_slice(&(tag as u64).to_le_bytes());
+    }
     for (i, item) in elements.into_iter().enumerate() {
         let slot = slots + 8 * i;
+        if let Some(payload) = wide_payload(item) {
+            let delta = (bytes.len() - slot) as u64;
+            bytes.extend_from_slice(&payload);
+            bytes[slot..slot + 8].copy_from_slice(&delta.to_le_bytes());
+            continue;
+        }
         let word = match item {
             FrozenValue::None => 0,
             FrozenValue::Bool(b) => u64::from(*b),
@@ -343,9 +520,9 @@ fn append_node(
                 IntegerRepresentation::Signed(n) => n as u64,
                 IntegerRepresentation::Unsigned(n) => n as u64,
             },
-            FrozenValue::Duration(n) => *n as u64,
+
             FrozenValue::Float(bits) => *bits,
-            child => (append_node(bytes, child, classes) - slot) as u64,
+            child => (append_node(bytes, child, classes, enums) - slot) as u64,
         };
         bytes[slot..slot + 8].copy_from_slice(&word.to_le_bytes());
     }
@@ -373,7 +550,7 @@ impl FunctionCompiler<'_> {
                 .and_then(|c| c.frozen.as_ref())
                 .ok_or_else(|| format!("missing frozen value for {key}"))?;
             let mut bytes = Vec::new();
-            append_node(&mut bytes, value, &self.classes);
+            append_node(&mut bytes, value, &self.classes, &self.enums);
             let mut contents = DataDescription::new(bytes);
             contents.align = Some(8);
             let obj = self.builder.module();
@@ -398,14 +575,22 @@ impl FunctionCompiler<'_> {
         &mut self,
         name: &str,
         args: &[MirArg],
-        type_args: &BTreeMap<String, Type>,
         target: &DirectType,
     ) -> Result<ValueRef, String> {
+        let text = name.strip_suffix(".text");
+        let name = text.unwrap_or(name);
         let base = self.load_operand(&args[0].value)?.values[0];
         let flags = MemFlags::new();
         let len = self.builder.load(types::I64, flags, base, 0);
         let value = match name {
             LEN => len,
+            IS_TAG => {
+                let tag = self.load_operand(&args[1].value)?.values[0];
+                let kind = DirectType::Scalar(ScalarKind::Uint64);
+                let current = self.frozen_slot(base, len, 1, false, &kind);
+                let equal = self.builder.icmp(IntCC::Equal, current, tag);
+                self.builder.uextend(types::I64, equal)
+            }
             EMPTY => {
                 let empty = self.builder.icmp_imm(IntCC::Equal, len, 0);
                 self.builder.uextend(types::I64, empty)
@@ -423,15 +608,19 @@ impl FunctionCompiler<'_> {
                 self.frozen_slot(base, index, 1, name == INDEX_REF, target)
             }
             MAP_HAS | SET_HAS | MAP_INDEX | MAP_REF => {
-                let text = type_args.contains_key("key");
                 let key = if let Operand::String(text) = &args[1].value {
                     let mut bytes = Vec::new();
-                    append_node(&mut bytes, &FrozenValue::Str(text.clone()), &self.classes);
+                    append_node(
+                        &mut bytes,
+                        &FrozenValue::Str(text.clone()),
+                        &self.classes,
+                        &self.enums,
+                    );
                     let (ptr, _) = self.string_constant(&bytes)?;
                     Key::Text(ptr)
                 } else {
                     let loaded = self.load_operand(&args[1].value)?;
-                    if text {
+                    if text.is_some() {
                         Key::Text(loaded.values[0])
                     } else {
                         Key::Scalar(loaded)
@@ -616,7 +805,7 @@ mod tests {
             ],
         );
         let mut bytes = Vec::new();
-        let base = append_node(&mut bytes, &value, &HashMap::new());
+        let base = append_node(&mut bytes, &value, &HashMap::new(), &HashMap::new());
         assert_eq!(word(&bytes, base), 7);
         let child = |i: usize| {
             let slot = base + (i + 1) * 8;
@@ -626,7 +815,9 @@ mod tests {
         assert_eq!(word(&bytes, child(1) + 8), u64::MAX);
         assert_eq!(word(&bytes, child(1) + 16), 1);
         assert_eq!(word(&bytes, child(2) + 8), 1.25f64.to_bits());
-        assert_eq!(word(&bytes, child(3) + 8), 7);
+        let duration_slot = child(3) + 8;
+        let duration = duration_slot + word(&bytes, duration_slot) as usize;
+        assert_eq!(&bytes[duration..duration + 16], &7i128.to_le_bytes());
         assert_eq!(word(&bytes, child(4) + 8), 0);
         assert_eq!(word(&bytes, child(5) + 16), 255);
         assert_eq!(word(&bytes, child(6)), 2);

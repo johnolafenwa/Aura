@@ -763,6 +763,11 @@ class Dimensions:
     height: int64
     width: int64
 
+enum Mode:
+    Missing
+    Ready(int64)
+
+MODE = Mode.Ready(4)
 ROWS = [[11, 13], [21, 23]]
 CODES = {10: 2, 40: 5}
 IDS = {10, 40}
@@ -772,8 +777,15 @@ TEXT = "λx"
 BYTES = b"ABC"
 NAMES = {"a": 2, "λx": 5}
 
+def mode_code() -> int64:
+    match MODE:
+        case Mode.Ready(value):
+            return value
+        case Mode.Missing:
+            return -1
+
 export "C" def total(i: int64, key: int64) -> int64:
-    mut total = ROWS[i][-1] + ROWS.len() + SHAPE.height + PAIR[1] + TEXT.byte_len() + TEXT.len() + NAMES["λx"]
+    mut total = ROWS[i][-1] + ROWS.len() + SHAPE.height + PAIR[1] + TEXT.byte_len() + TEXT.len() + NAMES["λx"] + mode_code()
     if key in IDS and key in CODES:
         total += CODES[key]
     return total + (BYTES[-1] as int64)
@@ -792,7 +804,7 @@ void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint3
 }
 int main(int argc, char **argv) {
     if (argc > 1) { total(-3, 10); return 1; }
-    return (total(-1, 40) == 118 && total(0, 30) == 103) ? 0 : 1;
+    return (total(-1, 40) == 122 && total(0, 30) == 107) ? 0 : 1;
 }
 "#,
     );

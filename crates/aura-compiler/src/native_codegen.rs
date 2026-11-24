@@ -9123,7 +9123,7 @@ impl<'a> FunctionCompiler<'a> {
                 if self.freestanding.is_some()
                     && freestanding::frozen_tables::is_projection(name) =>
             {
-                self.frozen_table_projection(name, args, type_args, target)
+                self.frozen_table_projection(name, args, target)
             }
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
