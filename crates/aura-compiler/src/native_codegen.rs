@@ -970,6 +970,9 @@ impl<'a> NativeCodegen<'a> {
         program_source: &str,
         freestanding: Option<FreestandingTarget>,
     ) -> std::result::Result<Self, String> {
+        if freestanding.is_none() && module.foreign_link.asm_arch.is_some() {
+            return Err("machine assembly requires a freestanding target".into());
+        }
         let reachable_blocks = validate_module(module)?;
         // A program with no task-start operation cannot have a runnable sibling
         // for a loop to starve. Keep explicit MIR markers for portability, but

@@ -12397,8 +12397,6 @@ struct ReturnedViewCallee {
     trait_name: Option<String>,
 }
 
-#[path = "mir_inline_asm.rs"]
-mod inline_asm;
 #[path = "mir_naked.rs"]
 mod naked;
 
@@ -32105,6 +32103,9 @@ fn mir_class_type_name(
             }
         })
 }
+
+#[path = "mir_inline_asm.rs"]
+mod inline_asm;
 
 #[path = "mir_spans.rs"]
 mod spans;

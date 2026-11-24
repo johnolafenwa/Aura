@@ -27,7 +27,7 @@ impl FunctionChecker<'_> {
             };
             let Some(binding) = locals
                 .get(name)
-                .filter(|b| b.assignable && b.view.is_none() && names.insert(name))
+                .filter(|b| (b.assignable || b.mutable_place) && names.insert(name))
             else {
                 return Err(Diagnostic::coded_at(
                     "AU3035",

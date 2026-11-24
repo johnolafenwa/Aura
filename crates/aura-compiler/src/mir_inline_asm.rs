@@ -22,13 +22,16 @@ impl Lowerer<'_> {
         }
         let mut outputs = Vec::new();
         let mut out_widths = Vec::new();
+        let mut destinations = Vec::new();
         for (_, value) in &asm.outputs {
             let ExprKind::Name(name) = &value.kind else {
                 unreachable!("checked binding")
             };
             let ty = self.infer_expr_type(value).expect("checked output type");
             out_widths.push(scalar_width(&ty).expect("checked scalar output"));
-            outputs.push(self.render_local_name(name));
+            let slot = self.new_typed_temp(ty);
+            destinations.push((self.render_local_name(name), slot.clone()));
+            outputs.push(slot);
         }
         let target = self
             .program
@@ -43,6 +46,14 @@ impl Lowerer<'_> {
             outputs,
             span: expr.span,
         });
+        // Use ordinary assignments for writeback so views and match bindings
+        // preserve their loans and the caller observes a mut parameter update.
+        for (target, slot) in destinations {
+            self.emit(Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::Place(slot)),
+            });
+        }
         if asm.noreturn {
             self.terminate(Terminator::Unreachable);
         }
