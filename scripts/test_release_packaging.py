@@ -153,7 +153,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         examples = docs[docs.index("\n  examples:\n"):docs.index("\n  deploy:\n")]
         self.assertLess(
             examples.index("run: bash scripts/install-llvm.sh"),
-            examples.index("run: cargo build -p aura"),
+            examples.index("run: cargo build --locked -p aura"),
         )
         safety = (REPO_ROOT / ".github" / "workflows" / "safety.yml").read_text(
             encoding="utf-8"
