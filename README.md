@@ -30,7 +30,7 @@ reads. The compiler enforces both.
 
 ## Install
 
-Install the Aura 0.16 technical preview on Linux x64, Linux arm64, macOS x64,
+Install the Aura 0.17 technical preview on Linux x64, Linux arm64, macOS x64,
 or macOS arm64:
 
 ```bash
@@ -61,7 +61,7 @@ pinned tools.
 
 ## What Aura Is For
 
-Aura 0.16 targets applications for agents, ML infrastructure, and the control
+Aura 0.17 targets applications for agents, ML infrastructure, and the control
 planes around models. Before a program runs, the compiler checks types,
 access, mutation, ownership transfer, resource cleanup, and task boundaries.
 

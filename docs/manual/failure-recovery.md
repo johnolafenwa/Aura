@@ -204,5 +204,5 @@ built programs. The measured depths differ, as the table above shows.
 
 ## Status
 
-See the Unreleased section of the changelog for availability. ADR-0104 records the recovery design and ADR-0105
+Available since Aura 0.17.0. ADR-0104 records the recovery design and ADR-0105
 the call depth rule.

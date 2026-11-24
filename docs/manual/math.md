@@ -233,7 +233,7 @@ follows the general runtime diagnostic rules.
 ## Status
 
 `tau` and the functions from `asin` to `perm` in the Public API table are new
-after Aura 0.16. Everything on this page is implemented on both the MIR and direct
+after Aura 0.17. Everything on this page is implemented on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.

@@ -420,7 +420,7 @@ Whether an allocation within the ceiling succeeds depends on the host. SHA-256
 output is always 32 bytes. Codec output, errors, and offsets do not depend on
 the host.
 
-Aura 0.16 does not provide:
+Aura 0.17 does not provide:
 
 - text encodings other than those listed under [Text Encodings](#text-encodings)
 - decoding that replaces or skips invalid input
@@ -433,7 +433,7 @@ Aura 0.16 does not provide:
 
 ## Status
 
-`list[uint8]` is the Aura 0.16 bytes type, and the conversion, codec, error,
+`list[uint8]` is the Aura 0.17 bytes type, and the conversion, codec, error,
 and hash behavior on this page is implemented. The bytes module derives no
 codecs for classes and enums. For JSON codecs and schemas, see
 [Typed Codecs](/manual/json#typed-codecs).
