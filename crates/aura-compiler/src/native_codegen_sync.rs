@@ -109,6 +109,26 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
+    /// The found value's own box, or null for a missing key, of a lookup
+    /// that compiled to `compiled`: `compiled` itself when it is in the
+    /// payload form, and otherwise what is in the `Lookup` it is.
+    pub(super) fn lookup_payload_box(
+        &mut self,
+        compiled: ValueRef,
+        payload_form: bool,
+        ty: Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let compiled = self.ensure_opaque(compiled)?;
+        if payload_form {
+            return Ok(compiled);
+        }
+        let lookup = self.transfer_owned_opaque_value(&compiled);
+        let inst = self
+            .builder
+            .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
+        Ok(self.owned_opaque_result(inst.results, ty))
+    }
+
     /// A `dict` `get` for a slot that keeps a found int64 as a word: the
     /// lookup writes the int64 to the slot and says whether it found one.
     /// `None` when no such slot asks, and the `get` compiles as usual.
@@ -151,15 +171,8 @@ impl FunctionCompiler<'_> {
             self.builder.store(MemFlags::new(), found, address, 8);
             return Ok(());
         }
-        let compiled = self.ensure_opaque(compiled)?;
-        let payload = if payload_form {
-            self.transfer_opaque_arg(&compiled)
-        } else {
-            let lookup = self.transfer_owned_opaque_value(&compiled);
-            self.builder
-                .call(self.runtime[RuntimeFn::LookupPayload], &[lookup])
-                .results[0]
-        };
+        let payload = self.lookup_payload_box(compiled, payload_form, Type::named("Unknown"))?;
+        let payload = self.transfer_opaque_arg(&payload);
         // The branch that follows leaves nothing for only one of its sides
         // to release.
         self.release_all_temporary_owned();

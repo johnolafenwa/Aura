@@ -15456,16 +15456,8 @@ impl<'a> FunctionCompiler<'a> {
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_lookup = false;
         let payload_form = self.lookup_payload.take() == Some(true);
-        let compiled = self.ensure_opaque(compiled?)?;
-        let payload = if payload_form {
-            compiled
-        } else {
-            let lookup = self.transfer_owned_opaque_value(&compiled);
-            let inst = self
-                .builder
-                .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
-            self.owned_opaque_result(inst.results, direct_type_to_type(&target_ty))
-        };
+        let payload =
+            self.lookup_payload_box(compiled?, payload_form, direct_type_to_type(&target_ty))?;
         self.store_place(
             target,
             ValueRef {
@@ -20638,12 +20630,8 @@ fn result_twin_signature(
     classes: &HashMap<String, MirClass>,
 ) -> std::result::Result<Signature, String> {
     let mut signature = signature_for(function, classes)?;
-    let Some((ok, err)) = result_slots::slot_parts(&function.return_type, classes) else {
-        return Err(format!(
-            "direct backend cannot return the `Result` of `{}` as words",
-            function.name
-        ));
-    };
+    let (ok, err) = result_slots::slot_parts(&function.return_type, classes)
+        .expect("a function with a twin returns a `Result` a slot can hold");
     signature
         .returns
         .splice(0..1, result_slots::twin_results(&ok, &err));

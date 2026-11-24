@@ -5,7 +5,7 @@ use crate::mir::{MirModule, MirOwnership};
 use crate::sema::Type;
 
 use super::super::{types, validated_for_emission, MirClass};
-use super::{plan, slot_parts, twin_results, ResultSlotPlan};
+use super::{called_function, plan, slot_parts, twin_results, ResultSlotPlan};
 
 const SOURCE: &str = r#"
 enum Fault:
@@ -197,4 +197,16 @@ fn a_twin_returns_the_tag_and_the_payload_words() {
         words(named("float64"), named("int64")),
         [types::I64, types::F64, types::I64]
     );
+}
+
+#[test]
+fn only_a_call_that_names_a_function_runs_a_known_function() {
+    use crate::mir::{CallTarget, Operand, Rvalue};
+    let call = Rvalue::Call {
+        callee: CallTarget::Name("scalar".to_string()),
+        args: Vec::new(),
+        type_args: Default::default(),
+    };
+    assert_eq!(called_function(&call), Some("scalar"));
+    assert_eq!(called_function(&Rvalue::Use(Operand::Unit)), None);
 }
