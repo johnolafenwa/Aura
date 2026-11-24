@@ -129,6 +129,36 @@ def gcd(a: int64, b: int64) -> int64:
     return gcd(b, a % b)
 ```
 
+### Generators
+
+The body of a generator function runs after the call returns, on the values
+the call passed, so it is proved with the generator's `requires` clauses
+known. Its checks are reported under the generator's name. Each call of the
+generator proves the clauses, as for any function:
+
+```aura
+from iter import Generator
+
+
+def countdown(n: int64) -> Generator[int64]:
+    requires 0 <= n and n <= 100
+    mut i = n
+    while i > 0:
+        invariant 0 <= i and i <= n
+        yield i
+        i -= 1
+
+
+def main():
+    for x in countdown(3):
+        print(x)  # 3 2 1
+```
+
+The generator's locals keep their values across a `yield`. A value the
+consumer can also reach, such as an atomic or a queue, is unknown after it,
+as after any other step. A consumer knows nothing about the items it
+receives beyond their type.
+
 ## Reports
 
 `aura verify` prints a diagnostic for each check it could not prove, then a
