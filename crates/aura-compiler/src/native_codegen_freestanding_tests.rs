@@ -1067,8 +1067,10 @@ extern "C" class Packet:
 
 extern "C" def touch(p: mut Packet) -> None
 
-def lane(lines: fixed[Line, 2]) -> uint32:
-    return lines[1].word
+def lane(lines: fixed[Line, 2] | None) -> uint32:
+    if lines is not None:
+        return lines[1].word
+    return 0
 
 export "C" def exercise() -> uint32:
     mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
