@@ -1070,10 +1070,13 @@ extern "C" class Packet:
 
 extern "C" def touch(p: mut Packet) -> None
 
+def lane(lines: fixed[Line, 2]) -> uint32:
+    return lines[1].word
+
 export "C" def exercise() -> uint32:
     mut p = Packet(rows=[Row(tag=1, word=3), Row(tag=2, word=4)], lines=[Line(word=5), Line(word=6)])
     touch(p)
-    return p.rows[1].word + p.lines[1].word
+    return p.rows[1].word + lane(p.lines)
 "#;
     for target in TARGETS {
         let (exports, _, imports) = symbols(&object(source, target));

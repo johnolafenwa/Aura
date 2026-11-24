@@ -7,7 +7,10 @@ impl<'ctx> FunctionLowerer<'ctx, '_, '_> {
         mut params: Vec<BasicValueEnum<'ctx>>,
     ) -> Result<Vec<BasicValueEnum<'ctx>>, String> {
         for (param, ty) in params.iter_mut().zip(&self.ir.signature.params) {
-            if matches!(ty, ScalarType::Inline { .. }) {
+            if matches!(
+                ty,
+                ScalarType::Inline { .. } | ScalarType::OverAligned { .. }
+            ) {
                 *param = built(self.builder.build_load(
                     basic_type(self.context, *ty),
                     param.into_pointer_value(),
@@ -34,7 +37,10 @@ impl<'ctx> FunctionLowerer<'ctx, '_, '_> {
             .iter()
             .map(|&v| {
                 let ty = self.ir.ty(v);
-                if !matches!(ty, ScalarType::Inline { .. }) {
+                if !matches!(
+                    ty,
+                    ScalarType::Inline { .. } | ScalarType::OverAligned { .. }
+                ) {
                     return Ok(self.value(v)?.into());
                 }
                 if let Some(inst) = self.ir.value_defs[v.0 as usize] {
@@ -55,6 +61,12 @@ impl<'ctx> FunctionLowerer<'ctx, '_, '_> {
                 slots.position_before(&first);
                 let slot =
                     built(slots.build_alloca(basic_type(self.context, ty), "array_argument"))?;
+                if let ScalarType::OverAligned { align, .. } = ty {
+                    slot.as_instruction_value()
+                        .expect("an alloca is an instruction")
+                        .set_alignment(u32::from(align))
+                        .map_err(|_| "invalid fixed array argument alignment")?;
+                }
                 built(self.builder.build_store(slot, self.value(v)?))?;
                 Ok(slot.into())
             })

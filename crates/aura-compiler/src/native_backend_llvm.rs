@@ -2036,6 +2036,9 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
         .iter()
         .enumerate()
         .map(|(index, ty)| {
+            if matches!(ty, ScalarType::OverAligned { .. }) {
+                return context.ptr_type(AddressSpace::default()).into();
+            }
             // A struct in memory travels as a real pointer, which `byval`
             // and `sret` need.
             if matches!(ty, ScalarType::Inline { .. }) {
@@ -2936,6 +2939,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn args(&self, values: &[Val]) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, String> {
+        if values
+            .iter()
+            .any(|v| matches!(self.ir.ty(*v), ScalarType::OverAligned { .. }))
+        {
+            return self.array_arguments(values);
+        }
         if values
             .iter()
             .any(|v| matches!(self.ir.ty(*v), ScalarType::Inline { .. }))
