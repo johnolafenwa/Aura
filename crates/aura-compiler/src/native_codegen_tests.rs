@@ -18399,3 +18399,24 @@ def main() -> None:
         .iter()
         .any(|name| name.contains("aura_direct_integer_bits")));
 }
+
+#[test]
+fn union_array_writeback_emits_dynamic_and_literal_reads_with_buffer_release() {
+    let module = lower_ffi_source_to_mir(include_str!(
+        "../../aura/tests/fixtures/systems_layout/layout.au"
+    ));
+    let object = emit_unoptimized_object(&module).expect("union array writeback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "fill_events",
+        "aura_direct_ffi_unpack_structs",
+        "aura_direct_ffi_release_structs",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "{symbol}: {referenced:?}"
+        );
+    }
+}
