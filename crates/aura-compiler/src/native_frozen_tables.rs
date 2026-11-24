@@ -4,6 +4,9 @@
 //! without dynamic relocations or host pointers.
 
 use super::*;
+
+#[path = "native_frozen_places.rs"]
+mod places;
 use crate::const_eval::FrozenValue;
 use crate::integer::IntegerRepresentation;
 
@@ -84,24 +87,27 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
         .map(|class| (class.name.clone(), class.clone()))
         .collect();
     for function in &mut module.functions {
-        let types: HashMap<_, _> = function
+        let mut types: HashMap<_, _> = function
             .local_types
             .iter()
             .map(|l| (l.name.clone(), l.ty.clone()))
             .collect();
-        let inline_values: HashSet<_> = types
-            .iter()
-            .filter(|(_, ty)| {
-                let aggregate = matches!(ty, Type::Union(_))
-                    || matches!(ty, Type::Named(n,_) if classes.contains_key(n.as_str()));
-                aggregate && direct_type(ty, &definitions).is_some_and(|ty| inline_aggregate(&ty))
-            })
-            .map(|(place, _)| place.clone())
-            .collect();
+        let mut inline_values = HashSet::new();
         let mut addresses = HashSet::new();
         // MIR names a computed receiver in a temporary before the projection.
         // Walk to a fixed point as a loop or branch may name an earlier block.
         loop {
+            inline_values.extend(
+                types
+                    .iter()
+                    .filter(|(_, ty)| {
+                        let aggregate = matches!(ty, Type::Union(_))
+                            || matches!(ty,Type::Named(n,_) if classes.contains_key(n.as_str()));
+                        aggregate
+                            && direct_type(ty, &definitions).is_some_and(|ty| inline_aggregate(&ty))
+                    })
+                    .map(|(place, _)| place.clone()),
+            );
             let previous = addresses.len();
             for block in &function.blocks {
                 for ins in &block.instructions {
@@ -130,7 +136,9 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                     }
                 }
             }
-            if previous == addresses.len() {
+            if previous == addresses.len()
+                && !places::expand(function, &addresses, &mut types, &classes)
+            {
                 break;
             }
         }
@@ -171,7 +179,9 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
                 }
                 let mut mentions = Vec::new();
                 crate::mir::instruction_place_mentions(instruction, &mut mentions);
-                unsupported |= mentions.iter().any(|place| addresses.contains(*place));
+                unsupported |= mentions
+                    .iter()
+                    .any(|place| addresses.contains(place.split('.').next().unwrap_or(place)));
             }
             lower_match(
                 block,
@@ -183,7 +193,7 @@ pub(super) fn lower_reads(module: &mut MirModule, problems: &mut Vec<Diagnostic>
             );
             unsupported |= crate::mir::terminator_place_mentions(&block.terminator)
                 .iter()
-                .any(|place| addresses.contains(*place));
+                .any(|place| addresses.contains(place.split('.').next().unwrap_or(place)));
         }
         function.blocks.extend(branches);
         if unsupported {

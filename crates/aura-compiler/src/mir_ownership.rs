@@ -2350,7 +2350,7 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
 }
 
 /// Every operand of `value`, as `rvalue_roles` lists them.
-fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
+pub(crate) fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
     match value {
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
