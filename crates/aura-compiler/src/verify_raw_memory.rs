@@ -7,13 +7,17 @@ use crate::mir::{CallTarget, Instruction, MethodDispatch, MirFunction, MirModule
 use crate::sema::Type;
 
 fn uses_typed_pointer(function: &MirFunction) -> bool {
-    function
-        .local_types
-        .iter()
-        .map(|local| &local.ty)
-        .chain(function.params.iter().map(|param| &param.ty))
-        .chain(std::iter::once(&function.return_type))
-        .any(|ty| matches!(ty, Type::Named(name, _) if name == "ptr"))
+    let exposes_storage = function.blocks.iter().flat_map(|b| &b.instructions).any(|i| {
+        matches!(i, Instruction::Assign { value, .. } if matches!(value, Rvalue::CFieldAddress { .. } | Rvalue::ModuleAddress { .. } | Rvalue::CPointerAccess { .. }) || matches!(value, Rvalue::Call { callee: CallTarget::Name(name), .. } if name == crate::mir::fixed_arrays::ADDRESS))
+    });
+    exposes_storage
+        || function
+            .local_types
+            .iter()
+            .map(|local| &local.ty)
+            .chain(function.params.iter().map(|param| &param.ty))
+            .chain(std::iter::once(&function.return_type))
+            .any(|ty| matches!(ty, Type::Named(name, _) if name == "ptr"))
 }
 
 fn writes_memory(name: &str) -> bool {
@@ -57,7 +61,11 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
             };
             let callee = match value {
                 Rvalue::Call { callee, .. } => callee,
-                Rvalue::StartTask { .. } | Rvalue::Closure { .. } => {
+                Rvalue::CPointerAccess { store: Some(_), .. }
+                | Rvalue::CFieldAddress { .. }
+                | Rvalue::ModuleAddress { .. }
+                | Rvalue::StartTask { .. }
+                | Rvalue::Closure { .. } => {
                     affected.insert(name);
                     continue;
                 }
@@ -89,7 +97,7 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
                     continue;
                 }
             };
-            if writes_memory(target) {
+            if writes_memory(target) || target == crate::mir::fixed_arrays::ADDRESS {
                 affected.insert(name);
             }
             callers.entry(target).or_default().push(name);
