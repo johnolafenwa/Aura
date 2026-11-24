@@ -2258,3 +2258,6 @@ fn a_gpu_device_agrees_on_merged_heads() {
         println!("RAN: merged heads written in place on a GPU device");
     }
 }
+
+#[path = "tensor_half_tests.rs"]
+mod half_and_heads;

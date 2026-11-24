@@ -455,3 +455,108 @@ pub(crate) fn filled(
     };
     ArrayValue::new(shape, storage)
 }
+
+/// A half-precision float as a `float32`. Every half is one exactly.
+pub(crate) fn half_to_single(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15) << 31;
+    let exponent = u32::from(bits >> 10) & 0x1F;
+    let fraction = u32::from(bits) & 0x3FF;
+    let bits = match (exponent, fraction) {
+        (0, 0) => sign,
+        (0, _) => {
+            // A subnormal half is a normal float32.
+            let shift = fraction.leading_zeros() - 21;
+            sign | ((113 - shift) << 23) | ((fraction << shift) & 0x3FF) << 13
+        }
+        (0x1F, _) => sign | 0x7F80_0000 | (fraction << 13),
+        _ => sign | ((exponent + 112) << 23) | (fraction << 13),
+    };
+    f32::from_bits(bits)
+}
+
+/// The half-precision float nearest to `value`, ties to even: an
+/// infinity past the largest half, and a NaN for a NaN.
+pub(crate) fn single_to_half(value: f32) -> u16 {
+    let bits = value.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exponent = ((bits >> 23) & 0xFF) as i32;
+    let fraction = bits & 0x007F_FFFF;
+    if exponent == 0xFF {
+        // An infinity, or a NaN, which stays one.
+        let kept = if fraction == 0 {
+            0
+        } else {
+            0x200 | (fraction >> 13) as u16
+        };
+        return sign | 0x7C00 | kept;
+    }
+    // The exponent of the half, before its bias of 15 is removed.
+    let half_exponent = exponent - 112;
+    if half_exponent >= 0x1F {
+        return sign | 0x7C00;
+    }
+    if half_exponent <= 0 {
+        // A subnormal half, or zero: the fraction with its leading one,
+        // moved right until the exponent is the smallest.
+        if half_exponent < -10 {
+            return sign;
+        }
+        let whole = fraction | 0x0080_0000;
+        let shift = (14 - half_exponent) as u32;
+        let kept = whole >> shift;
+        let rest = whole & ((1 << shift) - 1);
+        let middle = 1 << (shift - 1);
+        let up = rest > middle || (rest == middle && kept & 1 == 1);
+        return sign | (kept as u16 + u16::from(up));
+    }
+    let kept = ((half_exponent as u32) << 10) | (fraction >> 13);
+    let rest = fraction & 0x1FFF;
+    let up = rest > 0x1000 || (rest == 0x1000 && kept & 1 == 1);
+    // A carry out of the fraction raises the exponent, and out of the
+    // largest exponent gives an infinity: both are the next bit pattern.
+    sign | (kept as u16 + u16::from(up))
+}
+
+/// `value` as the nearest half-precision float.
+pub(crate) fn rounded_to_half(value: f32) -> f32 {
+    half_to_single(single_to_half(value))
+}
+
+/// A `float32` Array with every element rounded to half precision: the
+/// host memory of a `float16` tensor.
+pub(crate) fn round_half(elements: &ArrayValue) -> Result<ArrayValue> {
+    let values = elements.elements()?;
+    let ArrayStorage::Float32(values) = &*values else {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "`tensor` keeps a float16 tensor as float32 elements".to_string(),
+        ));
+    };
+    let rounded: Box<[f32]> = values.iter().map(|&value| rounded_to_half(value)).collect();
+    ArrayValue::new(elements.try_shape()?, ArrayStorage::Float32(rounded.into()))
+}
+
+/// The half-precision bits of a `float32` Array, little-endian, as the
+/// CUDA device and a safetensors file keep them.
+pub(crate) fn half_bytes(elements: &ArrayValue) -> Result<Vec<u8>> {
+    let values = elements.elements()?;
+    let ArrayStorage::Float32(values) = &*values else {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "`tensor` keeps a float16 tensor as float32 elements".to_string(),
+        ));
+    };
+    Ok(values
+        .iter()
+        .flat_map(|&value| single_to_half(value).to_le_bytes())
+        .collect())
+}
+
+/// A `float32` Array of `shape` from half-precision bits.
+pub(crate) fn from_half_bytes(shape: &[usize], bytes: &[u8]) -> Result<ArrayValue> {
+    let values: Box<[f32]> = bytes
+        .chunks_exact(2)
+        .map(|chunk| half_to_single(u16::from_le_bytes([chunk[0], chunk[1]])))
+        .collect();
+    ArrayValue::new(shape.into(), ArrayStorage::Float32(values.into()))
+}

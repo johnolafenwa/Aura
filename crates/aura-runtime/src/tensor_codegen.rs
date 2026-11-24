@@ -14,8 +14,8 @@
 //! NVRTC and runs the actions.
 
 use super::{
-    Operation, Plan, Slot, ERF_OPERATION, NEGATE_OPERATION, PAIR_OPERATION_BASE, SIGMOID_OPERATION,
-    TANH_OPERATION,
+    Operation, Plan, Slot, ERF_OPERATION, HALF_DTYPE, NEGATE_OPERATION, PAIR_OPERATION_BASE,
+    SIGMOID_OPERATION, TANH_OPERATION,
 };
 use crate::runtime_value::ArrayDType;
 use std::fmt::Write;
@@ -49,6 +49,8 @@ pub(crate) enum Action {
         output: usize,
         bytes: usize,
         double: bool,
+        /// Whether the matrices are `float16`.
+        half: bool,
         rows: usize,
         inner: usize,
         columns: usize,
@@ -61,10 +63,25 @@ pub(crate) enum Action {
         /// elements from one row of a product to the next, and the
         /// element each product starts at. No kernel then moves them.
         spread: Option<(usize, Vec<usize>)>,
+        /// For the left and the right buffer, when its matrices are
+        /// parts of wider rows, as the heads of an attention are before
+        /// they are split: the elements from one row to the next. The
+        /// product reads them where they are.
+        wide: (Option<usize>, Option<usize>),
     },
     /// Buffer `output` is buffer `input`: a reshape of memory that
     /// exists moves no element.
     Alias { output: usize, input: usize },
+}
+
+impl Action {
+    /// Whether this product's matrices are not one after another, so the
+    /// device is given the address of each: the kernel named
+    /// [`ADDRESSES_KERNEL`] writes them.
+    pub(crate) fn is_tabled(&self) -> bool {
+        matches!(self, Self::Matmul { spread, wide, .. }
+            if spread.is_some() || wide.0.is_some() || wide.1.is_some())
+    }
 }
 
 /// A plan as CUDA C and the actions that run it.
@@ -131,6 +148,68 @@ AURA_INLINE double aura_normal_d(long long seed, unsigned long long index) {
     double first = aura_unit_d(seed, 2 * index), second = aura_unit_d(seed, 2 * index + 1);
     return sqrt(-2.0 * log(1.0 - first)) * cos(6.283185307179586 * second);
 }
+"#;
+
+/// The `float16` element, for a plan that has one. A kernel reads it as
+/// a `float` and stores a `float` rounded to the nearest half. The GPU
+/// converts with one instruction each way. `AURA_SOFT_HALF` asks for the
+/// conversion in C that the host tests run.
+const HALF_PREAMBLE: &str = r#"#if defined(AURA_HOST_HARNESS) || defined(AURA_SOFT_HALF)
+union aura_word { unsigned int bits; float value; };
+AURA_INLINE float aura_h2f(unsigned short h) {
+    unsigned int sign = (unsigned int)(h & 0x8000u) << 16;
+    unsigned int exponent = (h >> 10) & 0x1Fu, fraction = h & 0x3FFu;
+    aura_word word;
+    if (exponent == 0u) {
+        if (fraction == 0u) {
+            word.bits = sign;
+        } else {
+            unsigned int shift = 0u;
+            while (!(fraction & 0x400u)) { fraction <<= 1; shift++; }
+            word.bits = sign | ((113u - shift) << 23) | ((fraction & 0x3FFu) << 13);
+        }
+    } else if (exponent == 0x1Fu) {
+        word.bits = sign | 0x7F800000u | (fraction << 13);
+    } else {
+        word.bits = sign | ((exponent + 112u) << 23) | (fraction << 13);
+    }
+    return word.value;
+}
+AURA_INLINE unsigned short aura_f2h(float f) {
+    aura_word word;
+    word.value = f;
+    unsigned int sign = (word.bits >> 16) & 0x8000u, fraction = word.bits & 0x007FFFFFu;
+    int exponent = (int)((word.bits >> 23) & 0xFFu);
+    if (exponent == 0xFF) return (unsigned short)(sign | 0x7C00u | (fraction ? 0x200u | (fraction >> 13) : 0u));
+    int half = exponent - 112;
+    if (half >= 0x1F) return (unsigned short)(sign | 0x7C00u);
+    if (half <= 0) {
+        if (half < -10) return (unsigned short)sign;
+        unsigned int whole = fraction | 0x00800000u, shift = (unsigned int)(14 - half);
+        unsigned int kept = whole >> shift, rest = whole & ((1u << shift) - 1u), middle = 1u << (shift - 1u);
+        return (unsigned short)(sign | (kept + ((rest > middle || (rest == middle && (kept & 1u))) ? 1u : 0u)));
+    }
+    unsigned int kept = ((unsigned int)half << 10) | (fraction >> 13), rest = fraction & 0x1FFFu;
+    return (unsigned short)(sign | (kept + ((rest > 0x1000u || (rest == 0x1000u && (kept & 1u))) ? 1u : 0u)));
+}
+#else
+AURA_INLINE float aura_h2f(unsigned short h) {
+    float f;
+    asm("{  cvt.f32.f16 %0, %1;}\n" : "=f"(f) : "h"(h));
+    return f;
+}
+AURA_INLINE unsigned short aura_f2h(float f) {
+    unsigned short h;
+    asm("{  cvt.rn.f16.f32 %0, %1;}\n" : "=h"(h) : "f"(f));
+    return h;
+}
+#endif
+struct aura_h {
+    unsigned short bits;
+    aura_h() = default;
+    __device__ __forceinline__ aura_h(float value) : bits(aura_f2h(value)) {}
+    __device__ __forceinline__ operator float() const { return aura_h2f(bits); }
+};
 "#;
 
 /// The elements one thread reduces in a stage of a whole reduction.
@@ -231,30 +310,84 @@ fn inner_of(shape: &[usize], axis: usize) -> usize {
     shape[axis + 1..].iter().product()
 }
 
-fn dtype_of(code: i64) -> ArrayDType {
-    ArrayDType::from_code(code).expect("a plan holds known dtypes")
+/// The dtype of a plan's value: an `Array` dtype, or `float16`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Kind {
+    Int32,
+    Int64,
+    Float16,
+    Float32,
+    Float64,
+    Bool,
 }
 
+pub(crate) fn dtype_of(code: i64) -> Kind {
+    if code == HALF_DTYPE {
+        return Kind::Float16;
+    }
+    match ArrayDType::from_code(code).expect("a plan holds known dtypes") {
+        ArrayDType::Int32 => Kind::Int32,
+        ArrayDType::Int64 => Kind::Int64,
+        ArrayDType::Float32 => Kind::Float32,
+        ArrayDType::Float64 => Kind::Float64,
+        ArrayDType::Bool => Kind::Bool,
+    }
+}
+
+/// The bytes of one element of an `Array` dtype on the device.
 pub(crate) fn element_bytes(dtype: ArrayDType) -> usize {
-    match dtype {
-        ArrayDType::Bool => 1,
-        ArrayDType::Int32 | ArrayDType::Float32 => 4,
-        ArrayDType::Int64 | ArrayDType::Float64 => 8,
+    kind_bytes(dtype_of(dtype as i64))
+}
+
+pub(crate) fn kind_bytes(kind: Kind) -> usize {
+    match kind {
+        Kind::Bool => 1,
+        Kind::Float16 => 2,
+        Kind::Int32 | Kind::Float32 => 4,
+        Kind::Int64 | Kind::Float64 => 8,
     }
 }
 
-fn c_type(dtype: ArrayDType) -> &'static str {
-    match dtype {
-        ArrayDType::Int32 => "int",
-        ArrayDType::Int64 => "long long",
-        ArrayDType::Float32 => "float",
-        ArrayDType::Float64 => "double",
-        ArrayDType::Bool => "unsigned char",
+/// The C type of an element in device memory.
+fn c_type(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Int32 => "int",
+        Kind::Int64 => "long long",
+        Kind::Float16 => "aura_h",
+        Kind::Float32 => "float",
+        Kind::Float64 => "double",
+        Kind::Bool => "unsigned char",
     }
 }
 
-fn is_float(dtype: ArrayDType) -> bool {
-    matches!(dtype, ArrayDType::Float32 | ArrayDType::Float64)
+/// The C type a kernel computes in. A `float16` element is read as a
+/// `float`, and a sum of them is kept as one until it is stored.
+fn value_type(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Float16 => "float",
+        kind => c_type(kind),
+    }
+}
+
+/// The bytes of one element of the type a kernel computes in.
+fn value_bytes(kind: Kind) -> usize {
+    match kind {
+        Kind::Float16 => 4,
+        kind => kind_bytes(kind),
+    }
+}
+
+/// The C expression for `value` as an element of `kind`, in the type a
+/// kernel computes in: a `float16` value is rounded to half precision.
+fn stored(kind: Kind, value: &str) -> String {
+    match kind {
+        Kind::Float16 => format!("(float)(aura_h)({value})"),
+        _ => value.to_string(),
+    }
+}
+
+fn is_float(kind: Kind) -> bool {
+    matches!(kind, Kind::Float16 | Kind::Float32 | Kind::Float64)
 }
 
 /// The row-major stride of each axis of `shape`.
@@ -353,7 +486,7 @@ fn slot_shape(slot: &Slot) -> &[usize] {
     }
 }
 
-fn slot_dtype(slot: &Slot) -> ArrayDType {
+fn slot_dtype(slot: &Slot) -> Kind {
     match slot {
         Slot::Leaf { dtype, .. } | Slot::Step { dtype, .. } => dtype_of(*dtype),
     }
@@ -402,7 +535,162 @@ pub(crate) fn swaps_matrix(operation: &Operation, rank: usize) -> bool {
         })
 }
 
+/// Whether `operation` over an operand of `rank` axes splits the heads of
+/// an attention: it moves the axis of the heads before the axis of the
+/// rows.
+pub(crate) fn splits_heads(operation: &Operation, rank: usize) -> bool {
+    matches!(operation, Operation::Permute(axes)
+        if rank == 4 && axes.iter().map(|&axis| axis as usize).eq([0, 2, 1, 3]))
+}
+
+/// Whether `setting`, the value of `AURA_TENSOR_HEADS_IN_PLACE`, leaves
+/// on the reading of an attention's heads in place. `0` turns it off.
+fn heads_in_place_from(setting: Option<&str>) -> bool {
+    setting != Some("0")
+}
+
+/// Whether a product reads the heads of an attention where the layer
+/// before wrote them, in rows that hold every head, and no kernel writes
+/// them apart first.
+pub(crate) fn heads_in_place() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        heads_in_place_from(std::env::var("AURA_TENSOR_HEADS_IN_PLACE").ok().as_deref())
+    })
+}
+
+/// Memory a product reads a matrix operand from, when it is not the
+/// operand's own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Stored {
+    /// The slot whose memory holds the matrices.
+    slot: usize,
+    /// Whether each matrix is there with its rows and columns swapped.
+    swapped: bool,
+    /// Whether each matrix is one head of rows that hold every head.
+    heads: bool,
+}
+
 impl<'a> Generator<'a> {
+    /// The memory a product reads the operand `slot` from in place: the
+    /// operand of a transpose, of a split of heads, or of both.
+    fn stored(plan: &Plan, materialized: &[bool], slot: usize) -> Option<Stored> {
+        let step = |slot: usize| match &plan.slots[slot] {
+            Slot::Step {
+                operation, inputs, ..
+            } => Some((operation, inputs[0], slot_shape(&plan.slots[inputs[0]]).len())),
+            Slot::Leaf { .. } => None,
+        };
+        if materialized[slot] {
+            return None;
+        }
+        let (operation, operand, rank) = step(slot)?;
+        if splits_heads(operation, rank) {
+            return materialized[operand].then_some(Stored {
+                slot: operand,
+                swapped: false,
+                heads: true,
+            });
+        }
+        if !swaps_matrix(operation, rank) {
+            return None;
+        }
+        if materialized[operand] {
+            return Some(Stored {
+                slot: operand,
+                swapped: true,
+                heads: false,
+            });
+        }
+        let (operation, base, rank) = step(operand)?;
+        (splits_heads(operation, rank) && materialized[base]).then_some(Stored {
+            slot: base,
+            swapped: true,
+            heads: true,
+        })
+    }
+
+    /// Finds the splits of heads that only products read, straight or
+    /// through a transpose, and makes the memory under each exist, so
+    /// the products read the heads from it in place. Without this a
+    /// kernel writes each split as a copy with the heads apart.
+    fn read_heads_in_place(plan: &Plan, uses: &[usize], materialized: &mut [bool]) {
+        let count = plan.slots.len();
+        let mut users = vec![Vec::new(); count];
+        for (index, slot) in plan.slots.iter().enumerate() {
+            if let Slot::Step { inputs, .. } = slot {
+                for &input in inputs {
+                    users[input].push(index);
+                }
+            }
+        }
+        let product =
+            |slot: usize| matches!(&plan.slots[slot], Slot::Step { operation: Operation::Matmul, .. });
+        for index in 0..count {
+            let Slot::Step {
+                operation, inputs, ..
+            } = &plan.slots[index]
+            else {
+                continue;
+            };
+            let rank = slot_shape(&plan.slots[inputs[0]]).len();
+            if !splits_heads(operation, rank) || plan.outputs.contains(&index) || users[index].is_empty()
+            {
+                continue;
+            }
+            // The transposes of the split that only products read.
+            let mut transposes = Vec::new();
+            let read_by_products = users[index].iter().all(|&user| {
+                if product(user) {
+                    return true;
+                }
+                let swaps = matches!(&plan.slots[user], Slot::Step { operation, .. }
+                    if swaps_matrix(operation, 4));
+                let fits = swaps
+                    && !plan.outputs.contains(&user)
+                    && !users[user].is_empty()
+                    && users[user].iter().all(|&reader| product(reader));
+                if fits {
+                    transposes.push(user);
+                }
+                fits
+            });
+            if !read_by_products {
+                continue;
+            }
+            // The memory under the split: the reshapes that only it
+            // reads lead down to memory that exists, or to arithmetic
+            // that a kernel then writes there.
+            let mut chain = Vec::new();
+            let mut root = inputs[0];
+            while !materialized[root] {
+                let Slot::Step {
+                    operation: Operation::Reshape(_),
+                    inputs,
+                    ..
+                } = &plan.slots[root]
+                else {
+                    break;
+                };
+                chain.push(root);
+                root = inputs[0];
+            }
+            let writes = matches!(&plan.slots[root], Slot::Step { operation, .. }
+                if fuses(operation) && !matches!(operation, Operation::Reshape(_)));
+            if !materialized[root] && !(writes && uses[root] == 1) {
+                continue;
+            }
+            materialized[root] = true;
+            for reshape in chain {
+                materialized[reshape] = true;
+            }
+            materialized[index] = false;
+            for transpose in transposes {
+                materialized[transpose] = false;
+            }
+        }
+    }
+
     fn new(plan: &'a Plan) -> Self {
         let count = plan.slots.len();
         let mut uses = vec![0_usize; count];
@@ -493,6 +781,9 @@ impl<'a> Generator<'a> {
             {
                 materialized[index] |= materialized[inputs[0]];
             }
+        }
+        if heads_in_place() {
+            Self::read_heads_in_place(plan, &uses, &mut materialized);
         }
         // A product reads a transpose of memory that exists in place, so
         // a transpose only products read is never written.
@@ -611,7 +902,15 @@ impl<'a> Generator<'a> {
             in_lane,
             held: Vec::new(),
             maps: Vec::new(),
-            source: PREAMBLE.to_string(),
+            source: if plan
+                .slots
+                .iter()
+                .any(|slot| slot_dtype(slot) == Kind::Float16)
+            {
+                format!("{PREAMBLE}{HALF_PREAMBLE}")
+            } else {
+                PREAMBLE.to_string()
+            },
             actions: Vec::new(),
             buffers: count,
         }
@@ -803,7 +1102,7 @@ impl<'a> Generator<'a> {
         slot_shape(&self.plan.slots[slot])
     }
 
-    fn dtype(&self, slot: usize) -> ArrayDType {
+    fn dtype(&self, slot: usize) -> Kind {
         slot_dtype(&self.plan.slots[slot])
     }
 
@@ -839,7 +1138,16 @@ impl<'a> Generator<'a> {
     fn signature(&self, leaves: &[usize]) -> (String, String) {
         let parameters = leaves
             .iter()
-            .map(|&leaf| format!(", const {}* p{leaf}", c_type(self.dtype(leaf))))
+            .map(|&leaf| {
+                // What a lane keeps of a reduction is in the type the
+                // threads add in.
+                let ty = if self.in_lane[leaf] {
+                    value_type(self.dtype(leaf))
+                } else {
+                    c_type(self.dtype(leaf))
+                };
+                format!(", const {ty}* p{leaf}")
+            })
             .collect();
         let arguments = leaves.iter().map(|leaf| format!(", p{leaf}")).collect();
         (parameters, arguments)
@@ -970,7 +1278,7 @@ impl<'a> Generator<'a> {
             Operation::Random { fill, dtype, .. } => format!(
                 "aura_{}_{}({}, (unsigned long long)j)",
                 if *fill == 0 { "unit" } else { "normal" },
-                if dtype_of(*dtype) == ArrayDType::Float64 {
+                if dtype_of(*dtype) == Kind::Float64 {
                     "d"
                 } else {
                     "f"
@@ -1054,13 +1362,13 @@ impl<'a> Generator<'a> {
         .expect("writing to a string cannot fail");
         let more = beside
             .iter()
-            .map(|&other| (other, count * element_bytes(self.dtype(other))))
+            .map(|&other| (other, count * kind_bytes(self.dtype(other))))
             .collect();
         self.maps.push(self.actions.len());
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
-            bytes: count * element_bytes(self.dtype(slot)),
+            bytes: count * kind_bytes(self.dtype(slot)),
             threads: count,
             inputs: leaves,
             clear: false,
@@ -1168,8 +1476,8 @@ impl<'a> Generator<'a> {
                 unreachable!("a lane holds reductions")
             };
             let dtype = self.dtype(reduction);
-            let ty = c_type(dtype);
-            let suffix = if dtype == ArrayDType::Float64 {
+            let ty = value_type(dtype);
+            let suffix = if dtype == Kind::Float64 {
                 "d"
             } else {
                 "f"
@@ -1179,11 +1487,14 @@ impl<'a> Generator<'a> {
                 2 => format!("aura_max_{suffix}(acc, {value})"),
                 _ => format!("acc + {value}"),
             };
-            let finish = if *code == 3 {
-                format!("acc / ({ty}){length}")
-            } else {
-                "acc".to_string()
-            };
+            let finish = stored(
+                dtype,
+                &if *code == 3 {
+                    format!("acc / ({ty}){length}")
+                } else {
+                    "acc".to_string()
+                },
+            );
             let operand = operand_of(self, reduction);
             let mut first = self.element(slot, operand, "(start + t)", &arguments);
             let mut next = self.element(slot, operand, "(start + k)", &arguments);
@@ -1191,7 +1502,7 @@ impl<'a> Generator<'a> {
             let (written, passed) = if kept {
                 first = format!("(out[start + t] = {first})");
                 next = format!("(out[start + k] = {next})");
-                (format!(", {ty}* out"), ", out")
+                (format!(", {}* out", c_type(dtype)), ", out")
             } else {
                 (String::new(), "")
             };
@@ -1296,7 +1607,7 @@ impl<'a> Generator<'a> {
         self.actions.push(Action::Kernel {
             name,
             output: slot,
-            bytes: count * element_bytes(self.dtype(slot)),
+            bytes: count * kind_bytes(self.dtype(slot)),
             threads: lanes * width,
             inputs,
             clear: false,
@@ -1517,7 +1828,7 @@ impl<'a> Generator<'a> {
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
-            bytes: len(shape) * element_bytes(self.dtype(slot)),
+            bytes: len(shape) * kind_bytes(self.dtype(slot)),
             threads: count,
             inputs: leaves,
             clear: true,
@@ -1530,7 +1841,7 @@ impl<'a> Generator<'a> {
     fn arg_reduce(&mut self, slot: usize, largest: bool, axis: usize, operand: usize) {
         let leaves = self.emit_operands(slot, &[operand]);
         let (parameters, arguments) = self.signature(&leaves);
-        let ty = c_type(self.dtype(operand));
+        let ty = value_type(self.dtype(operand));
         let source = self.shape(operand);
         let (length, inner) = (source[axis], inner_of(source, axis));
         let lanes = len(source) / length;
@@ -1630,8 +1941,11 @@ impl<'a> Generator<'a> {
     /// The kernels of the reduction step `slot`.
     fn reduce(&mut self, slot: usize, reduction: i64, axis: Option<i64>, operand: usize) {
         let dtype = self.dtype(slot);
-        let ty = c_type(dtype);
-        let suffix = if dtype == ArrayDType::Float64 {
+        // The threads add in `ty`. What they hand each other is kept in
+        // it, and the result is stored as `out_ty`.
+        let (ty, out_ty) = (value_type(dtype), c_type(dtype));
+        let part_bytes = value_bytes(dtype);
+        let suffix = if dtype == Kind::Float64 {
             "d"
         } else {
             "f"
@@ -1647,7 +1961,7 @@ impl<'a> Generator<'a> {
         let source = self.shape(operand);
         let count = len(source);
         let at = |index: &str| self.element(slot, operand, index, &arguments);
-        let bytes = element_bytes(dtype);
+        let bytes = kind_bytes(dtype);
         match axis {
             Some(axis) => {
                 // One thread reduces one lane.
@@ -1685,7 +1999,7 @@ impl<'a> Generator<'a> {
                          {ty} acc = {first};\n    \
                          for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step_code};\n    \
                          out[t] = acc;\n}}\n\
-                         extern \"C\" __global__ void k{slot}({ty}* out, const {ty}* in) {{\n    \
+                         extern \"C\" __global__ void k{slot}({out_ty}* out, const {ty}* in) {{\n    \
                          long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (lane >= {lanes}LL) return;\n    \
                          const long long step = {inner}LL;\n    \
@@ -1701,7 +2015,7 @@ impl<'a> Generator<'a> {
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}r0"),
                         output: partial,
-                        bytes: threads * bytes,
+                        bytes: threads * part_bytes,
                         threads,
                         inputs: leaves,
                         clear: false,
@@ -1722,7 +2036,7 @@ impl<'a> Generator<'a> {
                 let step = combine("acc", &next);
                 writeln!(
                     self.source,
-                    "extern \"C\" __global__ void k{slot}({ty}* out{parameters}) {{\n    \
+                    "extern \"C\" __global__ void k{slot}({out_ty}* out{parameters}) {{\n    \
                      long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                      if (lane >= {lanes}LL) return;\n    \
                      const long long step = {inner}LL;\n    \
@@ -1774,9 +2088,10 @@ impl<'a> Generator<'a> {
                         None => parameters.clone(),
                         Some(_) => format!(", const {ty}* in"),
                     };
+                    let stage_ty = if last { out_ty } else { ty };
                     writeln!(
                         self.source,
-                        "extern \"C\" __global__ void k{slot}r{stage}({ty}* out{parameters}) {{\n    \
+                        "extern \"C\" __global__ void k{slot}r{stage}({stage_ty}* out{parameters}) {{\n    \
                          long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (t >= {threads}LL) return;\n    \
                          {ty} acc = {first};\n    \
@@ -1788,7 +2103,7 @@ impl<'a> Generator<'a> {
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}r{stage}"),
                         output,
-                        bytes: threads * bytes,
+                        bytes: threads * if last { bytes } else { part_bytes },
                         threads,
                         inputs: match input {
                             None => leaves.clone(),
@@ -1825,11 +2140,44 @@ impl<'a> Generator<'a> {
         let lead = &shape[..shape.len() - 2];
         let left_lead = &left_shape[..left_shape.len() - 2];
         let right_lead = &right_shape[..right_shape.len() - 2];
+        let stored = |side: usize| Self::stored(self.plan, &self.materialized, side);
+        let (left_stored, right_stored) = (stored(left), stored(right));
+        // The element a side's matrix `at` starts at, and for heads read
+        // in place the elements from one of its rows to the next: head
+        // `h` of stack `b` starts `h` matrices' columns into the rows of
+        // its stack, which hold every head.
+        let place = |stored: Option<Stored>, at: usize, each: usize| match stored {
+            Some(Stored {
+                slot, heads: true, ..
+            }) => {
+                let base = self.shape(slot);
+                let (heads, width) = (base[2], base[3]);
+                (
+                    (at / heads) * base[1] * heads * width + (at % heads) * width,
+                    Some(heads * width),
+                )
+            }
+            _ => (at * each, None),
+        };
+        let wide = (
+            place(left_stored, 0, 0).1,
+            place(right_stored, 0, 0).1,
+        );
         let pairs = (0..len(lead))
             .map(|product| {
                 (
-                    broadcast_offset(lead, left_lead, product) * rows * inner,
-                    broadcast_offset(lead, right_lead, product) * inner * columns,
+                    place(
+                        left_stored,
+                        broadcast_offset(lead, left_lead, product),
+                        rows * inner,
+                    )
+                    .0,
+                    place(
+                        right_stored,
+                        broadcast_offset(lead, right_lead, product),
+                        inner * columns,
+                    )
+                    .0,
                 )
             })
             .collect();
@@ -1844,24 +2192,33 @@ impl<'a> Generator<'a> {
                 .collect();
             (width, offsets)
         });
-        if spread.is_some() && !self.source.contains(ADDRESSES) {
+        if (spread.is_some() || wide.0.is_some() || wide.1.is_some())
+            && !self.source.contains(ADDRESSES)
+        {
             self.source.push_str(ADDRESSES);
         }
-        let stored = |side: usize| Self::transpose_of(self.plan, &self.materialized, side);
-        let swapped = (stored(left).is_some(), stored(right).is_some());
-        let (left, right) = (stored(left).unwrap_or(left), stored(right).unwrap_or(right));
+        let swapped = (
+            left_stored.is_some_and(|stored| stored.swapped),
+            right_stored.is_some_and(|stored| stored.swapped),
+        );
+        let (left, right) = (
+            left_stored.map_or(left, |stored| stored.slot),
+            right_stored.map_or(right, |stored| stored.slot),
+        );
         self.actions.push(Action::Matmul {
             left,
             right,
             output: slot,
-            bytes: len(shape) * element_bytes(dtype),
-            double: dtype == ArrayDType::Float64,
+            bytes: len(shape) * kind_bytes(dtype),
+            double: dtype == Kind::Float64,
+            half: dtype == Kind::Float16,
             rows,
             inner,
             columns,
             pairs,
             swapped,
             spread,
+            wide,
         });
     }
 
@@ -1912,17 +2269,17 @@ impl<'a> Generator<'a> {
 
 /// Integer arithmetic wraps. Signed overflow is undefined in C, so the
 /// operation runs on the unsigned type.
-fn wrapping(dtype: ArrayDType, left: &str, symbol: &str, right: &str) -> String {
+fn wrapping(dtype: Kind, left: &str, symbol: &str, right: &str) -> String {
     let (signed, unsigned) = match dtype {
-        ArrayDType::Int32 => ("int", "unsigned int"),
+        Kind::Int32 => ("int", "unsigned int"),
         _ => ("long long", "unsigned long long"),
     };
     format!("({signed})(({unsigned}){left} {symbol} ({unsigned}){right})")
 }
 
-fn binary(code: i64, dtype: ArrayDType, left: &str, right: &str) -> String {
+fn binary(code: i64, dtype: Kind, left: &str, right: &str) -> String {
     let float = is_float(dtype);
-    let suffix = if dtype == ArrayDType::Float64 {
+    let suffix = if dtype == Kind::Float64 {
         "d"
     } else {
         "f"
@@ -1942,23 +2299,23 @@ fn binary(code: i64, dtype: ArrayDType, left: &str, right: &str) -> String {
             1 if float => format!("aura_max_{suffix}({left}, {right})"),
             0 => format!("({left} < {right} ? {left} : {right})"),
             1 => format!("({left} > {right} ? {left} : {right})"),
-            _ if dtype == ArrayDType::Float64 => format!("pow({left}, {right})"),
+            _ if dtype == Kind::Float64 => format!("pow({left}, {right})"),
             _ => format!("powf({left}, {right})"),
         },
     }
 }
 
-fn unary(code: i64, dtype: ArrayDType, operand: &str) -> String {
+fn unary(code: i64, dtype: Kind, operand: &str) -> String {
     if code == NEGATE_OPERATION {
         return match dtype {
             // The CPU device computes zero minus the element.
-            ArrayDType::Float32 => format!("(0.0f - {operand})"),
-            ArrayDType::Float64 => format!("(0.0 - {operand})"),
+            Kind::Float16 | Kind::Float32 => format!("(0.0f - {operand})"),
+            Kind::Float64 => format!("(0.0 - {operand})"),
             _ => wrapping(dtype, "0", "-", operand),
         };
     }
     if code == SIGMOID_OPERATION {
-        return if dtype == ArrayDType::Float64 {
+        return if dtype == Kind::Float64 {
             format!("(1.0 / (1.0 + exp(-({operand}))))")
         } else {
             format!("(1.0f / (1.0f + expf(-({operand}))))")
@@ -1974,7 +2331,7 @@ fn unary(code: i64, dtype: ArrayDType, operand: &str) -> String {
         6 => "sin",
         _ => "cos",
     };
-    if dtype == ArrayDType::Float64 {
+    if dtype == Kind::Float64 {
         format!("{function}({operand})")
     } else {
         format!("{function}f({operand})")

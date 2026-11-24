@@ -46,7 +46,11 @@ fn number(like: &TensorValue, value: f64) -> Result<TensorValue> {
         ArrayDType::Float32 => ArrayStorage::Float32(vec![value as f32].into()),
         _ => ArrayStorage::Float64(vec![value].into()),
     };
-    match place(like.device(), ArrayValue::new(Box::new([1]), storage)?)? {
+    match place_as(
+        like.device(),
+        ArrayValue::new(Box::new([1]), storage)?,
+        like.is_half(),
+    )? {
         Value::Tensor(node) => Ok(node),
         _ => unreachable!("placing elements gives a tensor"),
     }
