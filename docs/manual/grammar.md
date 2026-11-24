@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.16. The grammar is
+This chapter defines the complete source grammar of Aura 0.17. The grammar is
 normative once the lexer has formed tokens.
 [Static Semantics](/manual/static-semantics) defines the static restrictions
 the grammar does not express, such as types, visibility, ownership,
@@ -154,7 +154,7 @@ as follows:
 
 - Two opening braces insert one literal opening brace.
 - Two closing braces insert one literal closing brace.
-- In Aura 0.16, a lone closing brace outside an interpolation is also literal.
+- In Aura 0.17, a lone closing brace outside an interpolation is also literal.
 
 Interpolations may contain nested braces and ordinary single- or
 double-quoted strings. Braces inside those strings do not change the
@@ -1275,10 +1275,10 @@ instead of risking host stack exhaustion:
 | One comprehension | A 128th combined `for` clause or `if` filter is rejected |
 | F-string interpolation brace nesting | 128 |
 
-These are observable implementation limits of Aura 0.16. Inputs that exceed
+These are observable implementation limits of Aura 0.17. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.16
+## Syntax Not In Aura 0.17
 
 The grammar intentionally excludes:
 

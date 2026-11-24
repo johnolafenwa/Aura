@@ -489,7 +489,7 @@ $ aura run src/main.au
 ```
 
 Spans cover `list[T]` only. There is no span of a `str` or of an `Array` in
-Aura 0.16 (an `Array` slice already shares memory with its array, as the
+Aura 0.17 (an `Array` slice already shares memory with its array, as the
 last section showed), and a method cannot yet return a span of `self`. The Manual's pages on
 [ownership](/manual/ownership-and-borrowing#local-views-and-place-identity) and
 [collections](/manual/collections#span-t) have the complete rules.

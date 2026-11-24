@@ -153,7 +153,7 @@ $ aura run src/main.au
 ```
 
 Keeping the two kinds apart lets a reader pull out the timeline of the
-process with one filter on `kind`. That is all `trace` is in Aura 0.16: a
+process with one filter on `kind`. That is all `trace` is in Aura 0.17: a
 single event. There are no spans with a start and an end, and no trace ids
 that follow a request between services. To time a step, read
 `time.monotonic()` before and after and put the elapsed milliseconds in a
@@ -228,7 +228,7 @@ past the range of `int64` is a trap, like any integer overflow in Aura.
 
 What `metrics` does not have is a way out of the process. There is no
 exporter, no HTTP endpoint that a monitoring system could scrape, and no
-labels on a counter. In Aura 0.16 you publish the numbers yourself. The
+labels on a counter. In Aura 0.17 you publish the numbers yourself. The
 simplest ways are the two we have already seen: print a summary when the
 program ends, as Listing 20-14 does, or write the counters as fields of a
 log record every minute and let the log pipeline do the rest. A service

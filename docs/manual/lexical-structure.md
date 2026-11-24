@@ -116,7 +116,7 @@ physical line.
 print("ready") # A trailing comment.
 ```
 
-Aura 0.16 has no block comments.
+Aura 0.17 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -211,7 +211,7 @@ interpolation cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.16 recognizes these punctuation and operator tokens:
+Aura 0.17 recognizes these punctuation and operator tokens:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -440,7 +440,7 @@ To write a literal brace:
 
 - Two consecutive opening braces produce one literal opening brace.
 - Two consecutive closing braces produce one literal closing brace.
-- Aura 0.16 also treats a lone closing brace outside an interpolation as
+- Aura 0.17 also treats a lone closing brace outside an interpolation as
   literal text.
 
 ```aura fragment

@@ -77,12 +77,12 @@ sudo apt-get remove aura
 ### Install One Package File
 
 Each release also carries its Debian packages as files, named like
-`aura-v0.16.0-preview-amd64.deb` and `aura-v0.16.0-preview-arm64.deb`.
+`aura-v0.17.0-preview-amd64.deb` and `aura-v0.17.0-preview-arm64.deb`.
 To install one without adding the repository, download it from the
 [releases page](https://github.com/johnolafenwa/Aura/releases) and run:
 
 ```bash
-sudo apt-get install ./aura-v0.16.0-preview-amd64.deb
+sudo apt-get install ./aura-v0.17.0-preview-amd64.deb
 ```
 
 ## Chocolatey

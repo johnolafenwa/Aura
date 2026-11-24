@@ -103,7 +103,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.16 lays the foundation: static typing, deterministic ownership, native
+Aura 0.17 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. It also has the first low-level pieces: freestanding compilation
 with no runtime, memory access at an address, a C foreign function interface,

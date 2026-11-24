@@ -128,7 +128,7 @@ failures. See [Recovering From Traps](/manual/failure-recovery).
 
 ## Status
 
-Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.16 includes the bounded two-operand diagnostic.
+Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.17 includes the bounded two-operand diagnostic.
 
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.

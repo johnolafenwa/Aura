@@ -117,7 +117,7 @@ Comparisons between `DateTime` values are methods: `same_instant`,
 There is no `<` or `==` on `DateTime`, so you always say which comparison
 you mean.
 
-Offsets are all Aura 0.16 knows about zones. There is no time zone database
+Offsets are all Aura 0.17 knows about zones. There is no time zone database
 and no `Europe/Paris`. `to_local()` and `now_local()` ask the operating
 system for the machine's own offset at the instant in question, daylight
 saving included, and any other zone is an offset you supply. A program that
