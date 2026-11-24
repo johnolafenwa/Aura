@@ -18024,3 +18024,30 @@ fn native_run_selects_constants_before_consulting_the_program_cache() {
         assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     }
 }
+
+#[test]
+fn verify_proves_only_obligations_in_selected_suites() {
+    if !smt_solver_available() {
+        return;
+    }
+    let temp = TempDir::new("aura-verify-conditional");
+    let path = temp.path().join("api.au");
+    fs::write(
+        &path,
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/conditional_tooling.au"),
+    )
+    .unwrap();
+    let output = Command::new(aura_bin())
+        .args(["verify", "--no-cache", "--format", "json"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["proved"], 1);
+    assert_eq!(report["obligations"][0]["function"], "native_name");
+}

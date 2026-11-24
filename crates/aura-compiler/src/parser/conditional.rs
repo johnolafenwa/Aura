@@ -73,6 +73,15 @@ impl Parser {
                     | TokenKind::KwImpl
                     | TokenKind::KwPublic => return Some(true),
                     TokenKind::KwDef if depth == 1 && !seen_statement => return Some(true),
+                    TokenKind::Identifier(name)
+                        if name == "const"
+                            && matches!(
+                                self.peek_kind_at(cursor),
+                                Some(TokenKind::Identifier(_))
+                            ) =>
+                    {
+                        return Some(true)
+                    }
                     _ => {}
                 }
             }
