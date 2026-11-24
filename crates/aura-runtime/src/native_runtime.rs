@@ -134,6 +134,8 @@ pub mod foreign_calls;
 mod frame_stack;
 #[path = "native_owned_values.rs"]
 mod owned_values;
+#[path = "native_str_views.rs"]
+pub mod str_views;
 // Generated code reaches typed layouts through plain layouts (step 2c of
 // the typed-layout work); the rest of the converters only tests use until
 // values with handles live in layouts.
