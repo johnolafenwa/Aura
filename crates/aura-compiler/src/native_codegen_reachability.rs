@@ -123,6 +123,9 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
                 collect_strings(item, out);
             }
         }
+        // A resolved host operation names a runtime entry directly. Its
+        // callable-value wrapper is reachable only through a function operand.
+        serde_json::Value::Object(fields) if fields.len() == 1 && fields.contains_key("Host") => {}
         serde_json::Value::Object(fields) => {
             for (key, item) in fields {
                 out.push(key.clone());

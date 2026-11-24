@@ -1225,6 +1225,7 @@ impl BuiltinClassConstructor {
 pub enum BuiltinMember {
     FloatSqrt,
     IntegerToFloat,
+    IntegerBits(aura_core::integer_bits::BitMethod),
     IntegerWrappingAdd,
     IntegerWrappingSub,
     IntegerWrappingMul,
@@ -1517,6 +1518,7 @@ impl BuiltinMember {
 
     pub fn resolve(receiver_base: &str, name: &str) -> Option<Self> {
         match (receiver_base, name) {
+            (name, method) if is_builtin_integer_name(name) && aura_core::integer_bits::BitMethod::of(method).is_some() => aura_core::integer_bits::BitMethod::of(method).map(Self::IntegerBits),
             ("float64", "sqrt") => Some(Self::FloatSqrt),
             ("int8", "to_float")
             | ("int16", "to_float")
@@ -1876,6 +1878,7 @@ impl BuiltinMember {
 
     pub const fn name(self) -> &'static str {
         match self {
+            Self::IntegerBits(method) => method.name(),
             Self::FloatSqrt => "sqrt",
             Self::IntegerToFloat => "to_float",
             Self::IntegerWrappingAdd | Self::ArrayWrappingAdd => "wrapping_add",
@@ -2131,6 +2134,7 @@ impl BuiltinMember {
 
     pub const fn detail(self) -> &'static str {
         match self {
+            Self::IntegerBits(method) => method.signature(),
             Self::FloatSqrt => "sqrt() -> float64",
             Self::IntegerToFloat => "to_float() -> float64",
             Self::IntegerWrappingAdd => "wrapping_add(rhs: Self) -> Self",
@@ -2431,6 +2435,7 @@ impl BuiltinMember {
 
     pub const fn docs(self) -> &'static str {
         match self {
+            Self::IntegerBits(_) => "Operates on the fixed-width bit pattern of the receiver.",
             Self::FloatSqrt => "Returns the square root of a `float64` value.",
             Self::IntegerToFloat => {
                 "Converts an integer to the nearest `float64` value; large values may round."
@@ -2919,6 +2924,13 @@ impl BuiltinMember {
 
     const fn call_shape(self) -> BuiltinCallShape {
         match self {
+            Self::IntegerBits(method) => {
+                if matches!(method, aura_core::integer_bits::BitMethod::RotateLeft | aura_core::integer_bits::BitMethod::RotateRight) {
+                    BuiltinCallShape::fixed(&SHIFT_COUNT_PARAMS, CallConvention::PositionalOrNamed)
+                } else {
+                    BuiltinCallShape::fixed(&NO_BUILTIN_PARAMS, CallConvention::PositionalOnly)
+                }
+            }
             Self::FloatSqrt
             | Self::IntegerToFloat
             | Self::DurationToMilliseconds

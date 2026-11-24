@@ -250,6 +250,19 @@ fn function_info(
     params: Vec<Param>,
     return_type: TypeRef,
 ) -> FunctionInfo {
+    let mut params = params;
+    if module_name == "mem" {
+        if let Some(op) = aura_core::atomic_order::AtomicOperation::of(name) {
+            let optional = |name: &str, default: &str| value_param_with_default(
+                name, type_ref("str", Vec::new()), Expr {
+                    kind: ExprKind::String(default.to_owned()), span: builtin_span()
+                });
+            params.push(optional("order", "seq_cst"));
+            if op == aura_core::atomic_order::AtomicOperation::CompareExchange {
+                params.push(optional("failure_order", ""));
+            }
+        }
+    }
     let lowered_params = params
         .iter()
         .map(|param| lower_type_ref(&param.ty))
@@ -2576,7 +2589,7 @@ fn mem_namespace() -> ModuleNamespace {
             ));
         }
     }
-    for bits in [32, 64] {
+    for bits in [8, 16, 32, 64] {
         let value = || value_param("value", unsigned(bits));
         functions.push(function_info(
             "mem",

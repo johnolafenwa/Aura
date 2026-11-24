@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 27);
+    assert_eq!(namespace.all_functions.len(), 37);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -687,8 +687,8 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
             "function value",
         ),
         (
-            "    wide: int128 = 5\n    return count\n",
-            "holds `wide` of type `int128`",
+            "    wide: Duration = Duration.ms(5)\n    return count\n",
+            "holds `wide` of type `Duration`",
         ),
     ] {
         assert_problem(&format!("{prelude}{body}"), expected);
@@ -868,4 +868,26 @@ fn an_emitter_fault_is_not_a_subset_report() {
         refusal.message,
         "`f` does x, which a freestanding build cannot compile"
     );
+}
+
+#[test]
+fn systems_integer_operations_emit_self_contained_objects() {
+    for source in [
+        include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|s| s == "aura_trap"), "{undefined:?}");
+        }
+    }
+}
+
+#[test]
+fn load_rejects_release_order_during_checking() {
+    let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
+    let module = crate::parse_source(source).expect("valid syntax");
+    let errors = crate::check_module_with_builtin_imports(module).err().expect("invalid order");
+    assert_eq!(errors.code, "AU2087", "{errors:?}");
 }

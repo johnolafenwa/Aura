@@ -6794,6 +6794,14 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(target).is_some() {
+            if let Rvalue::Use(Operand::Int(value)) = rvalue {
+                return Ok(self.wide_literal(*value, target));
+            }
+            if let Rvalue::Unary { op: UnaryOp::Neg, value: Operand::Int(magnitude), .. } = rvalue {
+                return Ok(self.wide_literal(magnitude.wrapping_neg(), target));
+            }
+        }
         if !self.node_payloads.is_empty() {
             if let Some(made) = self.take_node_payload(rvalue)? {
                 return Ok(made);
@@ -7461,6 +7469,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&value.ty).is_some() {
+            return self.wide_unary(op, value, span);
+        }
         let integer = value.ty.scalar_kind().filter(|kind| kind.is_integer());
         if matches!(value.ty, DirectType::Opaque(_)) || (op == UnaryOp::BitNot && integer.is_none())
         {
@@ -7711,6 +7722,9 @@ impl<'a> FunctionCompiler<'a> {
         target_ty: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&value.ty).is_some() || wide_numbers::signed(target_ty).is_some() {
+            return self.wide_cast(value, target_ty, span);
+        }
         if matches!(value.ty, DirectType::Opaque(_)) || matches!(target_ty, DirectType::Opaque(_)) {
             let boxed = self.ensure_opaque(value)?;
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
@@ -8293,6 +8307,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&left.ty).is_some() || wide_numbers::signed(&right.ty).is_some() {
+            return self.wide_binary(op, left, right, span);
+        }
         if let (DirectType::Union(left_union), DirectType::Union(right_union)) =
             (&left.ty, &right.ty)
         {
@@ -11787,6 +11804,9 @@ impl<'a> FunctionCompiler<'a> {
         operand: &Operand,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if let (Some(_), Operand::Int(value)) = (wide_numbers::signed(target), operand) {
+            return Ok(self.wide_literal(*value, target));
+        }
         let hint = target.scalar_kind().filter(|kind| kind.is_integer());
         self.load_operand_with_integer_hint(operand, hint)
     }
@@ -12786,6 +12806,9 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if value.ty != *target && wide_numbers::signed(target).is_some() && value.ty.scalar_kind().is_some() {
+            return self.wide_cast(value, target, span);
+        }
         if &value.ty == target {
             let shaped =
                 matches!(value.values.as_slice(), [word] if self.shaped_boxes.contains(word));
@@ -17194,6 +17217,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         match op {
+            ScalarOp::Bits(method) => self.compile_bit_method(method, object, args),
             ScalarOp::Sqrt => Ok(ValueRef {
                 values: vec![self.builder.fsqrt(object.values[0])],
                 ty: object.ty,
@@ -22422,3 +22446,9 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
                 && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }
+
+#[path = "native_integer_bits.rs"]
+mod integer_bits;
+
+#[path = "native_freestanding_i128.rs"]
+pub(crate) mod wide_numbers;

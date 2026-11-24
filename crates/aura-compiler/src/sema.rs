@@ -1,6 +1,7 @@
 mod capabilities;
 use capabilities::resolve_param_passings;
 pub(crate) use capabilities::{assertion_dispatch_is_non_consuming, resolve_param_passing};
+mod atomic_order;
 mod callables;
 pub use aura_core::types::{
     CallableType, ClosureCallKind, ClosureCapture, ClosureCaptureMode, ClosureId, ClosureInfo,
@@ -13617,6 +13618,7 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        atomic_order::check(function, args, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
                                 ClosureArgumentPolicy::RepeatableParameter("worker")
@@ -17370,6 +17372,17 @@ impl<'a> FunctionChecker<'a> {
                     );
                 }
                 match (&receiver_ty, field.as_str()) {
+                    (Type::Named(name, _), method) if matches!(BuiltinMember::resolve(name, method), Some(BuiltinMember::IntegerBits(_))) => {
+                        let method = aura_core::integer_bits::BitMethod::of(method).expect("resolved integer bit method");
+                        let ordered = BuiltinMember::IntegerBits(method).bind_args(args, span)?;
+                        if let Some(Some(count)) = ordered.first() {
+                            let ty = Type::named("int64");
+                            if self.type_of_expr_hint(&count.value, locals, Some(&ty))? != ty {
+                                return Err(Diagnostic::coded_at("AU2088", count.span, "rotation count must be int64"));
+                            }
+                        }
+                        Ok(if method.counts() { Type::named("int64") } else { receiver_ty })
+                    }
                     (Type::Named(name, type_args), method_name)
                         if type_args.is_empty()
                             && is_integer_type(&receiver_ty)

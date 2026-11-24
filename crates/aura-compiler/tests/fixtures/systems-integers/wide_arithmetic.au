@@ -1,0 +1,9 @@
+def mul(a: uint128, b: uint128) -> uint128:
+    return a * b
+
+export "C" def high_product(a: uint64, b: uint64) -> uint64:
+    return (mul(a as uint128, b as uint128) >> 64) as uint64
+
+export "C" def divide(a: int64, b: int64) -> int64:
+    wide = (a as int128) << 64
+    return ((wide // (b as int128)) >> 64) as int64

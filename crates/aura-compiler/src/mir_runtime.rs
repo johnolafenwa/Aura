@@ -6240,6 +6240,17 @@ impl MirRuntime {
                 }
                 Ok(Value::String(value.to_string().into()))
             }
+            Value::Int(value) if aura_core::integer_bits::BitMethod::of(field).is_some() => {
+                let method = aura_core::integer_bits::BitMethod::of(field).expect("integer bit method");
+                let kind = receiver_static_ty.as_ref().and_then(|ty| IntegerKind::from_runtime_type_name(&ty.to_string()))
+                    .or(value.runtime_kind()).unwrap_or(IntegerKind::Int64);
+                let count = match evaluate_named_args(args, env)?.as_slice() {
+                    [] => 0,
+                    [count] => expect_i64_value(&count.value, "rotation count")?,
+                    _ => return Err(Diagnostic::coded("AU4034", "invalid bit method arguments")),
+                };
+                method.apply(*value, kind, count).map(Value::Int).map_err(|msg| Diagnostic::coded("AU4034", msg))
+            }
             Value::Int(value) if field == "to_float" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_float` does not take arguments"));
