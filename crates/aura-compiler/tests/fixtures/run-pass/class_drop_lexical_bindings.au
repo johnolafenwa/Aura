@@ -1,0 +1,20 @@
+class Ticket:
+    id: int64
+    def __drop__(mut self):
+        print(self.id)
+
+def work() -> int64:
+    ensures result == 7
+    if true:
+        name = 1
+        print(name)
+    if true:
+        name = Ticket(2)
+        print("inside")
+    print("after")
+    first = Ticket(3)
+    second = Ticket(4)
+    return 7
+
+def main():
+    print(work())

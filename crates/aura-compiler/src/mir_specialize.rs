@@ -578,7 +578,8 @@ impl Substitution<'_> {
                 | Instruction::ReborrowElement { selector, .. } => self.operand(selector),
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
-                | Instruction::EndOwner { .. } | Instruction::ArmDrop { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }

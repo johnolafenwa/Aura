@@ -992,7 +992,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         let mut methods = BTreeMap::new();
         for method in &trait_decl.methods {
             if method.name == super::DROP_HOOK {
-                return Err(Diagnostic::coded_at("AU2065", method.span, "drop hook must be an inherent class method"));
+                return Err(Diagnostic::coded_at(
+                    "AU2065",
+                    method.span,
+                    "drop hook must be an inherent class method",
+                ));
             }
             if method.name == INITIALIZER_NAME {
                 return Err(Diagnostic::coded_at(
