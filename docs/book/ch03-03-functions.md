@@ -194,14 +194,111 @@ $ aura run src/main.au
 low 15.25, high 22.0
 ```
 
-(`readings[0]` traps if the list is empty. In a real program you would decide
-what an empty list should mean, which is what
-[Chapter 9](/book/ch09-00-error-handling) is about.)
+## Saying what a function needs
+
+`min_max` needs something from its caller that the signature doesn't show.
+`readings[0]` traps if the list is empty, and we only know that because we
+read the body. Let's ask `aura verify`, the command from the last section
+that proves a file's checks can't fail or finds an input that breaks one:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:2:24
+  |
+2 |     mut low = readings[0]
+  |                        ^
+  = note: in `min_max` (index in range check)
+  = note: counterexample: len(readings) = 0
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:3:25
+  |
+3 |     mut high = readings[0]
+  |                         ^
+  = note: in `min_max` (index in range check)
+  = note: counterexample: len(readings) = 0
+verified src/main.au: 0 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier checks `min_max` for every list a caller could pass, and it
+names the one that breaks both reads: a list of length 0. Our `main` never
+passes one, but nothing stops the next caller. A function that needs
+something from its callers can say so, in a `requires` line at the top of its
+body:
+
+*Filename: src/main.au*
+
+```aura
+def min_max(readings: list[float64]) -> (float64, float64):
+    requires len(readings) > 0
+    mut low = readings[0]
+    mut high = readings[0]
+    for reading in readings:
+        low = min(low, reading)
+        high = max(high, reading)
+    return (low, high)
+
+def main():
+    low, high = min_max([18.5, 22.0, 15.25, 19.0])
+    print(f"low {low}, high {high}")
+```
+
+<span class="caption">Listing 3-4: A `requires` clause states what the caller must provide</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 3 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+A `requires` clause is a `bool` expression over the parameters, and it moves
+the obligation to the caller. Inside `min_max`, the verifier now assumes the
+list is not empty, so both index reads are proved. At each call it proves the
+clause instead, which is the third check: `main` passes a list of four
+readings. Pass an empty list and `aura verify` reports "cannot prove
+`requires` of `min_max` holds" at that call, without running anything. The
+clause is also checked when the program runs, so a caller that slips through
+stops at the call with `AU4009` and the text of the clause.
+
+The other half of a contract is `ensures`, a promise about the value the
+function returns, which the clause calls `result`. Our sensor reports tenths
+of a degree, from -50.0 to 150.0, so we clamp what it sends before converting:
+
+```aura
+def clamp_tenths(tenths: int64) -> int64:
+    ensures -500 <= result and result <= 1500
+    return min(max(tenths, -500), 1500)
+
+def to_fahrenheit_tenths(tenths: int64) -> int64:
+    return clamp_tenths(tenths) * 9 // 5 + 320
+
+def main():
+    print(to_fahrenheit_tenths(215))
+    print(to_fahrenheit_tenths(99_999))
+```
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 5 of 5 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier proves that `clamp_tenths` keeps its promise on every path.
+Then, in `to_fahrenheit_tenths`, it uses that promise: the multiplication and
+the addition can't overflow for any `tenths` at all, because the clamped
+value is at most 1500. It doesn't look inside `clamp_tenths` to learn that.
+A caller knows what the `ensures` clause says and nothing more, which is the
+same idea as the typed signature, taken one step further: the types say what
+kind of value goes in and comes out, and the contract says which values.
+
+Contracts are a normal part of writing an Aura function, and we'll use them
+through the rest of the book wherever a function has a real requirement or
+promise. [Contracts and proofs](/book/ch11-04-contracts-and-proofs) walks
+through a longer example and the solver setup, and the
+[Manual](/manual/contracts) has every clause.
 
 ## Calling with names and defaults
 
 Arguments can be passed by position, by name, or a mix of the two, and
-parameters can have defaults, all as in Python. Listing 3-4 extends the
+parameters can have defaults, all as in Python. Listing 3-5 extends the
 converter with a unit and a precision option.
 
 *Filename: src/main.au*
@@ -220,7 +317,7 @@ def main():
     print(convert(21.5, precise=true))
 ```
 
-<span class="caption">Listing 3-4: Default values and keyword-only parameters</span>
+<span class="caption">Listing 3-5: Default values and keyword-only parameters</span>
 
 ```console
 $ aura run src/main.au
@@ -340,6 +437,13 @@ check from the last section stops the program. The call chain in the note is
 more interesting now: it lists the functions that were running, innermost
 first, so you can see the multiplication failed inside `factorial`, which was
 called from `main`.
+
+We found that limit by running the program with the right argument.
+`aura verify` reports the same multiplication without a run, with the
+counterexample `n = 9223372036854775807`. A recursive function can carry
+`requires` and `ensures` like any other, plus a `decreases` clause that
+lets the verifier prove the recursion ends. The
+[Manual](/manual/contracts#recursive-functions) shows how.
 
 ## Lambdas
 

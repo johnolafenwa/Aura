@@ -59,7 +59,7 @@ def main():
     print(latte.label())
 ```
 
-<span class="caption">Listing 10-5: A `Priced` trait with two required methods and one default method</span>
+<span class="caption">Listing 10-6: A `Priced` trait with two required methods and one default method</span>
 
 ```console
 $ aura run src/main.au
@@ -194,7 +194,7 @@ def main():
     print_receipt(order)
 ```
 
-<span class="caption">Listing 10-6: Generic functions bounded by `Priced`</span>
+<span class="caption">Listing 10-7: Generic functions bounded by `Priced`</span>
 
 ```console
 $ aura run src/main.au
@@ -347,6 +347,155 @@ well. Implementing `Priced` doesn't implement `Named` for you, though. If we
 delete the `impl Named for Book` block, the compiler reports `impl of `Priced`
 for `Book` requires supertrait `Named``.
 
+## Contracts on trait methods
+
+A signature says what a method takes and returns. It can't say that a price
+is never negative, and `total_cents` quietly depends on that: a negative
+price would take money off the receipt, and a huge one would overflow the
+total. A trait method can state such a promise as a *contract*, and
+`aura verify`, the prover that [section
+11.4](/book/ch11-04-contracts-and-proofs) introduces in full, holds every
+implementation to it. Let's give `price_cents` an `ensures` clause, a promise
+about its `result`, and see how `Book` does:
+
+*Filename: src/main.au*
+
+```aura
+trait Priced:
+    def price_cents(self) -> int64:
+        ensures 0 <= result and result <= 1_000_000
+
+class Book:
+    title: str
+    pages: int64
+
+impl Priced for Book:
+    def price_cents(self) -> int64:
+        return 500 + self.pages * 2
+
+def main():
+    novel = Book(title="Emma", pages=400)
+    print(novel.price_cents())
+```
+
+A trait method with a contract ends its signature with a colon and lists its
+clauses underneath. It's still a required method, because clauses aren't a
+body. The program runs and prints `1300`. The verifier is harder to
+satisfy:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `ensures` clause `0 <= result and result <= 1_000_000`
+ --> src/main.au:3:17
+  |
+3 |         ensures 0 <= result and result <= 1_000_000
+  |                 ^
+  = note: in `Priced for Book.price_cents` (ensures check)
+  = note: counterexample: self.title = "", self.pages = 4611686018427387904
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:11:16
+   |
+11 |         return 500 + self.pages * 2
+   |                ^
+  = note: in `Priced for Book.price_cents` (overflow check)
+  = note: counterexample: self.title = "", self.pages = 4611686018427387904
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:11:27
+   |
+11 |         return 500 + self.pages * 2
+   |                           ^
+  = note: in `Priced for Book.price_cents` (overflow check)
+  = note: counterexample: self.title = "", self.pages = 4611686018427387904
+verified src/main.au: 0 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Our novel has 400 pages, but the contract is about every `Book` that can
+exist, and nothing stops one from having four quintillion pages, or a
+negative number of them. For such a book the multiplication overflows, the
+addition overflows, and the price lands outside the promised range. Each
+error comes with a *counterexample*, a value of `self` that breaks the check.
+The first note also shows where the clause was checked: in `Priced for
+Book.price_cents`. The trait wrote the promise once, and each `impl` inherits
+it and has to prove it.
+
+The fix is to make the method keep the promise for any page count, by
+clamping the count before using it. With that done for both types, the till
+can rely on the contract:
+
+*Filename: src/main.au*
+
+```aura
+trait Priced:
+    def price_cents(self) -> int64:
+        ensures 0 <= result and result <= 1_000_000
+
+class Book:
+    title: str
+    pages: int64
+
+class Coffee:
+    size: str
+    shots: int64
+
+impl Priced for Book:
+    def price_cents(self) -> int64:
+        return 500 + min(max(self.pages, 0), 5_000) * 2
+
+impl Priced for Coffee:
+    def price_cents(self) -> int64:
+        return 300 + min(max(self.shots, 0), 10) * 75
+
+def total_cents[T: Priced](items: list[T]) -> int64:
+    requires len(items) <= 10_000
+    ensures result >= 0
+    mut total = 0
+    for position, item in enumerate(items):
+        invariant 0 <= total
+        invariant total <= position * 1_000_000
+        total += item.price_cents()
+    return total
+
+def main():
+    books = [Book(title="Dune", pages=600), Book(title="Emma", pages=400)]
+    print(total_cents(books))
+    coffees = [Coffee(size="large", shots=2)]
+    print(total_cents(coffees))
+```
+
+<span class="caption">Listing 10-8: A trait contract that both implementations keep and a generic function relies on</span>
+
+```console
+$ aura run src/main.au
+3000
+450
+$ aura verify src/main.au
+verified src/main.au: 13 of 13 checks proved in 6 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Look at `total_cents`. It's generic, so when the verifier reads
+`item.price_cents()` it has no idea which implementation will run, and it
+doesn't need one. The call relies on the trait's contract: whatever `T` is,
+the price is between 0 and a million cents. With that, and a `requires`
+clause that caps the receipt at ten thousand items, the two `invariant` lines
+state what is true at the start of every pass through the loop: the total
+isn't negative, and it's at most a million cents for each item already
+added. That bounds the total at ten billion cents, far inside an `int64`, so
+the addition is proved never to overflow.
+
+This is the same bargain a trait bound makes with the type checker, carried
+over to values. A bound lets generic code call a method without seeing the
+implementations. A contract lets generic code reason about what the method
+returns without seeing them either, and a type added next year has to prove
+the same promise before a receipt can include it. An implementation may add
+`ensures` clauses of its own, and callers that know the exact type can use
+them. The [contracts manual page](/manual/contracts#trait-methods) has the
+rules for refining a trait's contract.
+
+There is one gap today. A call on a union such as `Book | Coffee` doesn't
+pick up the trait's contract in the verifier, so passing the `order` list
+from Listing 10-7 to this `total_cents` leaves the loop's checks unproved.
+Calls through a type parameter and through `dyn Priced` do rely on it.
+
 ## Traits the language knows about
 
 A few traits have names the compiler recognizes, and implementing them changes
@@ -442,7 +591,7 @@ def main():
     print(total)
 ```
 
-<span class="caption">Listing 10-7: Implementing `Add` gives `Money` a `+` operator</span>
+<span class="caption">Listing 10-9: Implementing `Add` gives `Money` a `+` operator</span>
 
 ```console
 $ aura run src/main.au
@@ -521,7 +670,7 @@ def main():
     announce(empty)
 ```
 
-<span class="caption">Listing 10-8: A generic `largest` bounded by `Ord`, used with integers, strings, and `Money`</span>
+<span class="caption">Listing 10-10: A generic `largest` bounded by `Ord`, used with integers, strings, and `Money`</span>
 
 ```console
 $ aura run src/main.au
@@ -579,7 +728,7 @@ A few features you may know from other languages don't exist in Aura today:
 associated constants and `where` clauses. A trait call is resolved at compile
 time to one implementation, except on a union or a `dyn Trait` value, where it
 runs the implementation for the type the value holds. When you need a list of
-mixed types, use a union for a fixed set, as Listing 10-6 did, or
+mixed types, use a union for a fixed set, as Listing 10-7 did, or
 `list[dyn Trait]` for an open one. The
 [Manual](/manual/generics-and-traits#trait-objects) has the complete rules for
 trait objects, implementations, overlap, and dispatch.

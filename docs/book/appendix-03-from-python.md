@@ -224,6 +224,62 @@ we can use `control.recover(function, arguments...)`. It runs the function
 in the current task and returns either its value in `Ok` or its diagnostic
 in `Err`. [Chapter 9](/book/ch09-01-traps) builds a working example.
 
+## Contracts and proofs
+
+Everything so far has a Python relative, even if a distant one. This does
+not. In Python you defend a function with `assert` statements and tests: the
+assert fires if a run reaches it with a bad value, and the tests are the
+runs you thought to write. Type checkers such as mypy add a proof of sorts,
+but only about types. Nothing in the Python toolchain will tell you that
+`total // len(values)` divides by zero for an input you never tried.
+
+Aura has `assert` and tests too, and Chapter 11 covers them. It also lets a
+function state its terms as part of the function:
+
+```aura
+def average(values: list[int64]) -> int64:
+    requires 0 < len(values) and len(values) <= 10_000
+    requires forall(v in values, 0 <= v and v <= 100)
+    ensures 0 <= result and result <= 100
+    mut total: int64 = 0
+    for i in range(len(values)):
+        invariant 0 <= total and total <= i * 100
+        total += values[i]
+    return total // len(values)
+
+
+def main():
+    print(average([70, 85, 90]))
+```
+
+`requires` is what the caller must supply, `ensures` is what the function
+promises about `result`, and `invariant` is what a loop keeps true. Under
+`aura run` these behave like asserts with better manners: a broken one
+stops the program with `AU4009` and names the clause. The part with no
+Python counterpart is the command that reads them without running anything:
+
+```console
+$ aura verify average.au
+verified average.au: 10 of 10 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Ten checks proved means that for every list the `requires` clauses allow,
+and not only for `[70, 85, 90]`, the index is in range, the sum does not
+overflow, the divisor is not zero, the invariant holds on each pass, and
+the result is from 0 to 100. Remove the `0 < len(values)` and the verifier
+answers with the input that breaks the division, `len(values) = 0`. A test
+suite samples the inputs. A proof covers them.
+
+Two habits from Python need adjusting. Integers have a size here, so every
+`+`, `-`, and `*` is something the verifier must show stays in range, and
+contracts usually carry bounds, such as the `10_000` above, that Python
+code never needs. And the verifier reads your code, not the world: what
+comes back from a file, a socket, or most library calls is unknown to it,
+so the pattern is to check input once where it arrives and state what you
+checked in the `requires` of the code behind it.
+[Section 11.4](/book/ch11-04-contracts-and-proofs) is the place to start,
+and Chapter 19 verifies a complete program.
+
 ## Classes, without inheritance
 
 A class is a set of fields and methods. Without an `__init__`, you construct

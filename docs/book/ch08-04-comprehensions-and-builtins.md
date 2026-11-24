@@ -22,7 +22,7 @@ def main():
     print(bands)
 ```
 
-<span class="caption">Listing 8-15: A list comprehension, a filtered one, and a set comprehension</span>
+<span class="caption">Listing 8-18: A list comprehension, a filtered one, and a set comprehension</span>
 
 ```console
 $ aura run src/main.au
@@ -183,7 +183,7 @@ def main():
     print(f"average {average:.1f}")
 ```
 
-<span class="caption">Listing 8-16: `sum`, `min`, `max`, `any`, and `all`</span>
+<span class="caption">Listing 8-19: `sum`, `min`, `max`, `any`, and `all`</span>
 
 ```console
 $ aura run src/main.au
@@ -240,6 +240,13 @@ One more note on `sum`: it uses the same checked `+` as the rest of the
 language, so adding up `int64` values that overflow stops with `AU4002`
 instead of wrapping around to a negative number.
 
+These one-liners have a cost if you use `aura verify`. The verifier doesn't
+model what a comprehension, `sum`, `min`, `max`, or `sorted` returns today, so
+a check that depends on one of those results is reported as unproved. When
+you want a proof about a total or a maximum, write the loop with an
+`invariant`, as `highest` did in [the lists
+section](/book/ch08-01-lists#proving-list-code).
+
 ## Building new lists
 
 Another group of builtins and operators make a new list from existing ones:
@@ -260,7 +267,7 @@ def main():
     print(scores)
 ```
 
-<span class="caption">Listing 8-17: Making sorted, reversed, joined, and repeated lists</span>
+<span class="caption">Listing 8-20: Making sorted, reversed, joined, and repeated lists</span>
 
 ```console
 $ aura run src/main.au
@@ -341,7 +348,7 @@ def main():
     print(f"everyone has a pass: {all([mark >= 70 for mark in best_marks])}")
 ```
 
-<span class="caption">Listing 8-18: Ranking, filtering, and summarizing the gradebook</span>
+<span class="caption">Listing 8-21: Ranking, filtering, and summarizing the gradebook</span>
 
 ```console
 $ aura run src/main.au

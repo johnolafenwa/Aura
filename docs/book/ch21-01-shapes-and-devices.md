@@ -200,6 +200,13 @@ operation. The note under the message is the chain of calls that led there,
 innermost first; the first entry is inside the `tensor` module's own source,
 and the last is our `main`.
 
+Earlier chapters would reach for `aura verify` at this point, to prove that
+the mistake cannot happen. It cannot help us here yet: the verifier does not
+model tensors, so it checks no shapes, and a shape mistake is found by
+running the program. The plain integer code around a model, such as the
+arithmetic that sizes a batch or indexes a vocabulary list, is proved as it
+is anywhere else.
+
 ## Devices
 
 Every tensor so far has gone to `Device.cpu()`. A device is where a tensor's

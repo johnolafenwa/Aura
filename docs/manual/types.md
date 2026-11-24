@@ -555,6 +555,34 @@ Runtime codes:
 | `AU4004` | A zero divisor. |
 | `AU4005` | A trapping resource or I/O failure. |
 
+## Verification
+
+Each integer type has a range, and an operation whose result leaves it traps
+with `AU4002`. `aura verify` proves that no operation in a function can do
+so. It treats integers of every width, `bool`, `float32`, `float64`, `str`,
+tuples, classes, enums, and unions exactly, and it checks each `as` cast.
+
+```aura
+def to_byte(level: int64) -> uint8:
+    requires 0 <= level and level <= 255
+    return level as uint8
+
+
+def widen(a: int32, b: int32) -> int64:
+    return (a as int64) + (b as int64)
+
+
+def main():
+    print(to_byte(200))
+    print(widen(2000000000, 2000000000))
+```
+
+`aura verify` proves all 5 checks. The cast in `to_byte` is in range because
+of the `requires` clause. The sum in `widen` needs no contract: two `int32`
+values always fit in an `int64`.
+
+See [Verification](/manual/verification) for the report, the options, and what the verifier models.
+
 ## Backend Support
 
 The checker produces one canonical type model. MIR lowering, compiler-backed analysis, and direct native code generation all use it. MIR is the compiler's mid-level intermediate representation.

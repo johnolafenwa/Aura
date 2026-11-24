@@ -142,6 +142,54 @@ $ aura run src/main.au
 
 The point is that you choose. The ordinary `+` never surprises you.
 
+### Proving that arithmetic stays in range
+
+A trap stops a wrong number from traveling on, but only in a run that reaches
+it. Aura can also tell you before any run. `aura verify` is a command that
+proves, with a solver, that checks like the overflow check can never fail for
+any input, or shows you an input that makes one fail. Here is a function that
+converts seconds to milliseconds:
+
+*Filename: src/main.au*
+
+```aura
+def to_millis(seconds: int32) -> int32:
+    return seconds * 1000
+
+def main():
+    print(to_millis(90))
+```
+
+The program runs and prints `90000`, and a test with a few ordinary durations
+would pass. The verifier isn't satisfied:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:2:12
+  |
+2 |     return seconds * 1000
+  |            ^
+  = note: in `to_millis` (overflow check)
+  = note: counterexample: seconds = 2147484
+verified src/main.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Nothing ran. The verifier read `to_millis`, asked whether any `int32` could
+make the multiplication leave the range of `int32`, and found one: 2,147,484
+seconds, about 25 days, gives a product a little above the largest `int32`.
+The `counterexample` note is that input. The last line counts the checks in
+the file: there is one, the multiplication, and it isn't proved.
+
+Every `+`, `-`, and `*` on integers is a check like this one, so `aura verify`
+goes through all the arithmetic in a file, and through each division and list
+index too. The usual fix is to say which inputs the function accepts. With a
+line stating that `seconds` is at most a day's worth, the same command
+reports that every check is proved. That line is a `requires` clause, and
+we'll write our first one in [Functions](/book/ch03-03-functions). The full
+story, including how to install the solver that `aura verify` uses, is in
+[Contracts and proofs](/book/ch11-04-contracts-and-proofs).
+
 ### Integer arithmetic
 
 The arithmetic operators are the ones you know from Python: `+`, `-`, `*`,

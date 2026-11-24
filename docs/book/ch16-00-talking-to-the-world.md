@@ -27,6 +27,14 @@ on every path out of the scope. Anything that waits takes a `timeout`, because
 a program that talks to the world has to assume the world can be slow. Once
 you have seen the pattern in one module, the others read the same way.
 
+The edges are also where proofs stop. `aura verify`, which we met in
+[Chapter 11](/book/ch11-04-contracts-and-proofs), reasons about your code
+and treats whatever a file, a process, or a socket hands back as a value it
+knows nothing about. That turns out to be a useful discipline, and the JSON
+section shows it at work: check input once where it arrives, state what you
+checked in a `requires` clause, and let the verifier prove that the code
+behind the check cannot trap.
+
 By the end of the chapter you will be able to write a command-line tool that
 reads and writes files safely, runs commands without a shell, serves and
 calls HTTP, and converts between JSON text and your own classes and enums

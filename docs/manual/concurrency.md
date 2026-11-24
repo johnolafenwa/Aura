@@ -712,6 +712,38 @@ The static ownership diagnostics should stop a correctly checked Aura program
 earlier. For `select(...)`, dynamic invalid deadlines and runtime
 observation-claim failures also stay `AU4001`.
 
+## Verification
+
+`aura verify` proves the `requires` clauses of a task's function at
+`group.start(...)`, on the arguments the child receives. The value of
+`TaskResult.Ready` from `result()`, `poll()`, or `result_or(...)` has the
+function's `ensures`.
+
+```aura
+def work(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    ensures result == n * 2
+    return n * 2
+
+
+def main():
+    with TaskGroup() as group:
+        task = group.start(work, 4)
+        match task.result():
+            case TaskResult.Ready(value):
+                assert value == 8
+                print(value)
+            case _:
+                print("stopped")
+```
+
+`aura verify` proves all 5 checks, including `assert value == 8`.
+
+The verifier knows nothing about a value read from a `Queue`, and nothing
+about the order in which tasks run. [`sync`](/manual/sync#verification)
+values are unknown each time they are read.
+
+
 ## Backend Support
 
 Both MIR execution and direct native generation support:
