@@ -587,6 +587,7 @@ pub(crate) enum DataAddress {
 /// addresses written into it, in order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DataDescription {
+    pub(crate) placement: Option<crate::machine_data::DataPlacement>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) align: Option<u64>,
     pub(crate) addresses: Vec<(u32, DataAddress)>,
@@ -631,6 +632,11 @@ pub(crate) type FunctionBody<'b> =
 
 /// Declares and defines the functions and data of one object.
 pub(crate) trait ModuleBackend {
+    fn mark_machine(
+        &mut self,
+        function: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    );
     fn declare_function(
         &mut self,
         name: &str,

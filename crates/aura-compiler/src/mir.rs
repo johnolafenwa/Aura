@@ -11024,6 +11024,19 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
 
     let mut foreign_link = program.foreign_link.clone();
     foreign_link.exports = exported_functions(program);
+    if program.machine_target.is_some() {
+        foreign_link.machine = crate::machine_attributes::collect(program);
+        foreign_link.placed_data = crate::machine_data::collect(program);
+    }
+    for export in &mut foreign_link.exports {
+        if let Some(symbol) = foreign_link
+            .machine
+            .get(&export.function)
+            .and_then(|a| a.link_name.as_ref())
+        {
+            export.symbol.clone_from(symbol);
+        }
+    }
 
     MirModule {
         foreign_link,

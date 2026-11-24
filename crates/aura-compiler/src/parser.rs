@@ -77,6 +77,7 @@ fn class_invariant_method(
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: invariants,
         spec: false,
@@ -538,6 +539,10 @@ impl Parser {
                     self.current_span(),
                     "a public module constant must come before the first top-level statement",
                 ));
+            } else if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                self.parse_decorated_declaration(&mut items, &mut constants, seen_statement)?;
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_simple(&TokenKind::At)
                 || self.at_copy_class_start()
@@ -604,6 +609,7 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            placement: None,
             public,
             name,
             annotation,
@@ -613,11 +619,6 @@ impl Parser {
     }
 
     fn parse_item(&mut self) -> Result<Item> {
-        if self.at_simple(&TokenKind::At)
-            && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
-        {
-            return self.parse_decorated_function();
-        }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
             let public = self.eat_simple(&TokenKind::KwPublic).is_some();
@@ -1517,7 +1518,12 @@ impl Parser {
 
     /// Parses a group of `@expression` lines and the module-level function
     /// they decorate. Comments and blank lines may sit inside the group.
-    fn parse_decorated_function(&mut self) -> Result<Item> {
+    fn parse_decorated_declaration(
+        &mut self,
+        items: &mut Vec<Item>,
+        constants: &mut Vec<ConstantDecl>,
+        seen_statement: bool,
+    ) -> Result<()> {
         let first = self.current_span();
         let mut decorators = Vec::new();
         while self.at_simple(&TokenKind::At) {
@@ -1533,13 +1539,28 @@ impl Parser {
             self.expect_newline()?;
             self.skip_newlines();
         }
-        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
-        if !self.at_keyword_def() {
-            return Err(misplaced_decorator_error(first));
+        if !seen_statement
+            && self.at_module_constant_start()
+            && decorators
+                .iter()
+                .any(|d| crate::machine_attributes::attribute(d).is_some())
+        {
+            let mut constant = self.parse_module_constant()?;
+            constant.placement = Some(Box::new(crate::machine_data::placement(&decorators)?));
+            constants.push(constant);
+            return Ok(());
         }
-        let mut function = self.parse_function(public)?;
-        function.decorators = decorators;
-        Ok(Item::Function(function))
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let mut function = if self.at_keyword_def() {
+            self.parse_function(public)?
+        } else if self.at_export_def_start() {
+            self.parse_export_function(public)?
+        } else {
+            return Err(misplaced_decorator_error(first));
+        };
+        crate::machine_attributes::attach(&mut function, decorators)?;
+        items.push(Item::Function(function));
+        Ok(())
     }
 
     /// Parses one `@property` line. `@property` is the only marker Aura
@@ -1645,6 +1666,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,
@@ -1895,6 +1917,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,

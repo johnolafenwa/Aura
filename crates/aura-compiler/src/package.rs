@@ -146,6 +146,10 @@ pub struct ForeignLinkPlan {
     /// defines as C symbols. Lowering fills it in, not a manifest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<ForeignExport>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machine: BTreeMap<String, crate::machine_attributes::MachineAttributes>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placed_data: Vec<crate::machine_data::PlacedData>,
 }
 
 /// One `export "C"` function: the MIR function and the C symbol a
@@ -164,7 +168,10 @@ impl ForeignLinkPlan {
 
     /// Whether the plan names nothing at all, so MIR leaves it out.
     pub fn is_blank(&self) -> bool {
-        self.is_empty() && self.exports.is_empty()
+        self.is_empty()
+            && self.exports.is_empty()
+            && self.machine.is_empty()
+            && self.placed_data.is_empty()
     }
 
     /// Adds what `other` names and this plan does not, keeping the order.

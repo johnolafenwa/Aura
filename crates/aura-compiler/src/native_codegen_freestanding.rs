@@ -138,6 +138,7 @@ impl NativeCodegen<'_> {
         // An export is declared before any body is built, so a body that
         // names the same symbol, as a check names the trap hook, calls the
         // export.
+        self.define_machine_items()?;
         let mut exports = Vec::new();
         for export in &self.module.foreign_link.exports {
             let function = self
@@ -167,6 +168,9 @@ impl NativeCodegen<'_> {
                 "failed to declare export `{}`: {}",
                 export.symbol
             );
+            if let Some(attrs) = self.module.foreign_link.machine.get(&export.function) {
+                self.module_backend()?.mark_machine(entry, attrs.clone());
+            }
             exports.push((export, callback, signature, entry));
         }
         for function in &self.module.functions {
@@ -626,6 +630,14 @@ fn keep_reached_functions(module: &mut MirModule) {
         .collect::<HashMap<_, _>>();
     let mut kept = HashSet::new();
     let mut pending = Vec::new();
+    for (name, attrs) in &module.foreign_link.machine {
+        if attrs.used {
+            if let Some(&function) = by_name.get(name.as_str()) {
+                kept.insert(name.clone());
+                pending.push(function);
+            }
+        }
+    }
     for export in &module.foreign_link.exports {
         if let Some(function) = by_name.get(export.function.as_str()) {
             if kept.insert(export.function.clone()) {

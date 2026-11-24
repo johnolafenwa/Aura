@@ -7453,7 +7453,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             libraries: vec!["sqlite3".to_string(), "stdc++".to_string()],
             library_paths: vec![PathBuf::from("/pkg/native,lib")],
             frameworks: vec!["Accelerate".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7548,7 +7548,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             library_paths: vec![PathBuf::from("C:/deps/lib")],
             libraries: vec!["sqlite3".to_string()],
             frameworks: vec!["Metal".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7640,7 +7640,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 libraries,
                 library_paths: Vec::new(),
                 frameworks,
-                exports: Vec::new(),
+                ..Default::default()
             };
             for os in ["linux", "macos"] {
                 assert_eq!(

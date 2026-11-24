@@ -13,6 +13,8 @@ pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
 pub mod lexer;
 pub mod limits;
+mod machine_attributes;
+mod machine_data;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;

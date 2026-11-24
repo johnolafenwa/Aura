@@ -211,6 +211,7 @@ fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::se
     crate::sema::ConstantInfo {
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            placement: None,
             public: true,
             name: name.to_string(),
             annotation: Some(type_ref("float64", Vec::new())),
@@ -273,6 +274,7 @@ fn function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,
@@ -325,6 +327,7 @@ fn generic_function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,

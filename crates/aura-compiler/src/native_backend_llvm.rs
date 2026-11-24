@@ -48,6 +48,9 @@ use inkwell::{
     OptimizationLevel,
 };
 
+#[path = "native_backend_llvm_machine.rs"]
+mod machine_attributes;
+
 use units::{Partition, Placement};
 
 use super::{
@@ -116,6 +119,7 @@ struct FunctionDecl {
     task_invariant: bool,
     inline: bool,
     weak_routine: bool,
+    machine: Option<Box<crate::machine_attributes::MachineAttributes>>,
     source: Option<FunctionSource>,
 }
 
@@ -185,6 +189,7 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
+        machine_attributes::apply(&lowerer, self)?;
         if let Some(debug) = &lowerer.debug {
             debug.builder.finalize();
         }
@@ -212,6 +217,13 @@ fn merge_linkage(previous: Linkage, declared: Linkage) -> Linkage {
 }
 
 impl ModuleBackend for LlvmModule {
+    fn mark_machine(
+        &mut self,
+        id: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    ) {
+        self.functions[id.0 as usize].machine = Some(Box::new(attrs));
+    }
     fn declare_function(
         &mut self,
         name: &str,
@@ -241,6 +253,7 @@ impl ModuleBackend for LlvmModule {
                     task_invariant: false,
                     inline: false,
                     weak_routine: false,
+                    machine: None,
                     source: None,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
@@ -586,6 +599,10 @@ fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
     let coff = triple.contains("windows");
     let mut function = module.get_first_function();
     while let Some(current) = function {
+        if current.get_section().is_some() {
+            function = current.get_next_function();
+            continue;
+        }
         if current.count_basic_blocks() > 0 {
             if coff {
                 set_own_comdat(module, current);
@@ -2521,6 +2538,13 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     fn lower_bodies(&self, object: &LlvmModule) -> Result<(), String> {
         for index in &self.bodies {
             let decl = &object.functions[*index];
+            if decl
+                .machine
+                .as_ref()
+                .is_some_and(|attrs| attrs.naked.is_some())
+            {
+                continue;
+            }
             if let Some(body) = &decl.body {
                 let mut lowerer = FunctionLowerer::new(self, self.functions[*index], body);
                 if let (Some(debug), Some(source)) = (&self.debug, &decl.source) {
