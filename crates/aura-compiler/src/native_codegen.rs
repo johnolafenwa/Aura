@@ -2662,6 +2662,10 @@ impl<'a> NativeCodegen<'a> {
             })
         })
         .collect::<Vec<_>>();
+        let formatted_reads = match self.freestanding {
+            Some(_) => HashSet::new(),
+            None => str_slots::formatted_reads(function),
+        };
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -2685,6 +2689,10 @@ impl<'a> NativeCodegen<'a> {
                 None => str_slots::clone_moves(function),
             },
             appended_copies: str_slots::appended_copies(function),
+            spliced_plan: str_slots::spliced_formats(function, &formatted_reads),
+            formatted_reads,
+            spliced_formats: HashMap::new(),
+            deferred_reads: HashSet::new(),
             deferred_str_copies: HashMap::new(),
             checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
@@ -4142,6 +4150,17 @@ struct FunctionCompiler<'a> {
     /// The words of each such copy between the two operations, when this
     /// body has the copied `str` as words.
     deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
+    /// The loan reads that fill a `str` only for the next operation to
+    /// push it into an f-string (see `str_slots::formatted_reads`).
+    formatted_reads: HashSet<String>,
+    /// Those of them this body read as words, and the f-strings it kept as
+    /// parts, whose release frees nothing.
+    deferred_reads: HashSet<String>,
+    /// The f-strings of `str_slots::spliced_formats`.
+    spliced_plan: HashSet<String>,
+    /// The parts of each of them this body kept for the f-string that
+    /// takes it, until that one pushes them.
+    spliced_formats: HashMap<String, Vec<str_slots::ViewArgument>>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -5911,6 +5930,10 @@ impl<'a> FunctionCompiler<'a> {
             // A callee read from a loan only to be called is called through
             // the loan, so the read and its release make nothing.
             Instruction::ReadLoan { target, loan } if self.call_through_loan(target, loan)? => {}
+            Instruction::ReadLoan { target, loan }
+                if self.defer_formatted_read(target, loan)? => {}
+            Instruction::Release { place } if self.deferred_reads.remove(place) => {}
+            Instruction::Assign { target, value } if self.splice_format(target, value)? => {}
             Instruction::Release { place } if self.in_place_callees.contains_key(place) => {}
             // A walk by entry makes neither the keys copy nor the key.
             Instruction::Release { place }

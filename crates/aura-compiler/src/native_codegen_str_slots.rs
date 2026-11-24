@@ -553,6 +553,148 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashMap<String, String>
         .collect()
 }
 
+/// The `str` locals of `function` that a loan read fills only for the
+/// next operation to push into an f-string, as `f"{first}"` of a `view`
+/// local does. Only source markers lie between the two, and nothing but
+/// the local's release reads it again.
+pub(super) fn formatted_reads(function: &MirFunction) -> HashSet<String> {
+    let strs = function
+        .local_types
+        .iter()
+        .filter(|local| is_str(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut reads = HashMap::<&str, usize>::new();
+    let mut formatted = HashSet::new();
+    let mut uses = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            match instruction {
+                Instruction::ReadLoan { target, .. } => {
+                    *reads.entry(target.as_str()).or_default() += 1;
+                    let next = block.instructions[index + 1..].iter().find(|next| {
+                        !matches!(
+                            next,
+                            Instruction::SourceLocation { .. } | Instruction::SourceName { .. }
+                        )
+                    });
+                    if let Some(Instruction::Assign {
+                        value: Rvalue::FormatString { parts },
+                        ..
+                    }) = next
+                    {
+                        let pushed = parts.iter().any(|part| {
+                            matches!(part, MirFormatPart::Value(Operand::Place(place))
+                                if place == target)
+                        });
+                        if pushed && strs.contains(target.as_str()) {
+                            formatted.insert(target.as_str());
+                        }
+                    }
+                }
+                Instruction::Release { .. } => {}
+                instruction => {
+                    let mut mentions = Vec::new();
+                    instruction_place_mentions(instruction, &mut mentions);
+                    for place in mentions {
+                        *uses
+                            .entry(place.split('.').next().unwrap_or(place))
+                            .or_default() += 1;
+                    }
+                }
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *uses
+                .entry(place.split('.').next().unwrap_or(place))
+                .or_default() += 1;
+        }
+    }
+    formatted
+        .into_iter()
+        .filter(|local| reads.get(local) == Some(&1) && uses.get(local) == Some(&1))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The f-strings of `function` that only a later f-string in their block
+/// takes, as a part: each part of one is one of `formatted`,
+/// and only loan reads of `formatted`, releases, source markers and other
+/// f-strings lie between the two, none of which can fail. The later one
+/// pushes the parts in its place.
+pub(super) fn spliced_formats(
+    function: &MirFunction,
+    formatted: &HashSet<String>,
+) -> HashSet<String> {
+    let mut uses = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if !matches!(instruction, Instruction::Release { .. }) {
+                let mut mentions = Vec::new();
+                instruction_place_mentions(instruction, &mut mentions);
+                for place in mentions {
+                    *uses
+                        .entry(place.split('.').next().unwrap_or(place))
+                        .or_default() += 1;
+                }
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *uses
+                .entry(place.split('.').next().unwrap_or(place))
+                .or_default() += 1;
+        }
+    }
+    let pushes = |parts: &[MirFormatPart], local: &str| {
+        parts.iter().any(
+            |part| matches!(part, MirFormatPart::Value(Operand::Place(place)) if place == local),
+        )
+    };
+    let mut spliced = HashSet::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Assign {
+                target,
+                value: Rvalue::FormatString { parts },
+            } = instruction
+            else {
+                continue;
+            };
+            let kept = parts.iter().all(|part| {
+                matches!(part, MirFormatPart::Value(Operand::Place(place))
+                    if formatted.contains(place))
+            });
+            // The part that takes it is its only use.
+            if !kept || uses.get(target.as_str()) != Some(&1) {
+                continue;
+            }
+            let taken = block.instructions[index + 1..]
+                .iter()
+                .find(|later| match later {
+                    Instruction::SourceLocation { .. }
+                    | Instruction::SourceName { .. }
+                    | Instruction::Release { .. } => false,
+                    Instruction::ReadLoan { target, .. } => !formatted.contains(target),
+                    Instruction::Assign {
+                        value: Rvalue::FormatString { parts },
+                        ..
+                    } => pushes(parts, target),
+                    _ => true,
+                });
+            if let Some(Instruction::Assign {
+                value: Rvalue::FormatString { parts },
+                ..
+            }) = taken
+            {
+                if pushes(parts, target) {
+                    spliced.insert(target.clone());
+                }
+            }
+        }
+    }
+    spliced
+}
+
 /// The `str` locals of a function that hold an element of a `list[str]`
 /// as words borrowed from the list, as a `for` loop's variable does.
 #[derive(Debug, Default)]
@@ -1418,14 +1560,72 @@ impl FunctionCompiler<'_> {
         handle: Val,
         value: &Operand,
     ) -> std::result::Result<bool, String> {
-        let Some(words) = self.load_place_words(value)? else {
-            return Ok(false);
+        if let Some(parts) = match value {
+            Operand::Place(place) => self.spliced_formats.remove(place.as_str()),
+            _ => None,
+        } {
+            for words in parts {
+                self.push_view_argument(handle, words);
+            }
+            return Ok(true);
+        }
+        let deferred = match value {
+            Operand::Place(place) => self.deferred_str_copies.remove(place.as_str()),
+            _ => None,
         };
+        let words = match deferred {
+            Some(words) => words,
+            None => match self.load_place_words(value)? {
+                Some(words) => words,
+                None => return Ok(false),
+            },
+        };
+        self.push_view_argument(handle, words);
+        Ok(true)
+    }
+
+    /// Pushes `words` into the f-string `handle` builds and releases the
+    /// copy they were read from, if any.
+    fn push_view_argument(&mut self, handle: Val, words: ViewArgument) {
         self.builder.call(
             self.runtime[RuntimeFn::FormatPushStr],
             &[handle, words.ptr, words.len],
         );
         self.release_view_arguments(words.released.into_iter().collect());
+    }
+
+    /// Keeps the parts of the f-string `value` instead of building it into
+    /// `target`, when a later f-string takes `target` as a part (see
+    /// [`spliced_formats`]) and this body has each part's `str` as words.
+    pub(super) fn splice_format(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        let Rvalue::FormatString { parts } = value else {
+            return Ok(false);
+        };
+        // The planner made each part a read this body may have kept.
+        let reads = parts
+            .iter()
+            .filter_map(|part| match part {
+                MirFormatPart::Value(Operand::Place(place)) => Some(place.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !self.spliced_plan.contains(target)
+            || !reads
+                .iter()
+                .all(|read| self.deferred_str_copies.contains_key(*read))
+        {
+            return Ok(false);
+        }
+        let parts = reads
+            .into_iter()
+            .filter_map(|read| self.deferred_str_copies.remove(read))
+            .collect();
+        self.spliced_formats.insert(target.to_string(), parts);
+        self.deferred_reads.insert(target.to_string());
         Ok(true)
     }
 
@@ -1443,18 +1643,40 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
+    /// Keeps the words of the loan `loan` instead of reading it into
+    /// `target`, when the next operation pushes `target` into an f-string
+    /// (see [`formatted_reads`]) and this body has the loan as words.
+    pub(super) fn defer_formatted_read(
+        &mut self,
+        target: &str,
+        loan: &str,
+    ) -> std::result::Result<bool, String> {
+        if !self.formatted_reads.contains(target)
+            || self.shadow_read_targets.contains(target)
+            || self.lent_payloads.contains(target)
+            || self.node_read_targets.contains(target)
+        {
+            return Ok(false);
+        }
+        let Some(words) = self.load_place_words(&Operand::Place(loan.to_string()))? else {
+            return Ok(false);
+        };
+        self.deferred_str_copies.insert(target.to_string(), words);
+        self.deferred_reads.insert(target.to_string());
+        Ok(true)
+    }
+
     /// Refuses a read of the deferred copy `name` other than its append,
     /// which [`appended_copies`] makes the copy's only use.
     pub(super) fn refuse_deferred_str_copy(
         &mut self,
         name: &str,
     ) -> std::result::Result<(), String> {
-        match self.deferred_str_copies.contains_key(name) {
-            false => Ok(()),
-            true => Err(format!(
-                "direct backend read the copy `{name}` before the append it was deferred to"
-            )),
-        }
+        let deferred =
+            self.deferred_str_copies.contains_key(name) || self.spliced_formats.contains_key(name);
+        (!deferred)
+            .then_some(())
+            .ok_or_else(|| format!("direct backend read the deferred copy `{name}` early"))
     }
 
     /// Appends the deferred copy `operand` moves to the `list[str]` `list`

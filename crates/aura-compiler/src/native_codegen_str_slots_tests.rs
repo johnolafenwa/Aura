@@ -5,8 +5,8 @@ use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
 use super::{
-    appended_copies, clone_moves, element_slots, literal_chunks, plan_views, receiver_view_read,
-    ViewParam, ViewRead,
+    appended_copies, clone_moves, element_slots, formatted_reads, literal_chunks, plan_views,
+    receiver_view_read, spliced_formats, ViewParam, ViewRead,
 };
 
 const SOURCE: &str = r#"
@@ -318,4 +318,45 @@ fn a_copy_that_is_the_last_read_of_a_str_local_may_move_its_reference() {
     // The payload is read again after the copy.
     assert!(clone_moves(function("shouted")).is_empty());
     assert!(clone_moves(function("main")).is_empty());
+}
+
+const FORMATS: &str = r#"
+def label(words: list[str]) -> str:
+    view first = words[0]
+    view second = words[1]
+    return f"{first}{second}"
+
+def kept(words: list[str]) -> str:
+    view first = words[0]
+    text = f"{first}"
+    print(text)
+    return text
+
+def main():
+    words = ["a", "b"]
+    print(label(words) + kept(words))
+"#;
+
+#[test]
+fn a_view_read_only_into_an_f_string_is_pushed_from_its_words() {
+    let mir = lower_source_to_mir(FORMATS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the module has the function")
+    };
+    let label = function("label");
+    let reads = formatted_reads(label);
+    assert_eq!(reads.len(), 2, "{reads:?}");
+    // Each part is an f-string of its own that the result takes.
+    assert_eq!(spliced_formats(label, &reads).len(), 2);
+    // `text` is printed and returned as well.
+    let kept = function("kept");
+    let reads = formatted_reads(kept);
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert!(!spliced_formats(kept, &reads).contains("text"));
+    assert!(formatted_reads(function("main")).is_empty());
 }
