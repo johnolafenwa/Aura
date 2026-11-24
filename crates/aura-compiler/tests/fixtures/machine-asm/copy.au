@@ -1,0 +1,10 @@
+module_asm(""".text
+.globl machine_noop
+machine_noop:
+    nop
+    ret""")
+
+export "C" def copy_bits(value: uint64) -> uint64:
+    mut result: uint64 = 0
+    asm("movq $1, $0", output("reg", result), input("reg", value), options("pure", "preserves_flags"))
+    return result
