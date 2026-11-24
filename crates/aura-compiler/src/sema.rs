@@ -13768,6 +13768,7 @@ impl<'a> FunctionChecker<'a> {
                             "mark `{field}` as `public` in `{module_path}` to call it from another module"
                         )));
                     }
+                    crate::hardware::check_missing_member(&namespace.path, field, span)?;
                     return Err(Diagnostic::coded_at(
                         "AU2001",
                         span,
@@ -17838,6 +17839,7 @@ impl<'a> FunctionChecker<'a> {
                         Vec::new(),
                     ));
                 }
+                crate::hardware::check_missing_member(&namespace.path, field, span)?;
                 return Err(Diagnostic::at(
                     span,
                     format!("module `{}` has no member `{}`", path, field),

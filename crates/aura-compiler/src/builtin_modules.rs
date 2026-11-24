@@ -3779,6 +3779,7 @@ pub(crate) fn builtin_imported_binding(
     if let Some(trait_info) = namespace.traits.get(name) {
         return Ok(ImportedBinding::Trait(trait_info.clone()));
     }
+    crate::hardware::check_missing_member(&namespace.path, name, span)?;
     Err(Diagnostic::at(
         span,
         format!(

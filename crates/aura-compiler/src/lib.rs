@@ -12,6 +12,7 @@ pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
 mod freestanding_mode;
+mod hardware;
 pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
@@ -2167,3 +2168,6 @@ use aura_runtime::array_kernel_corpus;
 
 #[cfg(test)]
 mod inline_asm_tests;
+
+#[cfg(test)]
+mod hardware_tests;

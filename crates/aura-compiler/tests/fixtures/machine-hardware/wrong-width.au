@@ -1,0 +1,3 @@
+import mem
+export "C" def wrong(port: uint32) -> uint8:
+    return mem.in_uint8(port)
