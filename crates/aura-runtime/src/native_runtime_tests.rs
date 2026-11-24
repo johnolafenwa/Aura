@@ -27083,6 +27083,21 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
         assert_eq!(super::aura_direct_vec_index_scalar(other, 39, kind), bits);
         unsafe { release_value(other) };
     }
+    // A list made empty with its type takes its first storage with its
+    // first element: room for four, or for a small block of narrow ones.
+    for (name, kind, room) in [("int64", 0, 4), ("float32", 10, 4), ("uint8", 6, 16)] {
+        let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+        let descriptor = super::canonical_runtime_type_name(&Type::Named(
+            "list".to_string(),
+            vec![Type::named(name)],
+        ));
+        let typed =
+            super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+        assert_eq!(list_view_capacity(typed), 0);
+        super::aura_direct_vec_push_scalar(typed, 1, kind);
+        assert_eq!((list_view_len(typed), list_view_capacity(typed)), (1, room));
+        unsafe { release_value(typed) };
+    }
     // A kind the list does not keep, and a value that is no list, take the
     // general path.
     super::aura_direct_vec_push_scalar(list, 1, 2);

@@ -9503,7 +9503,14 @@ unsafe fn grow_scalar_list(vec: *mut OpaqueValue, bits: i64, kind: i64) -> bool 
                     values.truncate(len);
                 }
             }
-            values.push($value);
+            let value = $value;
+            if values.capacity() == 0 {
+                // A list's first storage is one small block, made with no
+                // growth: room for four elements, or the sixteen bytes the
+                // smallest block has.
+                *values = Vec::with_capacity((16 / std::mem::size_of_val(&value)).max(4));
+            }
+            values.push(value);
             header.list_elements.set(values.as_ptr() as usize);
             header.list_len.set(values.len());
             header.list_capacity.store(
