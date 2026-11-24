@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-24
 
+## Rust speed (in progress)
+
+- Target: John's 2026-11-24 goal that Aura programs run as fast as their
+  Rust versions in `benchmarks/cross_language/`. Round 1 is in
+  `2026-11-24-rust-speed-round-1.md`.
+- Done: `Result` values travel as words, list swaps of copy classes and
+  appends to held lists happen in place. `bank_ledger` runs 2.1 times
+  Rust's instructions (was 4.2) and `graph_paths` 2.6 (was 5.5).
+- Follow-up: scalar dictionary index results, other enums, list creation
+  and growth, and generated code in numeric loops.
+
 ## Verification in the documentation (complete)
 
 - Target: John's 2026-11-24 request that `aura verify` be prominent across
