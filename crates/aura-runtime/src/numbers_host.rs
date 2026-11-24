@@ -189,6 +189,8 @@ fn int_value(value: i64) -> Value {
 }
 
 fn power_of_ten(digits: u64) -> Result<BigInt> {
+    // 3322 / 1000 bounds log2(10) from above.
+    crate::builtin_limit::check(digits.saturating_mul(3322).div_ceil(8000))?;
     if digits > MAX_SCALE_DIGITS {
         return Err(too_large("a power of ten"));
     }
@@ -354,6 +356,7 @@ fn positive_digits(name: &str, digits: i64) -> Result<i64> {
 }
 
 fn result_bits_fit(bits: u64) -> Result<()> {
+    crate::builtin_limit::check(bits.div_ceil(8))?;
     if bits > MAX_RESULT_BITS {
         Err(too_large("a result"))
     } else {
@@ -970,6 +973,7 @@ pub fn host_dec_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
 
 /// Plain notation: every digit written out, with no exponent.
 fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    crate::builtin_limit::check(exponent.unsigned_abs())?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let sign = if coefficient.is_negative() { "-" } else { "" };
     if exponent >= 0 {

@@ -1314,6 +1314,9 @@ pub fn host_gzip_compress(args: Vec<Value>, _program_args: Option<&[String]>) ->
             format!("`gzip.compress` requires a level from 0 to 9, found `{level}`"),
         ));
     };
+    // The deflate bound covers stored blocks and the gzip framing.
+    let input_len = data.len() as u64;
+    crate::builtin_limit::check(input_len + input_len.div_ceil(16_384) * 5 + 32)?;
     let packed = crate::gzip_codec::gzip_compress(&data, level)
         .map_err(|error| Diagnostic::coded("AU4005", format!("`gzip.compress` failed: {error}")))?;
     host_bytes_value(packed, name)
@@ -1337,8 +1340,15 @@ pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) 
             ),
         ));
     };
-    let error = match crate::gzip_codec::gzip_decompress(&data, limit) {
+    let available = crate::builtin_limit::allowance()
+        .unwrap_or(limit)
+        .min(limit);
+    let error = match crate::gzip_codec::gzip_decompress(&data, available) {
         Ok(bytes) => return host_bytes_value(bytes, name).map(result_ok),
+        Err(GzipError::OutputTooLarge { .. }) if available < limit => {
+            crate::builtin_limit::check(available as u64 + 1)?;
+            unreachable!("the scoped builtin allowance was exceeded")
+        }
         Err(error) => error,
     };
     let (variant_name, payload) = match error {
