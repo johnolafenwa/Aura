@@ -4130,3 +4130,19 @@ def main():
         );
     }
 }
+
+#[test]
+fn integer_bit_methods_use_the_declared_width_in_proofs() {
+    assert_proved(include_str!("../tests/fixtures/systems-integers/verify_bits.au"));
+}
+
+#[test]
+fn rotation_requires_a_nonnegative_count() {
+    let Some(report) = verify("def rotate(x: uint8, n: int64) -> uint8:\n    return x.rotate_left(n)\n") else {
+        return;
+    };
+    assert!(report.obligations.iter().any(|check|
+        matches!(check.status, Status::Failed { .. })
+            && check.message.contains("rotation count")
+    ));
+}
