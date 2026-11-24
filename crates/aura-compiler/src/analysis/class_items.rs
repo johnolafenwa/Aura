@@ -27,10 +27,10 @@ impl AnalysisBuilder<'_> {
     ) {
         // The public wrapper keeps the decorators. The private body also has
         // its own declaration at the same source position.
-        if is_decorator_generated(&method.name) {
+        let name = method_source_name(&method.name);
+        if name == method.name && method.decorators.is_empty() && name != "__drop__" {
             return;
         }
-        let name = method_source_name(&method.name);
         let definition = self.definition_range(&class.module_name, method.span, name);
         self.push_occurrence(
             definition.clone(),
@@ -41,7 +41,11 @@ impl AnalysisBuilder<'_> {
         if name != method.name {
             // The getter and setter have distinct declarations, even though
             // their source names coincide. The @name.setter line uses the getter.
-            let preceding = &self.source_lines[..method.span.line.saturating_sub(1)];
+            let preceding = &self.source_lines[..method
+                .span
+                .line
+                .saturating_sub(1)
+                .min(self.source_lines.len())];
             let marker = preceding.iter().rposition(|line| {
                 let text = line.trim_start();
                 !text.is_empty() && !text.starts_with('#')
@@ -70,22 +74,21 @@ impl AnalysisBuilder<'_> {
             .copied()
             .unwrap_or("");
         if let Ok(tokens) = crate::lexer::lex(line) {
-            for pair in tokens.windows(2) {
-                if let [dot, field] = pair {
-                    if dot.kind == crate::lexer::TokenKind::Dot
-                        && matches!(&field.kind, crate::lexer::TokenKind::Identifier(name) if name == property)
-                    {
-                        let end = field.span.column - 1 + property.len();
-                        let suffix = line[end..]
-                            .trim_start()
-                            .trim_start_matches(['+', '-', '*', '/', '%', '&', '|', '^', '<', '>']);
-                        if suffix.starts_with('=') && !suffix.starts_with("==") {
-                            return range_from_span(
-                                Span::new(span.line, field.span.column),
-                                property.len(),
-                            );
-                        }
-                    }
+            for (dot, field) in tokens.iter().zip(tokens.iter().skip(1)) {
+                if dot.kind != crate::lexer::TokenKind::Dot
+                    || !matches!(&field.kind, crate::lexer::TokenKind::Identifier(name) if name == property)
+                {
+                    continue;
+                }
+                let end = field.span.column - 1 + property.len();
+                let suffix = line[end..]
+                    .trim_start()
+                    .trim_start_matches(['+', '-', '*', '/', '%', '&', '|', '^', '<', '>']);
+                if suffix.starts_with('=') && !suffix.starts_with("==") {
+                    return range_from_span(
+                        Span::new(span.line, field.span.column),
+                        property.len(),
+                    );
                 }
             }
         }
