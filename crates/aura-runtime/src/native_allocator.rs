@@ -239,6 +239,25 @@ impl ThreadBlocks {
         cut
     }
 
+    /// Grows `block`, a block of class `old` in use, to class `new` where
+    /// it lies, when it is the block last cut from the thread's chunk and
+    /// the chunk has the bytes left. A list that grows while nothing else
+    /// is made, such as one filled in a loop, then keeps its elements in
+    /// place.
+    #[inline]
+    fn extend(&self, block: *mut u8, old: usize, new: usize) -> bool {
+        let more = class_size(new) - class_size(old);
+        let cut = self.cut.get();
+        if block.wrapping_add(class_size(old)) != cut
+            || (self.end.get() as usize) - (cut as usize) < more
+        {
+            return false;
+        }
+        // SAFETY: at least `more` bytes remain before the end of the chunk.
+        self.cut.set(unsafe { cut.add(more) });
+        true
+    }
+
     #[inline]
     fn push(&self, class: usize, block: *mut u8) {
         let list = &self.lists[class];
@@ -401,6 +420,14 @@ unsafe impl GlobalAlloc for AuraAllocator {
             // SAFETY: the caller's contract.
             (None, None) => unsafe { System.realloc(block, layout, new_size) },
             (Some(old), Some(new)) if old == new => block,
+            (Some(old), Some(new))
+                if old < new
+                    && THREAD_BLOCKS
+                        .try_with(|blocks| blocks.extend(block, old, new))
+                        .unwrap_or(false) =>
+            {
+                block
+            }
             _ => {
                 // SAFETY: the caller's contract, for a new block and the old.
                 unsafe {
