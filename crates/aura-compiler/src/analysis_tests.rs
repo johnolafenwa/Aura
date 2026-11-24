@@ -11727,11 +11727,22 @@ fn conditional_outline_keeps_source_decorators_and_only_active_members() {
         include_str!("../tests/fixtures/run-pass/decorators.au")
     );
     let analysis = analyze_source(&source);
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
-    let class = analysis.symbols.iter().find(|s| s.name == "Platform").unwrap();
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let class = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "Platform")
+        .unwrap();
     assert_eq!(class.children.len(), 1);
     assert_eq!(class.children[0].name, "id");
     let fact = analysis.symbols.iter().find(|s| s.name == "fact").unwrap();
     assert_eq!(fact.kind, "function");
-    assert!(analysis.symbols.iter().all(|s| !s.name.starts_with("__aura_")));
+    assert!(analysis
+        .symbols
+        .iter()
+        .all(|s| !s.name.starts_with("__aura_")));
 }

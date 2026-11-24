@@ -312,7 +312,23 @@ where
                     }
                 }
                 Ok(program) => {
-                    let mut output = analyze_program(source, &program);
+                    // The checked module contains generated declarations for decorators.
+                    // Show the user's source declarations that survived branch selection.
+                    let mut symbols = symbols_from_module(&syntax, source);
+                    if !program.module.inactive_lines.is_empty() {
+                        let active = |symbol: &AnalysisSymbol| {
+                            !program
+                                .module
+                                .inactive_lines
+                                .iter()
+                                .any(|lines| lines.contains(&symbol.line))
+                        };
+                        symbols.retain(&active);
+                        for symbol in &mut symbols {
+                            symbol.children.retain(&active);
+                        }
+                    }
+                    let mut output = AnalysisBuilder::new(source, &program, symbols).build();
                     output
                         .diagnostics
                         .extend(unused_binding_warnings(source, &output.occurrences));
