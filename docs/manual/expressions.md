@@ -441,7 +441,7 @@ with a bare `None`, or with a value of one of its member types, under the
 [union rule](#union-equality). The comparison does not narrow the operand.
 Unit `None == None` is `true`, and unit `None != None` is `false`.
 
-Builtin equality does not use an equality operator trait in Aura 0.16.
+Builtin equality does not use an equality operator trait in Aura 0.17.
 
 ### Tuple Equality
 
@@ -1183,7 +1183,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.16 expressions do not include:
+Aura 0.17 expressions do not include:
 
 - generator expressions
 - assignment expressions

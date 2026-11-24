@@ -1,6 +1,20 @@
 # Task Board
 
-Last updated: 2026-11-18
+Last updated: 2026-11-24
+
+## Release 0.17.0-preview (complete)
+
+- Target: John's 2026-11-23 choice to land the work that Codex left and
+  prepare the 0.17.0 preview. Details are in
+  `2026-11-24-v0.17.0-preview-release.md`.
+- Done: PR #311 merged as `6642a7c2`, tag `v0.17.0-preview` pushed on
+  2026-11-24, Release run `45367623676` green, five archives, four target
+  packs and extension 0.17.0 published. The packages are built and
+  attached but not published.
+- Follow-up: find why the command integration tests can hang on Windows
+  after they pass, find what `raytracer` and `order_book` run more of,
+  keep the set union test out of the plain dictionary lookup, and renew
+  the extension publishing token before 2026-12-01.
 
 ## Combined feature verification
 

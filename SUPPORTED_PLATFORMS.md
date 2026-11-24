@@ -1,6 +1,6 @@
 # Supported Platforms
 
-Aura 0.16 is a technical preview. It supports these hosts:
+Aura 0.17 is a technical preview. It supports these hosts:
 
 | Host | Architecture | CI | Release archive | Native `aura build` |
 | --- | --- | --- | --- | --- |
@@ -44,7 +44,7 @@ and run the arm64 ones under emulation.
 
 ## Unsupported Hosts
 
-The 0.16 preview archives do not support:
+The 0.17 preview archives do not support:
 
 - Windows on ARM
 - musl Linux as a host. `aura` itself needs glibc

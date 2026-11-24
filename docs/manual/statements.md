@@ -4,7 +4,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aura 0.16 has these statements:
+Aura 0.17 has these statements:
 
 - binding and assignment
 - local `view` bindings
@@ -240,7 +240,7 @@ def main():
         attempts += 1
 ```
 
-The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.16 has no loop `else` clause.
+The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.17 has no loop `else` clause.
 
 A `while` condition that tests a union place with `is None` or `is not None` narrows the place inside the body. A `continue` in the body after such a test narrows the rest of that iteration. The condition runs before every iteration, so its narrowing holds in the body on every pass. This is true even when the body assigns the place later.
 
@@ -289,7 +289,7 @@ Maintained iterable forms include:
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
 | `for value in source:` | Consumes an `iter.IntoIterator[T]` implementation through `source.into_iter()` and yields each owned item. |
 
-`for value in mut set:` is not supported in Aura 0.16.
+`for value in mut set:` is not supported in Aura 0.17.
 
 When an iterable yields tuples, the loop form decides the ownership of each non-copy tuple leaf:
 
