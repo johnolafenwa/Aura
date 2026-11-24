@@ -79,6 +79,27 @@ impl FunctionCompiler<'_> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn class_drop_nested_records_preserve_each_owned_field_as_a_handle() {
+        use aura_core::layout::LayoutKind;
+        let module = crate::lower_source_to_mir(include_str!(
+            "../tests/fixtures/run-pass/class_drop_nested_record_copy.au"
+        ))
+        .unwrap();
+        let records = super::plain::PlainRecords::new(&module);
+        assert!(records.class_layout("Ticket").is_none());
+        for class in ["Envelope", "Wrapper"] {
+            let (layouts, root) = records.class_layout(class).unwrap();
+            let LayoutKind::Struct { fields, .. } = &layouts.get(root).kind else {
+                panic!("expected record")
+            };
+            assert!(matches!(
+                layouts.get(fields[0].layout).kind,
+                LayoutKind::Handle
+            ));
+        }
+    }
+
+    #[test]
     fn class_drop_hook_emits_a_native_callback_only_for_hooked_programs() {
         for (source, expects_hook) in [
             (
