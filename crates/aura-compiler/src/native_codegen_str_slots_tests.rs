@@ -4,7 +4,7 @@ use crate::runtime_abi::RuntimeFn;
 use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
-use super::{plan_views, receiver_view_read, ViewParam, ViewRead};
+use super::{appended_copies, literal_chunks, plan_views, receiver_view_read, ViewParam, ViewRead};
 
 const SOURCE: &str = r#"
 def kind(text: str) -> int64:
@@ -122,4 +122,52 @@ fn the_runtime_operations_that_read_a_str_receiver_from_its_bytes() {
     );
     assert_eq!(receiver_view_read(RuntimeOp::Str(StrOp::ToUpper)), None);
     assert_eq!(receiver_view_read(RuntimeOp::List(ListOp::Len)), None);
+}
+
+#[test]
+fn a_short_literal_is_compared_in_words_that_cover_it() {
+    assert_eq!(literal_chunks(0), []);
+    assert_eq!(literal_chunks(1), [(0, 1)]);
+    assert_eq!(literal_chunks(3), [(0, 2), (1, 2)]);
+    assert_eq!(literal_chunks(4), [(0, 4)]);
+    assert_eq!(literal_chunks(7), [(0, 4), (3, 4)]);
+    assert_eq!(literal_chunks(8), [(0, 8)]);
+    assert_eq!(literal_chunks(13), [(0, 8), (5, 8)]);
+    assert_eq!(literal_chunks(16), [(0, 8), (8, 8)]);
+    assert_eq!(literal_chunks(17), []);
+}
+
+const COPIES: &str = r#"
+def gather(words: list[str], out: mut list[str]) -> str:
+    out.append(words[0].clone())
+    kept = words[1].clone()
+    out.append(kept.clone())
+    last = words[2].clone()
+    print(last)
+    out.append(last)
+    return kept
+
+def main():
+    mut out: list[str] = []
+    print(gather(["a", "b", "c"], out))
+"#;
+
+#[test]
+fn a_copy_made_only_to_be_appended_is_planned_as_words() {
+    let mir = lower_source_to_mir(COPIES).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let gather = module
+        .functions
+        .iter()
+        .find(|function| function.name == "gather")
+        .expect("the module has `gather`");
+    // The copy of `words[0]` and the copy of `kept` are each appended by
+    // the next operation. `kept` and `last` are read in between.
+    assert_eq!(appended_copies(gather).len(), 2);
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("the module has `main`");
+    assert!(appended_copies(main).is_empty());
 }

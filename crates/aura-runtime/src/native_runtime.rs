@@ -9334,6 +9334,28 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
     })
 }
 
+/// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
+/// `append` of a copy in a box does, with no box made for the copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_view(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        // The copy is made before the list changes, since the bytes may be
+        // an element of the same list.
+        let value = Value::String(literal_str(ptr, len).into());
+        with_vector_mut(vec, |vector| {
+            if is_unknown_runtime_type(&vector.element_type) {
+                vector.element_type = SharedType::from(inferred_collection_type(&value));
+            }
+            vector.elements.push(value);
+        });
+    })
+}
+
 /// The scalar a list write passes as `bits`, of the
 /// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {

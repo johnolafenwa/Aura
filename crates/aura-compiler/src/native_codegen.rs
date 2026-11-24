@@ -2653,6 +2653,8 @@ impl<'a> NativeCodegen<'a> {
             result_twin_words: None,
             view_twin_refs,
             str_slots,
+            appended_copies: str_slots::appended_copies(function),
+            deferred_str_copies: HashMap::new(),
             checked_scalar_body: checked_entry.then_some(func_id),
             function_thunk_refs,
             callback_refs,
@@ -4086,6 +4088,12 @@ struct FunctionCompiler<'a> {
     /// The `str` parameters this body takes as words, when it is a view
     /// twin.
     str_slots: HashMap<String, str_slots::StrSlot>,
+    /// The temporaries that hold a copy of a `str` only for the next
+    /// operation to append it to a list.
+    appended_copies: HashSet<String>,
+    /// The words of each such copy between the two operations, when this
+    /// body has the copied `str` as words.
+    deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
     recovery_refs: HashMap<String, FuncRef>,
     checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
@@ -6224,6 +6232,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.release_opaque_handle(key);
                 }
             }
+            Instruction::Assign { target, value } if self.defer_str_copy(target, value)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();
@@ -8311,12 +8320,8 @@ impl<'a> FunctionCompiler<'a> {
                 if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
                     && selection.element_type == Type::named("str")
                 {
-                    let equal = self.emit_str_view_equality(
-                        list,
-                        index,
-                        (literal_ptr, literal.len()),
-                        &slow_args,
-                    );
+                    let equal =
+                        self.emit_str_view_equality(list, index, literal.as_bytes(), &slow_args)?;
                     let result = if op == BinaryOp::Eq {
                         equal
                     } else {
@@ -10148,6 +10153,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 MirFormatPart::Value(value) => {
+                    if self.push_format_words(handle, value)? {
+                        continue;
+                    }
                     let value = self.load_operand(value)?;
                     self.push_format_value(handle, value)?;
                 }
@@ -12851,6 +12859,7 @@ impl<'a> FunctionCompiler<'a> {
             return Err("direct backend encountered an empty move place".to_string());
         };
         let root_ty = self.local_type(root)?;
+        self.materialize_deferred_str_copy(root)?;
         if segments.len() == 1 {
             let vars = self.local_vars(root)?;
             let values = vars
@@ -12925,6 +12934,7 @@ impl<'a> FunctionCompiler<'a> {
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
         self.materialize_str_slot(name)?;
+        self.materialize_deferred_str_copy(name)?;
         let vars = self.local_vars(name)?;
         let ty = self.local_type(name)?;
         let values = vars
@@ -13571,9 +13581,10 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         list: Val,
         index: Val,
-        (literal_ptr, literal_len): (Val, usize),
+        literal: &[u8],
         slow_args: &[Val; 8],
-    ) -> Val {
+    ) -> std::result::Result<Val, String> {
+        let literal_len = literal.len();
         use aura_runtime::native_runtime::{
             DirectListAccess, DIRECT_STR_VIEW_ENTRY_BYTES, DIRECT_STR_VIEW_LEN_OFFSET,
             DIRECT_STR_VIEW_PTR_OFFSET,
@@ -13613,12 +13624,7 @@ impl<'a> FunctionCompiler<'a> {
             let bytes = self
                 .builder
                 .load(types::I64, flags, entry, DIRECT_STR_VIEW_PTR_OFFSET);
-            let literal_len = self.builder.iconst(types::I64, literal_len as i64);
-            let inst = self.builder.call(
-                self.runtime[RuntimeFn::BytesEqual],
-                &[bytes, literal_ptr, literal_len],
-            );
-            let equal = inst.results[0];
+            let equal = self.emit_literal_bytes_equal(bytes, literal)?;
             self.builder.jump(join_block, &[equal]);
         }
 
@@ -13636,7 +13642,7 @@ impl<'a> FunctionCompiler<'a> {
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        self.builder.block_params(join_block)[0]
+        Ok(self.builder.block_params(join_block)[0])
     }
 
     /// A new box copying element `index` of the `list[str]` `list`. A list
@@ -17787,6 +17793,13 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
                 self.emit_plain_list_push(&record, list, &value);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ListOp::Push
+                if element_ty == Type::named("str")
+                    && self.push_deferred_str_copy(list, &args[0].value) =>
+            {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

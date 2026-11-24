@@ -349,6 +349,112 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
     views
 }
 
+/// The local a `clone()` of a `str` place is assigned to, when
+/// `instruction` is that.
+fn copied_str(instruction: &Instruction) -> Option<&str> {
+    match instruction {
+        Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Value(ValueOp::Clone),
+                            receiver: Some(Operand::Place(_)),
+                            ..
+                        },
+                    ..
+                },
+        } => Some(target),
+        _ => None,
+    }
+}
+
+/// The local `instruction` appends to a list by moving it, when it is an
+/// `append` of a moved local.
+fn appended_local(instruction: &Instruction) -> Option<&str> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::Push),
+                        receiver: Some(Operand::Place(_)),
+                        ..
+                    },
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    match args.as_slice() {
+        [MirArg {
+            value: Operand::MovePlace(place),
+            writeback_place: None,
+            ..
+        }] => Some(place),
+        _ => None,
+    }
+}
+
+/// The temporaries of `function` that hold a copy of a `str` only for the
+/// next operation to append it to a list, as in
+/// `out.append(text.clone())`. Only the end of the loan the copy read may
+/// lie between the two, so the bytes the copy read are still there when
+/// the list takes them.
+pub(super) fn appended_copies(function: &MirFunction) -> HashSet<String> {
+    let mut copies = HashSet::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Some(target) = copied_str(instruction) else {
+                continue;
+            };
+            let next = block.instructions[index + 1..].iter().find(|next| {
+                !matches!(
+                    next,
+                    Instruction::EndLoan { .. }
+                        | Instruction::SourceLocation { .. }
+                        | Instruction::SourceName { .. }
+                )
+            });
+            if next.and_then(appended_local) == Some(target) {
+                copies.insert(target);
+            }
+        }
+    }
+    if copies.is_empty() {
+        return HashSet::new();
+    }
+    // The append is the copy's only use.
+    let mut uses = HashMap::<&str, usize>::new();
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            instruction_place_mentions(instruction, &mut mentions);
+        }
+        mentions.extend(terminator_place_mentions(&block.terminator));
+    }
+    for place in mentions {
+        *uses
+            .entry(place.split('.').next().unwrap_or(place))
+            .or_default() += 1;
+    }
+    let strs = function
+        .local_types
+        .iter()
+        .filter(|local| is_str(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    copies
+        .into_iter()
+        .filter(|copy| uses.get(copy) == Some(&1) && strs.contains(copy))
+        .map(str::to_string)
+        .collect()
+}
+
 /// The signature of a view twin: `signature`, the function's own, then
 /// `ptr` and `len` for each of its `count` view parameters.
 pub(super) fn view_twin_signature(mut signature: Signature, count: usize) -> Signature {
@@ -411,6 +517,29 @@ pub(super) fn bind_view_params(
 enum ViewSide {
     Words(Val, Val),
     Literal(String),
+}
+
+/// The words a literal of `len` bytes is compared in, each an offset and
+/// a width in bytes: none when the runtime compares it, as it does a long
+/// literal. The last word overlaps the one before it when the widths do
+/// not add up to `len`.
+pub(super) fn literal_chunks(len: usize) -> Vec<(usize, usize)> {
+    if len == 0 || len > 16 || cfg!(target_endian = "big") {
+        return Vec::new();
+    }
+    let width = match len {
+        8.. => 8,
+        4.. => 4,
+        2.. => 2,
+        _ => 1,
+    };
+    let mut chunks = (0..len / width)
+        .map(|index| (index * width, width))
+        .collect::<Vec<_>>();
+    if !len.is_multiple_of(width) {
+        chunks.push((len - width, width));
+    }
+    chunks
 }
 
 /// How a call has a `str` argument as words.
@@ -503,17 +632,40 @@ impl FunctionCompiler<'_> {
     }
 
     /// Whether the `literal.len()` bytes at `ptr` are `literal`, as 0 or 1.
-    fn emit_literal_bytes_equal(
+    /// A short literal is compared in the words both hold.
+    pub(super) fn emit_literal_bytes_equal(
         &mut self,
         ptr: Val,
         literal: &[u8],
     ) -> std::result::Result<Val, String> {
-        let (literal_ptr, literal_len) = self.string_constant(literal)?;
-        let inst = self.builder.call(
-            self.runtime[RuntimeFn::BytesEqual],
-            &[ptr, literal_ptr, literal_len],
-        );
-        Ok(inst.results[0])
+        let chunks = literal_chunks(literal.len());
+        if chunks.is_empty() {
+            let (literal_ptr, literal_len) = self.string_constant(literal)?;
+            let inst = self.builder.call(
+                self.runtime[RuntimeFn::BytesEqual],
+                &[ptr, literal_ptr, literal_len],
+            );
+            return Ok(inst.results[0]);
+        }
+        // The bytes may lie anywhere.
+        let flags = MemFlags::new();
+        let mut difference = self.builder.iconst(types::I64, 0);
+        for (offset, width) in chunks {
+            let at = offset as i32;
+            let read = match width {
+                8 => self.builder.load(types::I64, flags, ptr, at),
+                4 => self.builder.uload32(flags, ptr, at),
+                2 => self.builder.uload16(flags, ptr, at),
+                _ => self.builder.uload8(types::I64, flags, ptr, at),
+            };
+            let mut word = [0u8; 8];
+            word[..width].copy_from_slice(&literal[offset..offset + width]);
+            let expected = self.builder.iconst(types::I64, i64::from_le_bytes(word));
+            let changed = self.builder.bxor(read, expected);
+            difference = self.builder.bor(difference, changed);
+        }
+        let equal = self.builder.icmp_imm(IntCC::Equal, difference, 0);
+        Ok(self.builder.uextend(types::I64, equal))
     }
 
     /// Whether the text at `left`, a `ptr` and a `len`, is `right`, as 0
@@ -874,6 +1026,92 @@ impl FunctionCompiler<'_> {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Appends the f-string part `value` to the builder `handle` from its
+    /// bytes, when this body has it as words.
+    pub(super) fn push_format_words(
+        &mut self,
+        handle: Val,
+        value: &Operand,
+    ) -> std::result::Result<bool, String> {
+        let Some(words) = self.load_place_words(value)? else {
+            return Ok(false);
+        };
+        self.builder.call(
+            self.runtime[RuntimeFn::FormatPushStr],
+            &[handle, words.ptr, words.len],
+        );
+        self.release_view_arguments(words.released.into_iter().collect());
+        Ok(true)
+    }
+
+    /// Keeps the words of the `str` that `value` copies into `target`,
+    /// instead of the copy, when the next operation appends `target` to a
+    /// list (see [`appended_copies`]) and this body has the `str` as words.
+    pub(super) fn defer_str_copy(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        if !self.appended_copies.contains(target) {
+            return Ok(false);
+        }
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    receiver: Some(receiver),
+                    ..
+                },
+            ..
+        } = value
+        else {
+            return Ok(false);
+        };
+        let Some(words) = self.load_place_words(receiver)? else {
+            return Ok(false);
+        };
+        self.deferred_str_copies.insert(target.to_string(), words);
+        Ok(true)
+    }
+
+    /// Makes the copy `name` stands for, when it was deferred and something
+    /// other than the append reads it.
+    pub(super) fn materialize_deferred_str_copy(
+        &mut self,
+        name: &str,
+    ) -> std::result::Result<(), String> {
+        let Some(words) = self.deferred_str_copies.remove(name) else {
+            return Ok(());
+        };
+        let copy = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::StringFromView],
+                &[words.ptr, words.len],
+            )
+            .results[0];
+        self.release_view_arguments(words.released.into_iter().collect());
+        let variable = self.local_vars(name)?[0];
+        self.builder.def_var(variable, copy);
+        Ok(())
+    }
+
+    /// Appends the deferred copy `operand` moves to the `list[str]` `list`
+    /// from its bytes, when it is one.
+    pub(super) fn push_deferred_str_copy(&mut self, list: Val, operand: &Operand) -> bool {
+        let Operand::MovePlace(place) = operand else {
+            return false;
+        };
+        let Some(words) = self.deferred_str_copies.remove(place.as_str()) else {
+            return false;
+        };
+        self.builder.call(
+            self.runtime[RuntimeFn::VecPushStrView],
+            &[list, words.ptr, words.len],
+        );
+        self.release_view_arguments(words.released.into_iter().collect());
+        true
     }
 
     /// Releases the copies a call of a view twin made for its arguments.

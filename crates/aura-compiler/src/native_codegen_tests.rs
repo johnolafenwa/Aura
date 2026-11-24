@@ -15816,14 +15816,17 @@ def main():
     let mir = lower_source_to_mir(equality).expect("the equality loop should lower");
     let object = emit_host_object(&mir).expect("the equality loop should compile directly");
     let referenced = exact_referenced_symbols(&object);
-    // The bytes are compared in generated code once the lengths match, and
-    // a list without a `str` view still takes the runtime compare.
-    for required in [
-        "aura_direct_bytes_equal",
-        "aura_direct_compare_str_literal_at",
-    ] {
-        assert!(referenced.contains(required), "{required}: {referenced:?}");
-    }
+    // The bytes of a short literal are compared in words in generated code
+    // once the lengths match, and a list without a `str` view still takes
+    // the runtime compare.
+    assert!(
+        referenced.contains("aura_direct_compare_str_literal_at"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_bytes_equal"),
+        "{referenced:?}"
+    );
 }
 
 #[test]

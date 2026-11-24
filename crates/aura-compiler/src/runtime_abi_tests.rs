@@ -226,7 +226,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // are read in place. A plain record element is read, appended,
     // replaced, and popped in place. An empty list literal of a known type
     // is built and tagged in one call, its `str` literals join it without
-    // boxes, and a `str` element copied out of a
+    // boxes, as does a copy of a `str` read from its bytes, and a `str`
+    // element copied out of a
     // list that keeps no view is read by index. A `get` whose `Lookup` is kept as its
     // found value calls the `_payload` form of the op's helper, and one
     // whose found value is only read calls the `_lent` form. A `contains_key`
@@ -263,6 +264,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecPushStrLiteral,
+            RuntimeFn::VecPushStrView,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,

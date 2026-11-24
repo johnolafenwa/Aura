@@ -28754,6 +28754,31 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
     }
     unsafe { release_value(list) };
 
+    // A copy of a `str` joins a list from its bytes, which may be an
+    // element of the same list, and an untyped list takes its type.
+    let list = super::aura_direct_vec_empty();
+    let word = "a much longer text than fits inline";
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), word.len());
+    let copy = super::aura_direct_vec_index(list, 0, 1, 1);
+    super::aura_direct_vec_push_str_view(list, super::aura_direct_string_bytes(copy), word.len());
+    unsafe { release_value(copy) };
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), 1);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(
+                vector.elements.to_vec(),
+                vec![
+                    Value::String(word.into()),
+                    Value::String(word.into()),
+                    Value::String("a".into())
+                ]
+            );
+            assert_eq!(*vector.element_type, Type::named("str"));
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
     let message = capture_direct_boundary_error_message(|| {
         let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
         super::aura_direct_vec_empty_tagged(&cell, b"int64".as_ptr(), 5);
