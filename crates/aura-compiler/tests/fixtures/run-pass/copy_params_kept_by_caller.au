@@ -1,0 +1,122 @@
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+    Empty
+
+
+copy class Point:
+    x: int64
+    y: int64
+
+
+# Only reads its parameter: a match, payload reads and a binary operation.
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Empty:
+            return 0.0
+
+
+# Passes its parameter on to a function that only reads it.
+def doubled(shape: Shape) -> float64:
+    return area(shape) * 2.0
+
+
+def same(a: Shape, b: Shape) -> bool:
+    return a == b
+
+
+def pair_sum(pair: (int64, int64)) -> int64:
+    (a, b) = pair
+    return a + b
+
+
+def norm(point: Point) -> int64:
+    return point.x * point.x + point.y * point.y
+
+
+# Returns its parameter: keeps a copy of its own.
+def chosen(shape: Shape, other: Shape, first: bool) -> Shape:
+    if first:
+        return shape
+    return other
+
+
+# Stores its parameter in a list it returns.
+def stored(shape: Shape) -> list[Shape]:
+    mut shapes = list[Shape]()
+    shapes.append(shape)
+    return shapes
+
+
+# Reassigns its parameter.
+def grown(shape: Shape) -> float64:
+    mut current = shape
+    current = Shape.Rect(area(current), 1.0)
+    return area(current)
+
+
+# Captures its parameter in a closure.
+def later(shape: Shape) -> float64:
+    read: def(float64) -> float64 = lambda scale: area(shape) * scale
+    return read(1.0)
+
+
+def main():
+    mut shapes = list[Shape]()
+    for i in range(6):
+        if i % 3 == 0:
+            shapes.append(Shape.Circle(2.0))
+        elif i % 3 == 1:
+            shapes.append(Shape.Rect(1.0, 3.0))
+        else:
+            shapes.append(Shape.Empty)
+    mut total = 0.0
+    mut i = 0
+    while i < shapes.len():
+        total += area(shapes[i])
+        total += doubled(shapes[i])
+        if same(shapes[i], Shape.Circle(2.0)):
+            total += 100.0
+        i += 1
+    print(total)
+
+    # A temporary argument the caller makes and releases.
+    print(area(Shape.Rect(2.0, 5.0)))
+    print(doubled(Shape.Circle(3.0)))
+
+    pairs = [(1, 2), (3, 4), (5, 6)]
+    mut sum = 0
+    for k in range(pairs.len()):
+        sum += pair_sum(pairs[k])
+    print(sum)
+
+    points = [Point(x=1, y=2), Point(x=3, y=4)]
+    mut squares = 0
+    for k in range(points.len()):
+        squares += norm(points[k])
+    print(squares)
+
+    # Results that outlive the element they were made from.
+    kept = chosen(shapes[0], shapes[1], true)
+    other = chosen(shapes[0], shapes[1], false)
+    held = stored(shapes[1])
+    shapes[0] = Shape.Empty
+    shapes[1] = Shape.Circle(9.0)
+    print(area(kept))
+    print(area(other))
+    print(area(held[0]))
+    print(grown(shapes[1]))
+    print(later(shapes[1]))
+
+    # A list written while an element read from it is still to be read.
+    mut items = [Shape.Circle(1.0), Shape.Rect(2.0, 2.0)]
+    first = items[0]
+    items[0] = Shape.Rect(5.0, 5.0)
+    print(area(first))
+    print(area(items[0]))
+    items.append(first)
+    print(area(items[2]))

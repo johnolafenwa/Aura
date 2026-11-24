@@ -269,6 +269,85 @@ fn reads_lent(instruction: &Instruction, temp: &str, borrowed: &[&Operand]) -> b
     }
 }
 
+/// Whether `instruction`, which names `local`, leaves the box `local`
+/// holds with its keeper. `local` holds a boxed value of a Copy type, which
+/// the MIR copies freely and never retains or releases, so only these uses
+/// are known to take no reference to the box: a callee that borrows it, a
+/// match on it or a read of a variant's payload, a comparison or other
+/// binary operation, and a read of one of its parts.
+fn reads_kept_copy(instruction: &Instruction, local: &str, borrowed: &[&Operand]) -> bool {
+    if matches!(
+        instruction,
+        Instruction::Lend { .. } | Instruction::EndLend { .. }
+    ) {
+        return false;
+    }
+    let reads_whole = matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::VariantPayload { .. } | Rvalue::Binary { .. },
+            ..
+        }
+    );
+    reads_lent(instruction, local, borrowed)
+        && crate::mir::ownership::operand_roles(instruction)
+            .into_iter()
+            .all(|(operand, _)| match operand {
+                Operand::Place(place) | Operand::MovePlace(place) if place == local => {
+                    reads_whole || borrowed.iter().any(|kept| std::ptr::eq(*kept, operand))
+                }
+                _ => true,
+            })
+}
+
+/// Which of `function`'s parameters `candidates` marks, each a boxed
+/// value of a Copy type, the function only reads where the caller keeps
+/// it (see [`reads_kept_copy`]). `borrowed` are the operands the callee of
+/// an instruction borrows.
+pub(super) fn kept_copy_params<'f>(
+    function: &'f MirFunction,
+    candidates: &[bool],
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> Vec<bool> {
+    let assigned = assignments(function);
+    let mut kept = function
+        .params
+        .iter()
+        .zip(candidates)
+        .map(|(param, candidate)| *candidate && !assigned.contains_key(param.name.as_str()))
+        .collect::<Vec<_>>();
+    kept.resize(function.params.len(), false);
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let roots = mentioned_roots(instruction);
+            let borrowed = borrowed(instruction);
+            for (param, kept) in function.params.iter().zip(&mut kept) {
+                if *kept
+                    && roots.contains(param.name.as_str())
+                    && !reads_kept_copy(instruction, &param.name, &borrowed)
+                {
+                    *kept = false;
+                }
+            }
+        }
+        let match_scrutinee = match &block.terminator {
+            Terminator::Match {
+                scrutinee: Operand::Place(place),
+                ..
+            } => Some(place.as_str()),
+            _ => None,
+        };
+        for place in terminator_place_mentions(&block.terminator) {
+            for (param, kept) in function.params.iter().zip(&mut kept) {
+                if place == param.name && Some(place) != match_scrutinee {
+                    *kept = false;
+                }
+            }
+        }
+    }
+    kept
+}
+
 /// The receiver place of a method call whose callee borrows its receiver,
 /// one of `borrowed`: a method that only reads `self`, which the MIR names
 /// as a writeback all the same.

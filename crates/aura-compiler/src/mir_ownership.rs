@@ -485,6 +485,40 @@ pub(super) fn recorded_borrowing(
         .collect()
 }
 
+/// The shared parameters of each recorded function (see
+/// [`recorded_borrowing`]) that the module passes by the owning convention
+/// only because their type needs no drop, by position. A backend that
+/// boxes such a value may keep the box with the caller when the callee
+/// only reads it. A function a runtime type picks owns its parameters.
+pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Vec<bool>> {
+    if module.ownership != MirOwnership::Explicit || module.borrowing.is_empty() {
+        return BTreeMap::new();
+    }
+    let Ok(context) = MirLoanValidationContext::new(module) else {
+        return BTreeMap::new();
+    };
+    let dispatched = candidate_dispatched(module);
+    module
+        .functions
+        .iter()
+        .filter(|function| {
+            module.borrowing.contains(&function.name)
+                && !dispatched.contains(function.name.as_str())
+        })
+        .map(|function| {
+            let params = function
+                .params
+                .iter()
+                .map(|param| {
+                    param.passing == MirReceiverKind::Borrow
+                        && !type_needs_drop(&context, &param.ty)
+                })
+                .collect();
+            (function.name.clone(), params)
+        })
+        .collect()
+}
+
 /// [`recorded_borrowing`] for a backend: how each function that keeps its
 /// callers' shared arguments takes them, or nothing for a module without
 /// explicit ownership.

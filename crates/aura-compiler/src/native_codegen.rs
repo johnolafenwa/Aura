@@ -1293,7 +1293,7 @@ impl<'a> NativeCodegen<'a> {
                 .collect(),
             receiver_keepers: element_loans::receiver_keepers(module, &method_receivers),
             method_receivers,
-            borrowing: crate::mir::ownership::kept_arguments(module),
+            borrowing: keep_boxed_copy_params(module, &function_param_types),
             function_return_types,
             function_param_types,
             function_writeback_types,
@@ -2041,6 +2041,15 @@ impl<'a> NativeCodegen<'a> {
             .get(&function.name)
             .cloned()
             .unwrap_or_default();
+        // A boxed Copy parameter the caller keeps is the caller's to
+        // release (see `keep_boxed_copy_params`).
+        if let Some(callee) = self.borrowing.get(&function.name) {
+            for (param, kept) in function.params.iter().zip(&callee.params) {
+                if *kept == MirReceiverKind::Borrow {
+                    explicit_locals.tracked.insert(param.name.clone());
+                }
+            }
+        }
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -20385,6 +20394,85 @@ fn adds_to_receiver(op: RuntimeOp) -> bool {
             | RuntimeOp::Set(SetOp::Add | SetOp::AddInt64)
             | RuntimeOp::Dict(DictOp::Set | DictOp::SetIndex)
     )
+}
+
+/// How each function that keeps its callers' shared arguments takes them
+/// (see `mir::ownership::kept_arguments`), with one addition. The MIR
+/// passes a shared parameter of a Copy type by the owning convention, since
+/// it copies such a value freely. This backend keeps some of those values
+/// in boxes: a Copy enum with a payload, a tuple, a narrow integer. The
+/// caller of a function that only reads such a parameter where it lies
+/// (see `elements::kept_copy_params`) keeps the box, as it keeps any other
+/// shared argument, so the call copies and releases nothing.
+fn keep_boxed_copy_params(
+    module: &MirModule,
+    param_types: &HashMap<String, Vec<DirectType>>,
+) -> BTreeMap<String, crate::mir::ownership::BorrowingCallee> {
+    let mut borrowing = crate::mir::ownership::kept_arguments(module);
+    let undropped = crate::mir::ownership::undropped_shared_params(module);
+    // Every candidate starts as kept, and loses that when its function
+    // does more than read it. A function may pass a parameter on to
+    // another candidate, so the passes repeat until none changes.
+    let mut candidates = Vec::new();
+    for function in &module.functions {
+        let (Some(undropped), Some(types), Some(callee)) = (
+            undropped.get(&function.name),
+            param_types.get(&function.name),
+            borrowing.get_mut(&function.name),
+        ) else {
+            continue;
+        };
+        let Some(first) = types.len().checked_sub(function.params.len()) else {
+            continue;
+        };
+        let mut any = false;
+        for (index, kept) in callee.params.iter_mut().enumerate() {
+            let boxed = matches!(
+                types.get(first + index),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name != "str"
+            ) || matches!(
+                types.get(first + index),
+                Some(DirectType::Opaque(Type::Tuple(_)))
+            );
+            if boxed && undropped.get(index) == Some(&true) && *kept == MirReceiverKind::Value {
+                *kept = MirReceiverKind::Borrow;
+                any = true;
+            }
+        }
+        if any {
+            candidates.push((function, undropped));
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (function, undropped) in &candidates {
+            let current = borrowing[&function.name]
+                .params
+                .iter()
+                .zip(undropped.iter())
+                .map(|(kept, undropped)| *undropped && *kept == MirReceiverKind::Borrow)
+                .collect::<Vec<_>>();
+            let kept = elements::kept_copy_params(function, &current, |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    borrowing.get(name)
+                })
+            });
+            if kept != current {
+                let callee = borrowing
+                    .get_mut(&function.name)
+                    .expect("a candidate is a borrowing function");
+                for ((param, was), kept) in callee.params.iter_mut().zip(&current).zip(&kept) {
+                    if *was && !*kept {
+                        *param = MirReceiverKind::Value;
+                    }
+                }
+                changed = true;
+            }
+        }
+        if !changed {
+            return borrowing;
+        }
+    }
 }
 
 /// Whether a call to a function whose parameters `kept` names only borrows

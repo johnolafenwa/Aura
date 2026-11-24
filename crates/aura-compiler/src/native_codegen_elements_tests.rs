@@ -999,3 +999,173 @@ fn a_scrutinee_a_task_reaches_has_no_view() {
     );
     assert_eq!(adopted_views(&function).1, Vec::<String>::new());
 }
+
+const COPIES: &str = r#"
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+
+class Node:
+    tags: list[int64]
+    children: list[int64]
+
+class Holder:
+    tags: list[int64]
+
+    def probe(self) -> int64:
+        return count(self.tags)
+
+    def mixed(self) -> int64:
+        return weigh(self.tags, self)
+
+def count(tags: list[int64]) -> int64:
+    return tags.len()
+
+def weigh(tags: list[int64], holder: Holder) -> int64:
+    return tags.len() + holder.tags.len()
+
+def area(shape: Shape) -> float64:
+    match shape:
+        case Shape.Circle(r):
+            return r * r
+        case Shape.Rect(w, h):
+            return w * h
+
+def doubled(shape: Shape) -> float64:
+    return area(shape) * 2.0
+
+def same(a: Shape, b: Shape) -> bool:
+    return a == b
+
+def chosen(shape: Shape) -> Shape:
+    return shape
+
+def stored(shape: Shape) -> list[Shape]:
+    mut shapes = list[Shape]()
+    shapes.append(shape)
+    return shapes
+
+def renamed(shape: Shape) -> float64:
+    mut current = shape
+    current = Shape.Circle(1.0)
+    return area(current)
+
+def later(shape: Shape) -> float64:
+    read: def(float64) -> float64 = lambda scale: area(shape) * scale
+    return read(1.0)
+
+def each(shapes: list[Shape]) -> float64:
+    mut total = 0.0
+    for i in range(shapes.len()):
+        total += area(shapes[i])
+    return total
+
+def equal(shapes: list[Shape]) -> bool:
+    return shapes[0] == shapes[1]
+
+def copies(nodes: list[Node]) -> int64:
+    mut total = 0
+    for node in nodes:
+        tags = node.tags.copy()
+        total += tags.len()
+    return total
+
+def walks(nodes: list[Node]) -> int64:
+    mut total = 0
+    for node in nodes:
+        for child in node.children:
+            total += child
+    return total
+
+def main():
+    shapes = [Shape.Circle(2.0), Shape.Rect(1.0, 3.0)]
+    print(each(shapes))
+    print(doubled(shapes[0]))
+    print(same(shapes[0], shapes[1]))
+    print(area(chosen(shapes[0])))
+    print(stored(shapes[1]).len())
+    print(renamed(shapes[0]))
+    print(later(shapes[0]))
+    print(equal(shapes))
+    nodes = [Node(tags = [1], children = [2, 3])]
+    print(copies(nodes))
+    print(walks(nodes))
+    holder = Holder(tags = [1, 2])
+    print(holder.probe())
+    print(holder.mixed())
+"#;
+
+/// The module of [`COPIES`], with how each function that keeps its
+/// callers' shared arguments takes them once every shared parameter of a
+/// Copy type is kept too.
+fn copies_module() -> (
+    crate::mir::MirModule,
+    std::collections::BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
+) {
+    let module = lower_source_to_mir(COPIES).expect("the source should lower");
+    let mut borrowing = crate::mir::ownership::kept_arguments(&module);
+    for (name, undropped) in crate::mir::ownership::undropped_shared_params(&module) {
+        let callee = borrowing.get_mut(&name).expect("a recorded function");
+        for (kept, undropped) in callee.params.iter_mut().zip(undropped) {
+            if undropped {
+                *kept = crate::mir::MirReceiverKind::Borrow;
+            }
+        }
+    }
+    (module, borrowing)
+}
+
+fn kept_copies(name: &str) -> Vec<bool> {
+    let (module, borrowing) = copies_module();
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist");
+    let candidates = vec![true; function.params.len()];
+    super::kept_copy_params(function, &candidates, |instruction| {
+        crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
+    })
+}
+
+#[test]
+fn a_copy_parameter_only_read_stays_with_the_caller() {
+    let undropped = crate::mir::ownership::undropped_shared_params(
+        &lower_source_to_mir(COPIES).expect("the source should lower"),
+    );
+    assert_eq!(undropped.get("area"), Some(&vec![true]));
+    assert_eq!(undropped.get("each"), Some(&vec![false]));
+    // A match and payload reads, a call that borrows it, a comparison.
+    // The MIR copies the left side of a comparison into a temporary.
+    assert_eq!(kept_copies("area"), vec![true]);
+    assert_eq!(kept_copies("doubled"), vec![true]);
+    assert_eq!(kept_copies("same"), vec![false, true]);
+    // A non-candidate stays owned.
+    let (module, _) = copies_module();
+    let area = module
+        .functions
+        .iter()
+        .find(|function| function.name == "area")
+        .expect("the function should exist");
+    assert_eq!(
+        super::kept_copy_params(area, &[false], |_| Vec::new()),
+        vec![false]
+    );
+    // Without a callee that borrows it, a call takes the parameter.
+    let doubled = module
+        .functions
+        .iter()
+        .find(|function| function.name == "doubled")
+        .expect("the function should exist");
+    assert_eq!(
+        super::kept_copy_params(doubled, &[true], |_| Vec::new()),
+        vec![false]
+    );
+}
+
+#[test]
+fn a_copy_parameter_returned_stored_reassigned_or_captured_is_owned() {
+    for name in ["chosen", "stored", "renamed", "later"] {
+        assert_eq!(kept_copies(name), vec![false], "{name}");
+    }
+}
