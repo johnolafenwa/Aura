@@ -193,3 +193,188 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn a_slice_has_its_length_and_the_elements_it_copies() {
+    assert_proved(
+        r#"
+def mid(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    ensures result == xs[1]
+    ys = xs[1:3]
+    assert len(ys) == 2
+    assert len(xs[1:3]) == 2
+    return ys[0]
+
+def tail(xs: list[int64]) -> list[int64]:
+    requires len(xs) > 0
+    ensures len(result) == len(xs) - 1
+    ensures forall(i in range(len(result)), result[i] == xs[i + 1])
+    return xs[1:]
+
+def head(xs: list[int64]) -> list[int64]:
+    requires len(xs) >= 2
+    ensures len(result) == len(xs) - 2
+    return xs[:-2]
+
+def last_two(xs: list[int64]) -> list[int64]:
+    requires len(xs) >= 2
+    ensures len(result) == 2
+    ensures result[1] == xs[len(xs) - 1]
+    ensures result[0] == xs[-2]
+    return xs[-2:]
+
+def copy(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    ensures forall(i in range(len(xs)), result[i] == xs[i])
+    return xs[:]
+
+def window(xs: list[int64], a: int64, b: int64) -> list[int64]:
+    requires 0 <= a and a <= b and b <= len(xs)
+    ensures len(result) == b - a
+    ensures forall(i in range(b - a), result[i] == xs[a + i])
+    return xs[a:b]
+
+def changed(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    ensures result == xs[1]
+    mut ys = xs[1:]
+    kept = ys[0]
+    ys[0] = kept + 0
+    ys[1] = 7
+    assert ys[1] == 7
+    return ys[0]
+
+def names(xs: list[(str, int64)]) -> int64:
+    requires len(xs) > 1
+    ensures result == xs[1][1]
+    ys = xs[1:]
+    return ys[0][1]
+
+def main():
+    xs = [1, 2, 3, 4, 5]
+    print(mid(xs))
+    print(len(tail(xs)))
+    print(len(head(xs)))
+    print(len(last_two(xs)))
+    print(len(copy(xs)))
+    print(len(window(xs, 1, 1)))
+    print(changed(xs))
+    print(names([("a", 1), ("b", 2)]))
+"#,
+    );
+}
+
+#[test]
+fn a_slice_outside_the_list_and_a_wrong_claim_about_one_still_fail() {
+    assert_open(
+        r#"
+def short(xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    ys = xs[1:3]
+    return len(ys)
+
+def backwards(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    return len(xs[2:1])
+
+def past_the_end(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    ys = xs[1:3]
+    return ys[2]
+
+def negative(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    return len(xs[-2:])
+
+def wrong_element(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    ensures result == xs[0]
+    ys = xs[1:3]
+    return ys[0]
+
+def wrong_length(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    ensures result == 3
+    return len(xs[1:3])
+
+def main():
+    xs = [1, 2, 3, 4, 5]
+    print(short(xs))
+    print(wrong_element(xs))
+    print(wrong_length(xs))
+"#,
+        &[
+            "4 index in range failed",
+            "9 index in range failed",
+            "14 index in range failed",
+            "18 index in range failed",
+            "22 ensures failed",
+            "28 ensures failed",
+        ],
+    );
+}
+
+#[test]
+fn a_stepped_slice_stays_unmodeled() {
+    assert_open(
+        r#"
+def evens(xs: list[int64]) -> int64:
+    ensures result >= 0
+    ensures result == 3
+    return len(xs[::2])
+
+def main():
+    print(evens([1, 2, 3, 4, 5]))
+"#,
+        &["4 ensures unsupported"],
+    );
+}
+
+#[test]
+fn a_slice_agrees_with_its_model_at_run_time() {
+    assert_runs(
+        r#"
+def check(xs: list[int64], a: int64, b: int64):
+    n = len(xs)
+    mut low = a
+    if a < 0:
+        low = a + n
+    mut high = b
+    if b < 0:
+        high = b + n
+    if 0 <= low and low <= high and high <= n:
+        ys = xs[a:b]
+        assert len(ys) == high - low
+        for i in range(len(ys)):
+            assert ys[i] == xs[low + i]
+    if 0 <= low and low <= n:
+        rest = xs[a:]
+        assert len(rest) == n - low
+        for i in range(len(rest)):
+            assert rest[i] == xs[low + i]
+    if 0 <= high and high <= n:
+        first = xs[:b]
+        assert len(first) == high
+        for i in range(len(first)):
+            assert first[i] == xs[i]
+
+def sweep(xs: list[int64]):
+    for a in range(-7, 8):
+        for b in range(-7, 8):
+            check(xs, a, b)
+
+def main():
+    sweep([])
+    sweep([4])
+    sweep([4, 5, 6])
+    sweep([9, 8, 7, 6, 5, 4])
+"#,
+    );
+    // Bounds out of order or outside the list stop the program: they are
+    // not clamped.
+    for slice in ["xs[2:1]", "xs[1:4]", "xs[-4:]", "xs[:-4]", "xs[4:]"] {
+        let source = format!("def main():\n    xs = [1, 2, 3]\n    print(len({slice}))\n");
+        assert!(crate::run_source(&source).is_err(), "{slice}");
+    }
+}
