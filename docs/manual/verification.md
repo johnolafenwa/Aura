@@ -173,14 +173,30 @@ error[AU5101]: cannot prove integer result in range
   = note: in `double` (overflow check)
   = note: counterexample: x = 4611686018427387904
 verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 1 failed, 0 not modeled, 0 undecided
 ```
+
+When a check is open, a second summary line counts the open checks by
+outcome: failed, not modeled, and undecided.
 
 | Code | Meaning |
 | --- | --- |
 | `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point `**`. It is not proved, and it stays a runtime check. |
+| `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a slice, a comprehension, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
+| `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
+
+A failure is reported only when the program can reach it. In this function
+the verifier does not model `split`, so it cannot tell that the result has
+at least one part, and it says so instead of inventing an input:
+
+```text
+error[AU5104]: cannot check `ensures` clause `result >= 1`: it depends on `split` at line 3, which the verifier does not model
+```
+
+A check beside such a step that does not read its result is still proved or
+refuted as usual.
 
 A check that fails to prove is not always a bug: the verifier may lack a
 fact that holds. Add it as a `requires` on the function, an `invariant` on
@@ -195,7 +211,7 @@ where it is stated and uses it where it is needed.
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, then the diagnostics. |
 
 ### Proof Cache
 

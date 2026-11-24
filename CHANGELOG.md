@@ -7,6 +7,21 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` no longer reports a made-up counterexample for a check that
+  reads the result of a step it does not model, such as `split`, an
+  f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
+  Such a check is reported as not modeled (`AU5104`), and the message names
+  the step and its line. A real failure beside such a step is still a
+  failure.
+- `aura verify` reports `AU5120` for a function whose `requires` clauses and
+  class invariants can never hold together, and does not count it as
+  proved.
+- `aura verify` prints how many open checks failed, are not modeled, or are
+  undecided, and the JSON report carries `failed`, `not_modeled` and
+  `undecided` counts.
+- `aura verify` proves the body of a generator function with its `requires`
+  clauses known, and reports its checks under the generator's name.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.
