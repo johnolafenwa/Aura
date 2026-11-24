@@ -22370,8 +22370,6 @@ mod enums;
 mod foreign;
 #[path = "native_codegen_foreign_reads.rs"]
 mod foreign_reads;
-#[path = "native_codegen_machine.rs"]
-mod machine;
 #[path = "native_codegen_freestanding.rs"]
 mod freestanding;
 #[cfg(test)]
@@ -22389,6 +22387,8 @@ mod key_loops;
 mod list_snapshots;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+#[path = "native_codegen_machine.rs"]
+mod machine;
 #[path = "native_codegen_math.rs"]
 mod math;
 #[path = "native_codegen_range_loops.rs"]

@@ -568,7 +568,7 @@ impl FunctionCompiler<'_> {
 pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<Diagnostic>> {
     let mut module = module.clone();
     let mut problems = Vec::new();
-    if module.foreign_link.exports.is_empty() && module.foreign_link.module_asm.is_empty() {
+    if module.foreign_link.exports.is_empty() {
         problems.push(
             Diagnostic::coded(
                 UNSUPPORTED,
@@ -578,6 +578,16 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
                 "a freestanding object has no `main`: the code that links it calls its exported functions",
             ),
         );
+        // Assembly entry points, retained functions and placed data can
+        // supply the object roots in place of an ordinary C export.
+        if !module.foreign_link.module_asm.is_empty()
+            || !module.foreign_link.placed_data.is_empty()
+            || module.foreign_link.machine.values().any(|attrs| attrs.used)
+        {
+            problems.clear();
+        }
+    }
+    if !problems.is_empty() {
         return Err(problems);
     }
     let mut symbols = HashSet::new();

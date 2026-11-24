@@ -25,7 +25,6 @@ impl NativeCodegen<'_> {
                 let body = if exported {
                     crate::machine_attributes::MachineAttributes {
                         inline: attrs.inline,
-                        naked: attrs.naked.clone(),
                         ..Default::default()
                     }
                 } else {

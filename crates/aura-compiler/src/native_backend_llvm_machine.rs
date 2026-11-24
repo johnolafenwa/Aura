@@ -197,7 +197,7 @@ fn arm_entry() -> String {
     for i in (0..32).step_by(2) {
         writeln!(text, "stp q{i}, q{}, [sp, #{}]", i + 1, 192 + i * 16).unwrap();
     }
-    text.push_str("bl ${0:c}\n");
+    text.push_str("bl ${0:c}\nmsr daifset, #15\n");
     for i in (0..32).step_by(2) {
         writeln!(text, "ldp q{i}, q{}, [sp, #{}]", i + 1, 192 + i * 16).unwrap();
     }
@@ -224,7 +224,7 @@ fn riscv_entry() -> String {
     for i in 0..32 {
         writeln!(text, "fsd f{i}, {}(sp)", 160 + i * 8).unwrap();
     }
-    text.push_str("2:\ncall ${0:c}\nld t0, 136(sp)\nli t1, 24576\nand t1, t0, t1\nbeqz t1, 3f\n");
+    text.push_str("2:\ncall ${0:c}\ncsrci mstatus, 8\nld t0, 136(sp)\nli t1, 24576\nand t1, t0, t1\nbeqz t1, 3f\n");
     for i in 0..32 {
         writeln!(text, "fld f{i}, {}(sp)", 160 + i * 8).unwrap();
     }

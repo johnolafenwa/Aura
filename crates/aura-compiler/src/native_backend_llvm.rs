@@ -195,7 +195,9 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
-        machine_attributes::apply(&lowerer, self)?;
+        if self.freestanding.is_some() {
+            machine_attributes::apply(&lowerer, self)?;
+        }
         if let Some(debug) = &lowerer.debug {
             debug.builder.finalize();
         }

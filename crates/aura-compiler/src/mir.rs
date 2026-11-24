@@ -11983,7 +11983,7 @@ fn lower_function_or_initializer(
         lowerer.emit_initializer_slot(class, return_type);
         lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
-    } else {
+    } else if !naked::lower_export(&mut lowerer, function, &params, return_type) {
         lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
@@ -12397,6 +12397,8 @@ struct ReturnedViewCallee {
 
 #[path = "mir_inline_asm.rs"]
 mod inline_asm;
+#[path = "mir_naked.rs"]
+mod naked;
 
 struct Lowerer<'a> {
     program: &'a Program,
