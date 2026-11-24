@@ -2509,7 +2509,7 @@ impl<'a> NativeCodegen<'a> {
         let mut compiler = FunctionCompiler {
             class_owners: class_drop::Owners::prepare(
                 function,
-                self.module,
+                &self.plain_records.owner_types,
                 builder,
                 &mut variable_index,
             ),
@@ -17350,8 +17350,8 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(self.owned_opaque_result(object.values, result_ty));
         }
         if matches!(op, ValueOp::Clone | ValueOp::Copy)
-            && !self.class_owners.types.is_empty()
-            && class_drop::can_hold_owner(&receiver_ty, &self.class_owners.types)
+            && !self.plain_records.owner_types.is_empty()
+            && class_drop::can_hold_owner(&receiver_ty, &self.plain_records.owner_types)
         {
             let id = declare_runtime_function(
                 self.builder.module(),

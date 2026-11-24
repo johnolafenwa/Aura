@@ -107,68 +107,28 @@ mod tests {
 pub(super) struct Owners {
     pub(super) roots: HashSet<String>,
     ranks: HashMap<String, Var>,
-    pub(super) types: HashSet<String>,
 }
 
 impl Owners {
     pub(super) fn prepare(
         function: &MirFunction,
-        module: &MirModule,
+        types: &HashSet<String>,
         builder: &mut dyn FunctionBackend,
         index: &mut usize,
     ) -> Self {
         let mut owners = Owners::default();
-        let hooks: HashSet<_> = module
-            .classes
-            .iter()
-            .filter(|class| {
-                class
-                    .methods
-                    .iter()
-                    .any(|method| method.name == crate::sema::DROP_HOOK)
-            })
-            .map(|class| class.name.clone())
-            .collect();
-        if hooks.is_empty() {
+        if types.is_empty() {
             return owners;
         }
-        let mut types = hooks;
-        loop {
-            let count = types.len();
-            for class in &module.classes {
-                if class
-                    .fields
-                    .iter()
-                    .any(|field| can_hold_owner(&field.ty, &types))
-                {
-                    types.insert(class.name.clone());
-                }
-            }
-            for enumeration in &module.enums {
-                if enumeration
-                    .variants
-                    .iter()
-                    .flat_map(|v| &v.payloads)
-                    .any(|ty| can_hold_owner(ty, &types))
-                {
-                    types.insert(enumeration.name.clone());
-                }
-            }
-            if count == types.len() {
-                break;
-            }
-        }
-
         owners.roots.extend(
             function
                 .local_types
                 .iter()
                 .map(|local| (&local.name, &local.ty))
                 .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
-                .filter(|(_, ty)| can_hold_owner(ty, &types))
+                .filter(|(_, ty)| can_hold_owner(ty, types))
                 .map(|(name, _)| name.clone()),
         );
-        owners.types = types;
         for instruction in function.blocks.iter().flat_map(|b| &b.instructions) {
             if let Instruction::EndOwner { place } = instruction {
                 owners.ranks.entry(place.clone()).or_insert_with(|| {
@@ -183,6 +143,53 @@ impl Owners {
         }
         owners
     }
+}
+
+/// All nominal layouts that can contain an owner, including through fields
+/// of another class. Native field and local storage use the same set.
+pub(super) fn owner_types(module: &MirModule) -> HashSet<String> {
+    let hooks: HashSet<_> = module
+        .classes
+        .iter()
+        .filter(|class| {
+            class
+                .methods
+                .iter()
+                .any(|method| method.name == crate::sema::DROP_HOOK)
+        })
+        .map(|class| class.name.clone())
+        .collect();
+    if hooks.is_empty() {
+        return hooks;
+    }
+    let mut types = hooks;
+    loop {
+        let count = types.len();
+        for class in &module.classes {
+            if class
+                .fields
+                .iter()
+                .any(|field| can_hold_owner(&field.ty, &types))
+            {
+                types.insert(class.name.clone());
+            }
+        }
+        for enumeration in &module.enums {
+            if enumeration
+                .variants
+                .iter()
+                .flat_map(|v| &v.payloads)
+                .any(|ty| can_hold_owner(ty, &types))
+            {
+                types.insert(enumeration.name.clone());
+            }
+        }
+        if count == types.len() {
+            break;
+        }
+    }
+
+    types
 }
 
 pub(super) fn can_hold_owner(ty: &Type, hooked: &HashSet<String>) -> bool {
