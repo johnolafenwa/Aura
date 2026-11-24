@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::property_reads::rewrite_module;
 use crate::ast::{ExprKind, Item, Stmt};
@@ -46,7 +46,7 @@ def main():
     let rewritten = rewrite_module(
         &mut module,
         &BTreeSet::from([read_site]),
-        &mut BTreeSet::new(),
+        &mut BTreeMap::new(),
     );
     assert_eq!(rewritten, BTreeSet::from([read_site]));
 
@@ -76,7 +76,7 @@ def main():
     let unchanged = rewrite_module(
         &mut module,
         &BTreeSet::from([(99, 1)]),
-        &mut BTreeSet::new(),
+        &mut BTreeMap::new(),
     );
     assert!(unchanged.is_empty());
 }
@@ -247,4 +247,29 @@ def main():
     );
     let output = crate::run_source(&source).unwrap();
     assert_eq!(output.stdout, "index\nget\nset\nindex\nget\nget\nset\n8\n");
+}
+
+#[test]
+fn property_setter_captures_a_selector_before_rhs_mutation() {
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let source = format!("{declaration}
+def bump(i: mut int64) -> int64:
+    i += 1
+    return 9
+
+def main():
+    mut i = 0
+    mut counters = [Counter(stored=1), Counter(stored=2)]
+    counters[i].count = bump(i)
+    print(counters[0].stored)
+    print(i)
+    key = \"x\"
+    mut named = {{key: Counter(stored=3)}}
+    key_again = \"x\"
+    named[key_again].count += 1
+    print(key_again)
+    print(named[key_again].stored)
+");
+    let output = crate::run_source(&source).unwrap();
+    assert_eq!(output.stdout, "set\n9\n1\nget\nset\nx\n4\n");
 }
