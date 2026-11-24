@@ -9,6 +9,7 @@
 //! shared method call. The recorded positions stay on the checked program so
 //! the checker can tell a rewritten read from call syntax, which is rejected.
 
+use super::property_setters::PropertyWrite;
 use super::{
     BTreeMap, BTreeSet, ClassInfo, Diagnostic, Expr, ExprKind, FunctionChecker, Item, MethodInfo,
     Module, ModuleContext, ReceiverKind, Result, Stmt, Type,
@@ -27,7 +28,7 @@ struct PropertyState {
     reads: BTreeSet<PropertySite>,
     /// Unrewritten reads the current check discovered.
     discovered: BTreeSet<PropertySite>,
-    writes: BTreeSet<PropertySite>,
+    writes: BTreeMap<PropertySite, PropertyWrite>,
 }
 
 thread_local! {
@@ -42,13 +43,17 @@ fn with_property_state<T>(
     module: &str,
     reads: BTreeSet<PropertySite>,
     check: impl FnOnce() -> T,
-) -> (T, BTreeSet<PropertySite>, BTreeSet<PropertySite>) {
+) -> (
+    T,
+    BTreeSet<PropertySite>,
+    BTreeMap<PropertySite, PropertyWrite>,
+) {
     PROPERTY_STATE.with(|state| {
         state.borrow_mut().push(PropertyState {
             module: module.to_string(),
             reads,
             discovered: BTreeSet::new(),
-            writes: BTreeSet::new(),
+            writes: BTreeMap::new(),
         })
     });
     struct Pop;
@@ -114,7 +119,7 @@ pub(super) fn check_with_property_reads(
         } else {
             rewrite_module(&mut module, &pending, &mut writes)
         };
-        if let Some(&(line, column)) = writes.first() {
+        if let Some(&(line, column)) = writes.keys().next() {
             return Err(Diagnostic::coded_at(
                 "AU2064",
                 crate::diag::Span::new(line, column),
@@ -160,7 +165,7 @@ fn module_may_read_properties(module: &Module, context: &ModuleContext) -> bool 
 pub(super) fn rewrite_module(
     module: &mut Module,
     sites: &BTreeSet<PropertySite>,
-    writes: &mut BTreeSet<PropertySite>,
+    writes: &mut BTreeMap<PropertySite, PropertyWrite>,
 ) -> BTreeSet<PropertySite> {
     let mut rewritten = BTreeSet::new();
     let mut rewriter = Rewriter {
@@ -206,7 +211,7 @@ pub(super) fn rewrite_module(
 
 struct Rewriter<'a> {
     sites: &'a BTreeSet<PropertySite>,
-    writes: &'a mut BTreeSet<PropertySite>,
+    writes: &'a mut BTreeMap<PropertySite, PropertyWrite>,
     rewritten: &'a mut BTreeSet<PropertySite>,
 }
 
@@ -239,8 +244,8 @@ impl Rewriter<'_> {
                 }
                 self.expr(&mut assign.value, false);
                 if let crate::ast::AssignTarget::Member { object, field } = &assign.target {
-                    if self.writes.remove(&site(assign.span)) {
-                        *stmt = super::property_setters::lower_write(assign, object, field);
+                    if let Some(write) = self.writes.remove(&site(assign.span)) {
+                        *stmt = super::property_setters::lower_write(assign, object, field, &write);
                     }
                 }
             }
@@ -622,6 +627,25 @@ impl FunctionChecker<'_> {
                 "`mut` can only be used when introducing a new binding",
             ));
         }
+        if !self.is_mutable_place(object, locals)? {
+            return Err(Diagnostic::coded_at(
+                "AU3003",
+                assign.member_span.unwrap_or(assign.span),
+                format!("setter for `{field}` requires a mutable receiver"),
+            ));
+        }
+        // Evaluate an independently typed result before borrowing the receiver.
+        // Leave contextual literals and borrowed non-copy arguments at their
+        // typed call site so they retain their expected type and passing mode.
+        let stage_rhs = assign.op.is_none()
+            && self
+                .type_of_expr(&assign.value, &mut locals.clone())
+                .is_ok_and(|ty| ty == getter.result)
+            && (self.is_copy_type(&getter.result)
+                || setter.decl.params[0].mode == crate::ast::ParamMode::Own
+                || self.borrow_call_place(&assign.value).is_none()
+                || self.property_read_name(&assign.value, locals).is_some());
+        let write = self.property_write(object, &assign.value, stage_rhs, locals)?;
         Ok(PROPERTY_STATE.with(|states| {
             let mut states = states.borrow_mut();
             let Some(state) = states
@@ -630,7 +654,7 @@ impl FunctionChecker<'_> {
             else {
                 return false;
             };
-            state.writes.insert(site(assign.span));
+            state.writes.insert(site(assign.span), write);
             true
         }))
     }

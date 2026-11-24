@@ -252,7 +252,8 @@ def main():
 #[test]
 fn property_setter_captures_a_selector_before_rhs_mutation() {
     let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
-    let source = format!("{declaration}
+    let source = format!(
+        "{declaration}
 def bump(i: mut int64) -> int64:
     i += 1
     return 9
@@ -269,7 +270,24 @@ def main():
     named[key_again].count += 1
     print(key_again)
     print(named[key_again].stored)
-");
+"
+    );
     let output = crate::run_source(&source).unwrap();
     assert_eq!(output.stdout, "set\n9\n1\nget\nset\nx\n4\n");
+}
+
+#[test]
+fn property_setter_keeps_the_indexed_receiver_alive_while_reading_the_rhs() {
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let source = format!(
+        "{declaration}
+def remove(counters: mut list[Counter]) -> int64:
+    return counters.pop(0).stored
+
+def main():
+    mut counters = [Counter(stored=1), Counter(stored=2)]
+    counters[0].count += remove(counters)
+"
+    );
+    assert_eq!(crate::check_source(&source).unwrap_err().code, "AU3002");
 }
