@@ -570,7 +570,15 @@ impl Parser {
         })
     }
 
+    fn at_const_marker(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "const")
+            && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+    }
+
     fn at_module_constant_start(&self) -> bool {
+        if self.at_const_marker() {
+            return true;
+        }
         match self.current_kind() {
             // `_ = expr` discards a value; it is a statement, not a constant.
             TokenKind::Identifier(name) if name == "_" => false,
@@ -594,6 +602,10 @@ impl Parser {
 
     fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let required = self.at_const_marker();
+        if required {
+            self.bump();
+        }
         let (name, span) = self.expect_identifier_with_span()?;
         let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
             Some(self.parse_type()?)
@@ -604,6 +616,7 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            required,
             public,
             name,
             annotation,

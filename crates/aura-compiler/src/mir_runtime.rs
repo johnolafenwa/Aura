@@ -91,6 +91,9 @@ macro_rules! io_timeout_or_return {
     };
 }
 
+mod const_eval;
+pub(crate) use const_eval::evaluate_constants;
+
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
@@ -841,6 +844,7 @@ struct MirRuntime {
     task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
     constant_states: Arc<Mutex<HashMap<String, MirConstantState>>>,
+    eval_budget: Option<const_eval::Budget>,
     /// Projection returned by the most recently completed child call and
     /// awaiting BeginReturnedLoan in the current frame.
     pending_returned_view_projection: Option<String>,
@@ -2706,6 +2710,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
@@ -2775,6 +2780,15 @@ impl MirRuntime {
                 None => {}
             }
         }
+        if let Some(frozen) = self.module.constants.iter()
+            .find(|constant| constant.key == key)
+            .and_then(|constant| constant.frozen.as_ref())
+        {
+            let value = Arc::new(frozen.thaw());
+            self.constant_states.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key.to_string(), MirConstantState::Ready(value.clone()));
+            return Ok(value);
+        }
         self.constant_states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2807,7 +2821,11 @@ impl MirRuntime {
     }
 
     fn initialize_module_constants(&mut self) -> Result<()> {
-        for constant in self.module.constants.clone() {
+        let module = Arc::clone(&self.module);
+        for constant in &module.constants {
+            if constant.frozen.is_some() {
+                continue;
+            }
             let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
         }
         Ok(())
@@ -3558,6 +3576,9 @@ impl MirRuntime {
         receiver_type: Option<&Type>,
         registered_exit: bool,
     ) -> Result<CallOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            budget.check_memory((self.call_depth + 1).saturating_mul(128 * 1024))?;
+        }
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
@@ -3974,6 +3995,9 @@ impl MirRuntime {
         cleanup_stack: &mut CleanupStack,
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.instruction(instruction, env)?;
+        }
         match instruction {
             // The interpreter's values own themselves, so a retain has
             // nothing to do; releasing a sole-owned generator closes it at
@@ -4228,6 +4252,9 @@ impl MirRuntime {
         loop_state: &mut HashMap<String, i128>,
         _cleanup_stack: &mut CleanupStack,
     ) -> Result<BlockOutcome> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.step()?;
+        }
         match terminator {
             Terminator::Return(value) => Ok(BlockOutcome::Return(
                 self.evaluate_owned_operand(value, env)?,
@@ -6872,6 +6899,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: self.task_ancestry.clone(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::clone(&self.constant_states),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,

@@ -1,0 +1,7 @@
+def sum_up() -> int64:
+    mut n: int64 = 0
+    while n < 100000:
+        n += 1
+    return n
+
+const total = sum_up()
