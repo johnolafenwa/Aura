@@ -2407,6 +2407,55 @@ impl<'a> NativeCodegen<'a> {
             key_loop_keys.insert(key_loop.key.clone(), list.clone());
             key_loops.insert(list, (key_loop, at, next));
         }
+        let dropped_removes = lookups::dropped_removes(function, &lookup_slots);
+        let mut entry_loops = HashMap::new();
+        let mut entry_loop_tuples = HashMap::new();
+        let mut walked =
+            entry_loops::entry_loops(function, |list| match variable_types.get(list) {
+                Some(DirectType::Opaque(Type::Named(name, args)))
+                    if name == "list" && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                _ => None,
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        walked.sort_by(|left, right| left.0.cmp(&right.0));
+        for (list, entry_loop) in walked {
+            // A key or value the loop reads is an owned copy, so a local
+            // another reading claims keeps the list. A loop over keys that
+            // already walks the dict's own entries keeps that walk.
+            let claimed = |local: &str| {
+                key_loops.contains_key(local)
+                    || key_loop_keys.contains_key(local)
+                    || lookup_slots.contains(local)
+                    || lent_places.contains(local)
+                    || recovery_slots.contains_key(local)
+                    || lent_elements.contains_key(local)
+                    || lent_element_reads.lists.contains_key(local)
+                    || lent_element_reads.payloads.contains_key(local)
+                    || explicit_locals.loans.contains(local)
+            };
+            if claimed(&list)
+                || (entry_loop.part != entry_loops::EntryPart::Both && claimed(&entry_loop.element))
+            {
+                continue;
+            }
+            // The slot the walk is at, and the one after it.
+            let at = Var(variable_index as u32);
+            let next = Var(variable_index as u32 + 1);
+            variable_index += 2;
+            for variable in [at, next] {
+                builder.declare_var(variable, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(variable, zero);
+            }
+            if entry_loop.part == entry_loops::EntryPart::Both {
+                entry_loop_tuples.insert(entry_loop.element.clone(), list.clone());
+            }
+            entry_loops.insert(list, (entry_loop, at, next));
+        }
         let list_snapshots = list_snapshots::list_snapshot_regions(
             function,
             |list| {
@@ -2589,6 +2638,11 @@ impl<'a> NativeCodegen<'a> {
             node_read_maps,
             key_loops,
             key_loop_keys,
+            entry_loops,
+            entry_loop_tuples,
+            entry_snapshot: false,
+            dropped_removes,
+            drop_removed: false,
             ordered_word_views,
             lent_entry_copies,
             lent_fused_copies: HashSet::new(),
@@ -4146,6 +4200,21 @@ struct FunctionCompiler<'a> {
     key_loops: HashMap<String, (key_loops::KeyLoop, Var, Var)>,
     /// The key local of each of `key_loops`, with its keys copy.
     key_loop_keys: HashMap<String, String>,
+    /// The loops over a dict's items, keys, or values that walk a snapshot
+    /// of its entries instead (see `entry_loops`), by the list they make no
+    /// more, with the slot the walk is at and the slot it goes on from.
+    entry_loops: HashMap<String, (entry_loops::EntryLoop, Var, Var)>,
+    /// The tuple local of each `items` loop of `entry_loops`, with its
+    /// list. The tuple is never made.
+    entry_loop_tuples: HashMap<String, String>,
+    /// Set while the call that would make the list of one of `entry_loops`
+    /// compiles, so it takes the snapshot instead.
+    entry_snapshot: bool,
+    /// The lookup slots of a `remove` nothing reads (see
+    /// `lookups::dropped_removes`).
+    dropped_removes: HashSet<String>,
+    /// Set while a `remove` into one of `dropped_removes` compiles.
+    drop_removed: bool,
     /// The packed backing of a freshly constructed, unaliased word sequence.
     ordered_word_views: HashMap<String, Var>,
     fused_entry_copies: HashMap<String, Var>,
@@ -5356,6 +5425,136 @@ impl<'a> FunctionCompiler<'a> {
         Ok(true)
     }
 
+    /// Compiles one step of a loop that walks a snapshot of a dict's
+    /// entries in place of a list of its items, keys, or values (see
+    /// `entry_loops`): the call that would make the list takes the
+    /// snapshot, the list's length is the snapshot's, and the read of an
+    /// element finds the next entry and copies out the key or the value.
+    /// An `items` loop copies each when it takes the tuple apart (see
+    /// `compile_tuple_element`). Returns whether `value` was such a step.
+    fn compile_entry_loop_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        if self.entry_loops.is_empty() {
+            return Ok(false);
+        }
+        if let Some(&(_, _, next)) = self.entry_loops.get(target) {
+            let first = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(next, first);
+            let target_ty = self.type_of_place(target)?;
+            self.entry_snapshot = true;
+            let compiled = self.compile_rvalue_for_target(value, &target_ty);
+            let taken = !std::mem::replace(&mut self.entry_snapshot, false);
+            let compiled = compiled?;
+            if !taken {
+                return Err(format!(
+                    "direct backend made the list `{target}` of a loop that walks a dict's entries"
+                ));
+            }
+            let coerced = self.coerce_value(compiled, &target_ty)?;
+            self.store_place(target, coerced)?;
+            return Ok(true);
+        }
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(op),
+                    receiver: Some(Operand::Place(list)),
+                    ..
+                },
+            ..
+        } = value
+        else {
+            return Ok(false);
+        };
+        let Some((entry_loop, at, next)) = self.entry_loops.get(list.as_str()).cloned() else {
+            return Ok(false);
+        };
+        let snapshot = self.load_root(list)?.values[0];
+        match op {
+            ListOp::Len => {
+                let len = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::MapLen], &[snapshot])
+                    .results[0];
+                self.store_place(
+                    target,
+                    ValueRef {
+                        values: vec![len],
+                        ty: DirectType::Scalar(ScalarKind::Int64),
+                    },
+                )?;
+            }
+            ListOp::IndexUnchecked | ListOp::IndexScalarUnchecked(_) => {
+                let from = self.builder.use_var(next);
+                let slot = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::MapNextSlot], &[snapshot, from])
+                    .results[0];
+                self.builder.def_var(at, slot);
+                let after = self.builder.iadd_imm(slot, 1);
+                self.builder.def_var(next, after);
+                let key = match entry_loop.part {
+                    entry_loops::EntryPart::Key => true,
+                    entry_loops::EntryPart::Value => false,
+                    // The tuple is taken apart where it is read.
+                    entry_loops::EntryPart::Both => return Ok(true),
+                };
+                let target_ty = self.type_of_place(target)?;
+                let element_type = direct_type_to_type(&target_ty);
+                let entry = self.load_walked_entry(list, key, &element_type)?;
+                let coerced = self.coerce_value(entry, &target_ty)?;
+                self.store_place(target, coerced)?;
+            }
+            op => {
+                return Err(format!(
+                    "direct backend cannot walk the entries of `{list}` for `{op:?}`"
+                ))
+            }
+        }
+        Ok(true)
+    }
+
+    /// A copy of the key or the value of the entry the walk of the
+    /// snapshot `list` is at, as a value of `element_type`.
+    fn load_walked_entry(
+        &mut self,
+        list: &str,
+        key: bool,
+        element_type: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let at = self
+            .entry_loops
+            .get(list)
+            .map(|&(_, at, _)| at)
+            .ok_or_else(|| format!("direct backend has no entry walk for `{list}`"))?;
+        let snapshot = self.load_root(list)?.values[0];
+        let slot = self.builder.use_var(at);
+        let direct_type = ensure_direct_type(element_type, &self.classes, "dict entry")?;
+        if direct_type == DirectType::Scalar(ScalarKind::Int64) {
+            let word = if key {
+                RuntimeFn::MapKeyInt64At
+            } else {
+                RuntimeFn::MapValueInt64At
+            };
+            let inst = self.builder.call(self.runtime[word], &[snapshot, slot]);
+            return Ok(ValueRef {
+                values: vec![inst.results[0]],
+                ty: direct_type,
+            });
+        }
+        let boxed = if key {
+            RuntimeFn::MapKeyAt
+        } else {
+            RuntimeFn::MapValueAt
+        };
+        let inst = self.builder.call(self.runtime[boxed], &[snapshot, slot]);
+        let entry = self.owned_opaque_result(inst.results, element_type.clone());
+        self.coerce_value(entry, &direct_type)
+    }
+
     /// The key of the `invoke` signature of the callable contract
     /// `signature` (see `callables::contract_abi_key`).
     fn callable_abi_key(&self, signature: &Type) -> std::result::Result<i64, String> {
@@ -5678,6 +5877,10 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
             Instruction::Assign { target, value }
                 if self.compile_key_loop_assign(target, value)? => {}
+            Instruction::Assign { target, value }
+                if self.compile_entry_loop_assign(target, value)? => {}
+            // The tuple of a walk by entry is never made.
+            Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
             Instruction::Assign { target, value }
                 if self.compile_callable_element_read(target, value)? => {}
             // A callee read from a loan only to be called is called through
@@ -15026,6 +15229,12 @@ impl<'a> FunctionCompiler<'a> {
         element_type: &Type,
     ) -> std::result::Result<ValueRef, String> {
         validate_tuple_projection_operand(tuple)?;
+        // The tuple of a walk by entry is the entry the walk is at.
+        if let Operand::Place(place) = tuple {
+            if let Some(list) = self.entry_loop_tuples.get(place).cloned() {
+                return self.load_walked_entry(&list, index == 0, element_type);
+            }
+        }
         let tuple = self.load_operand(tuple)?;
         let tuple = self.ensure_opaque(tuple)?;
         let index = self.builder.iconst(types::I64, index as i64);
@@ -15334,8 +15543,10 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.lookup_payload = Some(false);
         self.lend_lookup = self.lent_places.contains(target);
+        self.drop_removed = self.dropped_removes.contains(target);
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_lookup = false;
+        self.drop_removed = false;
         let payload_form = self.lookup_payload.take() == Some(true);
         let compiled = self.ensure_opaque(compiled?)?;
         let payload = if payload_form {
@@ -17840,6 +18051,23 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &[map, key_ptr, key_len]);
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
             }
+            DictOp::Remove
+                if self.lookup_payload == Some(false)
+                    && key_direct_ty == DirectType::Scalar(ScalarKind::Int64) =>
+            {
+                // A slot's `remove` under an `int64` key takes the key as
+                // its word, and drops the entry when nothing reads it.
+                let key = self.load_word(args[0], ScalarKind::Int64, true)?;
+                let remove = if self.drop_removed {
+                    RuntimeFn::MapDiscardInt64
+                } else {
+                    RuntimeFn::MapRemoveInt64Payload
+                };
+                self.lookup_payload = Some(true);
+                let results = self.runtime_call_results(self.runtime[remove], &[map, key]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
                 let function = if op == DictOp::Get {
@@ -17850,7 +18078,15 @@ impl<'a> FunctionCompiler<'a> {
                         in_place,
                     )
                 } else {
-                    function
+                    // A removed value is the caller's alone, so a slot
+                    // takes its box and is never lent it. A slot nothing
+                    // reads takes null.
+                    let remove = if self.drop_removed {
+                        RuntimeFn::MapDiscard
+                    } else {
+                        RuntimeFn::MapRemovePayload
+                    };
+                    self.lookup_function(function, remove, remove, false)
                 };
                 let results = self.runtime_call_results(function, &[map, key.values[0]]);
                 if op == DictOp::Remove {
@@ -17924,6 +18160,13 @@ impl<'a> FunctionCompiler<'a> {
                     DictOp::Keys => list(key_ty),
                     DictOp::Values => list(value_ty),
                     _ => list(Type::Tuple(vec![key_ty, value_ty])),
+                };
+                // A loop that walks the entries takes a snapshot of the
+                // dict where its list would be (see `entry_loops`).
+                let function = if std::mem::replace(&mut self.entry_snapshot, false) {
+                    self.runtime[RuntimeFn::MapSnapshot]
+                } else {
+                    function
                 };
                 let results = self.runtime_call_results(function, &[map]);
                 Ok(self.owned_opaque_result(results, result_ty))
@@ -22352,6 +22595,8 @@ mod classes;
 mod element_loans;
 #[path = "native_codegen_elements.rs"]
 mod elements;
+#[path = "native_codegen_entry_loops.rs"]
+mod entry_loops;
 #[path = "native_codegen_enums.rs"]
 mod enums;
 #[path = "native_codegen_foreign.rs"]

@@ -32,15 +32,22 @@ pub const INDEX_THRESHOLD: usize = 8;
 /// still hash consistently because equal values visit the same prefix.
 const HASH_NODE_BUDGET: usize = 64;
 
-/// A new hasher for a key, with this process's keys.
-fn hash_state() -> KeyedHasher {
+/// This process's hash keys, chosen once.
+#[inline(always)]
+fn hash_keys() -> (u64, u64) {
     static KEYS: OnceLock<(u64, u64)> = OnceLock::new();
-    let &(k0, k1) = KEYS.get_or_init(|| {
+    *KEYS.get_or_init(|| {
         // `RandomState` holds random keys it does not expose, so the keys
         // are two of its hashes: as secret and as random as its own.
         let state = RandomState::new();
         (state.hash_one(0u64), state.hash_one(1u64))
-    });
+    })
+}
+
+/// A new hasher for a key, with this process's keys.
+#[inline(always)]
+fn hash_state() -> KeyedHasher {
+    let (k0, k1) = hash_keys();
     KeyedHasher::with_keys(k0, k1)
 }
 
@@ -102,6 +109,61 @@ impl<const C: usize, const D: usize> SipHasher<C, D> {
             self.round();
         }
         self.v0 ^= word;
+    }
+
+    /// The last word of a stream of `length` bytes that ends with the
+    /// bytes in `tail`, hashed in.
+    #[inline(always)]
+    fn finish_with(mut self, tail: u64, length: usize) -> u64 {
+        self.compress(((length as u64 & 0xff) << 56) | tail);
+        self.v2 ^= 0xff;
+        for _ in 0..D {
+            self.round();
+        }
+        self.v0 ^ self.v1 ^ self.v2 ^ self.v3
+    }
+
+    /// The hash of `bytes` written to a new hasher in one `write`, without
+    /// the state a stream keeps between writes.
+    #[inline(always)]
+    pub(crate) fn hash_bytes(k0: u64, k1: u64, bytes: &[u8]) -> u64 {
+        let mut state = Self::with_keys(k0, k1);
+        let mut words = bytes.chunks_exact(8);
+        for chunk in &mut words {
+            state.compress(u64::from_le_bytes(
+                chunk.try_into().expect("an 8-byte chunk"),
+            ));
+        }
+        state.finish_with(short_tail(words.remainder()), bytes.len())
+    }
+
+    /// The hash of `word` written to a new hasher with `write_u64`.
+    #[inline(always)]
+    pub(crate) fn hash_word(k0: u64, k1: u64, word: u64) -> u64 {
+        let mut state = Self::with_keys(k0, k1);
+        state.compress(word);
+        state.finish_with(0, 8)
+    }
+}
+
+/// Up to 7 bytes, little-endian, as [`load_tail`] reads them, in at most
+/// three loads instead of one per byte.
+#[inline(always)]
+fn short_tail(rest: &[u8]) -> u64 {
+    let len = rest.len();
+    debug_assert!(len < 8);
+    if len >= 4 {
+        let low = u32::from_le_bytes(rest[..4].try_into().expect("four bytes"));
+        let high = u32::from_le_bytes(rest[len - 4..].try_into().expect("four bytes"));
+        u64::from(low) | (u64::from(high) << (8 * (len - 4)))
+    } else if len > 0 {
+        // Bytes 0, len / 2 and len - 1 are every byte of a 1 to 3 byte
+        // tail, and the ones that coincide hold the same bits.
+        u64::from(rest[0])
+            | (u64::from(rest[len / 2]) << (8 * (len / 2)))
+            | (u64::from(rest[len - 1]) << (8 * (len - 1)))
+    } else {
+        0
     }
 }
 
@@ -182,26 +244,33 @@ pub fn hash_value(value: &Value) -> u64 {
     while let Value::Union(union) = root {
         root = &union.payload;
     }
-    let mut hasher = hash_state();
     match root {
+        Value::String(text) => return hash_str(text.as_str()),
         Value::Int(integer) => {
+            // An integer that fits in `i64`, as nearly all do, hashes as
+            // `hash_i64` does. A wider one takes the general hasher.
+            let narrow = match integer.representation() {
+                IntegerRepresentation::Signed(wide) => i64::try_from(wide).ok(),
+                IntegerRepresentation::Unsigned(wide) => i64::try_from(wide).ok(),
+            };
+            if let Some(word) = narrow {
+                return hash_i64(word);
+            }
+            let mut hasher = hash_state();
             write_integer(integer, &mut hasher);
             return hasher.finish();
         }
         Value::Float(float) => {
-            hasher.write_u64(float_word(*float));
-            return hasher.finish();
+            let (k0, k1) = hash_keys();
+            return KeyedHasher::hash_word(k0, k1, float_word(*float));
         }
         Value::Bool(flag) => {
-            hasher.write_u8(u8::from(*flag));
-            return hasher.finish();
-        }
-        Value::String(text) => {
-            hasher.write(text.as_bytes());
-            return hasher.finish();
+            let (k0, k1) = hash_keys();
+            return KeyedHasher::hash_bytes(k0, k1, &[u8::from(*flag)]);
         }
         _ => {}
     }
+    let mut hasher = hash_state();
     let mut budget = HASH_NODE_BUDGET;
     hash_nodes(root, &mut hasher, &mut budget);
     hasher.finish()
@@ -320,18 +389,18 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
 }
 
 /// [`hash_value`] of a `str` value holding `text`, without building one.
+#[inline]
 pub fn hash_str(text: &str) -> u64 {
-    let mut hasher = hash_state();
-    hasher.write(text.as_bytes());
-    hasher.finish()
+    let (k0, k1) = hash_keys();
+    KeyedHasher::hash_bytes(k0, k1, text.as_bytes())
 }
 
 /// [`hash_value`] of an integer value equal to `integer`, of any width,
 /// without building one.
+#[inline]
 pub fn hash_i64(integer: i64) -> u64 {
-    let mut hasher = hash_state();
-    hasher.write_i64(integer);
-    hasher.finish()
+    let (k0, k1) = hash_keys();
+    KeyedHasher::hash_word(k0, k1, integer as u64)
 }
 
 /// Writes an integer key as one word. Integers of different widths compare
@@ -601,7 +670,37 @@ impl LookupCursor {
     }
 }
 
+impl<T: Keyed> Large<T> {
+    /// The slot of the entry whose key `matches`, where `hash` is the hash
+    /// of every such key. It first tries the entry after the one the last
+    /// lookup found, skipping a hole or two, and remembers the slot it
+    /// finds.
+    #[inline(always)]
+    fn lookup(
+        &self,
+        hash: impl FnOnce() -> u64,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Option<usize> {
+        let start = self.cursor.get().wrapping_add(1);
+        for slot in start..self.slots.len().min(start.saturating_add(3)) {
+            if let Some(entry) = &self.slots[slot] {
+                if matches(entry.key()) {
+                    self.cursor.set(slot);
+                    return Some(slot);
+                }
+                break;
+            }
+        }
+        let found = self.find_hashed(hash(), |_, entry| matches(entry.key()));
+        if let Some(slot) = found {
+            self.cursor.set(slot);
+        }
+        found
+    }
+}
+
 impl<T> Large<T> {
+    #[inline(always)]
     fn find_hashed(&self, hash: u64, matches: impl Fn(usize, &T) -> bool) -> Option<usize> {
         self.index
             .find(hash, |&(entry_hash, slot)| {
@@ -1201,27 +1300,17 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         hash: impl FnOnce() -> u64,
         matches: impl Fn(&Value) -> bool,
     ) -> Option<usize> {
-        if matches!(self.storage, Storage::Union(_)) {
-            return self.probe(hash, matches).0;
+        // The two eager forms, nearly every dict and set, are tested first
+        // and once.
+        match &self.storage {
+            Storage::Small(entries) => entries.iter().position(|entry| matches(entry.key())),
+            Storage::Large(large) => large.lookup(hash, matches),
+            Storage::Lazy(lazy) => match lazy.realized_ref() {
+                EagerRef::Small(entries) => entries.iter().position(|entry| matches(entry.key())),
+                EagerRef::Large(large) => large.lookup(hash, matches),
+            },
+            Storage::Union(_) => self.probe(hash, matches).0,
         }
-        if let EagerRef::Large(large) = self.eager() {
-            let start = large.cursor.get().wrapping_add(1);
-            for slot in start..large.slots.len().min(start.saturating_add(3)) {
-                if let Some(entry) = &large.slots[slot] {
-                    if matches(entry.key()) {
-                        large.cursor.set(slot);
-                        return Some(slot);
-                    }
-                    break;
-                }
-            }
-            let found = self.probe(hash, matches).0;
-            if let Some(slot) = found {
-                large.cursor.set(slot);
-            }
-            return found;
-        }
-        self.probe(hash, matches).0
     }
 
     /// The slot of the entry whose key `matches`, and the key's hash when
@@ -1312,6 +1401,16 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// where the entry was, which makes [`Self::get`] scan.
     pub fn remove(&mut self, key: &Value) -> Option<T> {
         let (slot, hash) = self.probe(|| hash_value(key), |candidate| key_equals(candidate, key));
+        Some(self.remove_slot(slot?, hash, false))
+    }
+
+    /// [`Self::remove`] of the entry under an integer key equal to
+    /// `integer`, without building the key.
+    pub fn remove_i64(&mut self, integer: i64) -> Option<T> {
+        let (slot, hash) = self.probe(
+            || hash_i64(integer),
+            |candidate| key_is_i64(candidate, integer),
+        );
         Some(self.remove_slot(slot?, hash, false))
     }
 
@@ -1467,6 +1566,18 @@ impl DictEntries {
     /// The value in `slot`, for writing.
     pub fn value_at_mut(&mut self, slot: usize) -> &mut Value {
         &mut self.at_slot_mut(slot).1
+    }
+
+    /// [`Self::insert`] under an `int64` key, which is hashed once and
+    /// becomes a value only when the key is new.
+    pub fn insert_i64(&mut self, key: i64, value: Value) -> Option<Value> {
+        match self.probe(|| hash_i64(key), |candidate| key_is_i64(candidate, key)) {
+            (Some(slot), _) => Some(std::mem::replace(self.value_at_mut(slot), value)),
+            (None, hash) => {
+                self.push_new_hashed((Value::Int(IntegerValue::from_i64(key)), value), hash);
+                None
+            }
+        }
     }
 
     /// Stores `value` under `key`. An equal key keeps its slot and its

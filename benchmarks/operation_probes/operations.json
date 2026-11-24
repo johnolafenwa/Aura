@@ -49,6 +49,51 @@
     "plan_step": "3",
     "measures": "one `get` on a `dict[str, int64]` of 1,000 keys, matching the result"
   },
+  "dict_get_int": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "one `get` on a `dict[int64, int64]` of 1,000 keys, matching the result"
+  },
+  "dict_set_int": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "storing a value under a key a `dict[int64, int64]` of 1,000 keys already holds"
+  },
+  "dict_insert_int": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "inserting one new key into a growing `dict[int64, int64]`"
+  },
+  "dict_count_str": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "`match mut table.lookup(key)` on a `dict[str, int64]` of 1,000 keys, adding one to the count it finds"
+  },
+  "dict_contains_str": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "`key in table` on a `dict[str, int64]` that holds half of the keys asked for"
+  },
+  "set_add_int": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "`add` on a growing `set[int64]`, about half of the adds new"
+  },
+  "set_contains_int": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "`value in seen` on a `set[int64]` of 1,000 members that holds half of the values asked for"
+  },
+  "set_contains_str": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "`key in seen` on a `set[str]` that holds half of the keys asked for"
+  },
+  "dict_items_loop": {
+    "count": 100000,
+    "plan_step": "dict",
+    "measures": "one step of `for key, value in table.items()` over a `dict[int64, int64]`, adding both to a total"
+  },
   "list_push": {
     "count": 100000,
     "plan_step": "2d",
