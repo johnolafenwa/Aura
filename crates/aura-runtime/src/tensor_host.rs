@@ -2221,6 +2221,17 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             Ok(Value::Tensor(operand.clone()))
         }
         11 => tensor_grad::kept_gradient(operand).map(Value::Tensor),
+        15 => {
+            // The tensor in the dtype its sums are added in: a `float16`
+            // tensor as `float32`, and any other as it is. A mean of
+            // squares of halves overflows a half long before the
+            // result does.
+            if operand.is_half() {
+                operate(Operation::Cast(ArrayDType::Float32 as i64), &[operand])
+            } else {
+                Ok(Value::Tensor(operand.clone()))
+            }
+        }
         12 => {
             operand.set_grad(None);
             Ok(Value::Tensor(operand.clone()))
@@ -2330,6 +2341,14 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             operate(Operation::IndexAdd { axis, size }, &[left, right])
         }
         3 => tensor_grad::gradient(left, right).map(Value::Tensor),
+        5 => {
+            // The left tensor in the dtype of the right one.
+            if left.code() == right.code() {
+                Ok(Value::Tensor(left.clone()))
+            } else {
+                operate(Operation::Cast(right.code()), &[left])
+            }
+        }
         4 => {
             let name = "tensor::Parameter.assign";
             let mut held = left.held(name)?;

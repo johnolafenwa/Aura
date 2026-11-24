@@ -1572,6 +1572,8 @@ def run() -> Result[None, str]:
     print(linear(small, weight, bias).to_array())
     normed = layer_norm(small, Tensor[float16].full([2], 1.0, device), Tensor[float16].zeros([2], device))
     print((normed.to_float32() * 100.0).to_int64().to_array())
+    large = Tensor[float16].from_array(Array[float32].from_list([3000.0, -3000.0, 1000.0, -1000.0], [2, 2]), device)
+    print(layer_norm(large, Tensor[float16].full([2], 1.0, device), Tensor[float16].zeros([2], device)).to_array())
     heads = small.reshape([1, 2, 2])
     mixed = scaled_dot_product_attention(heads, heads, heads, true)
     print(f"{mixed.shape()} {mixed.reshape([4]).slice(0, 0, 1).item()}")
@@ -1610,6 +1612,7 @@ def main():
          Array[float32](shape=[2], values=[2048.0, 2048.0])\n\
          Array[float32](shape=[2, 3], values=[1.75, 1.75, 1.75, 3.0, 3.0, 3.0])\n\
          Array[int64](shape=[2, 2], values=[-100, 100, -100, 100])\n\
+         Array[float32](shape=[2, 2], values=[1.0, -1.0, 1.0, -1.0])\n\
          [1, 2, 2] 1.0\n\
          true\n\
          Array[float32](shape=[2, 2], values=[2.0, 4.0, 6.0, 10.0])\n\

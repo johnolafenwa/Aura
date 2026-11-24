@@ -298,10 +298,10 @@ fn pull(
             give(0, &|| run(Operation::Permute(back.clone()), &[flow]))?;
         }
         Operation::Cast(_) => give(0, &|| {
-            if first.dtype() == flow.dtype() {
+            if first.code() == flow.code() {
                 Ok(flow.clone())
             } else {
-                run(Operation::Cast(first.dtype() as i64), &[flow])
+                run(Operation::Cast(first.code()), &[flow])
             }
         })?,
         Operation::Expand(_) => give(0, &|| sum_to(flow, first.shape()))?,

@@ -274,6 +274,43 @@ fn float16_tensors_are_made_filled_moved_and_kept() {
 }
 
 #[test]
+fn a_float16_tensor_widens_for_its_sums_and_narrows_again() {
+    let cpu = TensorDevice::Cpu;
+    let narrow = halves(&[3000.0, -2000.0], &[2], cpu);
+    let plain = tensor(float32(&[1.0, 2.0], &[2]), cpu);
+    // The dtype sums are added in: `float32` for halves, and a tensor of
+    // another dtype as it is.
+    let wide = node_op(&narrow, 15, &[]).unwrap();
+    assert!(!node(&wide).is_half() && node(&wide).dtype() == ArrayDType::Float32);
+    assert!(std::ptr::eq(
+        node(&node_op(&plain, 15, &[]).unwrap()).0.as_ref(),
+        node(&plain).0.as_ref()
+    ));
+    // The square of a half can be past every half where its mean of
+    // squares, scaled back, is not.
+    let squares = binary(&wide, &wide, 2).unwrap();
+    assert_eq!(elements(&squares), [9.0e6, 4.0e6]);
+    assert!(elements(&binary(&narrow, &narrow, 2).unwrap())[0].is_infinite());
+    let root = unary(&reduce(&squares, 3, None).unwrap(), 1).unwrap();
+    let back = pair_op(&root, &narrow, 5, &[]).unwrap();
+    assert!(node(&back).is_half());
+    assert_eq!(
+        elements(&back),
+        [tensor_kernels::rounded_to_half(6.5e6_f32.sqrt())]
+    );
+    assert!(std::ptr::eq(
+        node(&pair_op(&plain, &wide, 5, &[]).unwrap()).0.as_ref(),
+        node(&plain).0.as_ref()
+    ));
+    // The gradient of a conversion from halves is in halves.
+    let watched = node_op(&narrow, 4, &[]).unwrap();
+    let total = reduce(&node_op(&watched, 15, &[]).unwrap(), 0, None).unwrap();
+    let slope = pair_op(&total, &watched, 3, &[]).unwrap();
+    assert!(node(&slope).is_half());
+    assert_eq!(elements(&slope), [1.0, 1.0]);
+}
+
+#[test]
 fn a_gradient_of_float16_tensors_is_float16() {
     let x = node_op(&halves(&[1.0, -2.0, 0.5], &[3], TensorDevice::Cpu), 4, &[]).unwrap();
     let squares = reduce(&binary(&x, &x, 2).unwrap(), 0, None).unwrap();

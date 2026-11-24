@@ -668,9 +668,16 @@ public def linear[T](x: Tensor[T], weight: Tensor[T], bias: Tensor[T]) -> Tensor
 public def layer_norm[T](x: Tensor[T], weight: Tensor[T], bias: Tensor[T], eps: float64 = 0.00001) -> Tensor[T]:
     """What a `LayerNorm` layer computes, for float tensors of any
     dtype."""
-    centered = x - x.mean(-1, true)
+    # A `float16` tensor is normalized in `float32`: the square of an
+    # element overflows a half long before the result does.
+    none = list[int64]()
+    wide = Tensor[T](node=tensor.__aura_node_op(x.node, 15, none))
+    scale = Tensor[T](node=tensor.__aura_node_op(weight.node, 15, none))
+    shift = Tensor[T](node=tensor.__aura_node_op(bias.node, 15, none))
+    centered = wide - wide.mean(-1, true)
     spread = (centered * centered).mean(-1, true)
-    return centered / (spread + eps).sqrt() * weight + bias
+    normed = centered / (spread + eps).sqrt() * scale + shift
+    return Tensor[T](node=tensor.__aura_pair_op(normed.node, x.node, 5, none))
 
 
 public def scaled_dot_product_attention[T](query: Tensor[T], key: Tensor[T], value: Tensor[T], is_causal: bool = false) -> Tensor[T]:
