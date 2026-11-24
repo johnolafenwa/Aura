@@ -128,3 +128,68 @@ def value_text_contains(text: uint64, length: uint64, part: uint64, part_length:
             return true
         at = at + 1
     return false
+
+
+# A new block that holds `magnitude` in decimal digits, after a minus
+# sign when `negative`.
+def value_text_from_digits(magnitude: uint64, negative: bool) -> uint64:
+    mut digits: uint64 = 1
+    mut rest = magnitude // 10
+    while rest != 0:
+        digits = digits + 1
+        rest = rest // 10
+    mut length = digits
+    if negative:
+        length = length + 1
+    address = mem.alloc(17 + length, 8)
+    assert address != 0, "out of memory"
+    mem.write_uint64(address, 1)
+    mem.write_uint64(address + 8, length)
+    if negative:
+        mem.write_uint8(address + 16, 45)
+    mut at = address + 16 + length
+    mem.write_uint8(at, 0)
+    rest = magnitude
+    mut left = digits
+    while left != 0:
+        at = at - 1
+        mem.write_uint8(at, (48 + rest % 10) as uint8)
+        rest = rest // 10
+        left = left - 1
+    return address
+
+
+# A new block that holds `value` in decimal digits.
+def value_text_from_int(value: int64) -> uint64:
+    if value < 0:
+        return value_text_from_digits((0 - (value + 1)) as uint64 + 1, true)
+    return value_text_from_digits(value as uint64, false)
+
+
+# A new block that holds `value` in decimal digits.
+def value_text_from_uint(value: uint64) -> uint64:
+    return value_text_from_digits(value, false)
+
+
+# A new block that holds `true` or `false`.
+def value_text_from_bool(value: bool) -> uint64:
+    mut length: uint64 = 5
+    if value:
+        length = 4
+    address = mem.alloc(17 + length, 8)
+    assert address != 0, "out of memory"
+    mem.write_uint64(address, 1)
+    mem.write_uint64(address + 8, length)
+    if value:
+        mem.write_uint8(address + 16, 116)
+        mem.write_uint8(address + 17, 114)
+        mem.write_uint8(address + 18, 117)
+        mem.write_uint8(address + 19, 101)
+    else:
+        mem.write_uint8(address + 16, 102)
+        mem.write_uint8(address + 17, 97)
+        mem.write_uint8(address + 18, 108)
+        mem.write_uint8(address + 19, 115)
+        mem.write_uint8(address + 20, 101)
+    mem.write_uint8(address + 16 + length, 0)
+    return address

@@ -77,6 +77,9 @@ const TEXT_BYTE_COUNT: &str = "aura::values::value_text_byte_count";
 const TEXT_STARTS_WITH: &str = "aura::values::value_text_starts_with";
 const TEXT_ENDS_WITH: &str = "aura::values::value_text_ends_with";
 const TEXT_CONTAINS: &str = "aura::values::value_text_contains";
+const TEXT_FROM_INT: &str = "aura::values::value_text_from_int";
+const TEXT_FROM_UINT: &str = "aura::values::value_text_from_uint";
+const TEXT_FROM_BOOL: &str = "aura::values::value_text_from_bool";
 
 /// The functions the pass makes for a class, each named with its kind and
 /// the class. The emitter writes the code of a call of the first two.
@@ -1011,24 +1014,159 @@ fn text_view(
                     field: TEXT_FIELD.to_string(),
                 },
             });
-            let bytes = call(
-                fresh,
-                out,
-                TEXT_BYTES.to_string(),
-                vec![Operand::Place(address.clone())],
-                word(),
-            );
-            let length = call(
-                fresh,
-                out,
-                TEXT_BYTE_LENGTH.to_string(),
-                vec![Operand::Place(address)],
-                word(),
-            );
-            (Operand::Place(bytes), Operand::Place(length))
+            block_view(&address, fresh, out)
         }
         other => (other, Operand::Int(0)),
     }
+}
+
+/// The address of the first byte and the length in bytes of the text in
+/// the block whose address the local `address` holds.
+fn block_view(address: &str, fresh: &mut Fresh, out: &mut Vec<Instruction>) -> (Operand, Operand) {
+    let word = || Type::named("uint64");
+    let bytes = call(
+        fresh,
+        out,
+        TEXT_BYTES.to_string(),
+        vec![Operand::Place(address.to_string())],
+        word(),
+    );
+    let length = call(
+        fresh,
+        out,
+        TEXT_BYTE_LENGTH.to_string(),
+        vec![Operand::Place(address.to_string())],
+        word(),
+    );
+    (Operand::Place(bytes), Operand::Place(length))
+}
+
+/// The library function that writes a value of type `ty` as text, and
+/// the type the value is cast to first when it is narrower.
+fn text_writer(ty: &Type) -> Option<(&'static str, Option<&'static str>)> {
+    let Type::Named(name, args) = ty else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    Some(match name.as_str() {
+        "int64" => (TEXT_FROM_INT, None),
+        "int8" | "int16" | "int32" => (TEXT_FROM_INT, Some("int64")),
+        "uint64" => (TEXT_FROM_UINT, None),
+        "uint8" | "uint16" | "uint32" => (TEXT_FROM_UINT, Some("uint64")),
+        "bool" => (TEXT_FROM_BOOL, None),
+        _ => return None,
+    })
+}
+
+/// The `str` an f-string builds: each part appended to the text so far.
+/// Returns `None`, with nothing added, when a part is neither text, an
+/// integer, nor a `bool`, or has a format of its own.
+fn lower_format(
+    parts: &[crate::mir::MirFormatPart],
+    types: &HashMap<String, Type>,
+    values: &mut Values,
+    fresh: &mut Fresh,
+    out: &mut Vec<Instruction>,
+) -> Option<Rvalue> {
+    use crate::mir::MirFormatPart;
+    let word = || Type::named("uint64");
+    // What writes each part: `None` for text.
+    let mut writers = Vec::with_capacity(parts.len());
+    for part in parts {
+        writers.push(match part {
+            MirFormatPart::Literal(_) => None,
+            MirFormatPart::Int64(_) => Some((TEXT_FROM_INT, None)),
+            MirFormatPart::Value(operand) => match operand {
+                Operand::String(_) => None,
+                Operand::Bool(_) => Some((TEXT_FROM_BOOL, None)),
+                Operand::Int(_) => Some((TEXT_FROM_INT, None)),
+                Operand::Place(place) | Operand::MovePlace(place) => {
+                    if is_text(operand, types, values) {
+                        None
+                    } else {
+                        Some(text_writer(&place_type(place, types, values)?)?)
+                    }
+                }
+                _ => return None,
+            },
+            MirFormatPart::Formatted { .. } => return None,
+        });
+    }
+    let release = |address: String, fresh: &mut Fresh, out: &mut Vec<Instruction>| {
+        call(
+            fresh,
+            out,
+            TEXT_RELEASE.to_string(),
+            vec![Operand::Place(address)],
+            Type::Unit,
+        );
+    };
+    let mut so_far: Option<String> = None;
+    for (part, writer) in parts.iter().zip(writers) {
+        let operand = match part {
+            MirFormatPart::Literal(text) => Operand::String(text.clone()),
+            MirFormatPart::Int64(operand) | MirFormatPart::Value(operand) => operand.clone(),
+            MirFormatPart::Formatted { value, .. } => value.clone(),
+        };
+        let mut written = None;
+        let (bytes, length) = match writer {
+            None => text_view(operand, fresh, out),
+            Some((function, cast)) => {
+                let operand = match cast {
+                    Some(wide) => {
+                        let local = fresh.local(Type::named(wide));
+                        out.push(Instruction::Assign {
+                            target: local.clone(),
+                            value: Rvalue::Cast {
+                                value: operand,
+                                ty: Type::named(wide),
+                                span: crate::diag::Span::new(0, 0),
+                            },
+                        });
+                        Operand::Place(local)
+                    }
+                    None => operand,
+                };
+                let address = call(fresh, out, function.to_string(), vec![operand], word());
+                let view = block_view(&address, fresh, out);
+                written = Some(address);
+                view
+            }
+        };
+        let (start, start_length) = match &so_far {
+            Some(address) => block_view(address, fresh, out),
+            None => (Operand::Int(0), Operand::Int(0)),
+        };
+        let joined = call(
+            fresh,
+            out,
+            TEXT_CONCAT.to_string(),
+            vec![start, start_length, bytes, length],
+            word(),
+        );
+        for spent in [so_far.replace(joined), written].into_iter().flatten() {
+            release(spent, fresh, out);
+        }
+    }
+    let address = match so_far {
+        Some(address) => address,
+        None => call(
+            fresh,
+            out,
+            TEXT_NEW.to_string(),
+            vec![Operand::Int(0), Operand::Int(0)],
+            word(),
+        ),
+    };
+    Some(Rvalue::Construct {
+        class_name: values.text_class().to_string(),
+        fields: vec![MirFieldInit {
+            name: TEXT_FIELD.to_string(),
+            value: Operand::Place(address),
+        }],
+    })
 }
 
 /// The `str` value whose block is at the address `function(args)` gives.
@@ -1089,6 +1227,10 @@ fn lower_text(
 ) -> Rvalue {
     let bool_type = || Type::named("bool");
     match value {
+        Rvalue::FormatString { parts } => match lower_format(&parts, types, values, fresh, out) {
+            Some(text) => text,
+            None => Rvalue::FormatString { parts },
+        },
         Rvalue::Use(literal @ Operand::String(_)) => {
             let (bytes, length) = text_view(literal, fresh, out);
             text_from(TEXT_NEW, vec![bytes, length], values, fresh, out)

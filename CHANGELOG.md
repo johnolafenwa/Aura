@@ -27,8 +27,9 @@ in this file.
   `starts_with`, `ends_with`, and `contains`. A `str` lives in a counted
   block from the allocation hooks, and its operations are written in
   Aura. A foreign function takes a `str` value as an address, or as an
-  address and a length. F-strings, indexing, and the other text methods
-  are still reported as `AU2052`.
+  address and a length. An f-string may hold text, integers, and `bool`.
+  Indexing, the other text methods, and floats or format specs in
+  f-strings are still reported as `AU2052`.
 - Freestanding builds compile an enum with an `indirect` payload of its own
   type, such as a list or a tree. Each such payload lives in a block from
   the allocation hooks with a reference count, and the program frees

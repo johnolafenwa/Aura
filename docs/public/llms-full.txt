@@ -13847,14 +13847,14 @@ def read(port: uint64) -> (Reading, uint64):
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a collection |
-| `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains` | Every other `str` method, indexing, slices, f-strings, `str \| None` |
+| `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
 | `extern "C"` classes | `bytes`, `list`, `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
 | `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
 | `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
-| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
+| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
 | Module constants with a literal value | Module constants computed when the program starts |
@@ -13900,6 +13900,10 @@ Available: literals, `+`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `len`,
 `byte_len`, `starts_with`, `ends_with`, and `contains`. A literal used in
 an operation is read where it lies in the program's data and allocates
 nothing.
+
+An f-string may hold text, integers of every width up to 64 bits, and
+`bool`: `f"{name}: {count}"`. A float, or a part with a format such as
+`{count:>4}`, is not available yet.
 
 A foreign function takes a `str` value as it takes a literal: a `cstr`
 parameter gets the address of the bytes, which end in a zero byte, and a
@@ -14187,8 +14191,8 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 - The heap values of the language are `str` and enums that hold
   themselves: no collection yet. A program allocates other memory
   through the [`mem` module](/manual/mem).
-- Text has no formatting of numbers, no indexing, and no f-strings yet,
-  and `str | None` is not available.
+- Text has no indexing or slices, an f-string takes no float and no
+  format spec, and `str | None` is not available.
 - A value that holds such an enum cannot be a member of a union, and a
   field that holds one cannot be assigned. Build a new value instead.
 - Releasing a long list calls itself once for each link, so a very long
@@ -58509,7 +58513,7 @@ output is the same.
 
 This is the first step toward systems work in Aura, and it is honest to
 say where it stops. The heap holds blocks of bytes, text, and the nodes of enums that hold
-themselves: there are no collections yet, and text cannot format a number. There is no inline assembly, so startup code and x86 port
+themselves: there are no collections yet, and text cannot format a float. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`. The
 [Freestanding Builds](/manual/freestanding) and

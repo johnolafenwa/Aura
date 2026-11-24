@@ -66,8 +66,26 @@ def total(n: int64) -> int64:
             sum = sum - e.len() * 3
     return sum
 
+def describe(name: str, count: int64, small: uint8, flag: bool, wide: uint64) -> str:
+    return f"{name}: {count} of {small} ({flag}) max {wide}{-5}"
+
+def lowest() -> str:
+    low: int64 = -9223372036854775807 - 1
+    tiny: int8 = -128
+    return f"{low}{tiny}" + f"" + f"plain" + f"{0}"
+
+def formatted(text: str) -> int64:
+    mut sum = text.len() * 1000
+    if text == "board: -42 of 200 (true) max 18446744073709551615-5":
+        sum = sum + 1
+    if lowest() == "-9223372036854775808-128plain0":
+        sum = sum + 20
+    if f"{false}" == "false":
+        sum = sum + 300
+    return sum
+
 export "C" def entry(n: int64) -> int64:
-    return total(n)
+    return total(n) + formatted(describe("board", 0 - 42, 200, true, 18446744073709551615))
 
 def main() -> None:
-    print(total(40))
+    print(entry(40))

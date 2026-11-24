@@ -289,7 +289,7 @@ fn a_problem_in_an_imported_module_shows_that_file() {
     );
     workspace.write(
         "src/uart.au",
-        "public def banner(code: int64) -> int64:\n    text = f\"code {code}\"\n    return len(text)\n\npublic export \"C\" def uart_irq(status: uint32) -> uint32:\n    return status & 15\n",
+        "public def banner(code: int64) -> int64:\n    text = f\"code {code:>4}\"\n    return len(text)\n\npublic export \"C\" def uart_irq(status: uint32) -> uint32:\n    return status & 15\n",
     );
     let main = "import uart\n\nexport \"C\" def kernel_main(code: int64) -> int64:\n    return uart.banner(code)\n";
     workspace.write("src/main.au", main);
@@ -298,7 +298,7 @@ fn a_problem_in_an_imported_module_shows_that_file() {
     let text = stderr(&output);
     assert!(text.contains("`uart::banner` builds text"), "{text}");
     assert!(text.contains("uart.au:2:"), "{text}");
-    assert!(text.contains("text = f\"code {code}\""), "{text}");
+    assert!(text.contains("text = f\"code {code:>4}\""), "{text}");
 
     // Without the call, the module's own export is still defined.
     workspace.write(
@@ -551,7 +551,7 @@ fn text_computes_what_the_hosted_program_prints_and_frees_every_block() {
         compiler,
         include_str!("freestanding_text.au"),
         "entry",
-        "812111021\n",
+        "812162342\n",
     );
 }
 

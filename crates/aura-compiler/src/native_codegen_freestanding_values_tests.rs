@@ -203,6 +203,9 @@ fn text_becomes_calls_of_the_text_library_on_every_target() {
         "aura::values::value_text_equal",
         "aura::values::value_text_compare",
         "aura::values::value_text_length",
+        "aura::values::value_text_from_int",
+        "aura::values::value_text_from_uint",
+        "aura::values::value_text_from_bool",
         "aura::values::value_text_release",
         "aura::values::release::str",
     ] {
@@ -212,6 +215,7 @@ fn text_becomes_calls_of_the_text_library_on_every_target() {
         !module.contains("\"Runtime\":{\"op\":{\"Str\""),
         "a text op is left"
     );
+    assert!(!module.contains("FormatString"), "an f-string is left");
     for target in FreestandingTarget::ALL {
         object(TEXT, target);
     }
@@ -223,6 +227,20 @@ fn a_program_without_text_gets_no_text_library() {
         let module = prepared(source);
         assert!(!module.contains("value_text_"));
         assert!(!module.contains("aura::values::str"));
+    }
+}
+
+#[test]
+fn an_f_string_with_a_float_or_a_format_is_still_refused() {
+    for body in ["f\"{x}\"", "f\"{n:>4}\""] {
+        let source = format!(
+            "export \"C\" def run(n: int64, x: float64) -> int64:\n    return {body}.len()\n"
+        );
+        let found = refusals(&source);
+        assert!(
+            found.iter().any(|message| message.contains("builds text")),
+            "{body}: {found:?}"
+        );
     }
 }
 

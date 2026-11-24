@@ -71,7 +71,11 @@ count, and a way to drop what the block holds.
   releases it after the call.
 - **The pass rewrites** `+`, the six comparisons, `len`, `byte_len`,
   `starts_with`, `ends_with`, and `contains`. Any other text operation
-  is still refused, and so are f-strings.
+  is still refused.
+- **An f-string appends its parts one by one.** Text is read in place,
+  and an integer or a `bool` is written into a block by a library
+  function. A float or a part with a format spec leaves the f-string
+  refused.
 - **A `str` value given to a foreign function crosses as the address of
   its bytes** for a `cstr` parameter, and as the address and the length
   for a `str` parameter, as a literal already did.
@@ -96,4 +100,6 @@ count, and a way to drop what the block holds.
   block the program's data holds, never counted, is a later step.
 - `str | None` is refused with the other unions of values that own a
   block.
-- Number formatting, indexing, `bytes`, and `list` are the next steps.
+- An f-string of n parts allocates up to 2n blocks and frees all but
+  the last. One block sized in advance is a later step.
+- Float formatting, indexing, `bytes`, and `list` are the next steps.

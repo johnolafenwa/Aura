@@ -66,15 +66,15 @@ values that need no heap (ADR-0129).
   byte length, the bytes, and a zero byte. The library is
   `crates/aura-compiler/std/freestanding_text.au`.
 - The pass rewrites literals, `+`, comparisons, `len`, `byte_len`,
-  `starts_with`, `ends_with`, `contains`, and `str` arguments of foreign
+  `starts_with`, `ends_with`, `contains`, f-strings of text, integers and `bool`, and `str` arguments of foreign
   calls. Assertion text is stripped before the pass.
 - 3 more compiler tests, 1 more for foreign calls, and 1 more command
-  test: `crates/aura/tests/freestanding_text.au` prints 812111021 hosted
+  test: `crates/aura/tests/freestanding_text.au` prints 812162342 hosted
   and freestanding with every block freed.
 
 ## Follow-up
 
-- Number formatting, f-strings, indexing, and slices of `str`.
+- Floats and format specs in f-strings, indexing, and slices of `str`.
 - `str | None`.
 - Literal blocks in the program's data.
 - Unions as enum payloads, and unions of values that own a block.

@@ -395,7 +395,7 @@ export "C" def run(a: int64) -> int64:
             &["calls `sys::args`"],
         ),
         (
-            "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a}\")\n",
+            "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a:>4}\")\n",
             &["builds text"],
         ),
     ] {

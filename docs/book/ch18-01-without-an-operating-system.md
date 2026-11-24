@@ -198,7 +198,7 @@ output is the same.
 
 This is the first step toward systems work in Aura, and it is honest to
 say where it stops. The heap holds blocks of bytes, text, and the nodes of enums that hold
-themselves: there are no collections yet, and text cannot format a number. There is no inline assembly, so startup code and x86 port
+themselves: there are no collections yet, and text cannot format a float. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`. The
 [Freestanding Builds](/manual/freestanding) and

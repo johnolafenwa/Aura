@@ -23,7 +23,7 @@ Last updated: 2026-11-24
   (ADR-0160), and `str` with its first operations, 17 compiler tests and
   3 command tests.
   [Notes](2026-11-24-freestanding-values.md)
-- Remaining: number formatting for `str`, `list`, enums that hold them, `dict`,
+- Remaining: `list`, enums that hold them, `dict`,
   and closures in freestanding builds, by route D1 of
   [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
   a lean value layer written in Aura, which the owner chose.
