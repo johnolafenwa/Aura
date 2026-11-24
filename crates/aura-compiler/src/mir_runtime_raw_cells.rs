@@ -352,6 +352,16 @@ mod tests {
     }
 
     #[test]
+    fn lending_an_owner_preserves_nested_addressed_storage_until_writeback() {
+        let module = lower(include_str!(
+            "../tests/fixtures/typed-pointers/borrowed_owner.au"
+        ));
+        let output = crate::mir_runtime::run_trusted(&module)
+            .expect("owner remains live across its mutable call");
+        assert_eq!(output.stdout, "updated\n17\n23\n");
+    }
+
+    #[test]
     fn malformed_pointer_access_reports_shape_and_address_errors_before_writing() {
         use crate::c_layout::{CField, CFieldKind};
         let fixed_bool = CStruct {
