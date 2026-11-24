@@ -913,3 +913,16 @@ test("systems data uses layout modifiers only in declarations", async () => {
   }
   assert.ok(!scopesAt(tokens, 6, "fixed").includes("support.type.primitive.aura"));
 });
+
+test("alignment and bit-field widths retain Aura integer literal spellings", async () => {
+  const tokens = await tokenizeAura([
+    'extern "C" align(0x10) packed class Header:',
+    '    lower: uint64 bits(0b1_000)',
+  ].join("\n"));
+  for (const name of ["align", "packed"]) {
+    assert.ok(scopesAt(tokens, 0, name).includes("storage.modifier.layout.aura"));
+  }
+  assert.ok(scopesAt(tokens, 0, "0x10").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 1, "0b1_000").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 0, "Header").includes("entity.name.type.aura"));
+});

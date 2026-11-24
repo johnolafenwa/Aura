@@ -247,3 +247,8 @@ test("recovery keeps top-level script locals out of module symbols", () => {
   const source = 'mut count: uint64 = 0\nexport "C" def tick() -> uint64:\n    return count';
   assert.deepEqual(documentSymbols(source).map((symbol) => symbol.name), ["count", "tick"]);
 });
+
+test("recovery recognizes alignment followed by packing and base-prefixed lengths", () => {
+  const source = 'extern "C" align(0x10) packed class Header:\n    value: uint32 bits(0b1_00)';
+  assert.deepEqual(documentSymbols(source).map((s) => s.name), ["Header"]);
+});
