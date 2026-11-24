@@ -476,6 +476,7 @@ pub(super) struct Exec<'a> {
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    pub(super) bit_terms: super::bits::BitTerms,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -538,6 +539,7 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            bit_terms: Default::default(),
             rounded: Vec::new(),
             entry_facts: 0,
             defined: BTreeMap::new(),
@@ -4201,7 +4203,10 @@ impl<'a> Exec<'a> {
                 let Some(Val::Int(value, ty)) = receiver else {
                     return None;
                 };
-                Some(super::bits::evaluate(method, &value, ty, count.as_deref()))
+                Some(
+                    self.bit_terms
+                        .evaluate(method, &value, ty, count.as_deref()),
+                )
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {

@@ -788,7 +788,9 @@ impl Exec<'_> {
                         } else {
                             None
                         };
-                        return Ok(super::bits::evaluate(method, value, *ty, count.as_deref()));
+                        return Ok(self
+                            .bit_terms
+                            .evaluate(method, value, *ty, count.as_deref()));
                     }
                     if let (Val::List { .. }, "contains", [arg]) =
                         (&receiver, field.as_str(), args.as_slice())
