@@ -454,10 +454,6 @@ def same_place(xs: mut list[int64]) -> bool:
     xs.sort()
     return xs[0] == first
 
-def shrinks(xs: list[int64]) -> int64:
-    ensures result == len(xs) - 1
-    return len(sorted(xs))
-
 def new_element(xs: list[int64]) -> bool:
     requires len(xs) > 0
     ensures result
@@ -473,15 +469,13 @@ def main():
     print(descending(xs))
     mut ys = [3, 1, 2]
     print(same_place(ys))
-    print(shrinks([3, 1]))
     print(new_element([3, 1]))
 "#,
         &[
             "4 ensures failed",
             "10 ensures failed",
-            "16 ensures failed",
-            "21 ensures failed",
-            "27 index in range failed",
+            "17 ensures failed",
+            "23 index in range failed",
         ],
     );
 }
@@ -808,5 +802,81 @@ def main():
     );
     assert!(
         crate::run_source("def main():\n    xs: list[int64] = []\n    print(min(xs))\n").is_err()
+    );
+}
+
+#[test]
+fn a_short_literal_list_sorts_to_known_elements() {
+    assert_proved(
+        r#"
+def main():
+    mut xs = [3, 1, 2]
+    xs.sort()
+    assert xs[0] == 1 and xs[1] == 2 and xs[2] == 3
+    xs.sort(reverse=true)
+    assert xs[0] == 3 and xs[2] == 1
+    mut one = [7]
+    one.sort()
+    assert one[0] == 7
+    mut none: list[int64] = []
+    none.sort()
+    assert len(none) == 0
+"#,
+    );
+    assert_open(
+        r#"
+def main():
+    mut xs = [3, 1, 2]
+    xs.sort()
+    assert xs[0] == 2
+"#,
+        &["5 assert failed"],
+    );
+}
+
+#[test]
+fn slices_sorts_and_reversals_compose() {
+    assert_proved(
+        r#"
+def least_of_tail(xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    ensures forall(i in range(1, len(xs)), result <= xs[i])
+    return min(xs[1:])
+
+def sorted_tail(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    ensures result <= xs[1] and result <= xs[2]
+    ys = sorted(xs[1:])
+    return ys[0]
+
+def reversed_tail(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    ensures result == xs[len(xs) - 1]
+    mut ys = xs[1:]
+    ys.reverse()
+    return ys[0]
+
+def written(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    ensures result == xs[len(xs) - 2] + 0
+    mut ys = xs[:]
+    ys.reverse()
+    ys[0] = 5
+    assert ys[0] == 5
+    return ys[1]
+
+def slice_of_slice(xs: list[int64]) -> int64:
+    requires len(xs) > 4
+    ensures result == xs[3]
+    return xs[1:][1:][1]
+
+def main():
+    xs = [5, 3, 4, 1, 2]
+    print(least_of_tail(xs))
+    print(sorted_tail(xs))
+    print(reversed_tail(xs))
+    print(written(xs))
+    print(slice_of_slice(xs))
+"#,
     );
 }

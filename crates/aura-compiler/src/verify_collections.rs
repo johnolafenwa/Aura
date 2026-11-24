@@ -27,6 +27,54 @@ fn widen(slot: &mut Option<Count>, (low, high): Count) -> bool {
     changed
 }
 
+/// What each array of `store` holds for position `index`, in order.
+fn leaf_selects(store: &Store, index: &str) -> Vec<String> {
+    match store {
+        Store::Leaf(array, _) => vec![format!("(select {array} {index})")],
+        Store::Items(items) => items
+            .iter()
+            .flat_map(|item| leaf_selects(item, index))
+            .collect(),
+        Store::Shifted(base, start) => leaf_selects(base, &format!("(+ {index} {start})")),
+        Store::Reversed(base, last) => leaf_selects(base, &format!("(- {last} {index})")),
+    }
+}
+
+/// The sort of the elements of a store of scalars.
+fn scalar_sort(store: &Store) -> Option<&'static str> {
+    match store {
+        Store::Leaf(_, sort) => Some(sort),
+        Store::Items(_) => None,
+        Store::Shifted(base, _) | Store::Reversed(base, _) => scalar_sort(base),
+    }
+}
+
+/// What the one array of a store of scalars holds for position `index`.
+fn same_leaf(store: &Store, index: &str) -> String {
+    leaf_selects(store, index).concat()
+}
+
+/// The array of a store of scalars, and the positions of it that hold the
+/// store's positions from `low` up to `high`: its own from a low up to a
+/// high. A quantifier over those reads the array at its bound variable,
+/// which a solver matches more readily than at a sum.
+fn leaf_range(store: &Store, low: String, high: String) -> Option<(String, String, String)> {
+    match store {
+        Store::Leaf(array, _) => Some((array.clone(), low, high)),
+        Store::Items(_) => None,
+        Store::Shifted(base, start) => leaf_range(
+            base,
+            format!("(+ {low} {start})"),
+            format!("(+ {high} {start})"),
+        ),
+        Store::Reversed(base, last) => leaf_range(
+            base,
+            format!("(+ (- {last} {high}) 1)"),
+            format!("(+ (- {last} {low}) 1)"),
+        ),
+    }
+}
+
 /// Whether the MIR text `text` names the local `root` or a place in it.
 fn names(text: &str, root: &str) -> bool {
     text.contains(&format!("\"{root}\"")) || text.contains(&format!("\"{root}."))
@@ -83,7 +131,8 @@ impl Exec<'_> {
                 let data = match (op, data) {
                     (_, None) => None,
                     (ListOp::Reverse, Some(store)) => {
-                        Some(self.reindexed(&store, &|i| format!("(- (- {len} 1) {i})")))
+                        let last = self.define("Int", "last", format!("(- {len} 1)"));
+                        Some(Store::Reversed(Box::new(store), last))
                     }
                     (_, Some(store)) => {
                         // `sort(reverse)` orders by the elements' own
@@ -147,7 +196,7 @@ impl Exec<'_> {
                 elem,
             });
         }
-        let data = data.map(|store| self.reindexed(&store, &|i| format!("(+ {i} {low})")));
+        let data = data.map(|store| Store::Shifted(Box::new(store), low.clone()));
         let len = self.define("Int", "len", format!("(- {high} {low})"));
         Some(Val::List { len, data, elem })
     }
@@ -176,43 +225,34 @@ impl Exec<'_> {
         }
     }
 
-    /// A store whose position `i` holds what `store` holds at `at(i)`.
-    fn reindexed(&mut self, store: &Store, at: &dyn Fn(&str) -> String) -> Store {
-        let mut leaves = Vec::new();
-        let copy = self.fresh_like(store, "copy", &mut leaves);
+    /// A store of arrays of its own that holds what `store` holds, for a
+    /// store that reads another one's arrays at other positions.
+    pub(super) fn copied_store(&mut self, store: &Store) -> Store {
+        let copy = self.fresh_like(store, "copy");
         let i = self.bound_name();
-        let from = at(&i);
-        for (old, new) in leaves {
-            self.fact(format!(
-                "(forall (({i} Int)) (= (select {new} {i}) (select {old} {from})))"
-            ));
-        }
+        let same = leaf_selects(&copy, &i)
+            .iter()
+            .zip(leaf_selects(store, &i))
+            .map(|(new, old)| format!("(= {new} {old})"))
+            .collect::<Vec<_>>();
+        self.fact(format!("(forall (({i} Int)) (and {}))", same.join(" ")));
         copy
     }
 
-    /// A store of the shape of `store` with a fresh array for each of its
-    /// arrays. Each pair of the two is added to `leaves`.
-    fn fresh_like(
-        &mut self,
-        store: &Store,
-        hint: &str,
-        leaves: &mut Vec<(String, String)>,
-    ) -> Store {
+    /// A store of the shape of `store`, with a fresh array for each of
+    /// its arrays.
+    fn fresh_like(&mut self, store: &Store, hint: &str) -> Store {
         match store {
-            Store::Leaf(array, sort) => {
-                let fresh = self.fresh_const(&format!("(Array Int {sort})"), hint);
-                leaves.push((array.clone(), fresh.clone()));
-                Store::Leaf(fresh, sort)
+            Store::Leaf(_, sort) => {
+                Store::Leaf(self.fresh_const(&format!("(Array Int {sort})"), hint), sort)
             }
             Store::Items(items) => Store::Items(
                 items
                     .iter()
-                    .map(|item| self.fresh_like(item, hint, leaves))
+                    .map(|item| self.fresh_like(item, hint))
                     .collect(),
             ),
-            // A span's store exists only while a contract is read: the
-            // function's own steps run on its base list.
-            Store::Shifted(base, _) => self.fresh_like(base, hint, leaves),
+            Store::Shifted(base, _) | Store::Reversed(base, _) => self.fresh_like(base, hint),
         }
     }
 
@@ -223,15 +263,14 @@ impl Exec<'_> {
     /// model, so the result stays a made-up one that holds the same
     /// elements.
     fn sorted(&mut self, store: &Store, len: &str, descending: Option<String>) -> Store {
-        let ordered = match (store, descending) {
-            (Store::Leaf(_, "Int"), Some(descending)) => Some(descending),
+        let ordered = match (scalar_sort(store), descending) {
+            (Some("Int"), Some(descending)) => Some(descending),
             _ => None,
         };
-        let mut leaves = Vec::new();
         let result = match &ordered {
-            Some(_) => self.fresh_like(store, "sorted", &mut leaves),
+            Some(_) => self.fresh_like(store, "sorted"),
             None => self.unmodeled("the order of the elements after a sort", |exec| {
-                exec.fresh_like(store, "sorted", &mut leaves)
+                exec.fresh_like(store, "sorted")
             }),
         };
         // Position `i` of the result holds the element that was at
@@ -245,28 +284,68 @@ impl Exec<'_> {
                 .push(format!("(declare-fun {function} (Int) Int)"));
         }
         let inside = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
-        let (source, target) = (format!("({from} {i})"), format!("({to} {j})"));
-        let mut moved = vec![inside(&source), format!("(= ({to} {source}) {i})")];
-        let mut kept = vec![inside(&target), format!("(= ({from} {target}) {j})")];
-        for (old, new) in &leaves {
-            moved.push(format!("(= (select {new} {i}) (select {old} {source}))"));
-            kept.push(format!("(= (select {new} {target}) (select {old} {j}))"));
-        }
-        self.fact(format!(
-            "(forall (({i} Int)) (=> {} (and {})))",
-            inside(&i),
-            moved.join(" ")
-        ));
-        self.fact(format!(
-            "(forall (({j} Int)) (=> {} (and {})))",
-            inside(&j),
-            kept.join(" ")
-        ));
-        if let (Some(descending), Some((_, new))) = (ordered, leaves.first()) {
-            let (first, second) = (format!("(select {new} {i})"), format!("(select {new} {j})"));
-            self.fact(format!(
-                "(forall (({i} Int) ({j} Int)) (=> (and (<= 0 {i}) (<= {i} {j}) (< {j} {len})) (ite {descending} (>= {first} {second}) (<= {first} {second}))))"
-            ));
+        let same = |new: &str, old: &str| {
+            leaf_selects(&result, new)
+                .iter()
+                .zip(leaf_selects(store, old))
+                .map(|(new, old)| format!("(= {new} {old})"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let moved = |i: &str| {
+            let source = format!("({from} {i})");
+            format!(
+                "(and {} (= ({to} {source}) {i}) {})",
+                inside(&source),
+                same(i, &source)
+            )
+        };
+        let kept = |j: &str| {
+            let target = format!("({to} {j})");
+            format!(
+                "(and {} (= ({from} {target}) {j}) {})",
+                inside(&target),
+                same(&target, j)
+            )
+        };
+        let in_order = |i: &str, j: &str| {
+            let Some(descending) = &ordered else {
+                return "true".to_string();
+            };
+            let (first, second) = (same_leaf(&result, i), same_leaf(&result, j));
+            format!("(ite {descending} (>= {first} {second}) (<= {first} {second}))")
+        };
+        // A short list of a known length has each fact once for each
+        // position: the solver then decides every question about it.
+        match len.parse::<u8>() {
+            Ok(count) if count <= 16 => {
+                for position in 0..count {
+                    let (here, next) = (position.to_string(), (position + 1).to_string());
+                    self.fact(moved(&here));
+                    self.fact(kept(&here));
+                    if position + 1 < count {
+                        self.fact(in_order(&here, &next));
+                    }
+                }
+            }
+            _ => {
+                self.fact(format!(
+                    "(forall (({i} Int)) (=> {} {}))",
+                    inside(&i),
+                    moved(&i)
+                ));
+                self.fact(format!(
+                    "(forall (({j} Int)) (=> {} {}))",
+                    inside(&j),
+                    kept(&j)
+                ));
+                if ordered.is_some() {
+                    self.fact(format!(
+                        "(forall (({i} Int) ({j} Int)) (=> (and (<= 0 {i}) (<= {i} {j}) (< {j} {len})) {}))",
+                        in_order(&i, &j)
+                    ));
+                }
+            }
         }
         result
     }
@@ -631,8 +710,7 @@ impl Exec<'_> {
         }
         let (
             Some(Val::List {
-                data: Some(Store::Leaf(array, "Int")),
-                ..
+                data: Some(store), ..
             }),
             Some(Val::Int(initial, int)),
             Some(Val::Bool(unseen)),
@@ -644,20 +722,26 @@ impl Exec<'_> {
         else {
             return;
         };
-        if start != "0" || unseen != "false" {
+        if start != "0" || unseen != "false" || scalar_sort(store) != Some("Int") {
             return;
         }
-        let (array, initial, int) = (array.clone(), initial.clone(), *int);
+        let Some((array, low, high)) = leaf_range(store, start.to_string(), now.to_string()) else {
+            return;
+        };
+        let (initial, int) = (initial.clone(), *int);
         let moved = format!("(> {now} {start})");
         let bound = self.fresh_const("Int", kept);
         self.fact(int.contains(&bound));
         let (k, witness) = (self.bound_name(), self.fresh_const("Int", "at"));
         self.fact(format!("(=> (not {moved}) (= {bound} {initial}))"));
+        let inside = |k: &str| format!("(and (<= {low} {k}) (< {k} {high}))");
         self.fact(format!(
-            "(=> {moved} (forall (({k} Int)) (=> (and (<= {start} {k}) (< {k} {now})) ({order} {bound} (select {array} {k})))))"
+            "(=> {moved} (forall (({k} Int)) (=> {} ({order} {bound} (select {array} {k})))))",
+            inside(&k)
         ));
         self.fact(format!(
-            "(=> {moved} (and (<= {start} {witness}) (< {witness} {now}) (= {bound} (select {array} {witness}))))"
+            "(=> {moved} (and {} (= {bound} (select {array} {witness}))))",
+            inside(&witness)
         ));
         havoc.env.insert(kept.clone(), Val::Int(bound, int));
         havoc.env.insert(seen.clone(), Val::Bool(moved));

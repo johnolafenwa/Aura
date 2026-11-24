@@ -351,6 +351,9 @@ pub(super) enum Store {
     /// `i` of the span is position `i` plus the span's start in the base.
     /// Only a contract reads one; the function's own steps run on the base.
     Shifted(Box<Store>, String),
+    /// The elements of a reversed list, read from the store it had:
+    /// position `i` is that store's position `last - i`.
+    Reversed(Box<Store>, String),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -2488,6 +2491,9 @@ impl<'a> Exec<'a> {
             Store::Shifted(base, start) => {
                 self.store_select(base, elem, &format!("(+ {index} {start})"))
             }
+            Store::Reversed(base, last) => {
+                self.store_select(base, elem, &format!("(- {last} {index})"))
+            }
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -2545,6 +2551,10 @@ impl<'a> Exec<'a> {
                     .map(|(store, (_, value))| self.store_put(store, index, value))
                     .collect::<Option<Vec<_>>>()
                     .map(Store::Items)
+            }
+            (Store::Shifted(..) | Store::Reversed(..), _) => {
+                let copy = self.copied_store(store);
+                self.store_put(&copy, index, value)
             }
             _ => None,
         }
