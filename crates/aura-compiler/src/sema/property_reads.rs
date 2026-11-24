@@ -1,4 +1,4 @@
-//! Read-only computed properties (ADR-0055).
+//! Computed property access (ADR-0055 and ADR-0131).
 //!
 //! A property read `value.name` evaluates `value` once and calls the getter
 //! once with shared access. The checker learns that a member read names a
@@ -9,6 +9,7 @@
 //! shared method call. The recorded positions stay on the checked program so
 //! the checker can tell a rewritten read from call syntax, which is rejected.
 
+use super::property_setters::PropertyWrite;
 use super::{
     BTreeMap, BTreeSet, ClassInfo, Diagnostic, Expr, ExprKind, FunctionChecker, Item, MethodInfo,
     Module, ModuleContext, ReceiverKind, Result, Stmt, Type,
@@ -27,6 +28,7 @@ struct PropertyState {
     reads: BTreeSet<PropertySite>,
     /// Unrewritten reads the current check discovered.
     discovered: BTreeSet<PropertySite>,
+    writes: BTreeMap<PropertySite, PropertyWrite>,
 }
 
 thread_local! {
@@ -41,12 +43,17 @@ fn with_property_state<T>(
     module: &str,
     reads: BTreeSet<PropertySite>,
     check: impl FnOnce() -> T,
-) -> (T, BTreeSet<PropertySite>) {
+) -> (
+    T,
+    BTreeSet<PropertySite>,
+    BTreeMap<PropertySite, PropertyWrite>,
+) {
     PROPERTY_STATE.with(|state| {
         state.borrow_mut().push(PropertyState {
             module: module.to_string(),
             reads,
             discovered: BTreeSet::new(),
+            writes: BTreeMap::new(),
         })
     });
     struct Pop;
@@ -59,15 +66,20 @@ fn with_property_state<T>(
     }
     let pop = Pop;
     let result = check();
-    let discovered = PROPERTY_STATE.with(|state| {
+    let (discovered, writes) = PROPERTY_STATE.with(|state| {
         state
             .borrow_mut()
             .last_mut()
-            .map(|state| std::mem::take(&mut state.discovered))
+            .map(|state| {
+                (
+                    std::mem::take(&mut state.discovered),
+                    std::mem::take(&mut state.writes),
+                )
+            })
             .unwrap_or_default()
     });
     drop(pop);
-    (result, discovered)
+    (result, discovered, writes)
 }
 
 fn site(span: crate::diag::Span) -> PropertySite {
@@ -93,19 +105,28 @@ pub(super) fn check_with_property_reads(
     let mut module = module;
     let mut reads = BTreeSet::new();
     loop {
-        let (result, discovered) = with_property_state(&module_name, reads.clone(), || {
-            check(module.clone(), context.clone())
-        });
+        let (result, discovered, mut writes) =
+            with_property_state(&module_name, reads.clone(), || {
+                check(module.clone(), context.clone())
+            });
         let pending = discovered
             .difference(&reads)
             .copied()
             .collect::<BTreeSet<_>>();
-        let rewritten = if pending.is_empty() {
+        let had_writes = !writes.is_empty();
+        let rewritten = if pending.is_empty() && !had_writes {
             BTreeSet::new()
         } else {
-            rewrite_module(&mut module, &pending)
+            rewrite_module(&mut module, &pending, &mut writes)
         };
-        if rewritten.is_empty() {
+        if let Some(&(line, column)) = writes.keys().next() {
+            return Err(Diagnostic::coded_at(
+                "AU2064",
+                crate::diag::Span::new(line, column),
+                "cannot lower a property assignment in this context",
+            ));
+        }
+        if rewritten.is_empty() && !had_writes {
             MODULE_PROPERTY_READS.with(|module_reads| {
                 module_reads
                     .borrow_mut()
@@ -144,10 +165,12 @@ fn module_may_read_properties(module: &Module, context: &ModuleContext) -> bool 
 pub(super) fn rewrite_module(
     module: &mut Module,
     sites: &BTreeSet<PropertySite>,
+    writes: &mut BTreeMap<PropertySite, PropertyWrite>,
 ) -> BTreeSet<PropertySite> {
     let mut rewritten = BTreeSet::new();
     let mut rewriter = Rewriter {
         sites,
+        writes,
         rewritten: &mut rewritten,
     };
     for constant in &mut module.constants {
@@ -188,6 +211,7 @@ pub(super) fn rewrite_module(
 
 struct Rewriter<'a> {
     sites: &'a BTreeSet<PropertySite>,
+    writes: &'a mut BTreeMap<PropertySite, PropertyWrite>,
     rewritten: &'a mut BTreeSet<PropertySite>,
 }
 
@@ -219,6 +243,11 @@ impl Rewriter<'_> {
                     }
                 }
                 self.expr(&mut assign.value, false);
+                if let crate::ast::AssignTarget::Member { object, field } = &assign.target {
+                    if let Some(write) = self.writes.remove(&site(assign.span)) {
+                        *stmt = super::property_setters::lower_write(assign, object, field, &write);
+                    }
+                }
             }
             Stmt::View(view) => self.expr(&mut view.source, false),
             Stmt::Destructure(destructure) => self.expr(&mut destructure.value, false),
@@ -547,32 +576,87 @@ impl FunctionChecker<'_> {
         }
     }
 
-    /// Rejects an assignment whose target is a property or reaches through
-    /// one.
-    pub(super) fn reject_property_assignment(
+    /// Record a write for lowering, or reject a property used as a place.
+    pub(super) fn discover_property_assignment(
         &self,
         assign: &crate::ast::AssignStmt,
         locals: &mut std::collections::HashMap<String, super::LocalBinding>,
-    ) -> Result<()> {
-        let action = if assign.op.is_some() {
-            "updated"
-        } else {
-            "assigned"
+    ) -> Result<bool> {
+        use crate::ast::{AssignTarget, PROPERTY_SETTER_SUFFIX};
+        let object = match &assign.target {
+            AssignTarget::Name(_) => return Ok(false),
+            AssignTarget::Index { object, .. } | AssignTarget::Member { object, .. } => object,
         };
-        match &assign.target {
-            crate::ast::AssignTarget::Name(_) => Ok(()),
-            crate::ast::AssignTarget::Member { object, field } => {
-                if let Ok(object_ty) = self.type_of_member_object_expr(object, locals) {
-                    if self.property_getter(&object_ty, field).is_some() {
-                        return Err(property_use_error(assign.span, field, action));
-                    }
-                }
-                self.reject_property_place(object, "assigned through", locals)
-            }
-            crate::ast::AssignTarget::Index { object, .. } => {
-                self.reject_property_place(object, "assigned through", locals)
-            }
+        self.reject_property_place(object, "assigned through", locals)?;
+        let AssignTarget::Member { field, .. } = &assign.target else {
+            return Ok(false);
+        };
+        let Some(getter) = self
+            .type_of_member_object_expr(object, locals)
+            .ok()
+            .and_then(|ty| self.property_getter(&ty, field))
+        else {
+            return Ok(false);
+        };
+        let Some(setter) = getter
+            .class
+            .methods
+            .get(&format!("{field}{PROPERTY_SETTER_SUFFIX}"))
+        else {
+            let action = if assign.op.is_some() {
+                "updated"
+            } else {
+                "assigned"
+            };
+            return Err(property_use_error(assign.span, field, action));
+        };
+        if self.is_external_module(&getter.class.module_name)
+            && (!getter.method.decl.public || !setter.decl.public)
+        {
+            return Err(Diagnostic::at(
+                assign.span,
+                format!(
+                    "setter for `{field}` is private on `{}`",
+                    getter.class.decl.name
+                ),
+            ));
         }
+        if assign.mutable {
+            return Err(Diagnostic::at(
+                assign.span,
+                "`mut` can only be used when introducing a new binding",
+            ));
+        }
+        if !self.is_mutable_place(object, locals)? {
+            return Err(Diagnostic::coded_at(
+                "AU3003",
+                assign.member_span.unwrap_or(assign.span),
+                format!("setter for `{field}` requires a mutable receiver"),
+            ));
+        }
+        // Evaluate an independently typed result before borrowing the receiver.
+        // Leave contextual literals and borrowed non-copy arguments at their
+        // typed call site so they retain their expected type and passing mode.
+        let stage_rhs = assign.op.is_none()
+            && self
+                .type_of_expr(&assign.value, &mut locals.clone())
+                .is_ok_and(|ty| ty == getter.result)
+            && (self.is_copy_type(&getter.result)
+                || setter.decl.params[0].mode == crate::ast::ParamMode::Own
+                || self.borrow_call_place(&assign.value).is_none()
+                || self.property_read_name(&assign.value, locals).is_some());
+        let write = self.property_write(object, &assign.value, stage_rhs, locals)?;
+        Ok(PROPERTY_STATE.with(|states| {
+            let mut states = states.borrow_mut();
+            let Some(state) = states
+                .last_mut()
+                .filter(|state| state.module == self.module_name)
+            else {
+                return false;
+            };
+            state.writes.insert(site(assign.span), write);
+            true
+        }))
     }
 }
 
@@ -597,6 +681,10 @@ pub(super) fn validate_class_properties(
     methods: &BTreeMap<String, MethodInfo>,
 ) -> Result<()> {
     for method in &class.methods {
+        if let Some(name) = method.name.strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX) {
+            super::property_setters::validate_setter(name, method, methods)?;
+            continue;
+        }
         let Some(marker) = method.property else {
             continue;
         };

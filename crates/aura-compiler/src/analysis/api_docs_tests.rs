@@ -257,3 +257,32 @@ fn api_docs_and_completion_hide_the_class_invariant_check() {
         "{completions:?}"
     );
 }
+
+#[test]
+fn public_property_accessors_use_their_source_signatures() {
+    let source = r#"
+public class Counter:
+    stored: int64
+
+    @property
+    public def count(self) -> int64:
+        return self.stored
+
+    @count.setter
+    public def count(mut self, value: int64):
+        """Replace the count."""
+        self.stored = value
+"#;
+    let program = crate::check_source(source).expect("public accessors should check");
+    let module = api_module_from_program("counter", &program);
+    let methods = &module.declarations[0].methods;
+    assert_eq!(methods.len(), 2);
+    assert_eq!(methods[0].name, "count");
+    assert_eq!(methods[0].signature, "@property\ndef count(self) -> int64");
+    assert_eq!(methods[1].name, "count");
+    assert_eq!(
+        methods[1].signature,
+        "@count.setter\ndef count(mut self, value: int64) -> None"
+    );
+    assert_eq!(methods[1].doc.as_deref(), Some("Replace the count."));
+}

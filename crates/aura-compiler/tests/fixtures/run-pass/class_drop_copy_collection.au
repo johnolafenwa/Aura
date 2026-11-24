@@ -1,0 +1,14 @@
+class Ticket:
+    number: int64
+    def __drop__(mut self):
+        print(self.number)
+
+def main():
+    mut original = [Ticket(1)]
+    if true:
+        mut duplicate = original.copy()
+        duplicate.clear()
+        print("copy cleared")
+    print("original still live")
+    original.clear()
+    print("original cleared")

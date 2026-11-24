@@ -1,0 +1,10 @@
+trait Named:
+    def number(self) -> int64
+class Engine:
+    rpm: int64
+impl Named for Engine:
+    def number(self) -> int64:
+        return self.rpm
+class Car:
+    engine: Engine
+impl Named for Car by gone

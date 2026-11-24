@@ -1,6 +1,0 @@
-error[AU2005]: a decorator must name `property`
- --> crates/aura-compiler/tests/fixtures/parse-fail/property_not_a_name.au:4:5
-  |
-4 |     @3
-  |     ^
-  = help: decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property

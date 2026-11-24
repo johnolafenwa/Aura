@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-24
 
+## Class items for 0.18
+
+Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
+
 ## Verification in the documentation (complete)
 
 - Target: John's 2026-11-24 request that `aura verify` be prominent across

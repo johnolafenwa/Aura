@@ -1,0 +1,5 @@
+error[AU2065]: copy class `Badge` cannot declare `__drop__`
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_copy.au:4:5
+  |
+4 |     def __drop__(mut self):
+  |     ^

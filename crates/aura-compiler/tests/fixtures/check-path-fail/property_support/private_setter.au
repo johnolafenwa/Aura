@@ -1,0 +1,10 @@
+public class Gauge:
+    public raw: int64
+
+    @property
+    public def level(self) -> int64:
+        return self.raw
+
+    @level.setter
+    def level(mut self, replacement: int64):
+        self.raw = replacement

@@ -1,3 +1,5 @@
+mod property_setters;
+
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
     BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
@@ -26,7 +28,7 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn unsupported_decorator_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU2005", span, message)
-        .with_help("decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property")
+        .with_help("decorators apply to module-level functions and class methods; write `@property` alone above a getter")
 }
 
 fn misplaced_decorator_error(span: Span) -> Diagnostic {
@@ -328,10 +330,11 @@ pub fn parse(source: &str) -> Result<Module> {
 /// decorator or the definition. Comment lines inside the group are skipped.
 fn record_decorator_text(module: &mut Module, source: &str) {
     let lines = source.lines().collect::<Vec<_>>();
-    for item in &mut module.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
+    for function in module.items.iter_mut().flat_map(|item| match item {
+        Item::Function(function) => std::slice::from_mut(function),
+        Item::Class(class) => class.methods.as_mut_slice(),
+        _ => &mut [],
+    }) {
         let ends = function
             .decorators
             .iter()
@@ -616,7 +619,7 @@ impl Parser {
         if self.at_simple(&TokenKind::At)
             && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
         {
-            return self.parse_decorated_function();
+            return self.parse_decorated_function(false).map(Item::Function);
         }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
@@ -1157,6 +1160,16 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
+            if self.at_property_setter(&methods) {
+                methods.push(self.parse_property_setter(&methods)?);
+                continue;
+            }
+            if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                methods.push(self.parse_decorated_function(true)?);
+                continue;
+            }
             if self.at_simple(&TokenKind::At) {
                 let property = self.parse_property_marker()?;
                 let method_public = self.eat_simple(&TokenKind::KwPublic).is_some();
@@ -1495,8 +1508,10 @@ impl Parser {
     fn parse_field(&mut self) -> Result<FieldDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         let span = self.current_span();
+        self.reject_view_field()?;
         let name = self.expect_identifier()?;
         self.expect_simple(TokenKind::Colon)?;
+        self.reject_view_field()?;
         let ty = self.parse_type()?;
         let default = if self.eat_simple(&TokenKind::Equal).is_some() {
             Some(self.parse_expr()?)
@@ -1515,9 +1530,25 @@ impl Parser {
         })
     }
 
-    /// Parses a group of `@expression` lines and the module-level function
+    fn reject_view_field(&self) -> Result<()> {
+        if matches!(self.peek_kind(0), Some(TokenKind::Identifier(word)) if word == "view")
+            && matches!(
+                self.peek_kind(1),
+                Some(TokenKind::Identifier(_)) | Some(TokenKind::KwMut)
+            )
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2063",
+                self.current_span(),
+                "a class cannot store a view field",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parses a group of `@expression` lines and the function or method
     /// they decorate. Comments and blank lines may sit inside the group.
-    fn parse_decorated_function(&mut self) -> Result<Item> {
+    fn parse_decorated_function(&mut self, method: bool) -> Result<FunctionDecl> {
         let first = self.current_span();
         let mut decorators = Vec::new();
         while self.at_simple(&TokenKind::At) {
@@ -1535,15 +1566,21 @@ impl Parser {
         }
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         if !self.at_keyword_def() {
+            if method {
+                return Err(Diagnostic::coded_at(
+                    "AU2047",
+                    first,
+                    "a method decorator must come directly before a method definition",
+                ));
+            }
             return Err(misplaced_decorator_error(first));
         }
-        let mut function = self.parse_function(public)?;
+        let mut function = self.parse_function_with_receiver(method, public)?;
         function.decorators = decorators;
-        Ok(Item::Function(function))
+        Ok(function)
     }
 
-    /// Parses one `@property` line. `@property` is the only marker Aura
-    /// accepts: a general decorator is not part of the language.
+    /// Parses the reserved stand-alone `@property` marker.
     fn parse_property_marker(&mut self) -> Result<Span> {
         let span = self.expect_simple(TokenKind::At)?.span;
         let name = match self.current_kind() {
@@ -1767,6 +1804,13 @@ impl Parser {
         }
         self.expect_keyword(TokenKind::KwFor)?;
         let for_type = self.parse_type()?;
+        let delegation = if matches!(self.peek_kind(0), Some(TokenKind::Identifier(name)) if name == "by")
+        {
+            self.bump();
+            Some(self.expect_identifier_with_span()?)
+        } else {
+            None
+        };
         if self.eat_simple(&TokenKind::Colon).is_none() {
             // `impl Trait for Type` with no body asks for derived methods.
             self.expect_statement_terminator()?;
@@ -1778,7 +1822,8 @@ impl Parser {
                 for_type,
                 methods: Vec::new(),
                 span,
-                derived: true,
+                derived: delegation.is_none(),
+                delegation,
                 assoc_types: Vec::new(),
             });
         }
@@ -1799,6 +1844,7 @@ impl Parser {
             methods,
             span,
             derived: false,
+            delegation,
             assoc_types,
         })
     }
@@ -2347,6 +2393,8 @@ impl Parser {
         let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let span = self.current_span();
         let target = self.parse_assign_target()?;
+        let member_span =
+            matches!(target, AssignTarget::Member { .. }).then(|| self.tokens[self.index - 1].span);
         let annotation = if matches!(target, AssignTarget::Name(_))
             && self.eat_simple(&TokenKind::Colon).is_some()
         {
@@ -2359,6 +2407,7 @@ impl Parser {
         self.expect_statement_terminator()?;
 
         Ok(AssignStmt {
+            member_span,
             mutable,
             target,
             annotation,
@@ -3734,6 +3783,7 @@ impl Parser {
             })
             .collect();
         Ok(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             op: None,
             span: name_span,
