@@ -1,0 +1,9 @@
+def last(row: fixed[uint16, 9] | None) -> uint16:
+    if row is not None:
+        return row[8]
+    return 0
+
+def main():
+    row: fixed[uint16, 9] = [22] * 9
+    print(last(row))
+    print(last(None))
