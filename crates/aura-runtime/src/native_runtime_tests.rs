@@ -31810,3 +31810,26 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     );
     assert_eq!(out, [-1, 0]);
 }
+
+#[test]
+fn float_trait_object_preserves_width_through_generic_boxing() {
+    let f32_box = super::boxed_typed_value(Value::Float(1.5), "float32");
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    let wrapped = super::aura_direct_trait_object_from(f32_box);
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    unsafe { release_value(wrapped) };
+}

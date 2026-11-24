@@ -111,6 +111,7 @@ runtime_functions! {
     BoxI64 => ("aura_direct_box_i64", [I64], Some(I64)),
     BoxU64 => ("aura_direct_box_u64", [I64], Some(I64)),
     BoxUintLiteral => ("aura_direct_box_uint_literal", [I64, I64], Some(I64)),
+    BoxF32 => ("aura_direct_box_f32", [F64], Some(I64)),
     BoxF64 => ("aura_direct_box_f64", [F64], Some(I64)),
     BoxBool => ("aura_direct_box_bool", [I64], Some(I64)),
     FunctionValue => ("aura_direct_function_value", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),

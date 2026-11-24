@@ -14852,7 +14852,18 @@ impl<'a> FunctionCompiler<'a> {
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
             }
-            DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+            DirectType::Scalar(ScalarKind::Float32) => {
+                let inst = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::BoxF32], &[value.values[0]]);
+                let boxed = ValueRef {
+                    values: inst.results,
+                    ty: DirectType::Opaque(Type::named("float32")),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
+            }
+            DirectType::Scalar(ScalarKind::Float64) => {
                 let inst = self
                     .builder
                     .call(self.runtime[RuntimeFn::BoxF64], &[value.values[0]]);
@@ -21765,7 +21776,12 @@ fn box_thunk_value(
             let inst = builder.call(box_u64, &[values[0]]);
             Ok(inst.results[0])
         }
-        DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+        DirectType::Scalar(ScalarKind::Float32) => {
+            let box_f32 = builder.import_function(codegen.runtime[RuntimeFn::BoxF32]);
+            let inst = builder.call(box_f32, &[values[0]]);
+            Ok(inst.results[0])
+        }
+        DirectType::Scalar(ScalarKind::Float64) => {
             let box_f64 = builder.import_function(codegen.runtime[RuntimeFn::BoxF64]);
             let inst = builder.call(box_f64, &[values[0]]);
             Ok(inst.results[0])

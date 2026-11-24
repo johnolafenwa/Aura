@@ -6559,8 +6559,13 @@ pub extern "C-unwind" fn aura_direct_box_uint_literal(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_box_f32(value: f64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_typed_value(Value::Float(value), "float32"))
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_box_f64(value: f64) -> *mut OpaqueValue {
-    task_runtime_boundary(|| boxed_value(Value::Float(value)))
+    task_runtime_boundary(|| boxed_typed_value(Value::Float(value), "float64"))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -14948,7 +14953,10 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::Generator(_) => expected == "iter.GeneratorHandle",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
-            Value::Float(_) => expected == "float64" || expected == "float32",
+            Value::Float(_) => match explicit_type.as_deref() {
+                Some(actual) => actual == expected,
+                None => expected == "float64",
+            },
             Value::Int(value) => value.runtime_type_name().map_or_else(
                 || expected.starts_with("int") || expected.starts_with("uint"),
                 |actual| actual == expected,
@@ -15029,6 +15037,7 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let explicit_type = unsafe { effective_runtime_type_name(value) };
         let member = unsafe {
             with_value(value, |value| {
                 let mut active = value;
@@ -15037,19 +15046,45 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
                     member = crate::union_runtime::active_member_type(union);
                     active = &union.payload;
                 }
-                (!std::ptr::eq(active, value)).then(|| {
-                    let held = try_clone_array_containing_value(active)?;
-                    // A float does not say its width; the union member does.
-                    Ok(match (held, member) {
-                        (Value::Float(float), Some(member)) => {
+                if !std::ptr::eq(active, value) {
+                    let held = try_clone_array_containing_value(active);
+                    return Some(held.map(|held| match (held, member) {
+                        (Value::Float(float), Some(member))
+                            if matches!(
+                                member,
+                                Type::Named(name, args)
+                                    if args.is_empty() && matches!(name.as_str(), "float32" | "float64")
+                            ) =>
+                        {
                             Value::TraitObject(Box::new(TraitObjectValue {
                                 held: Arc::new(member.clone()),
                                 value: Value::Float(float),
                             }))
                         }
+                        (Value::Float(float), _) => {
+                            let width = match explicit_type.as_deref() {
+                                Some("float32") => "float32",
+                                _ => "float64",
+                            };
+                            Value::TraitObject(Box::new(TraitObjectValue {
+                                held: Arc::new(Type::named(width)),
+                                value: Value::Float(float),
+                            }))
+                        }
                         (held, _) => held,
-                    })
-                })
+                    }));
+                }
+                if let Value::Float(float) = active {
+                    let width = match explicit_type.as_deref() {
+                        Some("float32") => "float32",
+                        _ => "float64",
+                    };
+                    return Some(Ok(Value::TraitObject(Box::new(TraitObjectValue {
+                        held: Arc::new(Type::named(width)),
+                        value: Value::Float(*float),
+                    }))));
+                }
+                None
             })
         };
         match member {
@@ -15071,7 +15106,9 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_trait_object_float(value: *mut OpaqueValue, single: i64) {
     task_runtime_boundary(|| {
-        let held = Type::named(if single == 0 { "float64" } else { "float32" });
+        let name = if single == 0 { "float64" } else { "float32" };
+        let held = Type::named(name);
+        let mut updated = false;
         unsafe {
             value_mut(value, |value| {
                 if matches!(value, Value::Float(_)) {
@@ -15080,8 +15117,13 @@ pub extern "C-unwind" fn aura_direct_trait_object_float(value: *mut OpaqueValue,
                         held: Arc::new(held),
                         value: float,
                     }));
+                    updated = true;
                 }
             });
+            if updated {
+                let tag = interned_runtime_type_tag(name.as_bytes());
+                set_explicit_runtime_type_tag(value, &tag);
+            }
         }
     })
 }
