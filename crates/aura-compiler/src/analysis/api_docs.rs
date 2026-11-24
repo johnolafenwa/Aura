@@ -86,7 +86,7 @@ fn type_params(names: &[String], bounds: &BTreeMap<String, Vec<TypeRef>>) -> Str
     format!("[{}]", rendered.join(", "))
 }
 
-fn function_signature(function: &FunctionDecl) -> String {
+fn function_signature(function: &FunctionDecl, name: &str) -> String {
     let mut params = function
         .receiver
         .map(|receiver| canonical_receiver_spelling(receiver).to_string())
@@ -102,7 +102,7 @@ fn function_signature(function: &FunctionDecl) -> String {
     }
     format!(
         "def {}{}({}) -> {}",
-        function.name,
+        name,
         type_params(&function.type_params, &function.type_param_bounds),
         params.join(", "),
         format_decl_return(function)
@@ -121,12 +121,19 @@ pub(crate) fn decorated_signature(function: &FunctionDecl, signature: &str) -> S
 }
 
 fn function_declaration(kind: &str, function: &FunctionDecl) -> ApiDeclaration {
-    let mut entry = declaration(
-        kind,
-        &function.name,
-        function_signature(function),
-        function.doc.as_ref(),
-    );
+    let setter = function
+        .name
+        .strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX);
+    let name = setter.unwrap_or(&function.name);
+    let signature = function_signature(function, name);
+    let signature = if setter.is_some() {
+        format!("@{name}.setter\n{signature}")
+    } else if function.property.is_some() {
+        format!("@property\n{signature}")
+    } else {
+        signature
+    };
+    let mut entry = declaration(kind, name, signature, function.doc.as_ref());
     let args = function
         .doc
         .as_ref()
