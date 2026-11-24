@@ -23204,6 +23204,33 @@ what the container adds. Aura is still slower than Python on `file_io`
 and `template_render`, and `csv_aggregate` is level with it. All 34 take
 12.1 seconds, against 45.0 for Python and 8.7 for Rust.
 
+Aura 0.17.0 adds first-class closures, local functions, set algebra,
+byte strings, the `numbers`, `collections`, `sync`, and `image` modules,
+and recovery from a trapped call. Both compilers measured in the same four
+passes on 24 November 2026, median of twenty runs. The container was
+busier than on 14 November, so both columns are higher than the 0.16.0
+column above:
+
+| Measure | Aura 0.16.0 | Aura 0.17.0 |
+| --- | ---: | ---: |
+| All 34 programs, wall time | 14.6 s | 13.5 s |
+| Median Aura / Rust, wall time | 2.9x | 2.6x |
+| Median Aura / Python 3.13, wall time | 0.35x | 0.34x |
+| Programs faster than Python | 31 | 32 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 34 programs | 104.7 billion | 103.4 billion |
+
+`astar_pathfinding` runs 58% fewer instructions and takes 137 ms against
+288, because a swap of two elements of one list no longer calls the
+runtime. `interpreter` runs 2.1% more instructions, `raytracer` 1.5% more,
+and `order_book` 1.2% more; every other program is within 0.6% or runs
+fewer. `file_io` reads 1,101 ms against 1,786 on the same instructions,
+which is the disk. `csv_aggregate` reads 430 ms against 458 with Python
+at 442, which is why 0.16.0 counts 31 programs faster than Python here.
+Aura is still slower than Python on `file_io` and `template_render`, and
+`csv_aggregate` is level with it. All 34 take 13.5
+seconds, against 51.8 for Python and 10.0 for Rust.
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute

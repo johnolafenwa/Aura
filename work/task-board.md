@@ -1,6 +1,19 @@
 # Task Board
 
-Last updated: 2026-11-18
+Last updated: 2026-11-24
+
+## Release 0.17.0-preview (in progress)
+
+- Target: John's 2026-11-23 choice to land the work that Codex left and
+  prepare the 0.17.0 preview. Details are in
+  `2026-11-24-v0.17.0-preview-release.md`.
+- Done: everything from the integration and combined candidate branches
+  is on `main` (#310, `07337c84`). The release pull request holds the
+  version sweep, the changelog sections and the measurements against the
+  published 0.16.0 archive.
+- Next: merge the release pull request on a green run, push the
+  `v0.17.0-preview` tag from John's checkout after he approves it, and
+  check the Release run, the extension and the Linux archive.
 
 ## Combined feature verification
 
