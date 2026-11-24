@@ -73,7 +73,7 @@ export "C" def tick() -> uint64:
 
 A `public mut` binding exposes the same storage to importers. Each read snapshots the value. Take a local copy before forming a view. Freestanding callers coordinate access across cores and interrupts. A hosted script can still declare a `mut` local in its entry statements.
 
-Scalar literals and structural class constructors can initialize storage without startup code. A call to a user-defined initializer requires a computed value and produces `AU2080`.
+Scalar literals, fixed array literals, repeated elements and structural class constructors can initialize storage without startup code. An initialized C record in module storage has the target C field offsets and alignment. A literal address such as `0 as ptr[uint8]` can initialize a pointer in a package with FFI permission. A call to a user-defined initializer requires a computed value and produces `AU2080`.
 
 **Script locals.** An entry script's top-level locals live apart from module storage. [Top-Level Statement Scope](#top-level-statement-scope) covers them.
 
