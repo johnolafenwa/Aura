@@ -113,7 +113,7 @@ fn a_runtime_script_guard_can_still_contain_a_local_function_named_main() {
         "import metrics\n",
         "mut n = 1\n",
         "if metrics.get(\"calls\") > 0:\n",
-        "    def main():\n        pass\n",
+        "    def main() -> None:\n        pass\n",
     );
     let module = parse(source).unwrap();
     assert!(module.constants.is_empty());

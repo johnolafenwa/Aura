@@ -22,8 +22,8 @@ fn computed_integer_bits_and_local_fixed_arrays_obey_constant_evaluation_limits(
         "12"
     );
     let oversized = source
-        .replace("uint16, 3", "uint16, 5000000")
-        .replace("* 3", "* 5000000");
+        .replace("uint16, 3", "uint16, 100000")
+        .replace("* 3", "* 100000");
     assert_eq!(check_source(&oversized).unwrap_err().code, "AU3028");
 }
 
