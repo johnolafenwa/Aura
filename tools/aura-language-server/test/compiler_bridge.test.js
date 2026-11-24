@@ -1,5 +1,6 @@
 "use strict";
 
+const { pathToFileURL } = require("node:url");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const childProcess = require("node:child_process");
@@ -7319,5 +7320,73 @@ test("compiler bridge completes ordered collection methods and their signatures"
     const item = entries?.find((entry) => entry.name === method);
     assert.ok(item, `missing ${binding}.${method}`);
     assert.ok(item.detail.includes(signature), item.detail);
+  }
+});
+
+test("compiler bridge resolves delegated members, decorated methods, and property writes", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-class-items-lsp-"));
+  const lines = [
+    "trait Named:",
+    "    def name(self) -> str",
+    "class Engine:",
+    "    pass",
+    "impl Named for Engine:",
+    "    def name(self) -> str:",
+    '        return "engine"',
+    "type Answer = Callable[def() -> int64]",
+    "def traced(f: own Answer) -> Answer:",
+    "    return f",
+    "class Car:",
+    "    engine: Engine",
+    "    stored: int64",
+    "    @property",
+    "    def count(self) -> int64:",
+    "        return self.stored",
+    "    @count.setter",
+    "    def count(mut self, value: int64):",
+    "        self.stored = value",
+    "    @traced",
+    "    def answer() -> int64:",
+    "        return 42",
+    "    def __drop__(mut self):",
+    "        pass",
+    "impl Named for Car by engine",
+    "def main():",
+    "    mut car = Car(engine=Engine(), stored=0)",
+    "    car.count += 2",
+    "    print(car.count)",
+    "    print(car.name())",
+    "    print(Car.answer())",
+    "",
+  ];
+  const source = lines.join("\n");
+  const uri = pathToFileURL(path.join(root, "main.au")).href;
+  try {
+    setWorkspaceRoots([repoRoot, root]);
+    const analysis = await analyzeWithCompiler(uri, source);
+    assert.deepEqual(analysis?.diagnostics, []);
+    for (const [line, word, definitionLine, hover] of [
+      [19, "traced", 8, /traced/],
+      [24, "engine", 11, /field engine/],
+      [27, "count", 17, /@count\.setter/],
+      [28, "count", 14, /property count: int64/],
+      [29, "name", 1, /name\(self\)/],
+      [30, "answer", 20, /@traced\nmethod answer/],
+    ]) {
+      const column = lines[line].lastIndexOf(word);
+      assert.match(compilerHoverAtPosition(analysis, line, column)?.value || "", hover);
+      const location = compilerDefinitionAtPosition(uri, analysis, line, column);
+      assert.deepEqual(location?.range.start, {
+        line: definitionLine, character: lines[definitionLine].indexOf(word),
+      });
+    }
+    const items = await completeWithCompiler(uri, source, 29, lines[29].indexOf(".") + 1, ".");
+    assert.ok(items.some((item) => item.name === "name"));
+    assert.deepEqual(items.filter((item) => item.name === "count").map((item) => item.kind), ["property"]);
+    assert.ok(items.every((item) => !item.name.includes("$") && !item.name.startsWith("__aura_") && item.name !== "__drop__"));
+    const invalid = await analyzeWithCompiler(uri, source.replace("Car by engine", "Car by absent"));
+    assert.ok(invalid.diagnostics.some((diagnostic) => diagnostic.code === "AU2060"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
