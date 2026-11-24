@@ -1295,6 +1295,53 @@ Both backends maintain user-trait dispatch on builtin values for noncolliding me
 
 The checker gives lowering, analysis, and the language server one resolved specialization and implementation target, including inferred clone-safety obligations. The parity gate rejects dispatch behavior that differs between backends.
 
+## Verification
+
+A trait method can carry a [contract](/manual/contracts#trait-methods).
+`aura verify` proves that every implementation keeps it. A call through a
+bounded type parameter or through `dyn Trait` then relies on the contract,
+whichever type is behind it.
+
+```aura
+trait Meter:
+    def reading(self) -> int64:
+        ensures 0 <= result and result <= 100
+
+
+class Battery:
+    charge: int64
+
+impl Meter for Battery:
+    def reading(self) -> int64:
+        if self.charge < 0:
+            return 0
+        if self.charge > 100:
+            return 100
+        return self.charge
+
+
+def doubled[M: Meter](meter: M) -> int64:
+    ensures 0 <= result and result <= 200
+    return meter.reading() * 2
+
+
+def through_object(meter: dyn Meter) -> int64:
+    ensures 0 <= result and result <= 200
+    return meter.reading() * 2
+
+
+def main():
+    print(doubled(Battery(charge=70)))
+    print(through_object(Battery(charge=170)))
+```
+
+`aura verify` proves all 5 checks: `Battery.reading` keeps the trait's
+`ensures`, and both callers stay in range for any implementation of `Meter`.
+An implementation may weaken the `requires` and strengthen the `ensures` of
+the trait method.
+
+See [Verification](/manual/verification) for the report, the options, and what the verifier models.
+
 ## Limits And Implementation-Defined Behavior
 
 Aura 0.17 has none of the following:

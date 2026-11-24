@@ -29,6 +29,16 @@ time zones or a hash other than SHA-256, we will say so, because knowing the
 edge of a library saves an afternoon of looking for a function that is not
 there.
 
+They share one more edge. `aura verify` does not read library code, so a
+decoded byte list, a parsed instant, a pattern match, or a random number is
+a value it knows nothing about beyond its type. `courier` is nearly all
+library calls, with very little arithmetic of its own, so this chapter adds
+no contracts to it. When your own code computes with what a library
+returned, use the pattern from the
+[JSON section of Chapter 16](/book/ch16-04-json#checking-what-the-decoder-accepts):
+test the value once where it arrives, and state what you tested in the
+`requires` of the code behind it.
+
 By the end of the chapter you will be able to move between text and bytes
 without guessing at an encoding, sign and verify a message, do arithmetic on
 instants in time, pull fields out of text with a pattern, choose between
