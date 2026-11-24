@@ -107,7 +107,7 @@ nothing else: no `0x` prefix, no spaces. `"63 61"` has five characters, an
 odd number, and is refused for its length before the space is even looked
 at. `base64_decode` wants the standard alphabet with its `=` padding, and it
 rejected the `-` at index 4, a character from the URL-safe alphabet that
-Aura 0.16 does not provide. If you receive URL-safe base64, replace `-` with
+Aura 0.17 does not provide. If you receive URL-safe base64, replace `-` with
 `+` and `_` with `/` first.
 
 Strictness is deliberate here. A decoder that skips what it does not
@@ -210,7 +210,7 @@ the time tells them nothing. Use it whenever one side of a comparison is a
 secret.
 
 HMAC proves that the holder of the key produced the message. It does not
-hide the message: anyone can read a signed envelope. Aura 0.16 has no
+hide the message: anyone can read a signed envelope. Aura 0.17 has no
 encryption functions in its library, and SHA-256 is its only hash. In
 particular, do not store passwords with a bare `sha256`. Password storage
 needs a deliberately slow hash, which the library does not provide.

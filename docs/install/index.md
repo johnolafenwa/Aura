@@ -1,6 +1,6 @@
 # Install Aura
 
-Aura 0.16 ships as a self-contained command-line tool with its own private
+Aura 0.17 ships as a self-contained command-line tool with its own private
 native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |
@@ -39,7 +39,7 @@ irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
 aura --version
 ```
 
-The output begins with `aura 0.16.0-preview`. The rest of the line is the
+The output begins with `aura 0.17.0-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed

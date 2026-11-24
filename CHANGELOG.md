@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.17.0 — 2026-11-24
+
+- Bundles language server 0.17.0. The semantic interface version stays 20.
+- The grammar highlights byte strings and their escapes, `extern "C" union`
+  declarations, and a local `def` with its capture list.
+- Completion and hover from `aura lsp` cover the methods of the new
+  `numbers`, `collections` and `sync` types, and local functions with their
+  captured bindings.
+
+## 0.17.0 — 2026-11-24 (technical preview)
+
+Aura 0.17.0 makes closures first-class, adds local functions, and grows the
+library: set algebra, byte strings and text encodings, arbitrary-size
+integers, exact decimals and complex numbers, ordered collections, shared
+state between tasks, an image module, and recovery from a trapped call. The
+C interface gains array fields, unions, struct arrays and text in
+callbacks, and a raylib package shows it drawing graphics.
+
 - A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
 
 - Language: a closure is stored without ceremony. A lambda, a function, a

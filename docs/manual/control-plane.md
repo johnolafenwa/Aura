@@ -1,6 +1,6 @@
 # Control-Plane Modules
 
-This page covers Aura 0.16's small, typed host and control-plane modules:
+This page covers Aura 0.17's small, typed host and control-plane modules:
 `sys`, `path`, `json`, `toml`, `log`, `trace`, `metrics`, and `control`, plus
 a summary of the HTTP client. They are meant for service launchers, workers,
 evaluation harnesses, and agent infrastructure. They behave the same through
@@ -101,7 +101,7 @@ process share.
 - Incrementing past either `int64` bound is a runtime diagnostic and leaves
   the checked operation incomplete.
 
-The counters suit worker and test instrumentation. Aura 0.16 has no metrics
+The counters suit worker and test instrumentation. Aura 0.17 has no metrics
 exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
@@ -111,7 +111,7 @@ URLs. Validation uses the platform-independent Web PKI root set.
 
 - Request and response bodies support content length, connection-close
   framing, and chunked transfer encoding.
-- The 0.16 parser keeps a 16 MiB limit on an incoming wire message.
+- The 0.17 parser keeps a 16 MiB limit on an incoming wire message.
 - It accepts at most 64 headers and rejects conflicting framing headers.
 - Its `dict[str, str]` header boundary cannot represent repeated equal header
   names losslessly.
@@ -367,7 +367,7 @@ Retry delays stay bounded by the host timer range described in
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aura 0.16.
+Aura 0.17.
 
 Nested TOML data models, typed TOML codecs, telemetry exporters, metric labels,
 scoped tracing spans, and richer HTTP header representations are unavailable.

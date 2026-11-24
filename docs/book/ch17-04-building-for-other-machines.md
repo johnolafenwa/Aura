@@ -16,7 +16,7 @@ different C library, musl, and an empty container image has no C library at
 all.
 
 `aura build --target` builds for a machine other than the one you are
-sitting at. In Aura 0.16 it runs on a Linux host and produces Linux
+sitting at. In Aura 0.17 it runs on a Linux host and produces Linux
 programs for four targets, the two architectures with each of the two C
 libraries. We will use a program small enough to keep in view:
 
@@ -166,7 +166,7 @@ target architecture before you trust it. `aura run` and `aura test` always
 build for the machine they run on, so the tests have to run there, or
 under emulation.
 
-This is as far as cross-building goes in 0.16. The host must be Linux and
+This is as far as cross-building goes in 0.17. The host must be Linux and
 the targets are Linux. On macOS or Windows, `aura build --target` stops
 with exit status 2, and so does any target name outside the table:
 
