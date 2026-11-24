@@ -288,3 +288,79 @@ fn guard_dependencies_ignore_foreign_declarations_with_the_same_name() {
     let source = include_str!("../tests/fixtures/check-pass/conditional_local_or_foreign.au");
     assert_eq!(run_source(source).unwrap().stdout, "7\n");
 }
+
+#[test]
+fn conditional_class_dispatch_preserves_selected_getters_setters_decorators_and_delegates() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_class_dispatch.au");
+    crate::parser::parse_all_syntax(source).unwrap();
+    assert_eq!(run_source(source).unwrap().stdout, "3\n6\n");
+    let mut config = crate::current_build_config();
+    config.cfg.insert("alternate".into(), "true".into());
+    crate::with_build_config(config, || {
+        assert_eq!(run_source(source).unwrap().stdout, "14\n14\n");
+    });
+}
+
+#[test]
+fn a_discarded_getter_does_not_change_the_meaning_of_a_later_method_decorator() {
+    let source = concat!(
+        "import build\n",
+        "class Counter:\n",
+        "    if build.freestanding:\n",
+        "        @property\n",
+        "        def wrappers(self) -> int64:\n            return 0\n",
+        "    @wrappers.setter\n",
+        "    def score(self) -> int64:\n        return 1\n",
+    );
+    crate::parser::parse_all_syntax(source).unwrap();
+    let module = parse_source(source).unwrap();
+    let crate::ast::Item::Class(class) = &module.items[0] else {
+        panic!("expected Counter class");
+    };
+    assert_eq!(class.methods.len(), 1);
+    assert_eq!(class.methods[0].name, "score");
+    assert_eq!(class.methods[0].decorators[0].text, "@wrappers.setter");
+}
+
+#[test]
+fn duplicate_setters_are_diagnosed_in_the_selected_class_members() {
+    let source = concat!(
+        "import build\n",
+        "class Counter:\n",
+        "    stored: int64\n",
+        "    @property\n",
+        "    def n(self) -> int64:\n        return self.stored\n",
+        "    if \"alternate\" in build.cfg:\n",
+        "        @n.setter\n",
+        "        def n(mut self, value: int64):\n            self.stored = value\n",
+        "    @n.setter\n",
+        "    def n(mut self, value: int64):\n        self.stored = value\n",
+    );
+    parse_source(source).unwrap();
+    let mut config = crate::current_build_config();
+    config.cfg.insert("alternate".into(), "true".into());
+    crate::with_build_config(config, || {
+        let error = parse_source(source).unwrap_err();
+        assert_eq!(error.code, "AU2064");
+        assert_eq!(error.span.unwrap().line, 11);
+        assert!(error.message.contains("duplicate setter"));
+    });
+}
+
+#[test]
+fn a_class_in_an_inactive_module_arm_does_not_validate_setter_bindings() {
+    let source = concat!(
+        "import build\n",
+        "if build.freestanding:\n",
+        "    class Device:\n",
+        "        @property\n",
+        "        def count(self) -> int64:\n            return absent()\n",
+        "        @count.setter\n",
+        "        def count(mut self, value: int64):\n            pass\n",
+        "        @count.setter\n",
+        "        def count(mut self, value: int64):\n            pass\n",
+        "def main():\n    print(9)\n",
+    );
+    crate::parser::parse_all_syntax(source).unwrap();
+    assert_eq!(run_source(source).unwrap().stdout, "9\n");
+}

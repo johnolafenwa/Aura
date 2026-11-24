@@ -1,0 +1,57 @@
+import build
+
+trait Readable:
+    def read(self) -> int64
+
+type Method = Callable[def(self: Counter) -> int64]
+
+def doubled(f: own Method) -> Method:
+    return Method(lambda [own f] self: f(self) * 2)
+
+class Counter:
+    stored: int64
+
+    if "alternate" in build.cfg:
+        @property
+        def count(self) -> int64:
+            return self.stored + 1
+
+        @count.setter
+        def count(mut self, value: int64):
+            self.stored = value + 10
+    else:
+        @property
+        def count(self) -> int64:
+            return self.stored
+
+        @count.setter
+        def count(mut self, value: int64):
+            self.stored = value
+
+    if "alternate" in build.cfg:
+        @doubled
+        def score(self) -> int64:
+            return self.count + 1
+    else:
+        @doubled
+        def score(self) -> int64:
+            return self.count
+
+impl Readable for Counter:
+    def read(self) -> int64:
+        return self.score()
+
+class Pair:
+    left: Counter
+    right: Counter
+
+if "alternate" in build.cfg:
+    impl Readable for Pair by right
+else:
+    impl Readable for Pair by left
+
+def main():
+    mut c = Counter(stored=0)
+    c.count = 3
+    print(c.count)
+    print(Pair(left=c, right=Counter(stored=5)).read())

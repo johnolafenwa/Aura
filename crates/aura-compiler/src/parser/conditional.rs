@@ -139,7 +139,10 @@ impl Parser {
             let line = self.expect_newline()?.span.line;
             self.expect_simple(TokenKind::Indent)?;
             let header = first..self.index;
-            bodies.push(parse_body(self)?);
+            let outer_arm = std::mem::replace(&mut self.in_declaration_arm, true);
+            let body = parse_body(self);
+            self.in_declaration_arm = outer_arm;
+            bodies.push(body?);
             let end = self.expect_simple(TokenKind::Dedent)?.span.line - 1;
             arms.push(Arm {
                 condition,
