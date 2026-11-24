@@ -136,10 +136,10 @@ export "C" def go(n: int64) -> int64:
 }
 
 #[test]
-fn an_enum_that_holds_text_is_still_refused() {
+fn an_enum_that_holds_a_collection_is_still_refused() {
     let source = r#"
 enum Token:
-    Word(str)
+    Word(list[int64])
     End
 
 def length(token: Token) -> int64:
@@ -187,6 +187,54 @@ fn a_type_inside_itself_is_kept_in_a_counted_block_on_every_target() {
     for target in FreestandingTarget::ALL {
         object(BOXES, target);
     }
+}
+
+/// Text in literals, classes, enums, results, and the text operations.
+const TEXT: &str = include_str!("../../aura/tests/freestanding_text.au");
+
+#[test]
+fn text_becomes_calls_of_the_text_library_on_every_target() {
+    let module = prepared(TEXT);
+    for made in [
+        "aura::values::str",
+        "aura::values::text_literal",
+        "aura::values::value_text_new",
+        "aura::values::value_text_concat",
+        "aura::values::value_text_equal",
+        "aura::values::value_text_compare",
+        "aura::values::value_text_length",
+        "aura::values::value_text_release",
+        "aura::values::release::str",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    assert!(
+        !module.contains("\"Runtime\":{\"op\":{\"Str\""),
+        "a text op is left"
+    );
+    for target in FreestandingTarget::ALL {
+        object(TEXT, target);
+    }
+}
+
+#[test]
+fn a_program_without_text_gets_no_text_library() {
+    for source in [PLAIN_VALUES, BOXES] {
+        let module = prepared(source);
+        assert!(!module.contains("value_text_"));
+        assert!(!module.contains("aura::values::str"));
+    }
+}
+
+#[test]
+fn a_text_operation_the_library_lacks_is_still_refused() {
+    let source = r#"
+export "C" def run(n: int64) -> int64:
+    text = "a b"
+    return text.to_upper().len() + n
+"#;
+    let found = refusals(source);
+    assert!(!found.is_empty(), "{found:?}");
 }
 
 #[test]

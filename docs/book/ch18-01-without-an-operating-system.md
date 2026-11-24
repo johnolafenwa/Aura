@@ -48,11 +48,12 @@ a freestanding program is made of: fixed-width integers and floats, classes
 of them, tuples and enums of them, `T | None`, functions, generics,
 traits, loops, `match`, `assert`, and contracts.
 
-Most of the values Aura keeps on the heap for you are out: `str`, lists,
-dictionaries, enums that hold any of those, closures, tasks. One kind is
-in: an enum that holds itself through an `indirect` payload, so you can
-write a linked list or a tree, and the compiler frees each node when
-nothing refers to it. You do not have to remember the list. Ask
+Most of the values Aura keeps on the heap for you are out: lists,
+dictionaries, enums that hold any of those, closures, tasks. Two kinds are
+in. A `str` works, with `+`, comparisons, and a few methods, so a kernel
+can build a message and hand it to its console. And an enum may hold
+itself through an `indirect` payload, so you can write a linked list or a
+tree. The compiler frees each block when nothing refers to it. You do not have to remember the list. Ask
 the compiler:
 
 ```console
@@ -196,8 +197,8 @@ output is the same.
 ## What is missing
 
 This is the first step toward systems work in Aura, and it is honest to
-say where it stops. The heap holds blocks of bytes and the nodes of enums that hold
-themselves: there are no strings or collections yet. There is no inline assembly, so startup code and x86 port
+say where it stops. The heap holds blocks of bytes, text, and the nodes of enums that hold
+themselves: there are no collections yet, and text cannot format a number. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`. The
 [Freestanding Builds](/manual/freestanding) and

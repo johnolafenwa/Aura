@@ -1,0 +1,73 @@
+class Named:
+    name: str
+    age: int64
+
+enum Token:
+    Word(str)
+    Number(int64)
+    Stop
+
+def greet(name: str, n: int64) -> str:
+    mut out = "hi " + name
+    if name == "bob":
+        out = out + "!"
+    if n > 2:
+        out = out + " again"
+    return out
+
+def keep(name: own str) -> Named:
+    return Named(name=name, age=3)
+
+def pick(flag: bool) -> str:
+    if flag:
+        return "yes"
+    return "no"
+
+def weigh(token: Token) -> int64:
+    match token:
+        case Token.Word(text):
+            return text.len()
+        case Token.Number(n):
+            return n
+        case Token.Stop:
+            return 0 - 1
+
+def check(text: str) -> Result[str, str]:
+    if text.starts_with("hi"):
+        return Ok(text + "?")
+    return Err("bad " + text)
+
+def both(text: str) -> Result[int64, str]:
+    first = try check(text)
+    second = try check(first + " é")
+    return Ok(first.len() * 100 + second.byte_len())
+
+def total(n: int64) -> int64:
+    a = greet("bob", 2)
+    b = greet(a, n)
+    k = keep("zed")
+    mut sum = b.len() + k.name.len() + pick(true).len() + k.age
+    if a < b:
+        sum = sum + 1000
+    if a.starts_with("hi") and b.ends_with("again") and b.contains("bob!") and not a.contains("zed"):
+        sum = sum + 10000
+    if k.name == "zed" and k.name != "zeds":
+        sum = sum + 100000
+    sum = sum + weigh(Token.Word("héllo")) + weigh(Token.Number(7)) + weigh(Token.Stop)
+    match both(a):
+        case Ok(v):
+            sum = sum + v * 1000000
+        case Err(e):
+            sum = sum - e.len()
+    match both("x"):
+        case Ok(v):
+            sum = sum + v
+        case Err(e):
+            sum = sum - e.len() * 3
+    return sum
+
+export "C" def entry(n: int64) -> int64:
+    return total(n)
+
+def main() -> None:
+    print(total(40))

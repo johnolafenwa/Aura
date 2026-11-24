@@ -335,11 +335,11 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             r#"
-def parse(a: int64) -> Result[int64, str]:
+def parse(a: int64) -> Result[int64, list[int64]]:
     if a > 0:
         return Ok(a)
-    return Err("no")
-def inner(a: int64) -> Result[int64, str]:
+    return Err([a])
+def inner(a: int64) -> Result[int64, list[int64]]:
     value = try parse(a)
     return Ok(value + 1)
 export "C" def run(a: int64) -> int64:
@@ -351,7 +351,7 @@ export "C" def run(a: int64) -> int64:
 "#,
             &[
                 "`inner` uses `try`",
-                "`parse` returns `Result[int64, str]`",
+                "`parse` returns `Result[int64, list[int64]]`",
                 "`run` matches on an enum value",
             ],
         ),
@@ -396,7 +396,7 @@ export "C" def run(a: int64) -> int64:
         ),
         (
             "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a}\")\n",
-            &["builds text", "calls `len`"],
+            &["builds text"],
         ),
     ] {
         for expected in expected {
@@ -672,7 +672,6 @@ fn a_program_with_no_export_is_refused() {
 fn values_that_need_the_runtime_are_reported_by_construct() {
     let prelude = "export \"C\" def entry(count: int64) -> int64:\n";
     for (body, expected) in [
-        ("    text = \"hello\"\n    return count\n", "holds `text` of type `str`"),
         (
             "    mut values: list[int64] = []\n    values.append(count)\n    return count\n",
             "builds a collection",
@@ -684,7 +683,7 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
         ("    print(count)\n    return count\n", "calls `print`"),
         ("    return 2 ** count\n", "uses `**`"),
         (
-            "    pair = (count, \"count\")\n    return pair[0]\n",
+            "    pair = (count, [count])\n    return pair[0]\n",
             "uses a tuple",
         ),
         (
@@ -711,13 +710,13 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
 #[test]
 fn problems_name_the_function_and_the_line() {
     let source = r#"
-def describe(code: int64) -> str:
-    return f"code {code}"
+def describe(code: int64) -> list[int64]:
+    return [code]
 
 enum Shape:
     Circle(radius: float64)
     Square(side: float64)
-    Named(name: str)
+    Named(name: list[int64])
 
 def area(shape: Shape) -> float64:
     match shape:
@@ -729,7 +728,7 @@ def area(shape: Shape) -> float64:
             return 0.0
 
 export "C" def entry(count: int64) -> int64:
-    print(describe(count))
+    print(describe(count).len())
     return area(Shape.Square(side=2.0)) as int64
 "#;
     let found = check_freestanding(&lower(source));
@@ -741,8 +740,8 @@ export "C" def entry(count: int64) -> int64:
             .span
             .map(|span| span.line)
     };
-    assert_eq!(at("`describe` builds text"), Some(3));
-    assert_eq!(at("`describe` returns `str`"), Some(2));
+    assert_eq!(at("`describe` builds a collection"), Some(3));
+    assert_eq!(at("`describe` returns `list[int64]`"), Some(2));
     assert_eq!(at("`area` takes `shape` of type `Shape`"), Some(10));
     assert_eq!(at("`area` matches on an enum value"), Some(11));
     assert_eq!(at("`entry` calls `print`"), Some(20));
@@ -760,20 +759,40 @@ export "C" def entry(count: int64) -> int64:
 #[test]
 fn a_foreign_call_with_a_runtime_value_is_reported() {
     let source = r#"
-extern "C" def length(text: cstr) -> uint64
+extern "C" def length(data: list[uint8]) -> uint64
 extern "C" def name() -> cstr
 
-def pass_on(text: str) -> uint64:
-    return length(text)
+def pass_on(data: list[uint8]) -> uint64:
+    return length(data)
 
 export "C" def entry() -> uint64:
-    return length("literal") + pass_on("held") + length(name())
+    return pass_on([1]) + name().len() as uint64
 "#;
     assert_problem(
         source,
-        "passes `text` of type `str` to the foreign function `length`",
+        "passes `data` of type `list[uint8]` to the foreign function `length`",
     );
     assert_problem(source, "takes a `str` from the foreign function `name`");
+}
+
+#[test]
+fn a_foreign_call_takes_text_as_an_address_and_a_length() {
+    let source = r#"
+extern "C" def length(text: cstr) -> uint64
+extern "C" def sized(text: str) -> uint64
+
+def pass_on(text: str) -> uint64:
+    return length(text) + sized(text)
+
+export "C" def entry() -> uint64:
+    return length("literal") + sized("literal") + pass_on("held")
+"#;
+    assert!(problems(source).is_empty(), "{:?}", problems(source));
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.contains(&"length".to_string()), "{undefined:?}");
+        assert!(undefined.contains(&"sized".to_string()), "{undefined:?}");
+    }
 }
 
 #[test]

@@ -60,8 +60,23 @@ values that need no heap (ADR-0129).
   them) prints 16043307 hosted and freestanding, and the linked program
   ends with every block freed.
 
+## Text (ADR-0160, section Text)
+
+- `str` is a class of one word, the address of a block of a count, a
+  byte length, the bytes, and a zero byte. The library is
+  `crates/aura-compiler/std/freestanding_text.au`.
+- The pass rewrites literals, `+`, comparisons, `len`, `byte_len`,
+  `starts_with`, `ends_with`, `contains`, and `str` arguments of foreign
+  calls. Assertion text is stripped before the pass.
+- 3 more compiler tests, 1 more for foreign calls, and 1 more command
+  test: `crates/aura/tests/freestanding_text.au` prints 812111021 hosted
+  and freestanding with every block freed.
+
 ## Follow-up
 
+- Number formatting, f-strings, indexing, and slices of `str`.
+- `str | None`.
+- Literal blocks in the program's data.
 - Unions as enum payloads, and unions of values that own a block.
 - A write to a field that owns a block.
 - A part moved out without a retain and a release.

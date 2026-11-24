@@ -27,7 +27,10 @@
 
 use super::*;
 use crate::diag::Diagnostic;
-use crate::mir::{MirClassField, MirFieldInit, MirLocalType, MirParam, MirReceiverKind};
+use crate::mir::{
+    MethodDispatch, MirClassField, MirFieldInit, MirLocalType, MirParam, MirReceiverKind,
+};
+use crate::runtime_ops::{RuntimeOp, StrOp};
 
 /// What each class the pass makes is named. A source name holds no `:`.
 const CLASS_PREFIX: &str = "aura::values::";
@@ -38,6 +41,9 @@ const BOX_SOURCE: &str = include_str!("../std/freestanding_values.au");
 /// The path a failed check in the library reports to the trap hook.
 const BOX_PATH: &str = "aura/freestanding_values.au";
 
+/// The path a failed check in the text library reports.
+const TEXT_PATH: &str = "aura/freestanding_text.au";
+
 /// What each function the pass adds is named.
 const FUNCTION_PREFIX: &str = "aura::values::";
 
@@ -46,6 +52,31 @@ const BOX_NEW: &str = "aura::values::value_box_new";
 const BOX_RETAIN: &str = "aura::values::value_box_retain";
 const BOX_RELEASE: &str = "aura::values::value_box_release";
 const BOX_FREE: &str = "aura::values::value_box_free";
+
+/// The library of text, in Aura.
+const TEXT_SOURCE: &str = include_str!("../std/freestanding_text.au");
+
+/// The class that stands for `str`: the address of a text block.
+const TEXT_CLASS: &str = "aura::values::str";
+const TEXT_FIELD: &str = "address";
+
+/// The address of a literal's bytes in the program's data. The emitter
+/// writes each call.
+const TEXT_LITERAL: &str = "aura::values::text_literal";
+
+/// The functions of the text library.
+const TEXT_NEW: &str = "aura::values::value_text_new";
+const TEXT_BYTES: &str = "aura::values::value_text_bytes";
+const TEXT_BYTE_LENGTH: &str = "aura::values::value_text_byte_length";
+const TEXT_RELEASE: &str = "aura::values::value_text_release";
+const TEXT_CONCAT: &str = "aura::values::value_text_concat";
+const TEXT_EQUAL: &str = "aura::values::value_text_equal";
+const TEXT_COMPARE: &str = "aura::values::value_text_compare";
+const TEXT_LENGTH: &str = "aura::values::value_text_length";
+const TEXT_BYTE_COUNT: &str = "aura::values::value_text_byte_count";
+const TEXT_STARTS_WITH: &str = "aura::values::value_text_starts_with";
+const TEXT_ENDS_WITH: &str = "aura::values::value_text_ends_with";
+const TEXT_CONTAINS: &str = "aura::values::value_text_contains";
 
 /// The functions the pass makes for a class, each named with its kind and
 /// the class. The emitter writes the code of a call of the first two.
@@ -111,6 +142,12 @@ struct Values {
     made: Vec<MirClass>,
     /// The number of the next class.
     next: usize,
+    /// Whether the program holds a `str`.
+    text: bool,
+    /// The functions whose shared parameters stay with the caller.
+    borrowing: HashSet<String>,
+    /// How each function takes its parameters, with their names.
+    passing: HashMap<String, Vec<(String, MirReceiverKind)>>,
 }
 
 impl Values {
@@ -118,6 +155,9 @@ impl Values {
     /// class.
     fn rewritten(&mut self, ty: &Type) -> Type {
         match ty {
+            Type::Named(name, args) if name == "str" && args.is_empty() => {
+                Type::named(self.text_class())
+            }
             Type::Tuple(_) => match self.class_of(ty) {
                 Some(class) => Type::named(&class),
                 None => ty.clone(),
@@ -128,6 +168,34 @@ impl Values {
             },
             _ => ty.clone(),
         }
+    }
+
+    /// The class that stands for `str`, made at its first use: one field,
+    /// the address of a text block.
+    fn text_class(&mut self) -> &'static str {
+        if !self.text {
+            self.text = true;
+            let class = MirClass {
+                name: TEXT_CLASS.to_string(),
+                type_params: Vec::new(),
+                fields: vec![MirClassField {
+                    name: TEXT_FIELD.to_string(),
+                    ty: Type::named("uint64"),
+                }],
+                methods: Vec::new(),
+                copy: false,
+            };
+            self.classes.insert(TEXT_CLASS.to_string(), class.clone());
+            self.made.push(class);
+            self.boxes.insert(
+                TEXT_CLASS.to_string(),
+                vec![BoxField {
+                    field: TEXT_FIELD.to_string(),
+                    content: Type::named("str"),
+                }],
+            );
+        }
+        TEXT_CLASS
     }
 
     /// Whether a field of a class the pass makes can hold `ty`: a scalar
@@ -369,6 +437,20 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
         boxed: HashSet::new(),
         made: Vec::new(),
         next: 1,
+        text: false,
+        borrowing: module.borrowing.iter().cloned().collect(),
+        passing: module
+            .functions
+            .iter()
+            .map(|function| {
+                let params = function
+                    .params
+                    .iter()
+                    .map(|param| (param.name.clone(), param.passing))
+                    .collect();
+                (function.name.clone(), params)
+            })
+            .collect(),
     };
     // The classes first, so a function sees which of them hold a box.
     for class in &mut module.classes {
@@ -383,8 +465,19 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
     for function in &mut module.functions {
         lower_function(function, &mut values, &mut problems);
     }
-    if !values.boxed.is_empty() {
-        let made = box_functions(&mut values);
+    if !values.boxed.is_empty() || values.text {
+        let mut made = box_functions(&mut values);
+        if values.text {
+            // The emitter writes each call, so the body only keeps the
+            // module whole.
+            made.push(made_function(
+                TEXT_LITERAL.to_string(),
+                vec![("text", MirReceiverKind::Borrow, Type::named("uint64"))],
+                Type::named("uint64"),
+                Vec::new(),
+                one_block(Vec::new(), Terminator::Return(Operand::Int(0))),
+            ));
+        }
         // A retain or a release reads its value and leaves it with the
         // caller.
         module.borrowing.extend(
@@ -406,6 +499,16 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
                 FUNCTION_PREFIX,
                 BOX_PATH,
             ));
+        if values.text {
+            module
+                .functions
+                .extend(super::freestanding_heap::library_functions(
+                    TEXT_SOURCE,
+                    "value_text_",
+                    FUNCTION_PREFIX,
+                    TEXT_PATH,
+                ));
+        }
     }
     module.classes.extend(values.made);
     problems
@@ -769,6 +872,15 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                     if root.len() != target.len() && owner(root, &types, values).is_some() {
                         counted = false;
                     }
+                    let mut after = Vec::new();
+                    let value = lower_text(
+                        value,
+                        &types,
+                        values,
+                        &mut fresh,
+                        &mut current.instructions,
+                        &mut after,
+                    );
                     let value = lower_value(
                         value,
                         types.get(&target),
@@ -781,6 +893,7 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         target: target.clone(),
                         value,
                     });
+                    current.instructions.extend(after);
                     if reads {
                         counted &= count_references(
                             RETAIN,
@@ -795,7 +908,15 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                 other => current.instructions.push(other),
             }
         }
-        current.terminator = terminator;
+        current.terminator = match terminator {
+            Terminator::Return(literal @ Operand::String(_)) => Terminator::Return(owned_text(
+                literal,
+                values,
+                &mut fresh,
+                &mut current.instructions,
+            )),
+            other => other,
+        };
         lower_match(
             current,
             excluded.get(&label),
@@ -826,6 +947,378 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
         function
             .local_types
             .sort_by(|left, right| left.name.cmp(&right.name));
+    }
+}
+
+/// The type of the value in `place`, a local or a field of one, after
+/// the rewrite.
+fn place_type(place: &str, types: &HashMap<String, Type>, values: &mut Values) -> Option<Type> {
+    let mut parts = place.split('.');
+    let mut ty = values.rewritten(types.get(parts.next()?)?);
+    for field in parts {
+        let Type::Named(class, _) = &ty else {
+            return None;
+        };
+        ty = values
+            .classes
+            .get(class)?
+            .fields
+            .iter()
+            .find(|known| known.name == field)?
+            .ty
+            .clone();
+    }
+    Some(ty)
+}
+
+/// Whether `operand` is text: a literal, or a place that holds a `str`.
+fn is_text(operand: &Operand, types: &HashMap<String, Type>, values: &mut Values) -> bool {
+    match operand {
+        Operand::String(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            matches!(place_type(place, types, values), Some(Type::Named(name, _)) if name == TEXT_CLASS)
+        }
+        _ => false,
+    }
+}
+
+/// The address of the first byte of the text `operand` and its length in
+/// bytes. A literal lies in the program's data and needs no block.
+fn text_view(
+    operand: Operand,
+    fresh: &mut Fresh,
+    out: &mut Vec<Instruction>,
+) -> (Operand, Operand) {
+    let word = || Type::named("uint64");
+    match operand {
+        Operand::String(text) => {
+            let length = Operand::Int(text.len() as u128);
+            let bytes = call(
+                fresh,
+                out,
+                TEXT_LITERAL.to_string(),
+                vec![Operand::String(text)],
+                word(),
+            );
+            (Operand::Place(bytes), length)
+        }
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            let address = fresh.local(word());
+            out.push(Instruction::Assign {
+                target: address.clone(),
+                value: Rvalue::Member {
+                    object: Operand::Place(place),
+                    field: TEXT_FIELD.to_string(),
+                },
+            });
+            let bytes = call(
+                fresh,
+                out,
+                TEXT_BYTES.to_string(),
+                vec![Operand::Place(address.clone())],
+                word(),
+            );
+            let length = call(
+                fresh,
+                out,
+                TEXT_BYTE_LENGTH.to_string(),
+                vec![Operand::Place(address)],
+                word(),
+            );
+            (Operand::Place(bytes), Operand::Place(length))
+        }
+        other => (other, Operand::Int(0)),
+    }
+}
+
+/// The `str` value whose block is at the address `function(args)` gives.
+fn text_from(
+    function: &str,
+    args: Vec<Operand>,
+    values: &mut Values,
+    fresh: &mut Fresh,
+    out: &mut Vec<Instruction>,
+) -> Rvalue {
+    let address = call(
+        fresh,
+        out,
+        function.to_string(),
+        args,
+        Type::named("uint64"),
+    );
+    Rvalue::Construct {
+        class_name: values.text_class().to_string(),
+        fields: vec![MirFieldInit {
+            name: TEXT_FIELD.to_string(),
+            value: Operand::Place(address),
+        }],
+    }
+}
+
+/// `operand`, with a literal replaced by a new `str` value that holds a
+/// copy of it, which whatever takes the operand then owns.
+fn owned_text(
+    operand: Operand,
+    values: &mut Values,
+    fresh: &mut Fresh,
+    out: &mut Vec<Instruction>,
+) -> Operand {
+    let Operand::String(_) = operand else {
+        return operand;
+    };
+    let (bytes, length) = text_view(operand, fresh, out);
+    let value = text_from(TEXT_NEW, vec![bytes, length], values, fresh, out);
+    let local = fresh.local(Type::named(values.text_class()));
+    out.push(Instruction::Assign {
+        target: local.clone(),
+        value,
+    });
+    Operand::MovePlace(local)
+}
+
+/// Rewrites the text operations of `value` to calls of the text library.
+/// `out` gains what runs before the value, and `after` what runs after
+/// it is assigned.
+fn lower_text(
+    value: Rvalue,
+    types: &HashMap<String, Type>,
+    values: &mut Values,
+    fresh: &mut Fresh,
+    out: &mut Vec<Instruction>,
+    after: &mut Vec<Instruction>,
+) -> Rvalue {
+    let bool_type = || Type::named("bool");
+    match value {
+        Rvalue::Use(literal @ Operand::String(_)) => {
+            let (bytes, length) = text_view(literal, fresh, out);
+            text_from(TEXT_NEW, vec![bytes, length], values, fresh, out)
+        }
+        Rvalue::Binary {
+            op,
+            left,
+            right,
+            span,
+            trap: _,
+        } if matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Eq
+                | BinaryOp::NotEq
+                | BinaryOp::Less
+                | BinaryOp::LessEq
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEq
+        ) && is_text(&left, types, values)
+            && is_text(&right, types, values) =>
+        {
+            let (left, left_length) = text_view(left, fresh, out);
+            let (right, right_length) = text_view(right, fresh, out);
+            let args = vec![left, left_length, right, right_length];
+            match op {
+                BinaryOp::Add => text_from(TEXT_CONCAT, args, values, fresh, out),
+                BinaryOp::Eq | BinaryOp::NotEq => {
+                    let equal = call(fresh, out, TEXT_EQUAL.to_string(), args, bool_type());
+                    Rvalue::Binary {
+                        op: BinaryOp::Eq,
+                        left: Operand::Place(equal),
+                        right: Operand::Bool(op == BinaryOp::Eq),
+                        span,
+                        trap: Default::default(),
+                    }
+                }
+                _ => {
+                    let order = call(
+                        fresh,
+                        out,
+                        TEXT_COMPARE.to_string(),
+                        args,
+                        Type::named("int64"),
+                    );
+                    Rvalue::Binary {
+                        op,
+                        left: Operand::Place(order),
+                        right: Operand::Int(0),
+                        span,
+                        trap: Default::default(),
+                    }
+                }
+            }
+        }
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::Str(op),
+                    receiver: Some(receiver),
+                    receiver_place,
+                },
+            args,
+            type_args,
+        } => {
+            let function = match (op, args.as_slice()) {
+                (StrOp::Len, []) => Some((TEXT_LENGTH, Type::named("int64"))),
+                (StrOp::ByteLen, []) => Some((TEXT_BYTE_COUNT, Type::named("int64"))),
+                (StrOp::StartsWith, [_]) => Some((TEXT_STARTS_WITH, bool_type())),
+                (StrOp::EndsWith, [_]) => Some((TEXT_ENDS_WITH, bool_type())),
+                (StrOp::Contains, [_]) => Some((TEXT_CONTAINS, bool_type())),
+                _ => None,
+            };
+            let Some((function, returns)) = function else {
+                return Rvalue::Call {
+                    callee: CallTarget::Runtime {
+                        op: RuntimeOp::Str(op),
+                        receiver: Some(receiver),
+                        receiver_place,
+                    },
+                    args,
+                    type_args,
+                };
+            };
+            let (bytes, length) = text_view(receiver, fresh, out);
+            let mut operands = vec![bytes, length];
+            for arg in args {
+                let (bytes, length) = text_view(arg.value, fresh, out);
+                operands.extend([bytes, length]);
+            }
+            let result = call(fresh, out, function.to_string(), operands, returns);
+            Rvalue::Use(Operand::Place(result))
+        }
+        // A `str` value given to a foreign function crosses as the
+        // address of its bytes, which end in a zero byte, and as the
+        // address and the length where the declaration asks for both.
+        Rvalue::Call {
+            callee: CallTarget::Extern(mut foreign),
+            args,
+            type_args,
+        } if foreign.params.len() == args.len() => {
+            let word = |name: String, passing| crate::mir::MirExternParam {
+                name,
+                passing,
+                ty: Type::named("uint64"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            };
+            let mut params = Vec::with_capacity(args.len());
+            let mut operands = Vec::with_capacity(args.len());
+            for (param, arg) in std::mem::take(&mut foreign.params).into_iter().zip(args) {
+                let text = matches!(&param.ty, Type::Named(name, _) if name == "str")
+                    && matches!(arg.value, Operand::Place(_) | Operand::MovePlace(_))
+                    && is_text(&arg.value, types, values);
+                if !text {
+                    params.push(param);
+                    operands.push(arg);
+                    continue;
+                }
+                let (bytes, length) = text_view(arg.value, fresh, out);
+                let plain = |value| MirArg {
+                    name: None,
+                    value,
+                    writeback_place: None,
+                };
+                params.push(word(param.name.clone(), param.passing));
+                operands.push(plain(bytes));
+                if !param.c_string {
+                    params.push(word(format!("{}_length", param.name), param.passing));
+                    operands.push(plain(length));
+                }
+            }
+            foreign.params = params;
+            Rvalue::Call {
+                callee: CallTarget::Extern(foreign),
+                args: operands,
+                type_args,
+            }
+        }
+        Rvalue::Call {
+            callee,
+            mut args,
+            type_args,
+        } => {
+            let name = match &callee {
+                CallTarget::Name(name) => Some(name.clone()),
+                CallTarget::Member {
+                    dispatch: Some(MethodDispatch::Static { function }),
+                    ..
+                } => Some(function.clone()),
+                _ => None,
+            };
+            if let Some(params) = name
+                .as_ref()
+                .and_then(|name| values.passing.get(name))
+                .cloned()
+            {
+                let lends = name
+                    .as_ref()
+                    .is_some_and(|name| values.borrowing.contains(name));
+                for (position, arg) in args.iter_mut().enumerate() {
+                    if !matches!(arg.value, Operand::String(_)) {
+                        continue;
+                    }
+                    let passing = match &arg.name {
+                        Some(name) => params.iter().find(|(param, _)| param == name),
+                        None => params.get(position),
+                    }
+                    .map(|(_, passing)| *passing);
+                    let literal = std::mem::replace(&mut arg.value, Operand::Unit);
+                    let Operand::MovePlace(local) = owned_text(literal, values, fresh, out) else {
+                        continue;
+                    };
+                    // A callee that borrows leaves the value here, to be
+                    // released after the call. Any other takes it.
+                    if lends && passing == Some(MirReceiverKind::Borrow) {
+                        arg.value = Operand::Place(local.clone());
+                        call(
+                            fresh,
+                            after,
+                            class_function(RELEASE, TEXT_CLASS),
+                            vec![Operand::Place(local.clone())],
+                            Type::Unit,
+                        );
+                        after.push(Instruction::Release { place: local });
+                    } else {
+                        arg.value = Operand::MovePlace(local);
+                    }
+                }
+            }
+            Rvalue::Call {
+                callee,
+                args,
+                type_args,
+            }
+        }
+        Rvalue::TupleLiteral {
+            elements,
+            element_types,
+        } => Rvalue::TupleLiteral {
+            elements: elements
+                .into_iter()
+                .map(|element| owned_text(element, values, fresh, out))
+                .collect(),
+            element_types,
+        },
+        Rvalue::EnumVariant {
+            enum_name,
+            variant_name,
+            payloads,
+        } => Rvalue::EnumVariant {
+            enum_name,
+            variant_name,
+            payloads: payloads
+                .into_iter()
+                .map(|payload| owned_text(payload, values, fresh, out))
+                .collect(),
+        },
+        Rvalue::Construct { class_name, fields } => Rvalue::Construct {
+            class_name,
+            fields: fields
+                .into_iter()
+                .map(|field| MirFieldInit {
+                    name: field.name,
+                    value: owned_text(field.value, values, fresh, out),
+                })
+                .collect(),
+        },
+        other => other,
     }
 }
 
@@ -1578,6 +2071,8 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                     Some(found) => {
                         let function = if kind == RETAIN {
                             BOX_RETAIN.to_string()
+                        } else if class == TEXT_CLASS {
+                            TEXT_RELEASE.to_string()
                         } else {
                             match values.rewritten(&found.content) {
                                 Type::Named(content, _) => class_function(DROP_BOX, &content),
@@ -1655,6 +2150,20 @@ impl FunctionCompiler<'_> {
         };
         if self.freestanding.is_none() {
             return Ok(None);
+        }
+        if name == TEXT_LITERAL {
+            let [MirArg {
+                value: Operand::String(text),
+                ..
+            }] = args
+            else {
+                return Ok(None);
+            };
+            let (bytes, _) = self.string_constant(text.as_bytes())?;
+            return Ok(Some(ValueRef {
+                values: vec![bytes],
+                ty: DirectType::Scalar(ScalarKind::Uint64),
+            }));
         }
         let mut kinds = Vec::new();
         if kind.starts_with(STORE) {

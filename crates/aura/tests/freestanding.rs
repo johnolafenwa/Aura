@@ -240,13 +240,13 @@ fn check_reports_every_construct_a_freestanding_build_cannot_compile() {
 
     workspace.write(
         "hosted.au",
-        "export \"C\" def entry(count: int64) -> int64:\n    text = \"hello\"\n    print(text)\n    return count\n",
+        "export \"C\" def entry(count: int64) -> int64:\n    wide: int128 = 5\n    print(count)\n    return count\n",
     );
     let output = workspace.aura(&["check", "--freestanding", "hosted.au"]);
     assert_eq!(output.status.code(), Some(1));
     let text = stderr(&output);
     assert!(
-        text.contains("error[AU2052]: `entry` holds `text` of type `str`"),
+        text.contains("error[AU2052]: `entry` holds `wide` of type `int128`"),
         "{text}"
     );
     assert!(
@@ -532,20 +532,46 @@ fn values_that_hold_themselves_free_every_block_they_allocate() {
     let Some(compiler) = c_compiler() else {
         return;
     };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_boxes.au"),
+        "total",
+        "16043307\n",
+    );
+}
+
+/// Text lives in counted blocks too: literals, values in classes and
+/// enums, and the operations of the text library.
+#[test]
+fn text_computes_what_the_hosted_program_prints_and_frees_every_block() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_text.au"),
+        "entry",
+        "812111021\n",
+    );
+}
+
+/// Runs `source` hosted and as a freestanding object linked with hooks
+/// that count: both print `expected`, and no block is left.
+fn blocks_are_all_freed(compiler: &str, source: &str, entry: &str, expected: &str) {
     let workspace = Workspace::new();
-    workspace.write("boxes.au", include_str!("freestanding_boxes.au"));
-    let hosted = workspace.aura(&["run", "boxes.au"]);
+    workspace.write("blocks.au", source);
+    let hosted = workspace.aura(&["run", "blocks.au"]);
     assert!(hosted.status.success(), "{}", stderr(&hosted));
-    assert_eq!(stdout(&hosted), "16043307\n");
-    let build = workspace.aura(&["build", "--freestanding", "-o", "boxes.o", "boxes.au"]);
+    assert_eq!(stdout(&hosted), expected);
+    let build = workspace.aura(&["build", "--freestanding", "-o", "blocks.o", "blocks.au"]);
     assert!(build.status.success(), "{}", stderr(&build));
     let harness = workspace.write(
-        "boxes.c",
-        r#"
+        "blocks.c",
+        &r#"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-int64_t total(int64_t n);
+int64_t ENTRY(int64_t n);
 static long made, live;
 void *aura_alloc(uint64_t size, uint64_t align) {
     (void)align;
@@ -569,16 +595,17 @@ void aura_trap(uint32_t code, const char *file, uint64_t file_len, uint32_t line
     exit(1);
 }
 int main(void) {
-    printf("%lld\n", (long long)total(40));
+    printf("%lld\n", (long long)ENTRY(40));
     printf("made %d live %ld\n", made > 0, live);
     return 0;
 }
-"#,
+"#
+        .replace("ENTRY", entry),
     );
-    let binary = workspace.path.join("boxes.bin");
+    let binary = workspace.path.join("blocks.bin");
     let link = Command::new(compiler)
         .arg(&harness)
-        .arg(workspace.path.join("boxes.o"))
+        .arg(workspace.path.join("blocks.o"))
         .arg("-o")
         .arg(&binary)
         .output()
@@ -588,7 +615,7 @@ int main(void) {
         .output()
         .expect("the linked program should start");
     assert!(run.status.success(), "{}", stdout(&run));
-    assert_eq!(stdout(&run), "16043307\nmade 1 live 0\n");
+    assert_eq!(stdout(&run), format!("{expected}made 1 live 0\n"));
 }
 
 #[test]

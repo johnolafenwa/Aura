@@ -52,6 +52,32 @@ count, and a way to drop what the block holds.
   part of a value that owns a block, and a union one of whose members
   owns a block.
 
+## Text
+
+`str` uses the same blocks and the same counting.
+
+- **A `str` is a class of one word, the address of a text block:** a
+  reference count, the length in bytes, the bytes, and a zero byte after
+  them. The class needs drop, as `str` does, so every `Retain` and
+  `Release` the ownership pass stated counts the block.
+- **The text functions are Aura source** in `std/freestanding_text.au`,
+  compiled in only when the program holds a `str`. Each takes text as
+  the address of its first byte and a length.
+- **A literal is not a block.** An operation reads a literal's bytes in
+  the program's data, through one call the emitter writes. A literal
+  becomes a block only where it becomes a value: assigned, returned, put
+  in a class, a tuple, or a variant, or given to a function. A function
+  that borrows its parameter leaves the block with the caller, which
+  releases it after the call.
+- **The pass rewrites** `+`, the six comparisons, `len`, `byte_len`,
+  `starts_with`, `ends_with`, and `contains`. Any other text operation
+  is still refused, and so are f-strings.
+- **A `str` value given to a foreign function crosses as the address of
+  its bytes** for a `cstr` parameter, and as the address and the length
+  for a `str` parameter, as a literal already did.
+- **Assertion text is dropped before the pass**, so an `assert` with a
+  message allocates nothing.
+
 ## Consequences
 
 - A freestanding program builds lists and trees from enums, holds them in
@@ -66,4 +92,8 @@ count, and a way to drop what the block holds.
   recursion copies the nodes it passes.
 - A request the heap turns down is a failed assertion, trap code 3. A
   code of its own is a later step.
-- `str`, `bytes`, and `list` are the next step and use the same blocks.
+- Every literal that becomes a value is copied into a new block. A
+  block the program's data holds, never counted, is a later step.
+- `str | None` is refused with the other unions of values that own a
+  block.
+- Number formatting, indexing, `bytes`, and `list` are the next steps.

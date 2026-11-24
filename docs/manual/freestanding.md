@@ -62,8 +62,9 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. Only an enum that holds itself
-lives on a heap: see [Enums That Hold Themselves](#enums-that-hold-themselves).
+Every value is one or more machine words. Two kinds of value also own
+blocks on a heap: text, and an enum that holds itself. See
+[Text](#text) and [Enums That Hold Themselves](#enums-that-hold-themselves).
 A program reaches other heap memory through addresses: see
 [The Heap](#the-heap).
 
@@ -86,10 +87,11 @@ def read(port: uint64) -> (Reading, uint64):
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a `str` or a collection |
-| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, `Array` |
+| Classes whose fields are available types, with methods | Classes that hold a collection |
+| `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains` | Every other `str` method, indexing, slices, f-strings, `str \| None` |
+| `extern "C"` classes | `bytes`, `list`, `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
-| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union, text, or a collection, and `Lookup` |
+| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
 | `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
 | `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
@@ -97,7 +99,7 @@ def read(port: uint64) -> (Reading, uint64):
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
 | Module constants with a literal value | Module constants computed when the program starts |
-| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+| `extern "C"` calls with scalar, `mut` scalar, struct, text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -109,6 +111,53 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+## Text
+
+A freestanding program holds `str` values: in locals, parameters, results,
+classes, tuples, and enums.
+
+```aura
+def greeting(name: str, tries: int64) -> str:
+    mut text = "hello " + name
+    if tries > 1:
+        text = text + " again"
+    return text
+
+export "C" def greeting_length(tries: int64) -> int64:
+    text = greeting("board", tries)
+    if text.ends_with("again"):
+        return text.len() + 1
+    return text.len()
+```
+
+A `str` lives in a block from the allocation hooks: a reference count, the
+length in bytes, the bytes, and a zero byte after them. The compiler
+counts the references and frees the block with its last one. The
+operations are written in Aura and compiled into the object only when the
+program holds a `str`.
+
+Available: literals, `+`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `len`,
+`byte_len`, `starts_with`, `ends_with`, and `contains`. A literal used in
+an operation is read where it lies in the program's data and allocates
+nothing.
+
+A foreign function takes a `str` value as it takes a literal: a `cstr`
+parameter gets the address of the bytes, which end in a zero byte, and a
+`str` parameter gets the address and the length.
+
+```aura fragment
+extern "C" def uart_write(text: str) -> None
+
+export "C" def report(tries: int64) -> None:
+    uart_write(greeting("board", tries))
+```
+
+```c
+void uart_write(const char *text, size_t length);
+```
+
+The program needs a heap, as in the next section.
 
 ## Enums That Hold Themselves
 
@@ -376,9 +425,11 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- The only heap values of the language are enums that hold themselves:
-  no `str` and no collection yet. A program allocates other memory
+- The heap values of the language are `str` and enums that hold
+  themselves: no collection yet. A program allocates other memory
   through the [`mem` module](/manual/mem).
+- Text has no formatting of numbers, no indexing, and no f-strings yet,
+  and `str | None` is not available.
 - A value that holds such an enum cannot be a member of a union, and a
   field that holds one cannot be assigned. Build a new value instead.
 - Releasing a long list calls itself once for each link, so a very long

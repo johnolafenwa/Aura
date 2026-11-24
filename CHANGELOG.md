@@ -20,8 +20,15 @@ in this file.
 - Freestanding builds compile tuples, enums, and `Result` whose parts are
   all numbers, `bool`, classes of those, or other such tuples and enums,
   with `match` and `try` on them. The compiler keeps each in machine words with no
-  heap. An enum that holds text, a collection, or a union is still
-  reported as `AU2052`.
+  heap. An enum that holds a collection or a union is still reported as
+  `AU2052`.
+- Freestanding builds compile `str`: literals, values in locals, classes,
+  tuples, and enums, `+`, the comparisons, `len`, `byte_len`,
+  `starts_with`, `ends_with`, and `contains`. A `str` lives in a counted
+  block from the allocation hooks, and its operations are written in
+  Aura. A foreign function takes a `str` value as an address, or as an
+  address and a length. F-strings, indexing, and the other text methods
+  are still reported as `AU2052`.
 - Freestanding builds compile an enum with an `indirect` payload of its own
   type, such as a list or a tree. Each such payload lives in a block from
   the allocation hooks with a reference count, and the program frees

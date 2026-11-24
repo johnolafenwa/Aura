@@ -586,6 +586,10 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
         .into_iter()
         .map(str::to_string)
         .collect::<HashSet<_>>();
+    // An assertion's text would otherwise become a `str` on the heap.
+    for function in &mut module.functions {
+        strip_assertion_text(function);
+    }
     // The boxes the values pass adds allocate, so it runs first.
     problems.extend(super::freestanding_values::lower_plain_values(&mut module));
     super::freestanding_heap::include_allocator(&mut module, &declared);
