@@ -27,6 +27,8 @@ mod frame;
 mod guard;
 #[path = "verify_integers.rs"]
 mod integers;
+#[path = "verify_recovery.rs"]
+mod recovery;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
@@ -1925,6 +1927,10 @@ mod tests_workflow;
 #[cfg(test)]
 #[path = "verify_shapes_tests.rs"]
 mod tests_shapes;
+
+#[cfg(test)]
+#[path = "verify_recovery_tests.rs"]
+mod tests_recovery;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

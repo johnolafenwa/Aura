@@ -1011,7 +1011,7 @@ impl<'a> Exec<'a> {
                         .collect();
                     return Val::Enum(name.clone(), tag, payloads);
                 }
-                Val::Opaque
+                self.fresh_tensor_node(name, hint).unwrap_or(Val::Opaque)
             }
             _ => Val::Opaque,
         }
@@ -3309,13 +3309,15 @@ impl<'a> Exec<'a> {
                     }
                     _ => None,
                 };
+                if *recover {
+                    let call = |exec: &mut Self, state: &mut State| {
+                        exec.user_call(state, &name, None, actuals, None, target)
+                    };
+                    let recovered = self.recovered(state, target_type.as_ref(), call);
+                    return recovered.unwrap_or_else(|| fresh_target(self));
+                }
                 let result =
                     self.user_call(state, &name, None, actuals, result_type.as_ref(), target);
-                if *recover {
-                    // `control.recover` yields a `Result`, and whether the
-                    // call trapped is not known here.
-                    return fresh_target(self);
-                }
                 Val::Task(Box::new(result))
             }
             Rvalue::Closure {
@@ -3567,6 +3569,9 @@ impl<'a> Exec<'a> {
             }),
             None => Val::Opaque,
         };
+        if let Some(value) = self.modeled_call(state, callee, args, target_type.as_ref()) {
+            return value;
+        }
         match callee {
             CallTarget::Runtime {
                 op,
