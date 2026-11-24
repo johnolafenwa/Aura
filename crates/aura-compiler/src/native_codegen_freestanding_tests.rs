@@ -889,5 +889,5 @@ fn load_rejects_release_order_during_checking() {
     let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
     let module = crate::parse_source(source).expect("valid syntax");
     let errors = crate::check_module_with_builtin_imports(module).err().expect("invalid order");
-    assert!(errors.iter().any(|e| e.code == "AU2087"), "{errors:?}");
+    assert_eq!(errors.code, "AU2087", "{errors:?}");
 }
