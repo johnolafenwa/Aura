@@ -997,7 +997,6 @@ fn reached_assembly(program: &Program, module: &MirModule) -> Option<Diagnostic>
         .iter()
         .enumerate()
         .filter(|(_, function)| function.module_name == program.module_name)
-        .map(|(index, function)| (index, function))
         .collect();
     let mut visited = vec![false; functions.len()];
     while let Some((index, root)) = pending.pop() {
