@@ -12480,6 +12480,88 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
     task_runtime_boundary(|| with_map(map, |map| boxed_map_payload(map.entries.value_of_i64(key))))
 }
 
+/// Writes the `int64` a map lookup found to `out` and returns 1, or writes
+/// 0 and returns 0 when the key is missing. Generated code keeps a `Lookup`
+/// of an `int64` it only matches and unpacks as these two words, so the
+/// found value never goes in a box.
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    i64::from(found.is_some())
+}
+
+/// `aura_direct_map_get_payload` for a dict of `int64` values, as the two
+/// words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_word(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| match tape_lookup_key(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract, and `key` is a live box.
+            None => unsafe {
+                with_value(key, |key| map_lookup_word(map.entries.value_of(key), out))
+            },
+        })
+    })
+}
+
+/// `aura_direct_map_get_str_payload` for a dict of `int64` values, as the
+/// two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_str_word(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract.
+            None => unsafe { map_lookup_word(map.entries.value_of_str(key), out) },
+        })
+    })
+}
+
+/// `aura_direct_map_get_int64_payload` for a dict of `int64` values, as
+/// the two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_int64_word(
+    map: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        with_map(map, |map| unsafe {
+            map_lookup_word(map.entries.value_of_i64(key), out)
+        })
+    })
+}
+
 /// Turns an owned `Lookup` into the found value's own box, or null for
 /// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
 /// form came from a path that builds the `Lookup`.

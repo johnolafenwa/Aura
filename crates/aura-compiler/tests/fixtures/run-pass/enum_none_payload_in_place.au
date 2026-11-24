@@ -1,0 +1,46 @@
+# A `None` payload takes no room in its variant, and no box.
+enum Step:
+    Done(None)
+    Wait(None, int64)
+    Fail(str)
+
+def finish(ok: bool) -> Result[None, str]:
+    if ok:
+        return Result.Ok(None)
+    return Result.Err("failed")
+
+def step(kind: int64) -> Step:
+    if kind == 0:
+        return Step.Done(None)
+    if kind == 1:
+        return Step.Wait(None, 30)
+    return Step.Fail("broken")
+
+def show(step: Step) -> str:
+    match step:
+        case Step.Done(nothing):
+            return f"done {nothing}"
+        case Step.Wait(nothing, ticks):
+            return f"wait {nothing} {ticks}"
+        case Step.Fail(message):
+            return f"fail {message}"
+
+def main():
+    results: list[Result[None, str]] = [finish(true), finish(false)]
+    for result in results:
+        print(result)
+        match result:
+            case Result.Ok(nothing):
+                print(f"ok {nothing}")
+            case Result.Err(message):
+                print(f"err {message}")
+    print(results[0] == finish(true))
+    print(results[0] == results[1])
+    steps = [step(0), step(1), step(2)]
+    for item in steps:
+        print(item)
+        print(show(item))
+    print(steps[0] == Step.Done(None))
+    print(steps[1] == Step.Wait(None, 31))
+    kept: dict[str, Result[None, str]] = {"a": finish(true)}
+    print(kept)

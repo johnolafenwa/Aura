@@ -429,6 +429,30 @@ def element_plain_mut_call(n: int64, run: bool) -> int64:
     return tallies[n - 1].count
 
 
+def checked_scale(i: int64) -> Result[int64, int64]:
+    if i % 16 == 15:
+        return Result.Err(i)
+    return Result.Ok(i * 3)
+
+
+def result_call(n: int64, run: bool) -> int64:
+    mut total = 0
+    if run:
+        for i in range(n):
+            match checked_scale(i):
+                case Result.Ok(scaled):
+                    total += scaled
+                case Result.Err(code):
+                    total -= code
+    else:
+        for i in range(n):
+            if i % 16 == 15:
+                total -= i
+            else:
+                total += i * 3
+    return total
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -484,6 +508,8 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return element_mut_call(n, run)
     elif operation == "element_plain_mut_call":
         return element_plain_mut_call(n, run)
+    elif operation == "result_call":
+        return result_call(n, run)
     return -1
 
 

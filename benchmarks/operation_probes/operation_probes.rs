@@ -540,6 +540,35 @@ fn element_plain_mut_call(n: i64, run: bool) -> i64 {
     tallies[n as usize - 1].count
 }
 
+fn checked_scale(i: i64) -> Result<i64, i64> {
+    if i % 16 == 15 {
+        return Err(i);
+    }
+    Ok(i * 3)
+}
+
+fn result_call(n: i64, run: bool) -> i64 {
+    let mut total: i64 = 0;
+    if run {
+        for i in 0..n {
+            match checked_scale(black_box(i)) {
+                Ok(scaled) => total += scaled,
+                Err(code) => total -= code,
+            }
+        }
+    } else {
+        for i in 0..n {
+            let i = black_box(i);
+            if i % 16 == 15 {
+                total -= i;
+            } else {
+                total += i * 3;
+            }
+        }
+    }
+    total
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -569,6 +598,7 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "trait_object_call" => trait_object_call(n, run),
         "element_mut_call" => element_mut_call(n, run),
         "element_plain_mut_call" => element_plain_mut_call(n, run),
+        "result_call" => result_call(n, run),
         _ => -1,
     }
 }

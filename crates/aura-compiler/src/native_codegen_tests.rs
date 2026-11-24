@@ -10817,8 +10817,8 @@ fn direct_try_moves_noncopy_ok_payloads_through_the_destructive_runtime_path() {
 def produce() -> Result[str, str]:
     return Result.Ok("owned payload")
 
-def forward() -> Result[str, str]:
-    result = produce()
+def forward(results: mut list[Result[str, str]]) -> Result[str, str]:
+    result = results.pop()
     value = try result
     return Result.Ok(value)
 
