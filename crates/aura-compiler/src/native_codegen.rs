@@ -2497,9 +2497,14 @@ impl<'a> NativeCodegen<'a> {
                 }),
             };
             let sink = mutable_param_indices.get(&region.list).copied();
+            let scalar = match array {
+                Some(_) => None,
+                None => list_snapshots::region_scalar_element(function, &region),
+            };
             Some(list_snapshots::ListSnapshot {
                 array,
                 range,
+                scalar,
                 sink,
                 region,
                 ok,
