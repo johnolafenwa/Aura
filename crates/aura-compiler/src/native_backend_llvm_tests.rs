@@ -182,6 +182,122 @@ fn only_calls_since_allows_the_named_callees_in_the_current_block() {
 }
 
 #[test]
+fn a_test_holds_where_it_dominates_and_only_kept_calls_follow_it() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let retain = module
+        .declare_function("retain", Linkage::Import, &unary)
+        .unwrap();
+    let other = module
+        .declare_function("other", Linkage::Import, &unary)
+        .unwrap();
+    let indirect = unary.clone();
+    define(
+        &mut module,
+        "holds",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let boxed = builder.block_params(entry)[0];
+            let (retain, other) = (
+                builder.import_function(retain),
+                builder.import_function(other),
+            );
+            let (held, reset) = (Var(0), Var(1));
+            builder.declare_var(held, types::I64);
+            builder.declare_var(reset, types::I64);
+            builder.def_var(held, boxed);
+            builder.def_var(reset, boxed);
+            // The test, with a kept call where it holds and another call where
+            // it fails, which sets one variable.
+            let (fast, slow, join) = (
+                builder.create_block(),
+                builder.create_block(),
+                builder.create_block(),
+            );
+            builder.brif(boxed, fast, &[], slow, &[]);
+            builder.switch_to_block(fast);
+            builder.seal_block(fast);
+            builder.call(retain, &[boxed]);
+            assert!(builder.only_calls_in(fast, &[retain]));
+            assert!(!builder.only_calls_in(entry, &[retain]));
+            builder.jump(join, &[]);
+            builder.switch_to_block(slow);
+            builder.seal_block(slow);
+            let other_box = builder.call(other, &[boxed]).results[0];
+            builder.def_var(reset, other_box);
+            builder.jump(join, &[]);
+            builder.switch_to_block(join);
+            assert!(!builder.holds_since(entry, fast, boxed, boxed, &[retain]));
+            // Every predecessor it will get is there, though it is not
+            // sealed.
+            builder.note_complete(join);
+            let read = builder.use_var(held);
+            let reread = builder.use_var(reset);
+            assert!(builder.holds_since(entry, fast, boxed, boxed, &[retain]));
+            assert!(builder.holds_since(entry, fast, boxed, read, &[retain]));
+            assert!(!builder.holds_since(entry, fast, boxed, read, &[]));
+            assert!(!builder.holds_since(entry, fast, boxed, reread, &[retain]));
+            assert!(!builder.holds_since(entry, fast, boxed, other_box, &[retain]));
+            assert!(!builder.holds_since(fast, join, boxed, boxed, &[retain]));
+            // A test of a variable's read in the block that reads it.
+            let (again, after) = (builder.create_block(), builder.create_block());
+            builder.brif(read, again, &[], after, &[]);
+            builder.switch_to_block(again);
+            builder.seal_block(again);
+            let address = builder.func_addr(types::I64, other);
+            let indirect = builder.import_signature(indirect);
+            builder.call_indirect(indirect, address, &[read]);
+            assert!(!builder.only_calls_in(again, &[retain, other]));
+            builder.jump(after, &[]);
+            builder.switch_to_block(after);
+            builder.seal_block(after);
+            let last = builder.use_var(held);
+            assert!(builder.holds_since(join, after, read, last, &[]));
+            assert!(!builder.holds_since(join, again, read, last, &[retain, other]));
+            // A test in a loop does not hold after it.
+            let (header, body, exit) = (
+                builder.create_block(),
+                builder.create_block(),
+                builder.create_block(),
+            );
+            builder.jump(header, &[]);
+            builder.switch_to_block(header);
+            builder.brif(boxed, body, &[], exit, &[]);
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            builder.jump(header, &[]);
+            builder.seal_block(header);
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            assert!(!builder.holds_since(header, body, boxed, boxed, &[]));
+            // Walks too long give up.
+            let mut last_link = exit;
+            for _ in 0..70 {
+                let link = builder.create_block();
+                builder.jump(link, &[]);
+                builder.switch_to_block(link);
+                builder.seal_block(link);
+                last_link = link;
+            }
+            assert!(!builder.holds_since(exit, exit, boxed, boxed, &[]));
+            let open = builder.create_block();
+            builder.jump(open, &[]);
+            builder.switch_to_block(open);
+            builder.seal_block(open);
+            assert!(!builder.holds_since(last_link, open, boxed, boxed, &[]));
+            builder.seal_block(join);
+            builder.return_(&[boxed]);
+        },
+    );
+    assert!(ir(&module).contains("define"));
+}
+
+#[test]
 fn rewrites_turn_calls_into_other_calls_copies_and_nothing() {
     let mut module = module();
     let unary = signature(CallConv::C, &[types::I64], &[types::I64]);

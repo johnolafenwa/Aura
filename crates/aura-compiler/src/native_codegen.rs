@@ -2813,6 +2813,7 @@ impl<'a> NativeCodegen<'a> {
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
+            runtime_type_tagged: None,
             shaped_locals,
             reusable_array_temporaries: reusable_array_temporaries(function),
             array_binary_reuse: 0,
@@ -2820,6 +2821,7 @@ impl<'a> NativeCodegen<'a> {
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
             class_check_snapshot: None,
+            layout_checks: Vec::new(),
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
@@ -4207,6 +4209,9 @@ struct FunctionCompiler<'a> {
     /// of a list in a field of the instance once: the loop, whose copy
     /// runs while the instance keeps its layout.
     class_check_snapshot: Option<usize>,
+    /// The latest layout checks, the latest first: each one's block, the block it takes where
+    /// the box keeps the layout, the box, the access code, and the flag.
+    layout_checks: Vec<(Blk, Blk, Val, i64, Val)>,
     /// The `mut` arguments and receivers the MIR moves into their call,
     /// which take their root's value: see `ownership::moved_writebacks`.
     moved_operands: HashSet<*const Operand>,
@@ -4404,6 +4409,10 @@ struct FunctionCompiler<'a> {
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(Inst, Val, String)>,
+    /// The block a `tag_value_type` check joins in, with the value and the
+    /// encoded type it tagged, so an identical tag in that block that no
+    /// other call precedes is not repeated.
+    runtime_type_tagged: Option<(Blk, Val, String)>,
     /// The locals whose box always carries the tag of their type. See
     /// `shapes::shaped_locals`.
     shaped_locals: HashSet<String>,
@@ -5162,6 +5171,15 @@ impl<'a> FunctionCompiler<'a> {
             HashMap::<String, HashMap<String, Vec<DirectClosureCaptureWriteback>>>::new();
         incoming_writebacks.insert(function.entry.clone(), HashMap::new());
         let mut compiled = HashSet::new();
+        let mut predecessors = HashMap::<&str, Vec<&str>>::new();
+        for block in block_by_label.values() {
+            for successor in direct_terminator_successors(&block.terminator) {
+                predecessors
+                    .entry(successor)
+                    .or_default()
+                    .push(&block.label);
+            }
+        }
         self.enter_method_snapshot(function)?;
 
         for label in order {
@@ -5184,6 +5202,12 @@ impl<'a> FunctionCompiler<'a> {
                         function.name
                     )
                 })?;
+            // Blocks compile in reverse postorder, so only a loop's way
+            // back reaches a block after it.
+            let mut entered = predecessors.get(label.as_str()).into_iter().flatten();
+            if entered.all(|from| compiled.contains(*from)) {
+                self.builder.note_complete(self.blocks[label.as_str()]);
+            }
             let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
             let own = self.compiled_block_id(&label)?;
@@ -13404,6 +13428,12 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(());
             }
         }
+        if let Some((block, tagged, tagged_type)) = &self.runtime_type_tagged {
+            // Either way through the check below, the box has the tag.
+            if *tagged == raw && *tagged_type == encoded && self.no_call_in(*block) {
+                return Ok(());
+            }
+        }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
         let cell = self.tag_cell(&encoded)?;
         // A box that already took this cell's tag has its shape, so the
@@ -13438,8 +13468,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(done);
         self.builder.switch_to_block(done);
         // The call sits in a block of its own, so a later tag of the same
-        // box repeats the cheap check instead.
+        // box in another block repeats the cheap check instead.
         self.last_runtime_type_tag = None;
+        self.runtime_type_tagged = Some((done, raw, encoded));
         Ok(())
     }
 
@@ -13455,18 +13486,28 @@ impl<'a> FunctionCompiler<'a> {
     /// release of `raw` that frees it. A call that only boxes a new value
     /// from its words reaches no other box.
     fn no_call_since(&self, inst: Inst) -> bool {
-        self.builder.only_calls_since(
-            inst,
-            &[
-                self.runtime[RuntimeFn::RetainValue],
-                self.runtime[RuntimeFn::ReleaseValue],
-                self.runtime[RuntimeFn::FormatBegin],
-                self.runtime[RuntimeFn::StringLiteral],
-                self.runtime[RuntimeFn::StringLiteralCell],
-                self.runtime[RuntimeFn::BoxI64],
-                self.runtime[RuntimeFn::BoxBool],
-            ],
-        )
+        self.builder
+            .only_calls_since(inst, &self.box_keeping_calls())
+    }
+
+    /// Whether `block` is the current block and no call that could change
+    /// a box is in it (see `no_call_since`).
+    fn no_call_in(&self, block: Blk) -> bool {
+        self.builder.only_calls_in(block, &self.box_keeping_calls())
+    }
+
+    /// The runtime calls that change no box but the one they name (see
+    /// `no_call_since`).
+    fn box_keeping_calls(&self) -> [FuncRef; 7] {
+        [
+            self.runtime[RuntimeFn::RetainValue],
+            self.runtime[RuntimeFn::ReleaseValue],
+            self.runtime[RuntimeFn::FormatBegin],
+            self.runtime[RuntimeFn::StringLiteral],
+            self.runtime[RuntimeFn::StringLiteralCell],
+            self.runtime[RuntimeFn::BoxI64],
+            self.runtime[RuntimeFn::BoxBool],
+        ]
     }
 
     fn tag_raw_opaque_runtime_type(

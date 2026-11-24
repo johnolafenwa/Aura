@@ -936,6 +936,8 @@ struct BlockIr {
     /// condition fails, or a copy of such a branch.
     version_decision: bool,
     predecessors: Vec<u32>,
+    /// Has every predecessor it will get, though it is not sealed.
+    complete: bool,
     /// The value each variable last got in this block.
     definitions: HashMap<u32, Val>,
 }
@@ -1648,6 +1650,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.ir.blocks[block.0 as usize].sealed = true;
     }
 
+    fn note_complete(&mut self, block: Blk) {
+        self.ir.blocks[block.0 as usize].complete = true;
+    }
+
     fn seal_all_blocks(&mut self) {
         for block in &mut self.ir.blocks {
             block.sealed = true;
@@ -1816,6 +1822,118 @@ impl FunctionBackend for LlvmFunction<'_> {
             Op::Iconst(constant) => Some(constant),
             _ => None,
         }
+    }
+
+    fn only_calls_in(&self, block: Blk, allowed: &[FuncRef]) -> bool {
+        self.ir.current == Some(block.0)
+            && self.ir.blocks[block.0 as usize].insts.iter().all(|inst| {
+                match &self.ir.insts[*inst as usize].op {
+                    Op::Call(callee, _) => allowed.contains(callee),
+                    Op::CallIndirect(..) => false,
+                    _ => true,
+                }
+            })
+    }
+
+    fn holds_since(
+        &self,
+        check: Blk,
+        taken: Blk,
+        then: Val,
+        now: Val,
+        allowed: &[FuncRef],
+    ) -> bool {
+        // A walk this long gives up.
+        const LIMIT: usize = 64;
+        let ir = &self.ir;
+        let current = ir.current.expect("a test is made in a block");
+        let check = check.0;
+        // The blocks on a way from `check` to here.
+        let mut ways = vec![current];
+        let mut work = vec![current];
+        while let Some(block) = work.pop() {
+            let entry = &ir.blocks[block as usize];
+            if !(entry.sealed || entry.complete)
+                || entry.predecessors.is_empty()
+                || ways.len() > LIMIT
+            {
+                return false;
+            }
+            for predecessor in &entry.predecessors {
+                if *predecessor != check && !ways.contains(predecessor) {
+                    ways.push(*predecessor);
+                    work.push(*predecessor);
+                }
+            }
+        }
+        // A value of a loop's blocks used after it would keep the loop from
+        // being copied (see `version_blocks`).
+        let mut back = ir.blocks[check as usize].predecessors.clone();
+        let mut seen = HashSet::new();
+        while let Some(block) = back.pop() {
+            if block == check || seen.len() > LIMIT {
+                return false;
+            }
+            if seen.insert(block) {
+                back.extend(&ir.blocks[block as usize].predecessors);
+            }
+        }
+        // The blocks a way through `taken` reaches: a call in any other
+        // block runs only where the test failed, which a later test repeats
+        // the slow way.
+        let mut after = vec![taken.0];
+        let mut grew = ways.contains(&taken.0);
+        while grew {
+            grew = false;
+            for block in &ways {
+                let reached = ir.blocks[*block as usize]
+                    .predecessors
+                    .iter()
+                    .any(|predecessor| after.contains(predecessor));
+                if reached && !after.contains(block) {
+                    after.push(*block);
+                    grew = true;
+                }
+            }
+        }
+        let calls_kept = ways
+            .iter()
+            .filter(|block| after.contains(block))
+            .all(|block| {
+                ir.blocks[*block as usize].insts.iter().all(|inst| {
+                    match &ir.insts[*inst as usize].op {
+                        Op::Call(callee, _) => allowed.contains(callee),
+                        Op::CallIndirect(..) => false,
+                        _ => true,
+                    }
+                })
+            });
+        if !calls_kept {
+            return false;
+        }
+        if now == then {
+            return true;
+        }
+        let read_of = |value: Val| {
+            let inst = ir.value_defs.get(value.0 as usize).copied().flatten()?;
+            match ir.insts[inst as usize].op {
+                Op::UseVar(var) => Some((var, ir.insts[inst as usize].block)),
+                _ => None,
+            }
+        };
+        let Some((var, _)) = read_of(now) else {
+            return false;
+        };
+        // The variable holds `then` where `check` ends.
+        let held = match ir.blocks[check as usize].definitions.get(&var.0) {
+            Some(value) => *value == then,
+            None => read_of(then) == Some((var, check)),
+        };
+        held && ways.iter().all(|block| {
+            ir.blocks[*block as usize].insts.iter().all(
+                |inst| !matches!(ir.insts[*inst as usize].op, Op::DefVar(set, _) if set == var),
+            )
+        })
     }
 
     fn only_calls_since(&self, inst: Inst, allowed: &[FuncRef]) -> bool {

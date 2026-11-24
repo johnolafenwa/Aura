@@ -793,6 +793,19 @@ pub(crate) trait FunctionBackend {
     /// Whether `inst` is in the current block and each call after it there
     /// calls one of `allowed`.
     fn only_calls_since(&self, inst: Inst, allowed: &[FuncRef]) -> bool;
+    /// Whether `block` is the current block and each call in it so far
+    /// calls one of `allowed`.
+    fn only_calls_in(&self, block: Blk, allowed: &[FuncRef]) -> bool;
+    /// Notes that `block` has every predecessor it will get, though it is
+    /// not sealed, for `holds_since`.
+    fn note_complete(&mut self, block: Blk);
+    /// Whether what the branch ending `check` tested of the box `then` still
+    /// holds for the box `now` in the current block: `check` dominates the
+    /// current block and lies on no loop, each call on a way from its edge
+    /// to `taken` to here calls one of `allowed`, and `now` is `then` or
+    /// reads the variable that held `then`, which nothing on the way sets.
+    fn holds_since(&self, check: Blk, taken: Blk, then: Val, now: Val, allowed: &[FuncRef])
+        -> bool;
     /// Turns the call `inst` into a call of `callee`, keeping its results.
     fn replace_with_call(&mut self, inst: Inst, callee: FuncRef, args: &[Val]);
     /// Removes `inst`, which defines no value anything uses.

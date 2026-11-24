@@ -371,14 +371,41 @@ impl FunctionCompiler<'_> {
             self.builder.jump(fast_block, &[]);
             return;
         }
-        let layout = aura_runtime::native_runtime::direct_list_layout();
-        let actual = self.emit_list_access(object, &layout);
-        let mut matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
-        // The copy of a loop that reads a field's list once runs while
-        // the instance keeps its layout.
-        if let Some(snapshot) = self.class_check_snapshot.take() {
-            matches = self.holds_in_copy(snapshot, matches);
-        }
+        let snapshot = self.class_check_snapshot.take();
+        // A box an earlier check found in the layout keeps it until a call
+        // that may share it.
+        let kept = self.box_keeping_calls();
+        let earlier = snapshot.is_none().then(|| {
+            self.layout_checks
+                .iter()
+                .find(|(check, taken, then, checked, _)| {
+                    *checked == access
+                        && self
+                            .builder
+                            .holds_since(*check, *taken, *then, object, &kept)
+                })
+                .map(|check| check.4)
+        });
+        let matches = match earlier.flatten() {
+            Some(matches) => matches,
+            None => {
+                let layout = aura_runtime::native_runtime::direct_list_layout();
+                let actual = self.emit_list_access(object, &layout);
+                let matches = self.builder.icmp_imm(IntCC::Equal, actual, access);
+                // The copy of a loop that reads a field's list once runs
+                // while the instance keeps its layout.
+                match snapshot {
+                    Some(snapshot) => self.holds_in_copy(snapshot, matches),
+                    None => {
+                        let check = self.builder.current_block().expect("a check's block");
+                        self.layout_checks
+                            .insert(0, (check, fast_block, object, access, matches));
+                        self.layout_checks.truncate(8);
+                        matches
+                    }
+                }
+            }
+        };
         // An instance is out of its layout only while it is shared, so
         // the runtime's way lies out of line.
         self.builder.set_cold_block(slow_block);
