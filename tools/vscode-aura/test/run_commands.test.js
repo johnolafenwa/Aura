@@ -401,3 +401,18 @@ test("fallback terminal launches the compiler directly with shellPath and shellA
   assert.deepEqual(fake.terminals[0].sent, []);
 });
 
+test("buildOutputPath keeps dot-only stems such as ...au inside the source directory", () => {
+  for (const name of ["...au", "..au"]) {
+    const outputLinux = buildOutputPath(`/repo/${name}`, "linux");
+    assert.equal(path.dirname(outputLinux), "/repo");
+    assert.notEqual(path.basename(outputLinux), "..");
+    assert.notEqual(path.basename(outputLinux), ".");
+
+    const outputWin = buildOutputPath(`/repo/${name}`, "win32");
+    assert.equal(path.dirname(outputWin), "/repo");
+    assert.ok(outputWin.endsWith(".exe"));
+    assert.notEqual(path.basename(outputWin), "...exe");
+  }
+});
+
+

@@ -25,7 +25,11 @@ function quoteArgument(value, platform = process.platform) {
 
 function buildOutputPath(filePath, platform = process.platform) {
   const parsed = path.parse(filePath);
-  return path.join(parsed.dir, platform === "win32" ? `${parsed.name}.exe` : parsed.name);
+  const safeName =
+    !parsed.name || parsed.name === "." || parsed.name === ".." || /[/\\]/.test(parsed.name)
+      ? "aura_out"
+      : parsed.name;
+  return path.join(parsed.dir, platform === "win32" ? `${safeName}.exe` : safeName);
 }
 
 function resolveCompilerExecutable(vscode, options = {}) {
