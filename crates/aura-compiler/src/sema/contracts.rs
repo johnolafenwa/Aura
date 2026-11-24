@@ -660,6 +660,12 @@ impl FunctionChecker<'_> {
             if spec_method {
                 continue;
             }
+            // A tensor never changes, and the verifier models its shape.
+            let tensor_shape = matches!(&ty, Type::Named(class, _) if class == "tensor.Tensor")
+                && matches!(method, "shape" | "len");
+            if tensor_shape {
+                continue;
+            }
             if !has_builtin_methods(&ty) || !PURE_METHODS.contains(&method) {
                 return Err(impure(
                     receiver,

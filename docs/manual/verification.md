@@ -488,6 +488,29 @@ booleans, with each integer type's range as a check:
   arguments the child receives, and the value of `Ready` from
   `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
   Each task's function is verified like any other
+- `control.recover(f, args...)` with a named function: the call proves
+  `f`'s `requires`, and the result is `Ok` with a value that has `f`'s
+  `ensures`, or `Err` with any trap. The verifier never assumes the call
+  returns `Ok`, since even a call free of checks can run out of stack. The
+  caller's own values are unchanged on both paths
+- state that tasks share: the value a `with m.lock():` block starts with,
+  every receive from a `Queue`, `cancelled()`, and the result of every
+  atomic and `sync.Map` call are each any value of their type, because
+  another task may change them at any time. Inside the block the guarded
+  value is a local that only this task changes, so facts about it hold
+  until the block ends
+- the shapes of `tensor.Tensor` values, not their elements: `shape()` and
+  `len()` in code and in contracts. `zeros`, `full`, `rand`, `randn`, and
+  `from_array` make a tensor of the given shape. `matmul` checks the
+  `Array.matmul` shape rules, elementwise operators and comparisons check
+  that the shapes broadcast, `reshape` with a literal shape checks the
+  element count, `sum`, `min`, `max`, and `mean` along an axis check the
+  axis, and `item()` checks that there is one element; each gives the
+  result's shape. `transpose`, `flatten`, `scalar`, and the elementwise
+  functions such as `relu` keep or rearrange the shape. A matrix product
+  of parameters needs their ranks, as in
+  `requires len(a.shape()) == 2 and len(b.shape()) == 2 and a.shape()[1] == b.shape()[0]`.
+  Other tensor members, and the device and dtype checks, are not modeled
 - calls through a function value that names one function, such as
   `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
   `ensures`
