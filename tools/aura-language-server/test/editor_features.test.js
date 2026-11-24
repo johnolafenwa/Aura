@@ -292,6 +292,6 @@ test("module storage has a variable token without the readonly modifier", () => 
 });
 
 test("workspace search publishes module storage as a variable symbol", () => {
-  const matches = workspaceSymbols("ring", new Map([["file:///kernel.au", "mut ring: uint8 = 0"]]));
+  const matches = workspaceSymbols("ring", new Map([["file:///kernel.au", 'mut ring: uint8 = 0\nexport "C" def head() -> uint8:\n    return ring']]));
   assert.equal(matches[0].kind, 13);
 });

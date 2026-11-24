@@ -241,3 +241,9 @@ test("recovery navigates C layout and public module storage declarations", () =>
   assert.ok(!items.some((item) => item.name === "temporary"));
   assert.deepEqual(diagnosticsForDocument(source), []);
 });
+
+test("recovery keeps top-level script locals out of module symbols", () => {
+  assert.deepEqual(documentSymbols("mut result = 0\nprint(result)"), []);
+  const source = 'mut count: uint64 = 0\nexport "C" def tick() -> uint64:\n    return count';
+  assert.deepEqual(documentSymbols(source).map((symbol) => symbol.name), ["count", "tick"]);
+});
