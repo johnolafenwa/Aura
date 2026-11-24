@@ -680,6 +680,7 @@ fn lower_fast_loop(for_stmt: ForStmt, fast: &FastLoop) -> Vec<Stmt> {
     } else {
         let name = hidden_iterator_name(span);
         stmts.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: true,
             target: AssignTarget::Name(name.clone()),
             annotation: None,
@@ -704,6 +705,7 @@ fn lower_fast_loop(for_stmt: ForStmt, fast: &FastLoop) -> Vec<Stmt> {
     let mut body = Vec::new();
     if target != "_" {
         body.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             target: AssignTarget::Name(target),
             annotation: None,
@@ -722,6 +724,7 @@ fn lower_fast_loop(for_stmt: ForStmt, fast: &FastLoop) -> Vec<Stmt> {
         contracts: Vec::new(),
         body: vec![
             Stmt::Assign(AssignStmt {
+                member_span: None,
                 mutable: false,
                 target: AssignTarget::Name(step),
                 annotation: None,
@@ -760,6 +763,7 @@ fn lower_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
     } else {
         let name = hidden_iterator_name(span);
         stmts.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: true,
             target: AssignTarget::Name(name.clone()),
             annotation: None,
@@ -929,6 +933,7 @@ fn lower_lockstep_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
     let mut stmts = Vec::new();
     if enumerate {
         stmts.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: true,
             target: AssignTarget::Name(index_name.clone()),
             annotation: Some(crate::ast::TypeRef {
@@ -952,6 +957,7 @@ fn lower_lockstep_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
         .collect();
     for (name, operand) in iterator_names.iter().zip(operands) {
         stmts.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: true,
             target: AssignTarget::Name(name.clone()),
             annotation: None,
@@ -1025,6 +1031,7 @@ fn lower_lockstep_iterator_loop(for_stmt: ForStmt) -> Vec<Stmt> {
     if enumerate {
         // Advance the index before the body so `continue` keeps counting.
         let increment = Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             target: AssignTarget::Name(index_name.clone()),
             annotation: None,

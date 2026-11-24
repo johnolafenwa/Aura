@@ -6154,6 +6154,7 @@ fn analysis_member_assignment_without_source_field_range_does_not_emit_occurrenc
         .expect("update function info should exist");
     let mut scope = builder.function_scope(function_decl, function_info);
     let assignment = AssignStmt {
+        member_span: None,
         mutable: false,
         target: AssignTarget::Member {
             object: Box::new(expr(ExprKind::Name("counter".to_string()))),
@@ -6174,6 +6175,7 @@ fn analysis_member_assignment_without_source_field_range_does_not_emit_occurrenc
         .all(|occurrence| !occurrence.hover.contains("field value")));
 
     let unresolved_receiver_assignment = AssignStmt {
+        member_span: None,
         mutable: false,
         target: AssignTarget::Member {
             object: Box::new(expr(ExprKind::Name("missing".to_string()))),
@@ -6861,6 +6863,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
     let mut fallback_builder = AnalysisBuilder::new("", &program, Vec::new());
     let mut fallback_scope = BTreeMap::new();
     let fallback_assignment = AssignStmt {
+        member_span: None,
         mutable: false,
         target: AssignTarget::Name("fresh".to_string()),
         annotation: Some(type_ref("int32")),
@@ -6894,6 +6897,7 @@ fn analysis_builtin_completion_and_statement_helpers_cover_remaining_branches() 
             .definition
     );
     let reassignment = AssignStmt {
+        member_span: None,
         mutable: false,
         target: AssignTarget::Name("fresh".to_string()),
         annotation: None,
@@ -8770,6 +8774,7 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
         (
             "member assignment object",
             crate::ast::Stmt::Assign(AssignStmt {
+                member_span: None,
                 mutable: false,
                 target: AssignTarget::Member {
                     object: Box::new(lambda.clone()),
@@ -8784,6 +8789,7 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
         (
             "indexed assignment index",
             crate::ast::Stmt::Assign(AssignStmt {
+                member_span: None,
                 mutable: false,
                 target: AssignTarget::Index {
                     object: Box::new(leaf()),

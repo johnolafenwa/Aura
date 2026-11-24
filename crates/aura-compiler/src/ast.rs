@@ -373,6 +373,9 @@ pub struct FunctionDecl {
     pub export: Option<String>,
 }
 
+/// Suffix on the unspellable method name of a computed property's setter.
+pub const PROPERTY_SETTER_SUFFIX: &str = "$setter";
+
 /// The contextual keyword of a yield statement.
 pub const YIELD_KEYWORD: &str = "yield";
 
@@ -869,6 +872,9 @@ pub struct AssertStmt {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AssignStmt {
+    /// Source position of the final identifier of a written member target.
+    #[serde(skip)]
+    pub member_span: Option<Span>,
     pub mutable: bool,
     pub target: AssignTarget,
     pub annotation: Option<TypeRef>,
