@@ -54,8 +54,44 @@ it relies on that type's own contract, and a `match` type arm on it is
 decided. A trait object the function receives, reads from a collection, or
 gets from two paths that hold different types may hold any type. A call of a `lemma def` relies on the
 lemma's `ensures` the same way; see
-[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
-what a caller needs to know must be in the contract.
+[Lemmas](/manual/contracts#lemmas). One more fact about the callee's body
+is used, described next. Anything else a caller needs to know must be in
+the contract.
+
+A call changes only what its callee can write. After a call, a `mut`
+argument keeps the value of every field the callee never writes, so the
+`ensures` only has to describe the fields that change:
+
+```aura
+class Stack:
+    items: list[int64]
+    cap: int64
+    invariant 0 <= len(self.items) and len(self.items) <= self.cap
+
+    public def push(mut self, x: int64):
+        requires len(self.items) < self.cap
+        ensures len(self.items) == len(old(self.items)) + 1
+        self.items.append(x)
+
+
+def fill(s: mut Stack):
+    requires s.cap == 4 and len(s.items) == 0
+    s.push(1)
+    s.push(2)  # proved: `push` cannot write `cap`
+    assert len(s.items) == 2
+
+
+def main():
+    mut s = Stack(items=[], cap=4)
+    fill(s)
+```
+
+The verifier reads the fields a function may write from its body and from
+the functions it calls. An assignment, a write through a `view mut`, a
+method such as `append`, and a `mut` argument of a call each count against
+the field they reach. A call whose callee is not known, such as one through
+a function value or through a trait, may write any part of its `mut`
+arguments.
 
 ```aura
 def clamp(x: int64, lo: int64, hi: int64) -> int64:

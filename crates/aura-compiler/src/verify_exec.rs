@@ -458,6 +458,9 @@ pub(super) struct Exec<'a> {
     /// The declaration whose contract the call being made uses instead of
     /// its callee's own: a trait method's, for a call through the trait.
     pub(super) contract_override: Option<&'a crate::ast::FunctionDecl>,
+    /// Set while a call is made whose implementation is picked at run
+    /// time, so nothing read from one implementation's body holds for it.
+    pub(super) dynamic_call: bool,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
@@ -523,6 +526,7 @@ impl<'a> Exec<'a> {
             in_ghost: false,
             trap_site: false,
             contract_override: None,
+            dynamic_call: false,
             labels,
             unsupported: None,
             captured: closure_captures(function),
@@ -3298,6 +3302,7 @@ impl<'a> Exec<'a> {
                     ));
                 }
                 self.contract_override = contract;
+                self.dynamic_call = true;
                 let result = self.user_call(
                     state,
                     &function,
@@ -3306,6 +3311,7 @@ impl<'a> Exec<'a> {
                     target_type.as_ref(),
                     target,
                 );
+                self.dynamic_call = false;
                 self.contract_override = None;
                 result
             }
@@ -3541,7 +3547,8 @@ impl<'a> Exec<'a> {
 
     /// A call of a user function: prove its `requires`, then assume its
     /// `ensures` of a fresh result and fresh values for what it may
-    /// change.
+    /// change. A part of a `mut` argument the callee cannot write keeps
+    /// its value.
     fn user_call(
         &mut self,
         state: &mut State,
@@ -3611,6 +3618,7 @@ impl<'a> Exec<'a> {
                 Some(ty) => self.fresh(&ty, param),
                 None => Val::Opaque,
             };
+            let value = self.framed(name, param, &pre, value);
             if let Some(slot) = post.iter_mut().find(|(name, _)| name == param) {
                 slot.1 = value.clone();
             }
@@ -3618,6 +3626,33 @@ impl<'a> Exec<'a> {
         }
         self.call_ensures(state, name, &pre, &post, &result);
         result
+    }
+
+    /// The value the `mut` parameter `param` of `name` leaves in its
+    /// argument: `fresh` in each part the callee may write, and the value
+    /// passed everywhere else.
+    fn framed(&self, name: &str, param: &str, pre: &[(String, Val)], fresh: Val) -> Val {
+        let passed = pre.iter().find(|(name, _)| name == param);
+        let (false, Some(paths), Some((_, passed))) =
+            (self.dynamic_call, self.cx.written(name, param), passed)
+        else {
+            return fresh;
+        };
+        // A value the encoding does not model has no part to keep.
+        if *passed == Val::Opaque {
+            return fresh;
+        }
+        let mut kept = passed.clone();
+        for path in paths {
+            let segments: Vec<&str> = path.split('.').collect();
+            let part = segments
+                .iter()
+                .try_fold(fresh.clone(), |value, segment| project(&value, segment));
+            if !part.is_some_and(|part| set_in(&mut kept, &segments, part)) {
+                return fresh;
+            }
+        }
+        kept
     }
 
     fn runtime_call(
@@ -4469,7 +4504,7 @@ fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
 }
 
 /// The locals a closure made in `function` captures by reference.
-fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
+pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
     let mut captured = BTreeSet::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
@@ -4657,7 +4692,7 @@ fn collect_writes(
     }
 }
 
-fn rvalue_writes(value: &Rvalue, place: &mut impl FnMut(&str)) {
+pub(super) fn rvalue_writes(value: &Rvalue, place: &mut impl FnMut(&str)) {
     let args = match value {
         Rvalue::Call { callee, args, .. } => {
             match callee {

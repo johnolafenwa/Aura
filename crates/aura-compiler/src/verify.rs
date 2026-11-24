@@ -17,6 +17,8 @@ mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
 #[path = "verify_float.rs"]
 mod float;
+#[path = "verify_frame.rs"]
+mod frame;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -238,6 +240,9 @@ pub(crate) struct VerifyContext<'a> {
     /// The callable alias with a contract that each class field declared
     /// as one has, by class and field.
     field_contracts: BTreeMap<(String, String), String>,
+    /// What each function may write of its `mut` parameters, found when a
+    /// call first asks.
+    frames: std::cell::OnceCell<frame::Frames<'a>>,
 }
 
 impl<'a> VerifyContext<'a> {
@@ -676,7 +681,18 @@ impl<'a> VerifyContext<'a> {
             implemented,
             callable_contracts,
             field_contracts,
+            frames: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The field paths of its `mut` parameter `param` that `function` may
+    /// write, or `None` when it may write any part.
+    pub(crate) fn written(&self, function: &str, param: &str) -> Option<&BTreeSet<String>> {
+        self.frames
+            .get_or_init(|| frame::frames(&self.functions))
+            .get(function)?
+            .get(param)?
+            .as_ref()
     }
 
     /// The callable alias with a contract that field `field` of class
@@ -1568,6 +1584,10 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "verify_tests_classes.rs"]
+mod tests_classes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
