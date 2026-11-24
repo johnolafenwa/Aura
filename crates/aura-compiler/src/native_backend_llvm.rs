@@ -3169,7 +3169,10 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 self.define(inst, value);
             }
             Op::Iconst(0) if matches!(self.result_type(inst), ScalarType::Inline { .. }) => {
-                self.define(inst, basic_type(context, self.result_type(inst)).const_zero());
+                self.define(
+                    inst,
+                    basic_type(context, self.result_type(inst)).const_zero(),
+                );
             }
             Op::VarAddr(var) => {
                 let (slot, _) = self.vars[&var.0];

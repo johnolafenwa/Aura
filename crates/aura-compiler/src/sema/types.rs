@@ -13,6 +13,7 @@ use aura_core::types::{ReturnedViewType, TraitBound, Type, UnionType};
 #[derive(Clone, Debug, Default)]
 pub struct TypeDefinitions {
     pub(super) module_name: String,
+    pub(super) fixed_arrays: std::rc::Rc<std::cell::RefCell<BTreeMap<(usize, usize), Type>>>,
     names: BTreeMap<String, crate::diag::Span>,
     pub(super) aliases: BTreeMap<String, crate::ast::TypeAliasDecl>,
     pub(super) checked_aliases: BTreeMap<String, super::AliasInfo>,
@@ -75,6 +76,7 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
     fn from(names: BTreeMap<String, crate::diag::Span>) -> Self {
         Self {
             module_name: String::new(),
+            fixed_arrays: Default::default(),
             names,
             aliases: BTreeMap::new(),
             checked_aliases: BTreeMap::new(),
@@ -676,9 +678,18 @@ pub(super) fn lower_type_with_self(
 
     if type_name == "fixed" {
         let (element, count) = super::fixed_arrays::type_parts(type_args, type_ref.span)?;
-        let element = lower_type_with_self(element, type_names, type_arities, canonical_type_names, type_params, self_type)?;
+        let element = lower_type_with_self(
+            element,
+            type_names,
+            type_arities,
+            canonical_type_names,
+            type_params,
+            self_type,
+        )?;
         reject_nested_span_type(&element, type_ref.span)?;
-        return Ok(Type::Named(name.clone(), vec![element, Type::named(&count.to_string())]));
+        let ty = Type::Named(name.clone(), vec![element, Type::named(&count.to_string())]);
+        type_names.fixed_arrays.borrow_mut().insert((type_ref.span.line, type_ref.span.column), ty.clone());
+        return Ok(ty);
     }
 
     if type_name == "Self" {

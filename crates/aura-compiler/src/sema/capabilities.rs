@@ -846,6 +846,9 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if object_ty.as_fixed_array().is_some() {
+                    return self.is_mutable_place(object, locals);
+                }
                 // A list element or dictionary entry is a mutable place when
                 // its collection is (ADR-0061, 2026-09-21 section, A1).
                 if matches!(&object_ty, Type::Named(name, args)

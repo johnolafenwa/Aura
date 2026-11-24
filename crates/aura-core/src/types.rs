@@ -143,8 +143,12 @@ pub const TRAIT_OBJECT_TYPE_NAME: &str = "dyn";
 impl Type {
     /// The element and length of the inline array type `fixed[T, N]`.
     pub fn as_fixed_array(&self) -> Option<(&Type, usize)> {
-        let Type::Named(name, args) = self else { return None };
-        let [element, Type::Named(count, params)] = args.as_slice() else { return None };
+        let Type::Named(name, args) = self else {
+            return None;
+        };
+        let [element, Type::Named(count, params)] = args.as_slice() else {
+            return None;
+        };
         if name != "fixed" || !params.is_empty() {
             return None;
         }

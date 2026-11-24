@@ -14030,7 +14030,10 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
-        if is_scalar_literal_constant(constant) || constant.ty.as_fixed_array().is_some() && fixed_arrays::constant_initializer(&constant.decl.value) {
+        if is_scalar_literal_constant(constant)
+            || constant.ty.as_fixed_array().is_some()
+                && fixed_arrays::constant_initializer(&constant.decl.value)
+        {
             // The literal has no effects, so each read computes it where
             // it stands; the program still runs the initializer at startup.
             let value = self.lower_expr_with_expected(&constant.decl.value, Some(&constant.ty));
@@ -19909,6 +19912,7 @@ impl<'a> Lowerer<'a> {
         let target_ty = checked_binding
             .map(|binding| binding.binding_type.clone())
             .unwrap_or_else(|| match iterable_ty.as_ref() {
+                Some(ty) if ty.as_fixed_array().is_some() => ty.as_fixed_array().unwrap().0.clone(),
                 Some(Type::Named(name, _)) if name == "Range" => Type::named("int64"),
                 Some(Type::Named(name, args))
                     if matches!(name.as_str(), "Queue" | "list" | "set") && args.len() == 1 =>
@@ -19950,7 +19954,15 @@ impl<'a> Lowerer<'a> {
 
         match iterable_ty {
             Some(ref ty) if ty.as_fixed_array().is_some() => {
-                self.fixed_iteration(ty, iterable, simple_binding.clone().expect("fixed array loop binding"), for_stmt.span, dispatch_block, body_block, after_block);
+                self.fixed_iteration(
+                    ty,
+                    iterable,
+                    simple_binding.clone().expect("fixed array loop binding"),
+                    for_stmt.span,
+                    dispatch_block,
+                    body_block,
+                    after_block,
+                );
             }
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
                 let binding = simple_binding
@@ -30287,7 +30299,9 @@ impl<'a> Lowerer<'a> {
                     {
                         args.first().cloned()
                     }
-                    ref ty if ty.as_fixed_array().is_some() => ty.as_fixed_array().map(|(elem, _)| elem.clone()),
+                    ref ty if ty.as_fixed_array().is_some() => {
+                        ty.as_fixed_array().map(|(elem, _)| elem.clone())
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }

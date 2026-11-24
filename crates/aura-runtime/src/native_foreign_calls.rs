@@ -883,7 +883,11 @@ fn c_value_failure(symbol: &str, error: CValueError) -> ! {
 ///
 /// The descriptor names one fixed array field and the slot holds its bytes.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_fixed_box(descriptor: *const u8, length: usize, slot: *const u8) -> *mut OpaqueValue {
+pub unsafe extern "C-unwind" fn aura_direct_fixed_box(
+    descriptor: *const u8,
+    length: usize,
+    slot: *const u8,
+) -> *mut OpaqueValue {
     task_runtime_boundary(|| unsafe {
         let layout = foreign_layout(descriptor, length);
         let kind = &layout.fields[0].kind;
@@ -900,12 +904,19 @@ pub unsafe extern "C-unwind" fn aura_direct_fixed_box(descriptor: *const u8, len
 /// The descriptor names one fixed array field, value is live, and slot has
 /// room for the full array.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_fixed_unbox(value: *mut OpaqueValue, descriptor: *const u8, length: usize, slot: *mut u8) {
+pub unsafe extern "C-unwind" fn aura_direct_fixed_unbox(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    length: usize,
+    slot: *mut u8,
+) {
     task_runtime_boundary(|| unsafe {
         let layout = foreign_layout(descriptor, length);
         let kind = &layout.fields[0].kind;
         let bytes = slice::from_raw_parts_mut(slot, kind.size());
-        if let Err(error) = with_value(value, |value| c_values::pack_kind(value, kind, "fixed", bytes)) {
+        if let Err(error) = with_value(value, |value| {
+            c_values::pack_kind(value, kind, "fixed", bytes)
+        }) {
             c_value_failure("fixed", error)
         }
     })

@@ -3004,7 +3004,7 @@ impl<'a> NativeCodegen<'a> {
         let args_ptr = builder.block_params(entry)[0];
         let raw = builder.load(types::I64, MemFlags::new(), args_ptr, 0);
         match &place_ty {
-            DirectType::Fixed(_) => {},
+            DirectType::Fixed(_) => {}
             DirectType::Callable(_) => {}
             DirectType::Union(_) => {}
             DirectType::PlainClass(class_ty) => {
@@ -9116,7 +9116,9 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
-            CallTarget::Name(op) if crate::mir::fixed_arrays::is_operation(op) => self.compile_fixed(op, args, type_args),
+            CallTarget::Name(op) if crate::mir::fixed_arrays::is_operation(op) => {
+                self.compile_fixed(op, args, type_args)
+            }
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
             CallTarget::Extern(call) => self.compile_extern_call(call, args, target),
@@ -21993,7 +21995,7 @@ fn release_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
-        DirectType::Fixed(_) => {},
+        DirectType::Fixed(_) => {}
         DirectType::Callable(_) => {
             callables::call_callable_unary_adapter(builder, values, callables::DESCRIPTOR_DROP)?;
         }
@@ -22408,10 +22410,10 @@ mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
-#[path = "native_codegen_ordered.rs"]
-mod ordered;
 #[path = "native_codegen_fixed_arrays.rs"]
 mod fixed_arrays;
+#[path = "native_codegen_ordered.rs"]
+mod ordered;
 #[path = "native_codegen_plain.rs"]
 mod plain;
 #[path = "native_codegen_shapes.rs"]

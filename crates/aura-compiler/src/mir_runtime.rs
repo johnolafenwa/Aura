@@ -4971,9 +4971,13 @@ impl MirRuntime {
                     Some(*span),
                 )?))
             }
-            Rvalue::Call { callee: CallTarget::Name(op), args, type_args } if crate::mir::fixed_arrays::is_operation(op) => {
-                self.evaluate_fixed(op, args, type_args.get("array"), env).map(RvalueOutcome::Value)
-            }
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => self
+                .evaluate_fixed(op, args, type_args.get("array"), env)
+                .map(RvalueOutcome::Value),
             Rvalue::Call { callee, args, .. } => Ok(RvalueOutcome::Value(
                 self.evaluate_call_for_target(callee, args, env, expected_type)?,
             )),

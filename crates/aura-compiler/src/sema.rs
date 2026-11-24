@@ -607,7 +607,10 @@ fn ffi_field_kind(
         return Some(CFieldKind::Array(Box::new(element), *length));
     }
     if let Some((element, length)) = ty.as_fixed_array() {
-        return Some(CFieldKind::Array(Box::new(ffi_field_kind(element, &[], classes)?), length));
+        return Some(CFieldKind::Array(
+            Box::new(ffi_field_kind(element, &[], classes)?),
+            length,
+        ));
     }
     match ffi_scalar(ty) {
         Some(scalar) => Some(CFieldKind::Scalar(scalar)),
@@ -10280,7 +10283,10 @@ impl<'a> FunctionChecker<'a> {
                     // an Array that shares the source's elements.
                     return Ok(if selects { object_ty } else { element_ty });
                 }
-                if let Some(element_ty) = vec_element_type(&object_ty).or_else(|| object_ty.as_fixed_array().map(|(element, _)| element)).cloned() {
+                if let Some(element_ty) = vec_element_type(&object_ty)
+                    .or_else(|| object_ty.as_fixed_array().map(|(element, _)| element))
+                    .cloned()
+                {
                     self.check_vec_index_type(index, index.span, locals)?;
                     let retained_base = self
                         .retained_place_access(
@@ -12773,7 +12779,9 @@ impl<'a> FunctionChecker<'a> {
                                 format!("`len(...)` expects a value with a `len()` member, found `{value_ty}`"),
                             ));
                         };
-                        if value_ty.as_fixed_array().is_none() && BuiltinMember::resolve(receiver_name, "len").is_none() {
+                        if value_ty.as_fixed_array().is_none()
+                            && BuiltinMember::resolve(receiver_name, "len").is_none()
+                        {
                             return Err(Diagnostic::coded_at(
                                 "AU2002",
                                 value_arg.span,

@@ -745,6 +745,10 @@ impl<'a> Exec<'a> {
                     elem: args[0].clone(),
                 }
             }
+            ty if ty.as_fixed_array().is_some() => {
+                let (element, length) = ty.as_fixed_array().unwrap();
+                Val::List {len: length.to_string(), data: self.fresh_store(element, hint), elem: element.clone()}
+            }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
                 let len = self.fresh_const("Int", &format!("{hint}_len"));
                 self.fact(format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
@@ -2556,6 +2560,9 @@ impl<'a> Exec<'a> {
                     }
                     _ => fresh_target(self),
                 }
+            }
+            Rvalue::Call { callee: CallTarget::Name(op), args, type_args } if crate::mir::fixed_arrays::is_operation(op) => {
+                self.fixed_call(state, op, args, type_args.get("array"))
             }
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
@@ -4758,3 +4765,6 @@ fn children(value: &Val) -> Vec<&Val> {
         _ => Vec::new(),
     }
 }
+
+#[path = "verify_fixed_arrays.rs"]
+mod fixed_arrays;
