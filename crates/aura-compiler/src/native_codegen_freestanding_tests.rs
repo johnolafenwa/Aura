@@ -869,3 +869,22 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn machine_attributes_parse_a_vector_and_reject_hosted_functions() {
+    crate::parse_source(include_str!("../tests/fixtures/parse-pass/machine_attributes.au")).unwrap();
+    let source = include_str!("../tests/fixtures/check-fail/machine_attributes_hosted.au");
+    assert_eq!(crate::check_source(source).unwrap_err().code, "AU2094");
+}
+
+#[test]
+fn machine_attributes_place_align_retain_and_return_from_interrupt() {
+    let source = include_str!("../tests/fixtures/parse-pass/machine_attributes.au");
+    let bytes = object(source, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    let section = file.section_by_name(".text.irq").unwrap();
+    assert!(section.align() >= 64);
+    assert!(matches!(section.flags(), object::SectionFlags::Elf { sh_flags } if sh_flags & 0x200000 != 0));
+    assert!(section.data().unwrap().windows(2).any(|op| op == [0x48, 0xcf]));
+    assert!(file.symbols().any(|s| s.name() == Ok("timer_vector") && s.section_index() == Some(section.index())));
+}
