@@ -6,14 +6,16 @@ Z3 proved all six obligations in the delegated contract example. Changing the ar
 
 All 31 new run fixtures produced their expected output on the MIR and native back ends. The combined regression covers temporary native values created while a decorated method receives an object with a destructor. The full runnable-fixture layout and native-object suites passed, as did all 1,124 documentation examples and Clippy.
 
-Callgrind measured the release compiler and runtime on the same Linux host using the benchmark manifest inputs. The baseline was 6642a7c2 and the feature revision was 55af91ea.
+Callgrind measured the release compiler and runtime on the same Linux host using the benchmark manifest inputs. The baseline was 6642a7c2 and the feature revision was cbfabf58.
 
 | Program | Before | After | Change |
 | --- | ---: | ---: | ---: |
-| bank_ledger | 1,331,285,470 | 1,330,313,395 | −0.0730% |
-| raytracer | 870,708,926 | 870,712,365 | +0.0004% |
-| hashing | 271,220,674 | 271,207,983 | −0.0047% |
+| bank_ledger | 1,331,285,470 | 1,330,222,357 | −0.0799% |
+| raytracer | 870,708,926 | 870,712,496 | +0.0004% |
+| hashing | 271,220,674 | 271,239,698 | +0.0070% |
 
 [Hosted verification and merge status](https://github.com/johnolafenwa/Aura/pull/317)
 
 Ordinary trait parameter defaults remain deferred. A bound method value would need its trait's defaults to resolve through the same helpers used by a concrete implementation, including after type erasure.
+
+Hook-free native programs omit the destructor queue and dispatcher. All five Linux x86-64 release probes passed their existing budgets. The hello-world binary was 1,176,128 bytes and the JSON binary was 2,014,088 bytes.
