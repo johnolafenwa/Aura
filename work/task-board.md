@@ -23,11 +23,22 @@ Last updated: 2026-11-24
   (ADR-0160), `str` with its first operations and f-strings, and lists of numbers,
   text, classes, enums, and lists, 22 compiler tests and 6 command tests.
   [Notes](2026-11-24-freestanding-values.md)
-- Remaining: lists of other values, `dict`,
+- Remaining: `dict`, `set`,
   and closures in freestanding builds, by route D1 of
   [checkpoint 40](../architecture_docs/40-freestanding-heap-design-checkpoint.md),
   a lean value layer written in Aura, which the owner chose.
   [Notes](2026-11-24-freestanding-heap.md)
+
+## Verification in the documentation (complete)
+
+- Target: John's 2026-11-24 request that `aura verify` be prominent across
+  the documentation and the book. Details are in
+  `2026-11-24-verification-in-docs.md`.
+- Done: the README, the site landing page, the install guides, the Manual
+  and chapters 1 to 21 of the book present contracts and proofs, and
+  `docs/manual/verification.md` lists what the verifier does not model.
+- Follow-up: update that list and the book passages that state a limit as
+  each verifier gap closes.
 
 ## Release 0.17.0-preview (complete)
 

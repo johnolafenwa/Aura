@@ -37,7 +37,7 @@ def main():
     print("loaded")
 ```
 
-<span class="caption">Listing 9-2: `parse_line` returns a `Result` and `main` decides what to do with each outcome</span>
+<span class="caption">Listing 9-3: `parse_line` returns a `Result` and `main` decides what to do with each outcome</span>
 
 The return type now reads as a sentence: on success, a pair of strings; on
 failure, a `str` explaining why. Before indexing, the function checks the one
@@ -55,6 +55,23 @@ loaded
 
 This time the program reached the end. `main` chose to skip the bad line and
 say so, which is a policy, and the policy lives in `main` where it belongs.
+
+The length test does more than turn a trap into a message. It's also what
+lets `aura verify`, the prover from [the previous
+section](/book/ch09-01-traps#proving-a-trap-cannot-happen), show that the
+trap from Listing 9-1 is gone:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 2 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The two checks are `parts[0]` and `parts[1]`. The verifier knows nothing
+about what `split` returns, so it can't assume there are two parts. It
+follows the `if` instead: any path that reaches the last line has tested
+`parts.len() != 2` and not returned, so the list has exactly two elements
+there. Returning an error early and proving the code after it safe are the
+same act.
 
 ### The compiler keeps you honest
 
@@ -165,7 +182,7 @@ def main():
     print(parse_setting("verbose"))
 ```
 
-<span class="caption">Listing 9-3: Passing errors up by hand with nested `match`</span>
+<span class="caption">Listing 9-4: Passing errors up by hand with nested `match`</span>
 
 ```console
 $ aura run src/main.au
@@ -176,7 +193,7 @@ Result.Err(expected `key = value`, found `verbose`)
 
 Two details are new here. The first is `match own`. A plain `match` on a value
 looks at it through shared access, which is fine when you only read the
-payload, as `main` did in Listing 9-2 when it printed `message`. Here we want
+payload, as `main` did in Listing 9-3 when it printed `message`. Here we want
 to move `key` into a new `Result.Ok` and move `message` into a new
 `Result.Err`, and you can only move something out of a value you own. `match
 own` consumes the scrutinee, so its payloads become owned bindings we're free
@@ -184,7 +201,7 @@ to hand on. If you leave `own` off, the compiler names the problem and suggests
 both fixes: `match own`, or `.clone()` to move a copy instead. We'll see that
 diagnostic in full a little later.
 
-The second detail is the shape. Most of Listing 9-3 is plumbing: unwrap the
+The second detail is the shape. Most of Listing 9-4 is plumbing: unwrap the
 success, or return the error unchanged. The two lines that do the actual work
 are buried in it. That pattern is so common that Aura has an operator for it.
 
@@ -193,7 +210,7 @@ are buried in it. That pattern is so common that Aura has an operator for it.
 `try expr` evaluates `expr`, which must produce a `Result`. If it's
 `Result.Ok(value)`, the `try` expression produces `value` and execution
 continues. If it's `Result.Err(error)`, the current function returns
-`Result.Err(error)` immediately. Here's Listing 9-3 again with `try`:
+`Result.Err(error)` immediately. Here's Listing 9-4 again with `try`:
 
 ```aura
 def parse_line(line: str) -> Result[(str, str), str]:
@@ -213,7 +230,7 @@ def main():
     print(parse_setting("verbose"))
 ```
 
-<span class="caption">Listing 9-4: The same function with `try`</span>
+<span class="caption">Listing 9-5: The same function with `try`</span>
 
 The output is identical. `parse_setting` now reads top to bottom as the steps
 it performs, and each `try` marks a place where it might return early. That
@@ -532,7 +549,7 @@ def main() -> int32:
     return status
 ```
 
-<span class="caption">Listing 9-5: A settings loader where every input mistake is a `ConfigError`</span>
+<span class="caption">Listing 9-6: A settings loader where every input mistake is a `ConfigError`</span>
 
 ```console
 $ aura run src/main.au; echo $?
@@ -557,9 +574,19 @@ returns, which lets a script tell "the settings file was wrong" (status 2, from
 our code) apart from "the program hit a bug" (status 1, from a trap).
 
 The loader no longer traps on anything a user could type into a settings file.
-It still contains code that could trap, though: `parts[0]` in `parse_line`
-would trap on an empty list, and `index + 1` would trap on overflow. Those
-aren't input problems. `split` always returns at least one part, and no list is
-long enough for its index to overflow. Deciding which failures belong in a
-`ConfigError` and which can safely stay traps is the question of the next
-section.
+It still contains operations that can trap, though: the two indexes in
+`parse_line`, and `index + 1` in `parse_settings`, which would trap on
+overflow. Those aren't input problems, and we don't have to argue that
+they're safe, because `aura verify` proves it:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 4 of 4 checks proved in 7 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The four checks are the two indexes, which sit behind the length test, and
+the arithmetic on the line counter, which can't overflow because a position
+in a list is always less than the list's length. Every other failure in the
+program is a `ConfigError` on its way to the caller. Deciding which failures
+belong in a `ConfigError`, and which should be traps that we then prove away,
+is the question of the next section.

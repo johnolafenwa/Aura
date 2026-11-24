@@ -12,7 +12,10 @@ write code once and still say exactly what that code requires.
 That way has two parts. *Generics* let a function, class, or enum take type
 parameters, so `Stack[T]` works for any `T`. *Traits* describe behavior that a
 type can promise, such as "has a price" or "can be compared with `<`", and let
-generic code ask for exactly the behavior it uses. You've already been using
+generic code ask for exactly the behavior it uses. A trait method can also
+carry a contract, a promise about its result that
+[`aura verify`](/book/ch11-04-contracts-and-proofs) proves for
+every implementation, so generic code can rely on more than a signature. You've already been using
 both without seeing their definitions: `Result[T, E]`, `Lookup[T]`, and
 `list[T]` are generic types, and the `From` trait in the previous chapter told
 `try` how to convert one error into another.

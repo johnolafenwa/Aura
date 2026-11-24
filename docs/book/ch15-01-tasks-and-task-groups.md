@@ -483,6 +483,87 @@ it waits (a `sleep`, a queue receive, a task result) or when it checks
 `cancelled()`, as `slow` does. [Section 15.3](/book/ch15-03-cancellation-and-shutdown)
 covers it in detail.
 
+## Contracts cross into tasks
+
+A failed `assert` inside a task reaches the parent as an error to handle at
+run time. Some of those failures don't have to wait for a run. If the task's
+function states what it needs as a `requires` clause, `aura verify` proves
+it at the `start` call, the same way it does at an ordinary call, and the
+function's `ensures` comes back with the result.
+[Chapter 11](/book/ch11-04-contracts-and-proofs) introduced both clauses.
+Here is a task that turns a count of finished jobs into a percentage, and a
+parent that uses the percentage to pick a label:
+
+*Filename: src/main.au*
+
+```aura
+def percent_done(done: int64, total: int64) -> int64:
+    requires 0 < total and total <= 1_000_000
+    requires 0 <= done and done <= total
+    ensures 0 <= result and result <= 100
+    return done * 100 // total
+
+def main():
+    labels = ["started", "underway", "halfway", "nearly there", "done"]
+    with group = TaskGroup():
+        task = group.start(percent_done, 3, 4)
+        match task.result(timeout=1s):
+            case TaskResult.Ready(percent):
+                print(f"{percent}%: {labels[percent // 25]}")
+            case TaskResult.Error(message):
+                print("failed: " + message)
+            case TaskResult.TimedOut:
+                print("timed out")
+            case TaskResult.Cancelled:
+                print("cancelled")
+```
+
+<span class="caption">Listing 15-3: A task whose `requires` is proved at `start` and whose `ensures` arrives with its result</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 8 of 8 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ aura run src/main.au
+75%: nearly there
+```
+
+Two of those eight checks are about the task boundary. At
+`group.start(percent_done, 3, 4)` the verifier proves both `requires`
+clauses for the arguments the child will receive. And in the
+`TaskResult.Ready(percent)` arm it knows that `percent` is between 0 and
+100, because that is what `percent_done` ensures, so `percent // 25` is at
+most 4 and the read of `labels` is proved to be in range. Delete the
+`ensures` line and that index check fails, since nothing else says how large
+a percentage can be. The same holds for the value in `Poll.Ready` from
+`poll()` and for `result_or(...)`.
+
+Now start the task with more jobs done than exist, `group.start(percent_done,
+5, 4)`:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `requires` of `percent_done` holds: `0 <= done and done <= total`
+ --> src/main.au:10:9
+   |
+10 |         task = group.start(percent_done, 5, 4)
+   |         ^
+  = note: in `main` (requires check)
+verified src/main.au: 7 of 8 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+$ aura run src/main.au
+failed: `requires` clause failed: `0 <= done and done <= total`
+```
+
+Run it anyway and the clause fails inside the child, so the parent sees it
+as `TaskResult.Error`, one more case to handle. The verifier reports the
+same mistake at the line that made it, before any task exists.
+
+This is as far as the verifier follows concurrency today. A value that
+arrives through a queue, or that is read from a `sync` handle such as
+`AtomicInt` or `Mutex`, is unknown to it, because any task holding the
+handle may have put anything there. When a proof needs a fact about such a
+value, check the value where it arrives, with an `if` or a `match`, and the
+code under the check is proved from there.
+
 ## What can cross into a task
 
 Tasks in Aura really do run in parallel. The runtime starts one scheduler worker

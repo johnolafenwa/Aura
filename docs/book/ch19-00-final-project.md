@@ -15,14 +15,17 @@ talks to the operating system, juggles several pieces of work at the same
 time, and has to clean up after itself when something goes wrong in the
 middle. Aura gives us a tool for each of those: `Result` for parsing
 (Chapter 9), the `process` module for children (Chapter 16), task groups and
-queues for the pool (Chapter 15), and scoped cleanup for shutdown
-(Chapter 14). The interesting part is seeing them fit together.
+queues for the pool (Chapter 15), scoped cleanup for shutdown
+(Chapter 14), and contracts with `aura verify` for the arithmetic that
+holds it together (Chapter 11). The interesting part is seeing them fit
+together.
 
 We will grow the program in three steps, the way you would build it for real.
 First a single-task runner that does one job at a time and gets the
 reporting right. Then a version that hands jobs to a pool of workers through
 a queue, so independent jobs overlap. Finally, supervision: restart policies,
-timeouts, a deadline that cancels the pool, and a look at
+timeouts, a deadline that cancels the pool, a proof that the runner's own
+arithmetic cannot trap, and a look at
 `process.supervisor()` for jobs that are meant to stay running. Every listing
 is compiled, and every run you see is real output from the compiler this book
 was tested against.

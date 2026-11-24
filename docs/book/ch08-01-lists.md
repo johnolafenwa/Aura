@@ -138,6 +138,27 @@ runs. A trap is the right outcome when a bad index means the program has a
 bug. [Chapter 9](/book/ch09-00-error-handling) talks about when to let a
 program stop and when to recover.
 
+Aura has a second tool that does try. `aura verify` uses an SMT solver, a
+program that answers logic questions, to prove before anything runs that
+checks like this one can't fail, and it reports each check it can't prove:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:3:18
+  |
+3 |     print(scores[3])
+  |                  ^
+  = note: in `main` (index in range check)
+verified src/main.au: 0 of 1 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The program didn't run, and the bad index was found anyway.
+[Section 11.4](/book/ch11-04-contracts-and-proofs) covers `aura verify` in
+full, including how to install the solver. Collections are where many of the
+checks worth proving live, so we'll use it throughout this chapter, starting
+with [a pair of list functions](#proving-list-code) once we have loops.
+
 When a missing element is an ordinary situation, not a bug, use `get`
 instead. It returns a `Lookup[T]`, an enum with two variants, and `match`
 makes you handle both:
@@ -332,6 +353,103 @@ give the options: collect the changes and apply them after the loop, or use
 `for score in mut scores` if what you want is to change each element in
 place.
 
+## Proving list code
+
+Earlier, `aura verify` caught `scores[3]` on a list of three. That case was
+easy, because the list was a literal on the line above. Most list code lives
+in functions that receive a list from somewhere else, and there the verifier
+knows only what the function says about its parameters. Here are two
+functions for the gradebook. `highest` returns the best score, and
+`take_back` removes the score recorded last, for a teacher who entered one by
+mistake:
+
+*Filename: src/main.au*
+
+```aura
+def highest(scores: list[int64]) -> int64:
+    requires len(scores) > 0
+    ensures forall(score in scores, score <= result)
+    mut best = scores[0]
+    for i in range(len(scores)):
+        invariant forall(j in range(i), scores[j] <= best)
+        if scores[i] > best:
+            best = scores[i]
+    return best
+
+def take_back(scores: mut list[int64]) -> int64:
+    requires len(scores) > 0
+    ensures len(scores) == len(old(scores)) - 1
+    return scores.pop()
+
+def main():
+    mut scores = [72, 95, 88]
+    print(highest(scores))
+    print(take_back(scores))
+    print(scores)
+```
+
+<span class="caption">Listing 8-5: Two list functions with contracts</span>
+
+```console
+$ aura run src/main.au
+95
+88
+[72, 95]
+```
+
+The lines that start with `requires` and `ensures` are *contracts*. A
+`requires` clause is a condition the caller must meet. Both functions need a
+list with at least one score, because `scores[0]` and `pop()` trap on an
+empty one. An `ensures` clause is a promise about the outcome. `highest`
+promises that no score in the list is greater than its `result`, and `forall`
+says that about every element at once. `take_back` promises that the list
+ends up one shorter than `old(scores)`, which is the list as it was on entry.
+Contracts are checked while the program runs, as an `assert` is. The verifier
+goes further and proves them for every list a caller could pass:
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 13 of 13 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Thirteen checks, all proved. Among them: `scores[0]` and `scores[i]` are in
+range, `pop()` never meets an empty list, both promises hold on every return,
+and `main` meets each `requires` at the call. The `invariant` line is what
+gets the verifier through the loop. It proves a loop one pass at a time, so
+it needs us to say what is true at the start of every pass: `best` is at
+least as large as each of the first `i` scores. When the loop ends, `i` has
+reached `len(scores)`, and the invariant has become the promise. We wrote the
+loop over `range(len(scores))` because the invariant talks about positions,
+and a plain `for score in scores` loop has no position to name.
+
+Take away the first `requires` and the verifier shows which list breaks
+`highest`:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:3:23
+  |
+3 |     mut best = scores[0]
+  |                       ^
+  = note: in `highest` (index in range check)
+  = note: counterexample: len(scores) = 0
+verified src/main.au: 11 of 12 checks proved in 3 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+`len(scores) = 0` is a counterexample, an input for which the check fails.
+Our `main` never passes an empty list, and the program runs as before. The
+verifier doesn't care what `main` happens to do today. It reasons that
+nothing in `highest` rules an empty list out, which is the difference from a
+trap: a trap needs a run that reaches it.
+
+The verifier reads the list operations this example uses: `len`, indexing,
+assignment to an element, `append`, `pop`, `clear`, and `copy`. It doesn't
+model the lists that slices, `sort`, `map`, and `filter` produce today, so a
+check that depends on one of those results is reported as unproved even when
+it's safe. The [verification manual page](/manual/verification) lists what is
+modeled.
+
 ## Sorting
 
 `sort()` puts a list in order, in place:
@@ -353,7 +471,7 @@ def main():
     print(names)
 ```
 
-<span class="caption">Listing 8-5: Sorting naturally, by a key function, and in reverse</span>
+<span class="caption">Listing 8-6: Sorting naturally, by a key function, and in reverse</span>
 
 ```console
 $ aura run src/main.au
@@ -434,7 +552,7 @@ def main():
     print(roster[0].name)
 ```
 
-<span class="caption">Listing 8-6: Changing elements of a list of classes in place</span>
+<span class="caption">Listing 8-7: Changing elements of a list of classes in place</span>
 
 ```console
 $ aura run src/main.au
@@ -479,7 +597,7 @@ def main():
     print(describe([75, 98, 67, 91]))
 ```
 
-<span class="caption">Listing 8-7: Sequence patterns</span>
+<span class="caption">Listing 8-8: Sequence patterns</span>
 
 ```console
 $ aura run src/main.au

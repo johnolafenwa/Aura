@@ -363,6 +363,28 @@ The diagnostic itself is the ordinary trap report. `AU4003` is the
 out-of-bounds code, the arrow points at the `0` in `values[0]`, and the note
 lists the call chain from the innermost frame outwards.
 
+This particular trap didn't need a run to find. `aura verify`, the prover
+from [Chapter 11](/book/ch11-04-contracts-and-proofs), reads the same file
+and reports the read it can't prove safe, with the input that breaks it:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove list index in range
+ --> src/main.au:25:38
+   |
+25 |         print(f"first value: {values[0]}")
+   |                                      ^
+  = note: in `summarize` (index in range check)
+  = note: counterexample: len(values) = 0
+verified src/main.au: 0 of 1 checks proved in 6 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+A `requires len(values) > 0` on `summarize` would turn that into an error at
+the call that passes an empty list. The two tools cover different ground.
+Proofs remove the traps you can rule out ahead of time, and `with` makes
+sure the ones that remain, and every failure that comes from outside the
+program, still leave nothing behind.
+
 ### Cleanup order during a trap
 
 A trap doesn't only unwind the block it happens in. It unwinds every block that
