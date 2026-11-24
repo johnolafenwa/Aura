@@ -1142,7 +1142,6 @@ def main():
             "22 assert unsupported",
             "34 requires unsupported",
             "35 requires unsupported",
-            "35 requires unsupported",
         ],
     );
 }
