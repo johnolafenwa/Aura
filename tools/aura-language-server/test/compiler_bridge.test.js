@@ -750,7 +750,7 @@ test("compiler bridge reuses one persistent compiler process", async () => {
         "lines.on('line', (line) => {",
         "  const request = JSON.parse(line);",
         "  const result = request.method === 'analyze'",
-        "    ? { diagnostics: [], symbols: [], occurrences: [] }",
+        "    ? { diagnostics: [], symbols: [], occurrences: [], inactive_lines: [{ start: 2, end: 3 }] }",
         "    : [{ name: 'len', kind: 'method', detail: 'len() -> intsize' }];",
         `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
           SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
@@ -763,7 +763,13 @@ test("compiler bridge reuses one persistent compiler process", async () => {
     process.env.AURA_LSP_AURA_PATH = fakeCompiler;
     setWorkspaceRoots([]);
 
-    const analysis = await analyzeWithCompiler("file:///workspace/main.au", "print(1)\n");
+    const analysis = await analyzeWithCompiler(
+      "file:///workspace/main.au", 'import build\nif build.freestanding:\n    print("😀")'
+    );
+    assert.deepEqual(compilerDiagnosticsToLsp(analysis)[0].range, {
+      start: { line: 2, character: 0 },
+      end: { line: 2, character: 15 }
+    });
     const completions = await completeWithCompiler(
       "file:///workspace/main.au",
       "value.\n",
