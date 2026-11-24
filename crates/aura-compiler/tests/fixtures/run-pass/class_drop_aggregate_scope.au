@@ -1,0 +1,18 @@
+class Ticket:
+    label: str
+
+    def __drop__(mut self):
+        print(self.label)
+
+enum Parcel:
+    Again(child: indirect Parcel)
+    Empty
+    Held(ticket: Ticket)
+
+def main():
+    if true:
+        pair = (Ticket("tuple"), 1)
+        maybe: int64 | Ticket = Ticket("union")
+        parcel = Parcel.Again(Parcel.Held(Ticket("enum")))
+        print("inside")
+    print("outside")

@@ -352,7 +352,7 @@ pub struct FunctionDecl {
     /// read-only computed property.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<Span>,
-    /// The decorator expressions written above a module-level function, top
+    /// The decorator expressions written above a function or method, top
     /// to bottom.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decorators: Vec<Decorator>,
@@ -376,6 +376,9 @@ pub struct FunctionDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export: Option<String>,
 }
+
+/// Suffix on the unspellable method name of a computed property's setter.
+pub const PROPERTY_SETTER_SUFFIX: &str = "$setter";
 
 /// The contextual keyword of a yield statement.
 pub const YIELD_KEYWORD: &str = "yield";
@@ -786,6 +789,9 @@ pub fn assoc_type_param_name(name: &str) -> String {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ImplDecl {
+    /// The field named by a `by field` clause, at the identifier's position.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<(String, Span)>,
     pub type_params: Vec<String>,
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub trait_name: String,
@@ -873,6 +879,9 @@ pub struct AssertStmt {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AssignStmt {
+    /// Source position of the final identifier of a written member target.
+    #[serde(skip)]
+    pub member_span: Option<Span>,
     pub mutable: bool,
     pub target: AssignTarget,
     pub annotation: Option<TypeRef>,

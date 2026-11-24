@@ -1,0 +1,39 @@
+type Read = Callable[def(self: Counter) -> int64]
+
+def doubled(f: own Read) -> Read:
+    return Read(lambda [own f] self: f(self) * 2)
+
+class Counter:
+    stored: int64
+
+    @property
+    def count(self) -> int64:
+        return self.stored
+
+    @count.setter
+    def count(mut self, value: int64):
+        self.stored = value
+
+    @doubled
+    def read(self) -> int64:
+        return self.count
+
+    def __drop__(mut self):
+        print(self.count)
+
+trait Step:
+    def step(mut self) -> int64
+
+impl Step for Counter:
+    def step(mut self) -> int64:
+        self.count += 1
+        return self.read()
+
+class Meter:
+    counter: Counter
+
+impl Step for Meter by counter
+
+def main():
+    mut meter = Meter(counter=Counter(stored=2))
+    print(meter.step())

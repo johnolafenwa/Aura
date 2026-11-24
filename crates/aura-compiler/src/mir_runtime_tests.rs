@@ -21538,6 +21538,7 @@ fn trait_member_calls_diagnose_unresolvable_receivers_and_missing_impls() {
     );
     let call = |place: &str| Rvalue::Call {
         callee: CallTarget::TraitMember {
+            trait_args: Vec::new(),
             object: Operand::Place(place.to_string()),
             trait_name: "Show".to_string(),
             field: "render".to_string(),

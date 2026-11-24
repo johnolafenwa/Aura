@@ -8228,6 +8228,7 @@ fn assign_stmt(
     value: Expr,
 ) -> AssignStmt {
     AssignStmt {
+        member_span: None,
         mutable,
         target,
         annotation,
@@ -8624,6 +8625,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![not_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
@@ -8652,6 +8654,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![neg_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),

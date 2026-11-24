@@ -1364,6 +1364,7 @@ impl Machine<'_> {
                 };
                 let value = self.framed(&assign.value);
                 self.push(Stmt::Assign(AssignStmt {
+                    member_span: None,
                     mutable: false,
                     target,
                     annotation: None,
@@ -1500,6 +1501,7 @@ impl Machine<'_> {
                 // The counter is below the limit here, so adding one cannot
                 // overflow, as for the loop it replaces.
                 self.push(Stmt::Assign(AssignStmt {
+                    member_span: None,
                     mutable: false,
                     target: AssignTarget::Member {
                         object: Box::new(name_expr("self", span)),
@@ -1796,6 +1798,7 @@ fn is_none(value: Expr, span: Span) -> Expr {
 
 fn assign(name: &str, value: Expr, mutable: bool, span: Span) -> Stmt {
     Stmt::Assign(AssignStmt {
+        member_span: None,
         mutable,
         target: AssignTarget::Name(name.to_string()),
         annotation: None,
@@ -1807,6 +1810,7 @@ fn assign(name: &str, value: Expr, mutable: bool, span: Span) -> Stmt {
 
 fn set_field(field: &str, value: Expr, span: Span) -> Stmt {
     Stmt::Assign(AssignStmt {
+        member_span: None,
         mutable: false,
         target: AssignTarget::Member {
             object: Box::new(name_expr("self", span)),

@@ -1,0 +1,5 @@
+error[AU2065]: drop hook cannot require a precondition
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_precondition.au:4:5
+  |
+4 |     def __drop__(mut self):
+  |     ^

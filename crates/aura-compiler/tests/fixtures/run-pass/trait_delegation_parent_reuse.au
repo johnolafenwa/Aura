@@ -1,0 +1,44 @@
+trait Source:
+    type Output
+    def value(self) -> Self.Output
+
+trait Read: Source:
+    def read(self) -> Self.Output
+
+class Engine:
+    n: int64
+
+impl Source for Engine:
+    type Output = int64
+    def value(self) -> int64:
+        return self.n
+
+impl Read for Engine:
+    def read(self) -> int64:
+        return self.n + 1
+
+class Car:
+    engine: Engine
+
+impl Source for Car:
+    type Output = int64
+    def value(self) -> int64:
+        return 99
+
+impl Read for Car by engine
+
+class Truck:
+    engine: Engine
+
+impl Read for Truck by engine:
+    type Output = int64
+    def value(self) -> int64:
+        return 101
+
+def use[S: Source](item: S) -> S.Output:
+    return item.value()
+
+print(use(Car(engine=Engine(n=4))))
+print(Car(engine=Engine(n=4)).read())
+print(use(Truck(engine=Engine(n=7))))
+print(Truck(engine=Engine(n=7)).read())

@@ -6217,3 +6217,19 @@ fn parses_extern_layout_controls_and_diagnoses_invalid_sizes() {
         assert_eq!(crate::parse_source(&source).unwrap_err().code, "AU2085");
     }
 }
+
+#[test]
+fn member_assignment_records_the_written_field_position() {
+    for (source, expected) in [
+        ("counter.count = 2\n", Some(Span::new(1, 9))),
+        ("table[\"é\"].count += 2\n", Some(Span::new(1, 13))),
+        ("table[\n    \"é\"\n].count += 2\n", Some(Span::new(3, 3))),
+        ("table[\"é\"] = other\n", None),
+        ("counter = other\n", None),
+    ] {
+        let Stmt::Assign(assignment) = parse_stmt_from(source).expect("valid assignment") else {
+            panic!("expected an assignment");
+        };
+        assert_eq!(assignment.member_span, expected, "{source}");
+    }
+}

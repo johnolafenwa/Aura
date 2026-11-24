@@ -182,6 +182,7 @@ mod tests {
                 object: Operand::Unit,
                 field: "write".into(),
                 trait_name: "Writer".into(),
+                trait_args: vec![],
                 receiver_place: None,
                 dispatch,
             }),

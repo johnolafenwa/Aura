@@ -1,0 +1,5 @@
+from property_support.private_setter import Gauge
+
+def main():
+    mut gauge = Gauge(raw=0)
+    gauge.level = 2

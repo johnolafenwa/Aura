@@ -1,0 +1,25 @@
+trait Source:
+    type Output
+    def value(self) -> Self.Output
+
+trait Reader: Source:
+    def number(self) -> int64
+
+class Engine:
+    n: int64
+
+impl Source for Engine:
+    type Output = int64
+    def value(self) -> int64:
+        return self.n
+
+class Car:
+    engine: Engine
+
+impl Reader for Car:
+    def number(self) -> int64:
+        return self.value()
+
+impl Source for Car by engine
+
+print(Car(engine=Engine(n=6)).number())

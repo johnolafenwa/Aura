@@ -6,6 +6,10 @@ Last updated: 2026-11-24
 
 The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)
 
+## Class items for 0.18
+
+Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
+
 ## Verification in the documentation (complete)
 
 - Target: John's 2026-11-24 request that `aura verify` be prominent across

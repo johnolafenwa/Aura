@@ -18470,3 +18470,26 @@ fn union_array_writeback_emits_dynamic_and_literal_reads_with_buffer_release() {
         );
     }
 }
+
+#[test]
+fn class_drop_hook_leaves_unrelated_function_instructions_alone() {
+    let source = r#"
+class Resource:
+    value: int64
+    def __drop__(mut self):
+        print(self.value)
+
+def arithmetic(k: int64) -> int64:
+    return 2 * k + 1
+
+def main():
+    r = Resource(7)
+    print(arithmetic(3))
+"#;
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_unoptimized_object(&module).unwrap();
+    let refs = object_function_referenced_symbols(&object, &super::mangle_symbol("arithmetic"));
+    assert!(refs
+        .iter()
+        .all(|name| !name.contains("class_drop") && !name.contains("stamp_owner")));
+}

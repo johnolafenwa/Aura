@@ -1,0 +1,16 @@
+public trait Origin: Transfer:
+    def initial() -> int64
+
+public trait Scored: Origin:
+    def score(self) -> int64
+
+public class Meter[T]:
+    public n: T
+
+impl Origin for Meter[int64]:
+    def initial() -> int64:
+        return 41
+
+impl Scored for Meter[int64]:
+    def score(self) -> int64:
+        return self.n

@@ -295,3 +295,8 @@ test("workspace search publishes module storage as a variable symbol", () => {
   const matches = workspaceSymbols("ring", new Map([["file:///kernel.au", 'mut ring: uint8 = 0\nexport "C" def head() -> uint8:\n    return ring']]));
   assert.equal(matches[0].kind, 13);
 });
+
+test("semantic tokens use the method signature below decorator lines", () => {
+  const analysis = { occurrences: [occurrence(0, 4, 8, "@traced\n@tag(1)\nmethod call(self) -> int64", null)] };
+  assert.deepEqual(semanticTokens(analysis, "obj.call()").data, [0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("method"), 0]);
+});

@@ -1,0 +1,5 @@
+error[AU2001]: unknown function `staticmethod`
+ --> crates/aura-compiler/tests/fixtures/check-fail/property_other_decorator.au:4:5
+  |
+4 |     @staticmethod
+  |     ^

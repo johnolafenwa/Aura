@@ -1,0 +1,14 @@
+class Session:
+    name: str
+
+    def __drop__(mut self):
+        print("closed " + self.name)
+
+def visit(session: own Session):
+    print("visiting " + session.name)
+
+def main():
+    primary = Session("lobby")
+    secondary = Session("gallery")
+    visit(secondary)
+    print("leaving lobby")

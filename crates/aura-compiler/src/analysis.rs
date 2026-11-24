@@ -1,5 +1,7 @@
 mod api_docs;
+mod class_items;
 mod profile;
+use class_items::method_source_name;
 mod requests;
 mod systems_data;
 use crate::sema::recover;
@@ -508,6 +510,7 @@ impl<'a> AnalysisBuilder<'a> {
                             .chain(&method.type_params)
                             .cloned()
                             .collect();
+                        self.visit_class_item_declaration(class_info, method);
                         let method_info = class_info.methods.get(&method.name).unwrap();
                         let mut scope =
                             self.method_scope(class_decl.name.as_str(), method, method_info);
@@ -600,6 +603,7 @@ impl<'a> AnalysisBuilder<'a> {
                     self.type_parameters
                         .extend(declaration.type_params.iter().cloned());
                     self.visit_type_reference(&declaration.for_type);
+                    self.visit_delegation_field(declaration);
                     for argument in &declaration.trait_args {
                         self.visit_type_reference(argument);
                     }
@@ -814,7 +818,7 @@ impl<'a> AnalysisBuilder<'a> {
             .map(|completion| completion.name.clone())
             .collect::<BTreeSet<_>>();
         for (name, binding) in scope {
-            if names.insert(name.clone()) {
+            if !is_generated_binding(&name) && names.insert(name.clone()) {
                 completions.push(AnalysisCompletion {
                     name,
                     kind: "variable".to_string(),
@@ -2063,6 +2067,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if name == crate::sema::INITIALIZER_NAME
                     || name == crate::ast::CLASS_INVARIANT_METHOD
                     || (class_info.decl.c_union.is_some() && name.starts_with("__write_"))
+                    || name == "__drop__"
+                    || name.ends_with(crate::ast::PROPERTY_SETTER_SUFFIX)
+                    || is_decorator_generated(name)
                 {
                     continue;
                 }
@@ -3185,7 +3192,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(definition.clone(), hover, Some(definition));
+        if !is_generated_binding(name) {
+            self.push_occurrence(definition.clone(), hover, Some(definition));
+        }
     }
 
     /// The type and hover kind of a `with` item's name. A manager whose
@@ -3277,7 +3286,9 @@ impl<'a> AnalysisBuilder<'a> {
                 hover: hover.clone(),
             },
         );
-        self.push_occurrence(declaration, hover, Some(definition));
+        if !is_generated_binding(&view.name) {
+            self.push_occurrence(declaration, hover, Some(definition));
+        }
     }
 
     fn keyword_argument_definition(
@@ -3512,8 +3523,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.visit_expr(&link.operand, scope);
                 }
             }
-            // A decorated function's generated parts have no source text.
-            ExprKind::Name(name) if is_decorator_generated(name) => {}
+            // Rewritten properties and decorated callables use internal bindings.
+            ExprKind::Name(name) if is_generated_binding(name) => {}
             ExprKind::Name(name) => {
                 if let Some(resolved) = self.resolve_name(name, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
@@ -3531,11 +3542,8 @@ impl<'a> AnalysisBuilder<'a> {
                     self.push_occurrence(range, member.hover, member.definition);
                 } else if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
-                    self.push_occurrence(
-                        range_from_span(expr.span, field.len()),
-                        hover,
-                        resolved.definition,
-                    );
+                    let range = range_from_span(expr.span, method_source_name(field).len());
+                    self.push_occurrence(range, hover, resolved.definition);
                 }
             }
             ExprKind::Specialize { expr, type_args } => {
@@ -4229,7 +4237,7 @@ impl<'a> AnalysisBuilder<'a> {
                     definition: Some(self.definition_range(
                         &class_info.module_name,
                         method_info.decl.span,
-                        &method_info.decl.name,
+                        method_source_name(&method_info.decl.name),
                     )),
                     ty: Some(crate::sema::substitute_type(
                         &method_info.signature.return_type,
@@ -4247,11 +4255,9 @@ impl<'a> AnalysisBuilder<'a> {
                     &trait_method.decl,
                     self.implementation_method_doc(trait_impl, &trait_method.decl),
                 ),
-                definition: Some(self.definition_range(
-                    &trait_impl.module_name,
-                    trait_method.decl.span,
-                    &trait_method.decl.name,
-                )),
+                definition: Some(
+                    self.implementation_method_definition(trait_impl, &trait_method.decl),
+                ),
                 ty: Some(crate::sema::substitute_type(
                     &trait_method.signature.return_type,
                     &substitutions,
@@ -6604,6 +6610,7 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
     let method_symbols = |methods: &[FunctionDecl], kind: fn(&FunctionDecl) -> &'static str| {
         methods
             .iter()
+            .filter(|method| !method.name.ends_with(crate::ast::PROPERTY_SETTER_SUFFIX))
             .map(|method| {
                 symbol(
                     &method.name,
@@ -7425,6 +7432,10 @@ fn is_decorator_generated(name: &str) -> bool {
         || name.starts_with(crate::sema::DECORATED_PREFIX)
 }
 
+fn is_generated_binding(name: &str) -> bool {
+    name.contains(' ') || is_decorator_generated(name)
+}
+
 fn format_function_hover(function_decl: &FunctionDecl) -> String {
     let params = function_decl
         .params
@@ -7494,15 +7505,17 @@ fn format_method_hover_with_doc(method_decl: &FunctionDecl, doc: Option<&DocStri
         .chain(method_decl.params.iter().map(format_param_decl))
         .collect::<Vec<_>>()
         .join(", ");
-    with_doc(
-        format!(
-            "```aura\nmethod {}({}) -> {}\n```",
-            method_decl.name,
-            params,
-            format_decl_return(method_decl)
-        ),
-        doc,
-    )
+    let name = method_source_name(&method_decl.name);
+    let signature = format!(
+        "method {name}({params}) -> {}",
+        format_decl_return(method_decl)
+    );
+    let signature = if name != method_decl.name {
+        format!("@{name}.setter\n{signature}")
+    } else {
+        api_docs::decorated_signature(method_decl, &signature)
+    };
+    with_doc(format!("```aura\n{signature}\n```"), doc)
 }
 
 /// `Name[T: Bound, U] = target` for an alias declaration; the target is the

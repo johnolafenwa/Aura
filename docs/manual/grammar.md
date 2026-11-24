@@ -101,6 +101,7 @@ Several words are contextual:
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
 | `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
 | `export` | At module level, `export` followed by a string starts an exported function declaration. Elsewhere it is an ordinary identifier. |
+| `by` | After an implementation target, introduces the field supplying the trait. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -234,8 +235,7 @@ comma.
 -> @
 ```
 
-`@` begins a decorator line above a module-level function, or the
-`@property` marker of a class method.
+`@` begins a decorator line above a module function or class method. Class methods also use `@property` and `@name.setter` as accessor markers.
 There is no semicolon, assignment expression, unary plus, or lambda arrow.
 
 ## Modules And Imports
@@ -519,7 +519,9 @@ class-member
     = "pass", NEWLINE
     | [ "public" ], field-declaration
     | [ "public" ], method-declaration
-    | "@", "property", NEWLINE, [ "public" ], method-declaration ;
+    | "@", "property", NEWLINE, [ "public" ], method-declaration
+    | "@", identifier, ".", "setter", NEWLINE, [ "public" ], method-declaration
+    | decorator, { decorator }, [ "public" ], method-declaration ;
 
 field-declaration
     = identifier, ":", type,
@@ -532,7 +534,7 @@ start on the line directly after the field. A class body whose only entry is a
 docstring is an empty class, the same as `pass`.
 
 `copy` is contextual and is recognized only immediately before `class`.
-`property` after `@` is the only accepted marker name in a class body.
+The property markers take no arguments and each occupies a line of its own.
 A method named `__init__` is the class's initializer. It uses the ordinary
 method grammar. Fields and methods may be interleaved. `pass` permits an otherwise empty class
 body. A comment-only body is not a suite.
@@ -622,10 +624,7 @@ interpreted as an ordinary parameter. Use one of the receiver forms above.
 Call sites pass the value directly. They never prefix an argument with a
 capability.
 
-A `decorator` line starts at column 0 and holds one expression. Comment lines
-and blank lines may sit between decorator lines and the definition. Any other
-line ends the group and reports `AU2047`. Only a module-level function takes
-decorators. [Decorators](/manual/functions#decorators) gives the meaning.
+A `decorator` line is indented to match the function or method definition it precedes. It holds one expression. Comment lines and blank lines may sit between decorator lines and the definition. [Decorators](/manual/functions#decorators) gives the meaning.
 
 Bare means shared access for every type, including declaration-known copy
 types. An ordinary return type annotation is an owned return. A view
@@ -663,7 +662,7 @@ docstring-suite = INDENT, docstring, DEDENT ;
 impl-declaration
     = "impl", [ bounded-type-parameters ],
       identifier-path, [ "[", type-list, "]" ],
-      "for", type,
+      "for", type, [ "by", identifier ],
       ( NEWLINE
       | ":", NEWLINE, INDENT, impl-member, { impl-member }, DEDENT ) ;
 
@@ -672,8 +671,7 @@ impl-member
     | method-declaration ;
 ```
 
-An implementation without `:` and a suite asks the compiler to derive its
-methods. Only `json.Codec` can be derived.
+An implementation with `by` forwards missing methods to the named field. An implementation with neither `by` nor a suite asks the compiler to derive its methods. The derivable traits are `json.Codec` and `tensor.Module`.
 
 Trait-declaration type parameters use the plain form. Bounds on them are
 expressed through supertraits or method constraints, not inline in the trait
@@ -1292,8 +1290,8 @@ The grammar intentionally excludes:
 - semicolons and multiple statements on one physical line
 - backslash line continuation
 - multiline f-strings
-- local item declarations, attributes, and decorators on classes, enums,
-  methods, or local functions
+- class inheritance
+- local item declarations, attributes, and decorators on classes, enums, or local functions
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations

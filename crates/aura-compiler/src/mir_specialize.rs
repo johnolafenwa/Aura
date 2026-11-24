@@ -578,6 +578,8 @@ impl Substitution<'_> {
                 | Instruction::ReborrowElement { selector, .. } => self.operand(selector),
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
@@ -752,8 +754,12 @@ impl Substitution<'_> {
                         self.types(params.iter_mut().map(|param| &mut param.ty));
                         self.types([return_type]);
                     }
-                    CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
-                        self.operand(object)
+                    CallTarget::Member { object, .. } => self.operand(object),
+                    CallTarget::TraitMember {
+                        object, trait_args, ..
+                    } => {
+                        self.operand(object);
+                        self.types(trait_args.iter_mut());
                     }
                     CallTarget::Runtime { receiver, .. } => self.operands(receiver.iter_mut()),
                 }
