@@ -945,3 +945,53 @@ int main(void) { return write_ring() == 19 && write_ring() == 38 ? 0 : 1; }
         .unwrap()
         .success());
 }
+
+#[test]
+fn typed_pointers_run_on_both_hosted_backends() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    for source in [
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/foreign.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/foreign_array.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/links.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/wide.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/fixed.au"),
+    ] {
+        workspace.write("src/main.au", source);
+        for backend in ["mir", "direct"] {
+            let run = workspace.aura(&["run", "--backend", backend, "src/main.au"]);
+            assert!(run.status.success(), "{backend}: {}", stderr(&run));
+        }
+    }
+}
+
+#[test]
+fn typed_pointer_module_addresses_are_persistent() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write("src/main.au", include_str!("../../aura-compiler/tests/fixtures/typed-pointers/state.au"));
+    for target in ["x86_64-unknown-none","aarch64-unknown-none","riscv64gc-unknown-none-elf"] {
+        let build = workspace.aura(&["build","--freestanding","--target",target,"-o","state.o","src/main.au"]);
+        assert!(build.status.success(), "{target}: {}",stderr(&build));
+    }
+}
+
+#[test]
+fn typed_pointer_volatile_wide_accesses_keep_their_llvm_width() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    let source = workspace.write("src/main.au", include_str!("../../aura-compiler/tests/fixtures/typed-pointers/wide.au"));
+    let build = Command::new(aura_bin())
+        .current_dir(&workspace.path)
+        .args(["build","--freestanding","--target","x86_64-unknown-none","-o","wide.o"])
+        .arg(source)
+        .env("AURA_DUMP_LLVM_IR", workspace.path.join("pointer"))
+        .output().unwrap();
+    assert!(build.status.success(), "{}", stderr(&build));
+    let ir = fs::read_to_string(workspace.path.join("pointer.0.ll")).unwrap();
+    assert!(ir.contains("load volatile i128"), "{ir}");
+    assert!(ir.contains("store volatile i128"), "{ir}");
+}

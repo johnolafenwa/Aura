@@ -7,13 +7,33 @@ use crate::mir::{CallTarget, Instruction, MethodDispatch, MirFunction, MirModule
 use crate::sema::Type;
 
 fn uses_typed_pointer(function: &MirFunction) -> bool {
-    function
-        .local_types
+    let exposes_storage = function
+        .blocks
         .iter()
-        .map(|local| &local.ty)
-        .chain(function.params.iter().map(|param| &param.ty))
-        .chain(std::iter::once(&function.return_type))
-        .any(|ty| matches!(ty, Type::Named(name, _) if name == "ptr"))
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            let Instruction::Assign { value, .. } = instruction else {
+                return false;
+            };
+            match value {
+                Rvalue::CFieldAddress { .. }
+                | Rvalue::ModuleAddress { .. }
+                | Rvalue::CPointerAccess { .. } => true,
+                Rvalue::Call {
+                    callee: CallTarget::Name(name),
+                    ..
+                } => name == crate::mir::fixed_arrays::ADDRESS,
+                _ => false,
+            }
+        });
+    exposes_storage
+        || function
+            .local_types
+            .iter()
+            .map(|local| &local.ty)
+            .chain(function.params.iter().map(|param| &param.ty))
+            .chain(std::iter::once(&function.return_type))
+            .any(|ty| matches!(ty, Type::Named(name, _) if name == "ptr"))
 }
 
 fn writes_memory(name: &str) -> bool {
@@ -57,7 +77,11 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
             };
             let callee = match value {
                 Rvalue::Call { callee, .. } => callee,
-                Rvalue::StartTask { .. } | Rvalue::Closure { .. } => {
+                Rvalue::CPointerAccess { store: Some(_), .. }
+                | Rvalue::CFieldAddress { .. }
+                | Rvalue::ModuleAddress { .. }
+                | Rvalue::StartTask { .. }
+                | Rvalue::Closure { .. } => {
                     affected.insert(name);
                     continue;
                 }
@@ -89,7 +113,7 @@ pub(super) fn affected_functions(module: &MirModule) -> BTreeSet<&str> {
                     continue;
                 }
             };
-            if writes_memory(target) {
+            if writes_memory(target) || target == crate::mir::fixed_arrays::ADDRESS {
                 affected.insert(name);
             }
             callers.entry(target).or_default().push(name);

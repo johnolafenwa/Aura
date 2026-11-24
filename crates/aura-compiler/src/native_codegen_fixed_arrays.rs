@@ -469,6 +469,14 @@ impl FunctionCompiler<'_> {
         let Some(DirectType::Fixed(layout)) = direct_type(ty, &self.classes) else {
             return Err(format!("cannot lay out `{ty}` inline"));
         };
+        if op == crate::mir::fixed_arrays::ADDRESS && args.len() == 5 {
+            let address = self.load_operand(&args[0].value)?.values[0];
+            let index = self.load_operand(&args[1].value)?.values[0];
+            let line = self.load_operand(&args[2].value)?.values[0];
+            let column = self.load_operand(&args[3].value)?.values[0];
+            let at = self.fixed_element_address(&layout, address, index, line, column);
+            return Ok(ValueRef { values: vec![at], ty: DirectType::Scalar(ScalarKind::Uint64) });
+        }
         let base = layout.slot(self.builder);
         let storage = layout.storage();
         match op {

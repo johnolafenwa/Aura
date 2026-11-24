@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 37);
+    assert_eq!(namespace.all_functions.len(), 66);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -1052,6 +1052,30 @@ export "C" def reset(code: uint16) -> uint32:
             .iter()
             .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
     }
+}
+
+#[test]
+fn typed_pointer_objects_use_target_memory_operations() {
+    for source in [
+        include_str!("../tests/fixtures/typed-pointers/scalars.au"),
+        include_str!("../tests/fixtures/typed-pointers/aggregate.au"),
+        include_str!("../tests/fixtures/typed-pointers/links.au"),
+        include_str!("../tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../tests/fixtures/typed-pointers/wide.au"),
+        include_str!("../tests/fixtures/typed-pointers/fixed.au"),
+    ] {
+        for target in TARGETS {
+            let (_, _, undefined) = symbols(&object(source, target));
+            assert!(undefined.iter().all(|symbol| symbol == TRAP_HOOK));
+        }
+    }
+}
+
+#[test]
+fn a_pointer_cast_requires_ffi_without_a_mem_import() {
+    let source = include_str!("../tests/fixtures/typed-pointers/permission.au");
+    let failure = crate::check_source(source).expect_err("source-only pointers need a manifest");
+    assert!(failure.message.contains("allow_ffi = true"), "{failure:?}");
 }
 
 #[test]

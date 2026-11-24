@@ -144,7 +144,9 @@ pub fn run_entry_with_stdout_sink_and_program_args(
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
     reject_untrusted_extern_calls(module)?;
-    run_entry_with_stdout_sink_and_program_args_trusted(module, entry, stdout_sink, program_args)
+    let mut module = module.clone();
+    crate::mir::resolve_runtime_ops(&mut module);
+    run_resolved_entry(module, entry, stdout_sink, program_args, false)
 }
 
 pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
@@ -158,7 +160,7 @@ pub(crate) fn run_entry_with_stdout_sink_and_program_args_trusted(
     // calls. Resolve them as the native emitter does, so both boundaries
     // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
-    run_resolved_entry(module, entry, stdout_sink, program_args)
+    run_resolved_entry(module, entry, stdout_sink, program_args, true)
 }
 
 /// Runs a module `lower_implicit` just made. Lowering already resolved its
@@ -169,7 +171,7 @@ pub(crate) fn run_lowered_entry(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    run_resolved_entry(module.clone(), entry, stdout_sink, program_args)
+    run_resolved_entry(module.clone(), entry, stdout_sink, program_args, true)
 }
 
 fn run_resolved_entry(
@@ -177,6 +179,7 @@ fn run_resolved_entry(
     entry: Option<&str>,
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
+    raw_memory_allowed: bool,
 ) -> Result<RunOutput> {
     crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error) => {
@@ -214,6 +217,7 @@ fn run_resolved_entry(
                             CancellationContext::default(),
                             program_args,
                         );
+                        runtime.raw_memory_allowed = raw_memory_allowed;
                         runtime.run_entry(task_entry.as_deref())
                     })
                 } else {
@@ -224,6 +228,7 @@ fn run_resolved_entry(
                         CancellationContext::default(),
                         program_args,
                     );
+                    runtime.raw_memory_allowed = raw_memory_allowed;
                     catch_lightweight_task_failure(|| runtime.run_entry(entry.as_deref()))
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
@@ -465,6 +470,8 @@ fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
         Rvalue::Construct { fields, .. } => fields
             .iter()
             .any(|field| operand_is_process_run_function(&field.value)),
+        Rvalue::CPointerAccess { .. } => false,
+        Rvalue::CFieldAddress { .. } => false,
         Rvalue::ModuleStore { value, .. } => operand_is_process_run_function(value),
         Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
         Rvalue::TupleTakeElement { .. } | Rvalue::ModuleConstant { .. } => false,
@@ -818,6 +825,9 @@ fn validate_runtime_module_complexity_with_limits(
 }
 
 struct MirRuntime {
+    raw_memory_allowed: bool,
+    borrowed_raw_cells: raw_cells::SharedCells,
+    raw_parameters: Arc<raw_cells::ParameterLayouts>,
     module: Arc<MirModule>,
     /// Explicit-tag layout plans keyed by canonical union identity
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
@@ -934,8 +944,12 @@ fn try_clone_mir_value(value: &Value) -> Result<Value> {
     try_clone_array_containing_value(value)
 }
 
+#[path = "mir_runtime_raw_cells.rs"]
+mod raw_cells;
+
 #[derive(Default)]
 struct Env {
+    raw_cells: raw_cells::SharedCells,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
@@ -1486,10 +1500,13 @@ impl Env {
             .split_first()
             .expect("split_place_segments rejects empty MIR places");
 
+        if self.raw_cells.contains_key(root) {
+            self.write_raw_cell(root, rest, place, &value)?;
+        }
         if rest.is_empty() {
             self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
-            return Ok(());
+            return self.update_addressed_members(root);
         }
 
         let root_value = self
@@ -1500,7 +1517,8 @@ impl Env {
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place(root_value, &rest_refs, value, place)
+        write_nested_place(root_value, &rest_refs, value, place)?;
+        self.update_addressed_members(root)
     }
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
@@ -2691,6 +2709,9 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
+            raw_memory_allowed: true,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::new(raw_cells::parameter_layouts(&module)),
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
@@ -3571,6 +3592,7 @@ impl MirRuntime {
         receiver_type: Option<&Type>,
         registered_exit: bool,
     ) -> Result<CallOutcome> {
+        let borrowed_cells = std::mem::take(&mut self.borrowed_raw_cells);
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
@@ -3658,7 +3680,7 @@ impl MirRuntime {
                 }
             }
 
-            let mut env = Env::default();
+            let mut env = Env { raw_cells: borrowed_cells, ..Default::default() };
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -3886,6 +3908,7 @@ impl MirRuntime {
             let block = &function.blocks[block_index];
             for instruction in &block.instructions {
                 let instruction_result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    env.refresh_raw_cells()?;
                     self.execute_instruction(
                         instruction,
                         env,
@@ -3927,6 +3950,7 @@ impl MirRuntime {
                 }
             }
 
+            env.refresh_raw_cells()?;
             let outcome = match self.execute_terminator(
                 &block.label,
                 &block.terminator,
@@ -4716,6 +4740,35 @@ impl MirRuntime {
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(is_none)))
             }
+            Rvalue::CPointerAccess { .. } | Rvalue::CFieldAddress { .. } if !self.raw_memory_allowed => Err(raw_cells::permission_error()),
+            Rvalue::CPointerAccess {
+                address,
+                store,
+                layout,
+                volatile,
+            } => {
+                let word = self.evaluate_operand(address, env)?;
+                let value = store
+                    .as_ref()
+                    .map(|operand| self.evaluate_operand(operand, env))
+                    .transpose()?;
+                Ok(RvalueOutcome::Value(raw_cells::access(
+                    &word,
+                    value.as_ref(),
+                    layout,
+                    *volatile,
+                )?))
+            }
+            Rvalue::CFieldAddress {
+                root,
+                layout,
+                offset,
+            } => {
+                let addr = env.raw_field_address(root, layout, *offset)?;
+                Ok(RvalueOutcome::Value(Value::Int(IntegerValue::from_u64(
+                    addr,
+                ))))
+            }
             Rvalue::ModuleStore { .. }
             | Rvalue::ModuleLoad { .. }
             | Rvalue::ModuleAddress { .. } => Err(Diagnostic::coded(
@@ -4845,6 +4898,12 @@ impl MirRuntime {
             }
             Rvalue::Cast { value, ty, span } => {
                 let value = self.evaluate_operand(value, env)?;
+                let address = Type::named("uint64");
+                let ty = if ty.as_raw_pointer().is_some() {
+                    &address
+                } else {
+                    ty
+                };
                 Ok(RvalueOutcome::Value(cast_numeric_value(
                     value,
                     ty,
@@ -5781,6 +5840,9 @@ impl MirRuntime {
             return result;
         }
 
+        if !self.raw_memory_allowed && name.starts_with("mem::") {
+            return Err(raw_cells::permission_error());
+        }
         if let Some(metadata) = host_builtin_metadata(name) {
             // Checked MIR materializes builtin defaults before runtime dispatch, so
             // optional metadata parameters are present in this argument list too.
@@ -5864,6 +5926,9 @@ impl MirRuntime {
                 let evaluated_args = evaluate_named_args(args, env)?;
                 let writeback_places =
                     bind_function_writeback_places(&function.params, &evaluated_args)?;
+                if !env.raw_cells.is_empty() || self.raw_parameters.contains_key(&function.name) {
+                    self.borrowed_raw_cells = env.borrowed_cells(&function, args, self.raw_parameters.get(&function.name))?;
+                }
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
@@ -6886,6 +6951,9 @@ impl MirRuntime {
     /// its indices, output and program-wide constant states.
     fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
+            raw_memory_allowed: self.raw_memory_allowed,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::clone(&self.raw_parameters),
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
             safepoints_enabled: self.safepoints_enabled,
@@ -11417,6 +11485,9 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
 /// by-value boundary type of a parameter. `c_string` marks a `str` or
 /// `str | None` that crosses as NUL-terminated text.
 fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
+    if ty.as_raw_pointer().is_some() {
+        return Ok(FfiType::U64);
+    }
     if c_string {
         return Ok(match ty {
             Type::Union(_) => FfiType::NullableCString,
@@ -11467,6 +11538,9 @@ fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
 }
 
 fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    if ty.as_raw_pointer().is_some() {
+        return ffi_value_from_runtime(value, &Type::named("uint64"));
+    }
     let mismatch = || {
         Diagnostic::coded(
             "AU4005",
@@ -11574,6 +11648,7 @@ thread_local! {
 pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
     let scalar = |ty: &Type| match ty {
+        _ if ty.as_raw_pointer().is_some() => Some(FfiScalar::U64),
         Type::Named(name, args) if args.is_empty() => {
             let name = if name == "int" {
                 "int64"
@@ -11973,6 +12048,9 @@ fn runtime_value_from_ffi_with(
         )
     };
     match (value, ty) {
+        (FfiValue::U64(address), ty) if ty.as_raw_pointer().is_some() => {
+            Ok(Value::Int(IntegerValue::from_u64(address)))
+        }
         (FfiValue::Unit, Type::Unit) => Ok(Value::Unit),
         (FfiValue::Bool(value), Type::Named(name, args)) if name == "bool" && args.is_empty() => {
             Ok(Value::Bool(value))

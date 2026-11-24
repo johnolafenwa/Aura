@@ -1,0 +1,23 @@
+import mem
+
+extern "C" class Point:
+    x: int32
+    y: int32
+
+export "C" def shift(block: uint64) -> int32:
+    p = block as ptr[Point]
+    p.offset(1).write(Point(x=10, y=20))
+    mut point = p.offset(1).read()
+    member = mem.address_of(point.y)
+    member.write(30)
+    return point.x + point.y
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    address = malloc(16)
+    assert shift(address) == 40
+    point = (address as ptr[Point]).offset(1).read()
+    assert point.x == 10 and point.y == 20
+    free(address)

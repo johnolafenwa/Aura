@@ -290,6 +290,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid fixed array initializer",
     },
     DiagnosticCodeInfo {
+        code: "AU2083",
+        band: "names/types",
+        title: "invalid raw pointer operation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2084",
+        band: "names/types",
+        title: "raw pointer requires FFI permission",
+    },
+    DiagnosticCodeInfo {
         code: "AU2085",
         band: "names/types",
         title: "invalid C layout declaration",
@@ -385,6 +395,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "fixed array would duplicate a non-copy element",
     },
     DiagnosticCodeInfo {
+        code: "AU3032",
+        band: "ownership",
+        title: "place has no writable stable address",
+    },
+    DiagnosticCodeInfo {
         code: "AU3033",
         band: "ownership",
         title: "borrow of a C bit-field",
@@ -448,6 +463,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4031",
         band: "runtime",
         title: "fixed array index out of bounds",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4032",
+        band: "runtime",
+        title: "invalid raw pointer value",
     },
     DiagnosticCodeInfo {
         code: "AU4033",
