@@ -1777,6 +1777,18 @@ fn load_first(library: &str, candidates: &[PathBuf]) -> Result<usize, FfiError> 
     })
 }
 
+/// Returns whether `name` is a safe bare library or macOS framework name
+/// (matching `[ffi]` manifest rules and rejecting path separators, traversal,
+/// NUL/control bytes, drive prefixes, and leading `-` or `.`).
+fn is_valid_library_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && !name.contains("..")
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_+.-".contains(character))
+}
+
 /// Loads every library and framework a program links into this process,
 /// once per `(kind, name, canonical_search_paths)` tuple, so the symbols
 /// resolve via explicit `RTLD_LOCAL` handles as they do in a built program.
@@ -1788,6 +1800,15 @@ pub fn load_libraries(
 ) -> Result<(), FfiError> {
     const KIND_LIBRARY: u8 = 0;
     const KIND_FRAMEWORK: u8 = 1;
+
+    for name in libraries.iter().chain(frameworks.iter()) {
+        if !is_valid_library_name(name) {
+            return Err(FfiError::LibraryNotFound {
+                library: name.clone(),
+                detail: "invalid library or framework name".to_owned(),
+            });
+        }
+    }
 
     let raw_paths = search_paths.to_vec();
     let canonical_paths = search_paths
@@ -3731,6 +3752,58 @@ mod tests {
             assert!(
                 !is_internal_host_image_name(allowed),
                 "`{allowed}` must not be blocked as an internal host image"
+            );
+        }
+    }
+
+    #[test]
+    fn load_libraries_rejects_path_separators_and_traversal_names() {
+        for bad in [
+            "", ".", "..", "../evil", "a/b", r"a\b", "-evil", "a\0b", "C:evil",
+        ] {
+            let err = load_libraries(&[bad.to_owned()], &[], &[])
+                .expect_err(&format!("library name `{bad}` must be rejected"));
+            assert!(
+                matches!(
+                    err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "expected invalid name error for library `{bad}`, got {err:?}"
+            );
+            let fw_err = load_libraries(&[], &[], &[bad.to_owned()])
+                .expect_err(&format!("framework name `{bad}` must be rejected"));
+            assert!(
+                matches!(
+                    fw_err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "expected invalid name error for framework `{bad}`, got {fw_err:?}"
+            );
+        }
+
+        #[cfg(unix)]
+        {
+            let dir = scratch_directory("nested-name");
+            let sub = dir.join("libsub");
+            std::fs::create_dir_all(&sub).expect("create subdir");
+            let ext = if cfg!(target_os = "macos") {
+                "dylib"
+            } else {
+                "so"
+            };
+            build_fixture_library(&sub.join(format!("nested.{ext}")), "aura_nested_probe", 5);
+            let err = load_libraries(&["sub/nested".to_owned()], std::slice::from_ref(&dir), &[])
+                .expect_err("path separator in library name must not load nested file");
+            std::fs::remove_dir_all(&dir).expect("cleanup nested-name");
+            assert!(
+                matches!(
+                    err,
+                    FfiError::LibraryNotFound { ref detail, .. }
+                        if detail.contains("invalid library or framework name")
+                ),
+                "unexpected error: {err:?}"
             );
         }
     }
