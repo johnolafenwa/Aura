@@ -28,7 +28,8 @@ use crate::mir::{
     MirFunction, MirReceiverKind, Operand, Rvalue, Terminator,
 };
 use crate::runtime_ops::{
-    DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, StrOp, TaskOp, ValueOp,
+    ArrayOp, DictOp, FunctionOp, ListOp, RuntimeOp, ScalarOp, SetOp, SpanOp, StrOp, TaskOp,
+    ValueOp, ARRAY_COORDINATE_WORDS,
 };
 use crate::sema::Type;
 
@@ -346,6 +347,10 @@ pub(super) enum Val {
 pub(super) enum Store {
     Leaf(String, &'static str),
     Items(Vec<Store>),
+    /// The elements of a span, read from its base list's store: position
+    /// `i` of the span is position `i` plus the span's start in the base.
+    /// Only a contract reads one; the function's own steps run on the base.
+    Shifted(Box<Store>, String),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -360,6 +365,11 @@ enum Loan {
     /// A loan the encoding does not follow. A write through it makes the
     /// root local unknown.
     Unknown(String),
+    /// A loan of something inside an element of the collection at this
+    /// place, which the encoding does not follow further. A write through
+    /// it may change any element, and leaves the collection's own length
+    /// and keys as they are.
+    Inside(String),
 }
 
 #[derive(Clone, Debug)]
@@ -369,6 +379,13 @@ pub(super) struct State {
     loans: BTreeMap<String, Loan>,
 }
 
+impl State {
+    /// Whether `local` names a view of another place.
+    pub(super) fn is_view(&self, local: &str) -> bool {
+        self.loans.contains_key(local)
+    }
+}
+
 /// What an obligation asks the solver to show.
 #[derive(Clone, Debug)]
 pub(super) enum Goal {
@@ -376,6 +393,10 @@ pub(super) enum Goal {
     Holds(String),
     /// The step is outside the subset the encoding models.
     Unsupported(String),
+    /// What is assumed so far can hold: some input satisfies it. A
+    /// contract no input satisfies makes every check after it pass for
+    /// nothing.
+    CanHold,
 }
 
 #[derive(Clone, Debug)]
@@ -396,6 +417,9 @@ pub(super) struct Obligation {
     /// an erased lemma call. Until it is proved, what follows from it is
     /// not known to hold when the program runs.
     pub(super) erased: bool,
+    /// For a check that fails wherever its block is reached, the branch
+    /// condition that leads there: what the check reads.
+    pub(super) guard: Option<String>,
 }
 
 /// The loops of a function's control-flow graph.
@@ -458,12 +482,18 @@ pub(super) struct Exec<'a> {
     /// The declaration whose contract the call being made uses instead of
     /// its callee's own: a trait method's, for a call through the trait.
     pub(super) contract_override: Option<&'a crate::ast::FunctionDecl>,
+    /// Set while a call is made whose implementation is picked at run
+    /// time, so nothing read from one implementation's body holds for it.
+    pub(super) dynamic_call: bool,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    /// The positions in a base list that a span index was checked to give.
+    /// The base list's own check of such a position cannot fail.
+    span_positions: BTreeSet<String>,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -488,6 +518,23 @@ pub(super) struct Exec<'a> {
     /// The unfolding limit a `spec def` call reached while a goal was
     /// being proved, so the obligation can say so.
     pub(super) spec_limit_hit: Option<usize>,
+    /// Each step whose result the encoding does not model, and where it is.
+    pub(super) unmodeled_steps: Vec<(String, Span)>,
+    /// Each constant that stands for the result of such a step, by the
+    /// step's position in `unmodeled_steps`. The solver may give one any
+    /// value, so a check it can only break by choosing one is not a
+    /// failure of the program.
+    pub(super) unmodeled: BTreeMap<String, usize>,
+    /// The step whose result is being made up, while one is.
+    origin: Option<usize>,
+    /// The fact that defines each constant `define` made. A constant
+    /// depends on its definition, and not the other way around.
+    definitions: BTreeMap<String, usize>,
+    /// Where the assumed term starts in each fact that holds only on some
+    /// paths: the path condition before it is not what the fact is about.
+    guarded: BTreeMap<usize, usize>,
+    /// The condition of the branch that last led to each block.
+    branch_guards: BTreeMap<usize, String>,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -523,9 +570,11 @@ impl<'a> Exec<'a> {
             in_ghost: false,
             trap_site: false,
             contract_override: None,
+            dynamic_call: false,
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            span_positions: BTreeSet::new(),
             rounded: Vec::new(),
             entry_facts: 0,
             defined: BTreeMap::new(),
@@ -535,6 +584,12 @@ impl<'a> Exec<'a> {
             spec_module: function.module_name.clone(),
             active_specs: Vec::new(),
             spec_limit_hit: None,
+            unmodeled_steps: Vec::new(),
+            unmodeled: BTreeMap::new(),
+            origin: None,
+            definitions: BTreeMap::new(),
+            guarded: BTreeMap::new(),
+            branch_guards: BTreeMap::new(),
         }
     }
 
@@ -555,7 +610,86 @@ impl<'a> Exec<'a> {
             .collect();
         let name = format!("{clean}!{}", self.counter);
         self.decls.push(format!("(declare-const {name} {sort})"));
+        if let Some(step) = self.origin {
+            self.unmodeled.insert(name.clone(), step);
+        }
         name
+    }
+
+    /// Runs `make`, which makes up the result of `what`, a step the
+    /// encoding does not model. Every constant it declares is unknown
+    /// because of that step, not because of the program.
+    pub(super) fn unmodeled<T>(
+        &mut self,
+        what: impl Into<String>,
+        make: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        if self.origin.is_some() {
+            return make(self);
+        }
+        self.unmodeled_steps.push((what.into(), self.span));
+        self.origin = Some(self.unmodeled_steps.len() - 1);
+        let made = make(self);
+        self.origin = None;
+        made
+    }
+
+    /// The step the encoding does not model that the check `obligation`
+    /// depends on, if it depends on one: a value the check reads follows
+    /// from that step's made-up result. A failure of such a check is the
+    /// solver's choice of that result, so it says nothing about the
+    /// program. Which paths reach the check does not count: paths that
+    /// part on such a result join again, and the check after them is as
+    /// real as before.
+    pub(super) fn unmodeled_cause(&self, obligation: &Obligation) -> Option<&(String, Span)> {
+        if self.unmodeled.is_empty() {
+            return None;
+        }
+        let Goal::Holds(goal) = &obligation.goal else {
+            return None;
+        };
+        let facts: Vec<Vec<&str>> = self.facts[..obligation.facts]
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| symbols(&fact[self.guarded.get(&index).copied().unwrap_or(0)..]))
+            .collect();
+        let mut reached: BTreeSet<&str> = BTreeSet::new();
+        let mut order: Vec<&str> = Vec::new();
+        let guard = obligation.guard.as_deref().unwrap_or("");
+        for symbol in symbols(goal).into_iter().chain(symbols(guard)) {
+            if reached.insert(symbol) {
+                order.push(symbol);
+            }
+        }
+        let mut used = vec![false; facts.len()];
+        let mut next = 0;
+        while next < order.len() {
+            let symbol = order[next];
+            next += 1;
+            if let Some(step) = self.unmodeled.get(symbol) {
+                return self.unmodeled_steps.get(*step);
+            }
+            for (index, names) in facts.iter().enumerate() {
+                if used[index] || !names.contains(&symbol) {
+                    continue;
+                }
+                // The fact that defines another constant says nothing
+                // about this one.
+                let defines_other = names.first().is_some_and(|name| {
+                    *name != symbol && self.definitions.get(*name) == Some(&index)
+                });
+                if defines_other {
+                    continue;
+                }
+                used[index] = true;
+                for name in names {
+                    if reached.insert(name) {
+                        order.push(name);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// A fresh constant equal to `term`, to keep terms small.
@@ -567,6 +701,7 @@ impl<'a> Exec<'a> {
             return name.clone();
         }
         let name = self.fresh_const(sort, hint);
+        self.definitions.insert(name.clone(), self.facts.len());
         self.facts.push(format!("(= {name} {term})"));
         self.defined.insert(term, name.clone());
         name
@@ -600,6 +735,7 @@ impl<'a> Exec<'a> {
             op,
             float,
         });
+        self.definitions.insert(result.clone(), self.facts.len());
         self.facts.push(format!("(= {result} {term})"));
         result
     }
@@ -615,6 +751,8 @@ impl<'a> Exec<'a> {
         if pc == "true" {
             self.fact(term);
         } else {
+            self.guarded
+                .insert(self.facts.len(), "(=> ".len() + pc.len() + 1);
             self.fact(format!("(=> {pc} {term})"));
         }
     }
@@ -650,6 +788,7 @@ impl<'a> Exec<'a> {
                     .cx
                     .decl(&self.function.name)
                     .is_some_and(|decl| decl.lemma),
+            guard: None,
         });
         if self.trap_site {
             self.copy_as_site(self.position);
@@ -755,6 +894,12 @@ impl<'a> Exec<'a> {
                     elem: args[0].clone(),
                 }
             }
+            Type::Named(name, args) if name == "Array" && args.len() == 1 => {
+                let len = self.fresh_const("Int", &format!("{hint}_len"));
+                self.fact(format!("(<= {len} {})", i64::MAX));
+                let shape = self.fresh_at(&shape_type(), &format!("{hint}_shape"), depth + 1);
+                self.array_value("true", len, shape)
+            }
             Type::Tuple(items) => Val::Tuple(
                 items
                     .iter()
@@ -821,6 +966,28 @@ impl<'a> Exec<'a> {
         }
     }
 
+    /// An Array of `len` elements whose `shape()` is the list `shape`, on
+    /// the paths `pc` describes. It has at least one axis, no dimension is
+    /// negative, and with one axis its only dimension is its element count.
+    fn array_value(&mut self, pc: &str, len: String, shape: Val) -> Val {
+        let value = Val::Record(
+            ARRAY_RECORD.to_string(),
+            vec![
+                ("len".to_string(), Val::Int(len, IntTy::INT64)),
+                ("shape".to_string(), shape),
+            ],
+        );
+        if let Some((len, rank, dims)) = array_parts(&value) {
+            self.assume(
+                pc,
+                format!(
+                    "(and (<= 0 {len}) (<= 1 {rank}) (<= 0 (select {dims} 0)) (=> (= {rank} 1) (= {len} (select {dims} 0))))"
+                ),
+            );
+        }
+        value
+    }
+
     /// The type of a place path such as `self.balance` or `pair.0`.
     pub(super) fn place_type(&self, path: &str) -> Option<Type> {
         let mut segments = path.split('.');
@@ -837,6 +1004,11 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
+        // A view of a whole place reads that place.
+        if let Some(Loan::Place(source)) = state.loans.get(&root) {
+            let source = join_path(source, &rest.join("."));
+            return self.read_place(state, &source);
+        }
         if !state.env.contains_key(&root) {
             let value = self.fresh_local(&root);
             state.env.insert(root.clone(), value);
@@ -870,6 +1042,23 @@ impl<'a> Exec<'a> {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
+        // A write through a view changes what it views: the place itself,
+        // or, where the encoding does not follow the view, anything in the
+        // local it came from.
+        match state.loans.get(&root).cloned() {
+            Some(Loan::Place(source)) => {
+                let source = join_path(&source, &rest.join("."));
+                return self.write_place(state, &source, value);
+            }
+            Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                self.havoc_inside(state, &list)
+            }
+            Some(Loan::Unknown(source)) => self.unmodeled(
+                "a write through a borrow the verifier does not follow",
+                |exec| exec.havoc_root(state, &source),
+            ),
+            None => {}
+        }
         if rest.is_empty() {
             state.env.insert(root, value);
             return;
@@ -883,6 +1072,45 @@ impl<'a> Exec<'a> {
         } else {
             self.havoc_root(state, &root);
         }
+    }
+
+    /// Makes the elements of the collection at `place` unknown after a
+    /// write through a loan of something inside one of them. Such a write
+    /// cannot add or remove an element, so a list keeps its length and a
+    /// `dict` its length and keys.
+    fn havoc_inside(&mut self, state: &mut State, place: &str) {
+        self.unmodeled(
+            "a write through a borrow the verifier does not follow",
+            |exec| match exec.read_place(state, place) {
+                Val::List { len, elem, .. } => {
+                    let data = exec.fresh_store(&elem, "store");
+                    exec.write_place(state, place, Val::List { len, data, elem });
+                }
+                Val::Map {
+                    len,
+                    keys,
+                    key,
+                    value,
+                    ..
+                } => {
+                    let values = match (key_sort(&key), element_sort(&value)) {
+                        (Some(sort), Some(value_sort)) => Some(
+                            exec.fresh_const(&format!("(Array {sort} {value_sort})"), "values"),
+                        ),
+                        _ => None,
+                    };
+                    let after = Val::Map {
+                        len,
+                        keys,
+                        values,
+                        key,
+                        value,
+                    };
+                    exec.write_place(state, place, after);
+                }
+                _ => exec.havoc_place(state, place),
+            },
+        );
     }
 
     fn havoc_root(&mut self, state: &mut State, root: &str) {
@@ -1104,8 +1332,27 @@ impl<'a> Exec<'a> {
                 Some((alias, _)) => Val::Contracted(alias),
                 None => self.fresh(&param.ty, &param.name),
             };
-            self.record_inputs(&param.name, &value);
+            // A counterexample names a span parameter's parts by the span.
+            let [_, span_len] = span_range_names(&param.name);
+            let is_span_base = self.local_types.contains_key(&span_len);
+            let label = if is_span_base {
+                format!("base list of {}", param.name)
+            } else if let Some(span) = param.name.strip_prefix(SPAN_LEN_PREFIX) {
+                format!("len({span})")
+            } else if let Some(span) = param.name.strip_prefix(SPAN_START_PREFIX) {
+                format!("start of {span}")
+            } else {
+                param.name.clone()
+            };
+            self.record_inputs(&label, &value);
             state.env.insert(param.name.clone(), value);
+        }
+        // A span parameter's range lies inside the list it views: every
+        // span operation checks its range against that list.
+        for param in &self.function.params {
+            if let Some((base, start, len)) = span_parts(&state.env, &param.name) {
+                self.fact(span_in_list(&start, &len, &base));
+            }
         }
         state
     }
@@ -1485,7 +1732,20 @@ impl<'a> Exec<'a> {
         }
         let mut havoc = state.clone();
         for root in &lp.writes {
-            self.havoc_root(&mut havoc, root);
+            // A temporary that carries a value from one iteration to the
+            // next belongs to a loop the compiler wrote, for a
+            // comprehension or a built-in such as `sum`. No invariant can
+            // name it, so what the loop leaves in it is not modeled.
+            if root.starts_with('%')
+                && !lp.counters.contains_key(root)
+                && self.read_outside(lp, root)
+            {
+                self.unmodeled("a comprehension or built-in loop", |exec| {
+                    exec.havoc_root(&mut havoc, root)
+                });
+            } else {
+                self.havoc_root(&mut havoc, root);
+            }
         }
         // A counter the loop only steps up stays at least its entry value,
         // and one it only steps down at most that value.
@@ -1530,6 +1790,25 @@ impl<'a> Exec<'a> {
             self.loop_checks(cfg, lp, back);
         }
         exits
+    }
+
+    /// Whether a block outside the loop `lp` reads the local `root`: what
+    /// the loop leaves in it is then used after the loop.
+    fn read_outside(&self, lp: &Loop, root: &str) -> bool {
+        let (whole, prefix) = (format!("Place(\"{root}\")"), format!("Place(\"{root}."));
+        self.function
+            .blocks
+            .iter()
+            .enumerate()
+            // A block that ends the function counts as part of the loop it
+            // leaves, and still runs after it.
+            .filter(|(index, block)| {
+                !lp.body.contains(index) || terminator_targets(&block.terminator).is_empty()
+            })
+            .any(|(_, block)| {
+                let text = format!("{block:?}");
+                text.contains(&whole) || text.contains(&prefix)
+            })
     }
 
     /// Proves the loop's own checks for one state that reaches its header.
@@ -1797,10 +2076,12 @@ impl<'a> Exec<'a> {
                 }
                 let condition = match self.operand(&mut state, condition, None) {
                     Val::Bool(term) => term,
-                    _ => self.fresh_const("Bool", "branch"),
+                    _ => self.unmodeled("a condition", |exec| exec.fresh_const("Bool", "branch")),
                 };
                 let then_pc = and(&state.pc, &condition);
                 let else_pc = and(&state.pc, &not(&condition));
+                self.branch_guards.insert(pass, condition.clone());
+                self.branch_guards.insert(fail, condition);
                 let mut then_state = state.clone();
                 then_state.pc = then_pc;
                 state.pc = else_pc;
@@ -1847,7 +2128,9 @@ impl<'a> Exec<'a> {
                     };
                     // An arm whose test the encoding does not model is
                     // taken on an unknown condition.
-                    let condition = condition.unwrap_or_else(|| self.fresh_const("Bool", "arm"));
+                    let condition = condition.unwrap_or_else(|| {
+                        self.unmodeled("a `match` arm test", |exec| exec.fresh_const("Bool", "arm"))
+                    });
                     let mut arm_state = state.clone();
                     arm_state.pc = and(&remaining, &condition);
                     remaining = and(&remaining, &not(&condition));
@@ -1882,6 +2165,9 @@ impl<'a> Exec<'a> {
                             &state.pc,
                             Goal::Holds("false".into()),
                         );
+                        if let Some(check) = self.obligations.last_mut() {
+                            check.guard = self.branch_guards.get(&index).cloned();
+                        }
                         // For a build, the check whose failure this is may
                         // go when no path reaches it.
                         if self.prove_sites {
@@ -1956,6 +2242,7 @@ impl<'a> Exec<'a> {
                             projection: projection.clone(),
                         }
                     }
+                    (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
                     _ => Loan::Unknown(root_of(source).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -1984,6 +2271,7 @@ impl<'a> Exec<'a> {
                         projection: join_path(&inner, projection),
                     },
                     Some(Loan::Unknown(root)) => Loan::Unknown(root),
+                    Some(Loan::Inside(place)) => Loan::Inside(place),
                     None => Loan::Unknown(root_of(parent).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -2009,12 +2297,16 @@ impl<'a> Exec<'a> {
                                     projection: projection.clone(),
                                 }
                             }
+                            (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(place),
                             _ => Loan::Unknown(root_of(&place).to_string()),
                         }
                     }
-                    Some(Loan::Element { list, .. }) | Some(Loan::Unknown(list)) => {
-                        Loan::Unknown(root_of(&list).to_string())
+                    // An element of an element is still inside the
+                    // collection the first one came from.
+                    Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                        Loan::Inside(list)
                     }
+                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
                     None => Loan::Unknown(root_of(parent).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -2038,7 +2330,9 @@ impl<'a> Exec<'a> {
                             value
                         }
                     }
-                    _ => self.fresh_local(target),
+                    _ => self.unmodeled("a borrow the verifier does not follow", |exec| {
+                        exec.fresh_local(target)
+                    }),
                 };
                 self.write_place(state, target, value);
             }
@@ -2080,7 +2374,11 @@ impl<'a> Exec<'a> {
                             _ => self.havoc_place(state, &list),
                         }
                     }
-                    Some(Loan::Unknown(root)) => self.havoc_root(state, &root),
+                    Some(Loan::Unknown(root)) => self
+                        .unmodeled("a write through a borrow the verifier does not follow", |exec| {
+                            exec.havoc_root(state, &root)
+                        }),
+                    Some(Loan::Inside(place)) => self.havoc_inside(state, &place),
                     None => self.havoc_root(state, root_of(loan)),
                 }
             }
@@ -2100,7 +2398,9 @@ impl<'a> Exec<'a> {
             }
             Instruction::PopCleanup { place, run, .. } => {
                 if *run {
-                    self.havoc_root(state, root_of(place));
+                    self.unmodeled("the exit of a `with` block", |exec| {
+                        exec.havoc_root(state, root_of(place))
+                    });
                 }
             }
         }
@@ -2173,6 +2473,9 @@ impl<'a> Exec<'a> {
     pub(super) fn store_select(&self, store: &Store, elem: &Type, index: &str) -> Val {
         match store {
             Store::Leaf(array, _) => scalar_val(format!("(select {array} {index})"), elem),
+            Store::Shifted(base, start) => {
+                self.store_select(base, elem, &format!("(+ {index} {start})"))
+            }
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -2251,38 +2554,34 @@ impl<'a> Exec<'a> {
     }
 
     fn merge_stores(&mut self, pcs: &[String], stores: &[&Store], hint: &str) -> Option<Store> {
-        match stores.first()? {
-            Store::Leaf(_, sort) => {
-                let sort = *sort;
-                let mut arrays = Vec::new();
-                for store in stores {
-                    let Store::Leaf(array, _) = store else {
-                        return None;
-                    };
-                    arrays.push(array.as_str());
-                }
-                let array = self.merge_terms(&format!("(Array Int {sort})"), pcs, &arrays, hint);
-                Some(Store::Leaf(array, sort))
+        let Store::Items(first) = stores.first()? else {
+            // Leaves merge as arrays. A span's store is never merged: it
+            // exists only while a contract is read.
+            let mut arrays = Vec::new();
+            let mut sorts = Vec::new();
+            for store in stores {
+                let Store::Leaf(array, sort) = store else {
+                    return None;
+                };
+                arrays.push(array.as_str());
+                sorts.push(*sort);
             }
-            Store::Items(first) => {
-                let mut merged = Vec::new();
-                for position in 0..first.len() {
-                    let mut children = Vec::new();
-                    for store in stores {
-                        let Store::Items(items) = store else {
-                            return None;
-                        };
-                        children.push(items.get(position)?);
-                    }
-                    merged.push(self.merge_stores(
-                        pcs,
-                        &children,
-                        &format!("{hint}_{position}"),
-                    )?);
-                }
-                Some(Store::Items(merged))
+            let sort = sorts[0];
+            let array = self.merge_terms(&format!("(Array Int {sort})"), pcs, &arrays, hint);
+            return Some(Store::Leaf(array, sort));
+        };
+        let mut merged = Vec::new();
+        for position in 0..first.len() {
+            let mut children = Vec::new();
+            for store in stores {
+                let Store::Items(items) = store else {
+                    return None;
+                };
+                children.push(items.get(position)?);
             }
+            merged.push(self.merge_stores(pcs, &children, &format!("{hint}_{position}"))?);
         }
+        Some(Store::Items(merged))
     }
 
     /// Names each scalar of a value built from `select` terms, with the
@@ -2351,6 +2650,11 @@ impl<'a> Exec<'a> {
     }
 
     fn oblige_index(&mut self, state: &State, span: Span, len: &str, index: &str) {
+        // A position a span index gave was checked against the span, whose
+        // range lies inside the list.
+        if self.span_positions.contains(index) {
+            return;
+        }
         let goal = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
         self.oblige(
             ObligationKind::IndexInRange,
@@ -2377,6 +2681,7 @@ impl<'a> Exec<'a> {
             facts: self.facts.len(),
             site: Some(self.position),
             erased: false,
+            guard: None,
         });
     }
 
@@ -2416,6 +2721,7 @@ impl<'a> Exec<'a> {
                 facts: self.facts.len(),
                 site: Some(site),
                 erased: false,
+                guard: None,
             });
         }
         result
@@ -2430,7 +2736,9 @@ impl<'a> Exec<'a> {
     ) -> Val {
         let target_type = target.and_then(|target| self.place_type(target));
         let fresh_target = |exec: &mut Self| match &target_type {
-            Some(ty) => exec.fresh(ty, target.unwrap_or("value")),
+            Some(ty) => exec.unmodeled(rvalue_name(value), |exec| {
+                exec.fresh(ty, target.unwrap_or("value"))
+            }),
             None => Val::Opaque,
         };
         match value {
@@ -2560,7 +2868,10 @@ impl<'a> Exec<'a> {
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
                 for root in self.captured.clone() {
-                    self.havoc_root(state, &root);
+                    self.unmodeled(
+                        format!("a closure that may change `{root}`, which it captures"),
+                        |exec| exec.havoc_root(state, &root),
+                    );
                 }
                 result
             }
@@ -2813,18 +3124,21 @@ impl<'a> Exec<'a> {
             // was made from, so a type arm and a call on it are decided.
             Rvalue::TraitObject { value, held } => {
                 let inner = self.followed_operand(state, value, IntTy::of(held));
+                self.prove_held_invariant(state, &inner);
                 Val::Held(held.clone(), Box::new(inner))
             }
             Rvalue::TraitObjectHolds { value, ty } => {
                 match self.followed_operand(state, value, None) {
                     Val::Held(held, _) => Val::Bool((held == *ty).to_string()),
-                    _ => fresh_target(self),
+                    // A trait object the function receives may hold any
+                    // type: that is the program's unknown, not a gap.
+                    _ => target.map_or(Val::Opaque, |target| self.fresh_local(target)),
                 }
             }
             Rvalue::TraitObjectTake { value, ty } => {
                 match self.followed_operand(state, value, None) {
                     Val::Held(held, inner) if held == *ty => *inner,
-                    _ => fresh_target(self),
+                    _ => target.map_or(Val::Opaque, |target| self.fresh_local(target)),
                 }
             }
             Rvalue::Try { value, .. } => {
@@ -2906,7 +3220,10 @@ impl<'a> Exec<'a> {
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
-            Some(ty) => exec.fresh(ty, "binary"),
+            Some(ty) => exec.unmodeled(
+                format!("`{}`", crate::sema::binary_operator_symbol(op)),
+                |exec| exec.fresh(ty, "binary"),
+            ),
             None => Val::Opaque,
         };
         let pc = state.pc.clone();
@@ -3120,7 +3437,9 @@ impl<'a> Exec<'a> {
     ) -> Val {
         let target_type = target.and_then(|target| self.place_type(target));
         let fresh_target = |exec: &mut Self| match &target_type {
-            Some(ty) => exec.fresh(ty, target.unwrap_or("call")),
+            Some(ty) => exec.unmodeled(call_name(callee), |exec| {
+                exec.fresh(ty, target.unwrap_or("call"))
+            }),
             None => Val::Opaque,
         };
         match callee {
@@ -3142,13 +3461,19 @@ impl<'a> Exec<'a> {
                 );
                 // An operation the encoding does not model may change its
                 // receiver in any way.
-                if result.is_none() && !runtime_op_is_pure(*op) {
-                    if let Some(place) = receiver_place {
-                        self.havoc_place(state, place);
-                    }
+                if result.is_none() {
+                    return self.unmodeled(call_name(callee), |exec| {
+                        if !runtime_op_is_pure(*op) {
+                            if let Some(place) = receiver_place {
+                                exec.havoc_place(state, place);
+                            }
+                        }
+                        exec.havoc_writebacks(state, args);
+                        fresh_target(exec)
+                    });
                 }
                 self.havoc_writebacks(state, args);
-                result.unwrap_or_else(|| fresh_target(self))
+                result.unwrap_or(Val::Unit)
             }
             CallTarget::Name(name)
                 if self
@@ -3303,6 +3628,7 @@ impl<'a> Exec<'a> {
                     ));
                 }
                 self.contract_override = contract;
+                self.dynamic_call = true;
                 let result = self.user_call(
                     state,
                     &function,
@@ -3311,16 +3637,19 @@ impl<'a> Exec<'a> {
                     target_type.as_ref(),
                     target,
                 );
+                self.dynamic_call = false;
                 self.contract_override = None;
                 result
             }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
-                if let Some(place) = receiver_place {
-                    self.havoc_place(state, place);
-                }
-                self.havoc_writebacks(state, args);
-                fresh_target(self)
+                self.unmodeled(call_name(callee), |exec| {
+                    if let Some(place) = receiver_place {
+                        exec.havoc_place(state, place);
+                    }
+                    exec.havoc_writebacks(state, args);
+                    fresh_target(exec)
+                })
             }
             CallTarget::Value(callee) => match self.followed_operand(state, callee, None) {
                 Val::Contracted(alias) => {
@@ -3352,10 +3681,10 @@ impl<'a> Exec<'a> {
                     }
                     self.user_call(state, &name, None, actuals, target_type.as_ref(), target)
                 }
-                _ => {
-                    self.havoc_writebacks(state, args);
-                    fresh_target(self)
-                }
+                _ => self.unmodeled("a call through a function value", |exec| {
+                    exec.havoc_writebacks(state, args);
+                    fresh_target(exec)
+                }),
             },
             CallTarget::Extern(call) if self.cx.extern_decl(&call.symbol).is_some() => {
                 let decl = self.cx.extern_decl(&call.symbol).expect("checked above");
@@ -3546,7 +3875,8 @@ impl<'a> Exec<'a> {
 
     /// A call of a user function: prove its `requires`, then assume its
     /// `ensures` of a fresh result and fresh values for what it may
-    /// change.
+    /// change. A part of a `mut` argument the callee cannot write keeps
+    /// its value.
     fn user_call(
         &mut self,
         state: &mut State,
@@ -3599,6 +3929,7 @@ impl<'a> Exec<'a> {
             },
         };
         let mut post = pre.clone();
+        let pre_env: BTreeMap<String, Val> = pre.iter().cloned().collect();
         for (param, place) in &post_places {
             let ty = callee
                 .params
@@ -3612,10 +3943,18 @@ impl<'a> Exec<'a> {
                         .find(|local| &local.name == param)
                         .map(|local| local.ty.clone())
                 });
-            let value = match ty {
+            let mut value = match ty {
                 Some(ty) => self.fresh(&ty, param),
                 None => Val::Opaque,
             };
+            // A `mut Span[T]` parameter writes elements of its base list
+            // and keeps the list's length.
+            if let (Val::List { len, .. }, Some((base, ..))) =
+                (&mut value, span_parts(&pre_env, param))
+            {
+                *len = base;
+            }
+            let value = self.framed(name, param, &pre, value);
             if let Some(slot) = post.iter_mut().find(|(name, _)| name == param) {
                 slot.1 = value.clone();
             }
@@ -3623,6 +3962,33 @@ impl<'a> Exec<'a> {
         }
         self.call_ensures(state, name, &pre, &post, &result);
         result
+    }
+
+    /// The value the `mut` parameter `param` of `name` leaves in its
+    /// argument: `fresh` in each part the callee may write, and the value
+    /// passed everywhere else.
+    fn framed(&self, name: &str, param: &str, pre: &[(String, Val)], fresh: Val) -> Val {
+        let passed = pre.iter().find(|(name, _)| name == param);
+        let (false, Some(paths), Some((_, passed))) =
+            (self.dynamic_call, self.cx.written(name, param), passed)
+        else {
+            return fresh;
+        };
+        // A value the encoding does not model has no part to keep.
+        if *passed == Val::Opaque {
+            return fresh;
+        }
+        let mut kept = passed.clone();
+        for path in paths {
+            let segments: Vec<&str> = path.split('.').collect();
+            let part = segments
+                .iter()
+                .try_fold(fresh.clone(), |value, segment| project(&value, segment));
+            if !part.is_some_and(|part| set_in(&mut kept, &segments, part)) {
+                return fresh;
+            }
+        }
+        kept
     }
 
     fn runtime_call(
@@ -3792,7 +4158,11 @@ impl<'a> Exec<'a> {
                         Some(Val::Unit)
                     }
                     ListOp::Reverse | ListOp::Sort | ListOp::Swap => {
-                        let data = self.fresh_store(&elem, "permuted");
+                        let what = format!(
+                            "the order of the elements after `{}`",
+                            op.name().trim_start_matches("__")
+                        );
+                        let data = self.unmodeled(what, |exec| exec.fresh_store(&elem, "permuted"));
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
                         }
@@ -3870,7 +4240,9 @@ impl<'a> Exec<'a> {
                                 let read = scalar_val(format!("(select {values} {k})"), &value);
                                 self.name_scalars(read, hint)
                             }
-                            None => self.fresh(&value, hint),
+                            None => self.unmodeled("the values of this `dict`", |exec| {
+                                exec.fresh(&value, hint)
+                            }),
                         })
                     }
                     DictOp::Get | DictOp::GetStr | DictOp::GetInt64 | DictOp::Remove => {
@@ -3884,7 +4256,9 @@ impl<'a> Exec<'a> {
                                 let read = scalar_val(format!("(select {values} {k})"), &value);
                                 self.name_scalars(read, hint)
                             }
-                            None => self.fresh(&value, hint),
+                            None => self.unmodeled("the values of this `dict`", |exec| {
+                                exec.fresh(&value, hint)
+                            }),
                         };
                         let tag = self.define("Int", "lookup", format!("(ite {present} 0 1)"));
                         if dict_op == DictOp::Remove {
@@ -4099,6 +4473,246 @@ impl<'a> Exec<'a> {
                     _ => None,
                 }
             }
+            RuntimeOp::Span(span_op) => {
+                let Some(Val::List {
+                    len: base, elem, ..
+                }) = receiver
+                else {
+                    return None;
+                };
+                // Every range operand is an `int64` word.
+                let int = |exec: &mut Self, state: &mut State, index: usize| {
+                    scalar_term(&arg(exec, state, index, Some(IntTy::INT64))).map(str::to_string)
+                };
+                match span_op {
+                    SpanOp::Start | SpanOp::Stop => {
+                        // `base[start:end]` inside the outer range, whose
+                        // endpoints count from its end when negative.
+                        let outer_start = int(self, state, 0)?;
+                        let outer_len = int(self, state, 1)?;
+                        let start = int(self, state, 2)?;
+                        let has_start = int(self, state, 3)?;
+                        let end = int(self, state, 4)?;
+                        let has_end = int(self, state, 5)?;
+                        self.assume(&pc, span_in_list(&outer_start, &outer_len, &base));
+                        let low = self.define(
+                            "Int",
+                            "low",
+                            format!(
+                                "(ite (= {has_start} 0) 0 (ite (< {start} 0) (+ {start} {outer_len}) {start}))"
+                            ),
+                        );
+                        let high = self.define(
+                            "Int",
+                            "high",
+                            format!(
+                                "(ite (= {has_end} 0) {outer_len} (ite (< {end} 0) (+ {end} {outer_len}) {end}))"
+                            ),
+                        );
+                        let in_range =
+                            format!("(and (<= 0 {low}) (<= {low} {high}) (<= {high} {outer_len}))");
+                        // The stop is read with the operands the start was
+                        // checked with.
+                        if span_op == SpanOp::Start {
+                            let span = span_of(self, 6);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span range in bounds",
+                                &pc,
+                                Goal::Holds(in_range.clone()),
+                            );
+                        }
+                        self.assume(&pc, in_range);
+                        let bound = if span_op == SpanOp::Start { low } else { high };
+                        Some(Val::Int(
+                            self.define("Int", "bound", format!("(+ {outer_start} {bound})")),
+                            IntTy::INT64,
+                        ))
+                    }
+                    SpanOp::Index => {
+                        let start = int(self, state, 0)?;
+                        let len = int(self, state, 1)?;
+                        let index = int(self, state, 2)?;
+                        self.assume(&pc, span_in_list(&start, &len, &base));
+                        let in_range = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
+                        let span = span_of(self, 3);
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            span,
+                            "span index in range",
+                            &pc,
+                            Goal::Holds(in_range.clone()),
+                        );
+                        self.assume(&pc, in_range);
+                        // The position in the base list. Its name is its
+                        // own, so no other index is taken for it.
+                        let position = self.fresh_const("Int", "position");
+                        self.fact(format!(
+                            "(= {position} (+ {start} (ite (< {index} 0) (+ {index} {len}) {index})))"
+                        ));
+                        self.span_positions.insert(position.clone());
+                        Some(Val::Int(position, IntTy::INT64))
+                    }
+                    // The members that write the base keep or change its
+                    // length as the range they move does. The elements
+                    // they leave are not modeled.
+                    SpanOp::Fill => {
+                        let data = self.fresh_store(&elem, "filled");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: base,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(Val::Unit)
+                    }
+                    SpanOp::Extract => {
+                        let start = int(self, state, 0)?;
+                        let len = int(self, state, 1)?;
+                        self.assume(&pc, span_in_list(&start, &len, &base));
+                        let rest = self.define("Int", "len", format!("(- {base} {len})"));
+                        let taken = Val::List {
+                            len,
+                            data: self.fresh_store(&elem, "taken"),
+                            elem: elem.clone(),
+                        };
+                        let data = self.fresh_store(&elem, "rest");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: rest,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(taken)
+                    }
+                    SpanOp::Restore => {
+                        let whole = self.fresh_const("Int", "len");
+                        self.fact(format!("(and (<= 0 {whole}) (<= {whole} {}))", i64::MAX));
+                        if let Val::List { len: count, .. } = arg(self, state, 1, None) {
+                            self.assume(&pc, format!("(= {whole} (+ {base} {count}))"));
+                        }
+                        let data = self.fresh_store(&elem, "restored");
+                        if let Some(place) = receiver_place {
+                            let value = Val::List {
+                                len: whole,
+                                data,
+                                elem,
+                            };
+                            self.write_place(state, place, value);
+                        }
+                        Some(Val::Unit)
+                    }
+                    // A search or comparison reads elements the span's
+                    // range picks; its result is not modeled.
+                    _ => None,
+                }
+            }
+            RuntimeOp::Array(array_op) => {
+                let parts = receiver.as_ref().and_then(array_parts);
+                // The coordinates of an element access, and where its
+                // source position starts among the arguments.
+                let (coordinates, position) = match array_op {
+                    ArrayOp::Len => return parts.map(|(len, ..)| Val::Int(len, IntTy::INT64)),
+                    ArrayOp::Shape => return parts.map(|(_, rank, dims)| array_shape(rank, dims)),
+                    // `array[c]` or `array[c0, c1, ...]`, as one
+                    // coordinate or a tuple of them.
+                    ArrayOp::Index | ArrayOp::SetIndex => {
+                        let items = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Tuple(items) => items,
+                            single => vec![single],
+                        };
+                        let position = if array_op == ArrayOp::Index { 1 } else { 2 };
+                        (Some(items), position)
+                    }
+                    // The coordinates follow their count, and unused
+                    // words pad them.
+                    ArrayOp::ReadAt | ArrayOp::WriteAt => {
+                        let count = scalar_term(&arg(self, state, 0, None))
+                            .and_then(|count| count.parse::<usize>().ok());
+                        let items = count.map(|count| {
+                            (1..=count)
+                                .map(|index| arg(self, state, index, Some(IntTy::INT64)))
+                                .collect::<Vec<_>>()
+                        });
+                        let position = if array_op == ArrayOp::ReadAt { 1 } else { 2 };
+                        (items, position + ARRAY_COORDINATE_WORDS)
+                    }
+                    // A member that stops the program on a coordinate or a
+                    // slice bound outside the Array.
+                    ArrayOp::Set
+                    | ArrayOp::Slice
+                    | ArrayOp::Select
+                    | ArrayOp::SelectWords
+                    | ArrayOp::Assign
+                    | ArrayOp::AssignWords
+                    | ArrayOp::UpdateWords => (None, args.len()),
+                    _ => return None,
+                };
+                // Every coordinate is an `int64` word.
+                let terms = coordinates.and_then(|items| {
+                    items
+                        .iter()
+                        .map(|item| scalar_term(item).map(str::to_string))
+                        .collect::<Option<Vec<String>>>()
+                });
+                // One coordinate for each axis, each inside its dimension
+                // and counted from its end when negative.
+                let in_range = terms.zip(parts).map(|(terms, (_, rank, dims))| {
+                    let mut parts = vec![format!("(= {rank} {})", terms.len())];
+                    for (axis, term) in terms.iter().enumerate() {
+                        let dim = format!("(select {dims} {axis})");
+                        // No dimension of an Array is negative.
+                        self.assume(&pc, format!("(=> (< {axis} {rank}) (<= 0 {dim}))"));
+                        parts.push(format!("(<= (- {dim}) {term})"));
+                        parts.push(format!("(< {term} {dim})"));
+                    }
+                    conjoin(&parts)
+                });
+                let span = span_of(self, position);
+                let goal = match &in_range {
+                    Some(term) => Goal::Holds(term.clone()),
+                    None => Goal::Unsupported(
+                        "the coordinates and slice bounds of this Array member are not modeled yet"
+                            .into(),
+                    ),
+                };
+                self.oblige(
+                    ObligationKind::IndexInRange,
+                    span,
+                    "array index in range, with one coordinate for each axis",
+                    &pc,
+                    goal,
+                );
+                // Past the access, its check held.
+                if let Some(term) = in_range {
+                    self.assume(&pc, term);
+                }
+                None
+            }
+            RuntimeOp::Function(
+                function @ (FunctionOp::ArrayZeros
+                | FunctionOp::ArrayFull
+                | FunctionOp::ArrayFromList),
+            ) => {
+                // The constructor stops the program on a shape with no
+                // axis or a negative dimension, and `from_list` on a list
+                // of another length.
+                let from_list = function == FunctionOp::ArrayFromList;
+                let shape = arg(self, state, usize::from(from_list), None);
+                let len = self.fresh_const("Int", "array_len");
+                self.fact(format!("(<= {len} {})", i64::MAX));
+                if from_list {
+                    if let Val::List { len: count, .. } = arg(self, state, 0, None) {
+                        self.assume(&pc, format!("(= {len} {count})"));
+                    }
+                }
+                Some(self.array_value(&pc, len, shape))
+            }
             RuntimeOp::Function(
                 function @ (FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max),
             ) => {
@@ -4203,10 +4817,40 @@ impl<'a> Exec<'a> {
 }
 
 /// Whether a runtime op leaves its receiver as it was.
+/// What a call the encoding does not model is called, for a report.
+fn call_name(callee: &CallTarget) -> String {
+    match callee {
+        CallTarget::Runtime { op, .. } => format!("`{}`", op.name().trim_start_matches("__")),
+        CallTarget::Name(name) => format!("`{}`", crate::mir::public_function_name(name)),
+        CallTarget::Member { field, .. } | CallTarget::TraitMember { field, .. } => {
+            format!("a call of `{field}` on a value the verifier does not follow")
+        }
+        // Each of its fallbacks names itself.
+        CallTarget::Value(_) => "a call through a function value".to_string(),
+        CallTarget::Extern(call) => format!("`{}`", call.symbol),
+    }
+}
+
+/// What a step the encoding does not model is called, for a report.
+fn rvalue_name(value: &Rvalue) -> &'static str {
+    match value {
+        Rvalue::FormatString { .. } => "an f-string",
+        Rvalue::Closure { .. } => "a closure",
+        Rvalue::StartTask { recover: true, .. } => "`control.recover`",
+        Rvalue::StartTask { .. } => "a task started through a function value",
+        Rvalue::Cast { .. } => "a conversion",
+        _ => "a value",
+    }
+}
+
 fn runtime_op_is_pure(op: RuntimeOp) -> bool {
     match op {
         RuntimeOp::List(op) => list_op_is_pure(op),
         RuntimeOp::Str(_) | RuntimeOp::Scalar(_) | RuntimeOp::Value(_) => true,
+        // No Array member changes its receiver's shape or element count,
+        // which is all the encoding models of an Array.
+        RuntimeOp::Array(_) => true,
+        RuntimeOp::Span(op) => !matches!(op, SpanOp::Extract | SpanOp::Restore | SpanOp::Fill),
         RuntimeOp::Dict(op) => matches!(
             op,
             DictOp::Len
@@ -4399,8 +5043,126 @@ fn join_path(left: &str, right: &str) -> String {
     }
 }
 
+/// The class name that marks the record an `Array[T]` is modeled as: its
+/// element count `len`, and its `shape` as a list of dimensions. Elements
+/// are not modeled. No class can have this name.
+const ARRAY_RECORD: &str = "Array[T]";
+
+fn shape_type() -> Type {
+    Type::Named("list".to_string(), vec![Type::named("int64")])
+}
+
+/// The element count, the rank, and the dimensions as an `(Array Int Int)`
+/// of an Array value.
+pub(super) fn array_parts(value: &Val) -> Option<(String, String, String)> {
+    if let Val::Record(class, fields) = value {
+        if let (
+            ARRAY_RECORD,
+            [(_, Val::Int(len, _)), (
+                _,
+                Val::List {
+                    len: rank,
+                    data: Some(Store::Leaf(dims, _)),
+                    ..
+                },
+            )],
+        ) = (class.as_str(), fields.as_slice())
+        {
+            return Some((len.clone(), rank.clone(), dims.clone()));
+        }
+    }
+    None
+}
+
+/// The shape of an Array value, as the list `shape()` gives.
+pub(super) fn array_shape(rank: String, dims: String) -> Val {
+    Val::List {
+        len: rank,
+        data: Some(Store::Leaf(dims, "Int")),
+        elem: Type::named("int64"),
+    }
+}
+
+/// The hidden parameters that carry a `Span[T]` parameter's range: its
+/// start in the base list, and its length (see `mir_spans`).
+const SPAN_START_PREFIX: &str = "__aura_span_start_";
+const SPAN_LEN_PREFIX: &str = "__aura_span_len_";
+
+pub(super) fn span_range_names(param: &str) -> [String; 2] {
+    [
+        format!("{SPAN_START_PREFIX}{param}"),
+        format!("{SPAN_LEN_PREFIX}{param}"),
+    ]
+}
+
+/// The base list length, start, and length of the span parameter `param`,
+/// when `env` holds one.
+fn span_parts(env: &BTreeMap<String, Val>, param: &str) -> Option<(String, String, String)> {
+    let [start, len] = span_range_names(param);
+    match (env.get(param), env.get(&start), env.get(&len)) {
+        (Some(Val::List { len: base, .. }), Some(Val::Int(start, _)), Some(Val::Int(len, _))) => {
+            Some((base.clone(), start.clone(), len.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// Binds each span parameter in `env` to the list a contract reads it as:
+/// the span's own length, and its elements read from the base list.
+pub(super) fn bind_span_views(env: &mut BTreeMap<String, Val>) {
+    let params: Vec<String> = env.keys().cloned().collect();
+    for param in params {
+        let Some((_, start, len)) = span_parts(env, &param) else {
+            continue;
+        };
+        if let Some(Val::List {
+            len: base, data, ..
+        }) = env.get_mut(&param)
+        {
+            *base = len;
+            *data = data
+                .take()
+                .map(|store| Store::Shifted(Box::new(store), start));
+        }
+    }
+}
+
+/// A span range lies inside its base list.
+fn span_in_list(start: &str, len: &str, base: &str) -> String {
+    format!("(and (<= 0 {start}) (<= 0 {len}) (<= (+ {start} {len}) {base}))")
+}
+
 pub(super) fn root_of(place: &str) -> &str {
     place.split('.').next().unwrap_or(place)
+}
+
+/// The constants an SMT term names, in order: every generated constant
+/// has a `!` in its name. A variable a quantifier binds is not one, and
+/// neither is text inside a string literal.
+fn symbols(term: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut in_string = false;
+    let mut start = None;
+    for (index, ch) in term.char_indices() {
+        if in_string {
+            in_string = ch != '"';
+            continue;
+        }
+        let ends = ch == '"' || ch == '(' || ch == ')' || ch.is_whitespace();
+        if !ends {
+            start.get_or_insert(index);
+            continue;
+        }
+        if let Some(from) = start.take() {
+            names.push(&term[from..index]);
+        }
+        in_string = ch == '"';
+    }
+    if let Some(from) = start {
+        names.push(&term[from..]);
+    }
+    names.retain(|name| name.contains('!') && !name.starts_with("k!q"));
+    names
 }
 
 fn is_atom(term: &str) -> bool {
@@ -4474,7 +5236,7 @@ fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
 }
 
 /// The locals a closure made in `function` captures by reference.
-fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
+pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
     let mut captured = BTreeSet::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
@@ -4662,7 +5424,7 @@ fn collect_writes(
     }
 }
 
-fn rvalue_writes(value: &Rvalue, place: &mut impl FnMut(&str)) {
+pub(super) fn rvalue_writes(value: &Rvalue, place: &mut impl FnMut(&str)) {
     let args = match value {
         Rvalue::Call { callee, args, .. } => {
             match callee {

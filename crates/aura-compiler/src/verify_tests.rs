@@ -1139,7 +1139,7 @@ def main():
     print(f2([3], ["a"], "A", P(x=1), (1, 2)))
 "#,
         &[
-            "22 assert failed",
+            "22 assert unsupported",
             "34 requires unsupported",
             "35 requires unsupported",
             "35 requires unsupported",
@@ -3066,7 +3066,11 @@ def main():
     ) else {
         return;
     };
-    assert_eq!(open_checks(&report), ["25 ensures failed"], "{report:#?}");
+    assert_eq!(
+        open_checks(&report),
+        ["25 ensures unsupported"],
+        "{report:#?}"
+    );
 }
 
 #[test]
