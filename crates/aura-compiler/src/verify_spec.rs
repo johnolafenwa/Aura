@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use super::exec::{
-    conjoin, key_sort, lit, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
-    State, Val,
+    array_parts, array_shape, bind_span_views, conjoin, key_sort, lit, not, scalar_val, smt_string,
+    span_range_names, structural_eq, Exec, FloatTy, Goal, IntTy, State, Val,
 };
 use super::ObligationKind;
 use crate::ast::{
@@ -44,7 +44,8 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = pre.iter().cloned().collect();
+        let mut env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut env);
         let display = public_name(callee);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
@@ -208,12 +209,14 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let pre_env: Env = pre.iter().cloned().collect();
+        let mut pre_env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut pre_env);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
             match clause.kind {
                 ContractKind::Ensures => {
                     let mut env: Env = post.iter().cloned().collect();
+                    bind_span_views(&mut env);
                     env.insert("result".to_string(), result.clone());
                     let mut olds_ok = true;
                     let prev_proving = self.proving;
@@ -442,7 +445,8 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = state.env.clone();
+        let mut env: Env = state.env.clone();
+        bind_span_views(&mut env);
         for clause in &decl.contracts {
             if clause.kind == ContractKind::Requires {
                 self.assume_clause_in(state, clause, &env, decl_module);
@@ -776,6 +780,13 @@ impl Exec<'_> {
                     }
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let Some((len, rank, dims)) = array_parts(&receiver) {
+                        return match field.as_str() {
+                            "len" => Ok(Val::Int(len, IntTy::INT64)),
+                            "shape" => Ok(array_shape(rank, dims)),
+                            _ => Err(format!("`Array.{field}` is not modeled in contracts yet")),
+                        };
+                    }
                     if let (Val::List { .. }, "contains", [arg]) =
                         (&receiver, field.as_str(), args.as_slice())
                     {
@@ -829,6 +840,11 @@ impl Exec<'_> {
                 let mut values = Vec::new();
                 for arg in args {
                     values.push(self.spec(&arg.value, env, wd, depth)?);
+                }
+                if let ("len", [value]) = (name.as_str(), values.as_slice()) {
+                    if let Some((len, ..)) = array_parts(value) {
+                        return Ok(Val::Int(len, IntTy::INT64));
+                    }
                 }
                 match (name.as_str(), values.as_slice()) {
                     (
@@ -1537,9 +1553,22 @@ impl<'a> Exec<'a> {
                 // A name the clause binds itself, or a function.
                 continue;
             }
+            if state.is_view(&local) {
+                // A view is left to the lowered code: the local of a span
+                // made here names its whole base list, not its range.
+                continue;
+            }
             let value = self.read_place(state, &local);
+            // A span parameter is read with its range.
+            for hidden in span_range_names(&local) {
+                if self.place_type(&hidden).is_some() {
+                    let value = self.read_place(state, &hidden);
+                    env.insert(hidden, value);
+                }
+            }
             env.insert(name, value);
         }
+        bind_span_views(&mut env);
         env
     }
 }

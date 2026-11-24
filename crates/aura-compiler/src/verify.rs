@@ -1568,6 +1568,9 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "verify_tests_spans.rs"]
+mod tests_spans;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
