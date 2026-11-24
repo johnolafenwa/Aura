@@ -962,10 +962,22 @@ struct FunctionIr {
     /// settled, by the select's result, so a later call for blocks that
     /// were already copied settles those copies too.
     select_copies: HashMap<Val, Vec<u32>>,
+    /// The select each copy of a select in `select_copies` was made from,
+    /// through any number of copies.
+    select_roots: HashMap<Val, Val>,
     /// The value each select `version_blocks` settled keeps in a copy
     /// that runs while its condition holds, by the select's result, so a
     /// later copy of the same blocks for a stronger condition keeps it too.
     settled_selects: HashMap<Val, Val>,
+    /// The copies `version_blocks` made of each block, and the blocks it
+    /// added beside a block that enters copied blocks. A later copy of the
+    /// block takes them along.
+    block_copies: HashMap<u32, Vec<u32>>,
+    /// The copies made since `seal_versions`, which the next call for the
+    /// same blocks leaves alone.
+    pending_copies: Vec<(u32, u32)>,
+    /// How many instructions the body may grow to through copies.
+    version_budget: Option<usize>,
     current: Option<u32>,
     params_block: Option<u32>,
     /// The source position of the instructions built from here on.
@@ -1099,7 +1111,11 @@ impl FunctionIr {
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
             select_copies: HashMap::new(),
+            select_roots: HashMap::new(),
             settled_selects: HashMap::new(),
+            block_copies: HashMap::new(),
+            pending_copies: Vec::new(),
+            version_budget: None,
             current: None,
             params_block: None,
             location: None,
@@ -1200,7 +1216,18 @@ impl FunctionIr {
         // defined before the blocks that use it. A block may be created
         // long before it gets its first instruction, so the order of the
         // block numbers is not that order.
-        let set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        let mut set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        // The copies earlier calls made of these blocks for other
+        // conditions are copied with them, so the copy keeps every version
+        // of a loop inside it or across it.
+        let mut work = set.iter().copied().collect::<Vec<_>>();
+        while let Some(block) = work.pop() {
+            for copy in self.block_copies.get(&block).into_iter().flatten() {
+                if set.insert(*copy) {
+                    work.push(*copy);
+                }
+            }
+        }
         let members = self
             .layout
             .iter()
@@ -1253,7 +1280,20 @@ impl FunctionIr {
                     .last()
                     .is_some_and(|inst| self.pick(&self.insts[*inst as usize].op, &set).is_some())
         });
-        if members.is_empty() || entries.is_empty() || escapes || !enters {
+        // A body grows to a few times its size at most.
+        let size = members
+            .iter()
+            .map(|block| self.blocks[*block as usize].insts.len())
+            .sum::<usize>();
+        let budget = *self
+            .version_budget
+            .get_or_insert(self.insts.len() * 3 + 4096);
+        if members.is_empty()
+            || entries.is_empty()
+            || escapes
+            || !enters
+            || self.insts.len() + size > budget
+        {
             return false;
         }
         let mut block_map = HashMap::new();
@@ -1277,6 +1317,7 @@ impl FunctionIr {
             }
             self.blocks[copy as usize] = entry;
             block_map.insert(*block, copy);
+            self.pending_copies.push((*block, copy));
         }
         for block in &members {
             for inst in self.blocks[*block as usize].insts.clone() {
@@ -1314,7 +1355,9 @@ impl FunctionIr {
                     self.value_defs[result.0 as usize] = Some(index);
                 }
                 if let (Op::Select(..), Some(result)) = (&op, original.results.first()) {
-                    self.select_copies.entry(*result).or_default().push(index);
+                    let root = self.select_roots.get(result).copied().unwrap_or(*result);
+                    self.select_copies.entry(root).or_default().push(index);
+                    self.select_roots.insert(results[0], root);
                 }
                 self.insts.push(InstIr {
                     op,
@@ -1349,7 +1392,7 @@ impl FunctionIr {
                 self.blocks[pad.0 as usize].insts.push(last);
             }
             let location = self.insts[last as usize].location;
-            let (copy, copy_args) = self.place_pick(pick, &block_map, &value_map, location);
+            let (copy, copy_args) = self.place_pick(pick, pad.0, &block_map, &value_map, location);
             self.blocks[copy.0 as usize].predecessors.push(pad.0);
             if let Op::Jump(original, args) = earlier {
                 self.insts[last as usize].op = Op::Brif(condition, copy, copy_args, original, args);
@@ -1370,6 +1413,7 @@ impl FunctionIr {
                 ..BlockIr::default()
             });
             self.layout.push(fallback);
+            self.block_copies.entry(pad.0).or_default().push(fallback);
             self.blocks[pad.0 as usize].insts.pop();
             let branch = self.insts.len() as u32;
             self.insts.push(InstIr {
@@ -1385,9 +1429,9 @@ impl FunctionIr {
 
     /// The versions of the blocks of `set` that `op`, the branch an entry
     /// pad ends in, picks among, or `None` when it does not enter them.
-    /// A copy an earlier call made is one for a weaker condition of the
-    /// same blocks, which a stronger copy replaces where its own condition
-    /// holds, so the pick leaves it out.
+    /// A copy made since `seal_versions` is one for a weaker condition of
+    /// the same blocks, which a stronger copy replaces where its own
+    /// condition holds, so the pick leaves it out.
     fn pick(&self, op: &Op, set: &HashSet<u32>) -> Option<Pick> {
         match op {
             Op::Jump(target, args) => self.pick_target(*target, args, set),
@@ -1413,10 +1457,11 @@ impl FunctionIr {
     }
 
     /// Builds the branches of `pick` among the copies `block_map` names,
-    /// and returns where they start.
+    /// in blocks that belong to entry `pad`, and returns where they start.
     fn place_pick(
         &mut self,
         pick: Pick,
+        pad: u32,
         block_map: &HashMap<u32, u32>,
         value_map: &HashMap<Val, Val>,
         location: Option<(u32, u32)>,
@@ -1429,9 +1474,9 @@ impl FunctionIr {
             ),
             Pick::Branch(condition, then, otherwise) => {
                 let (then_block, then_args) =
-                    self.place_pick(*then, block_map, value_map, location);
+                    self.place_pick(*then, pad, block_map, value_map, location);
                 let (else_block, else_args) =
-                    self.place_pick(*otherwise, block_map, value_map, location);
+                    self.place_pick(*otherwise, pad, block_map, value_map, location);
                 let block = self.blocks.len() as u32;
                 let inst = self.insts.len() as u32;
                 self.insts.push(InstIr {
@@ -1458,8 +1503,16 @@ impl FunctionIr {
                 self.blocks[then_block.0 as usize].predecessors.push(block);
                 self.blocks[else_block.0 as usize].predecessors.push(block);
                 self.layout.push(block);
+                self.block_copies.entry(pad).or_default().push(block);
                 (Blk(block), Vec::new())
             }
+        }
+    }
+
+    /// See [`FunctionBackend::seal_versions`].
+    fn seal_versions(&mut self) {
+        for (block, copy) in std::mem::take(&mut self.pending_copies) {
+            self.block_copies.entry(block).or_default().push(copy);
         }
     }
 
@@ -1588,6 +1641,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         entries: &[crate::native_backend::VersionEntry],
     ) -> bool {
         self.ir.version_blocks(blocks, selects, entries)
+    }
+
+    fn seal_versions(&mut self) {
+        self.ir.seal_versions();
     }
 
     fn seal_block(&mut self, block: Blk) {

@@ -1390,22 +1390,24 @@ impl FunctionCompiler<'_> {
     }
 
     /// Gives each loop that reads a view once its copy for while the view
-    /// qualifies. A loop that shares blocks with one already copied keeps
-    /// reading its views from memory.
+    /// qualifies. Loops inside others come first, so the copy of a loop
+    /// around them, or across them, holds each of their versions.
     pub(super) fn version_snapshot_loops(&mut self) {
-        let mut copied = HashSet::<Blk>::new();
-        let mut done = vec![false; self.list_snapshots.len()];
+        // The loops with the same blocks, which one copy serves.
+        let mut groups = Vec::<Vec<usize>>::new();
         for index in 0..self.list_snapshots.len() {
-            if done[index] {
-                continue;
+            let blocks = &self.list_snapshots[index].region.blocks;
+            match groups
+                .iter_mut()
+                .find(|group| self.list_snapshots[group[0]].region.blocks == *blocks)
+            {
+                Some(group) => group.push(index),
+                None => groups.push(vec![index]),
             }
-            // The loops with the same blocks, which one copy serves.
-            let group = (index..self.list_snapshots.len())
-                .filter(|other| {
-                    self.list_snapshots[*other].region.blocks
-                        == self.list_snapshots[index].region.blocks
-                })
-                .collect::<Vec<_>>();
+        }
+        groups.sort_by_key(|group| self.list_snapshots[group[0]].region.blocks.len());
+        for group in groups {
+            let index = group[0];
             // A loop over one list whose operations all check for one
             // access code runs its copy only for that code, which the copy
             // then knows. A loop with scalar element accesses checked the
@@ -1428,7 +1430,6 @@ impl FunctionCompiler<'_> {
             let mut blocks = Vec::new();
             let mut selects = Vec::new();
             for member in &group {
-                done[*member] = true;
                 let known = code_of(&self.list_snapshots[*member]).or(expected);
                 blocks.extend(self.list_snapshots[*member].ir_blocks.iter().copied());
                 selects.extend(
@@ -1438,23 +1439,18 @@ impl FunctionCompiler<'_> {
                         .map(|(select, access)| (*select, known.filter(|_| *access))),
                 );
             }
-            let overlaps = blocks.iter().any(|block| copied.contains(block));
-            let entries = if overlaps {
-                Vec::new()
-            } else {
-                self.list_snapshots[index]
-                    .entries
-                    .iter()
-                    .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
-                    .collect()
-            };
+            let entries = self.list_snapshots[index]
+                .entries
+                .iter()
+                .map(|(pad, flag, access)| (*pad, *flag, expected.map(|code| (*access, code))))
+                .collect::<Vec<_>>();
             // A loop that reads lists of scalars and other lists first gets
             // a copy for while the lists of scalars qualify, whose view is
             // the cheapest to keep and the likeliest to qualify. The copy
             // for while every list qualifies is then tried first where the
             // loop is entered, so a list that does not qualify costs the
             // others nothing.
-            if !overlaps && !self.list_snapshots[index].scalar_entries.is_empty() {
+            if !self.list_snapshots[index].scalar_entries.is_empty() {
                 let scalar_selects = group
                     .iter()
                     .filter(|member| self.list_snapshots[**member].scalar_element().is_some())
@@ -1474,9 +1470,8 @@ impl FunctionCompiler<'_> {
                 self.builder
                     .version_blocks(&blocks, &scalar_selects, &scalar_entries);
             }
-            if self.builder.version_blocks(&blocks, &selects, &entries) {
-                copied.extend(blocks);
-            }
+            self.builder.version_blocks(&blocks, &selects, &entries);
+            self.builder.seal_versions();
         }
     }
 }

@@ -722,14 +722,20 @@ pub(crate) trait FunctionBackend {
     /// or the constant given with it, and `blocks` its false one. Nothing is
     /// copied, and
     /// every select keeps its false value, when a block outside `blocks`
-    /// uses a value defined in them, or `entries` is empty; the result
-    /// says whether the copy was made.
+    /// uses a value defined in them, `entries` is empty, or the copy would
+    /// grow the body past a few times its size; the result says whether
+    /// the copy was made.
     fn version_blocks(
         &mut self,
         blocks: &[Blk],
         selects: &[(Val, Option<i64>)],
         entries: &[VersionEntry],
     ) -> bool;
+    /// Ends the calls of `version_blocks` for one set of blocks. A later
+    /// call for blocks that share some of them copies the copies made up
+    /// to here along with them, so each version of a loop inside another,
+    /// or across another, stays a version inside the other's copy.
+    fn seal_versions(&mut self);
     fn switch_to_block(&mut self, block: Blk);
     /// Declares that every branch to `block` is built.
     fn seal_block(&mut self, block: Blk);

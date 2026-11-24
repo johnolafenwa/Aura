@@ -1,5 +1,6 @@
-# A loop over lists of scalars and other lists gets a copy for while the
-# lists of scalars qualify, and one for while every list does.
+# Loops inside loops, and loops whose lists leave out different blocks,
+# each read their lists' views once where they are entered. The copy of
+# a loop around another, or across another, holds each version of it.
 
 class Point:
     x: int64
@@ -23,6 +24,30 @@ def recompute(values: mut list[int64], dirty: list[int64], is_formula: list[bool
                 recomputed += values[cell] % 3
     return recomputed
 
+# An inner loop over one list inside an outer loop over another. The
+# outer loop grows the inner loop's list, so only the inner loop reads
+# that list's view once.
+def nested(rows: list[int64], cols: mut list[float64], n: int64) -> float64:
+    mut total = 0.0
+    for i in range(n):
+        total += rows[i] as float64
+        for j in range(cols.len()):
+            total += cols[j] * (i as float64) + (rows[j % rows.len()] as float64)
+        cols.append(0.5)
+    return total
+
+# Three loops deep, each over its own list, the innermost over the list
+# of the outermost too.
+def deep(a: list[int64], b: mut list[int64], c: mut list[int64]) -> int64:
+    mut total = 0
+    for i in range(a.len()):
+        for j in range(b.len()):
+            for k in range(c.len()):
+                total += a[i] * b[j] + c[k] - a[(i + k) % a.len()]
+            c.append(j)
+        b.append(i)
+    return total
+
 # A loop over a list of scalars and a list of records.
 def mixed(xs: list[int64], ps: list[Point]) -> int64:
     mut total = 0
@@ -38,6 +63,18 @@ def main():
     print(recompute(values, dirty, is_formula, order, 3))
     print(values)
     print(recompute(values, dirty, is_formula, [], 2))
+    mut cols = [0.5, 1.5]
+    print(nested([1, 2, 3], cols, 3))
+    print(cols)
+    mut none: list[float64] = []
+    print(nested([1, 2, 3], none, 2))
+    mut b = [4, 5]
+    mut c = [6, 7, 8, 9]
+    print(deep([1, 2, 3], b, c))
+    print(c.len())
+    mut empty: list[int64] = []
+    mut one = [6]
+    print(deep([1], empty, one))
     ps = [Point(x=1, y=2), Point(x=3, y=4), Point(x=5, y=6)]
     print(mixed([2, 4, 6], ps))
     print(mixed([], ps))
