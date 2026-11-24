@@ -1037,6 +1037,7 @@ fn package_resolver_reports_graph_limit_and_workspace_lookup_edges() {
         resolver.packages.insert(
             name.clone(),
             PackageSource {
+                cfg: BTreeMap::new(),
                 name,
                 version: "0.1.0".to_string(),
                 allow_ffi: false,
@@ -2299,6 +2300,7 @@ fn package_unix_cache_helpers_reject_symlinked_manifest_and_missing_dirs() {
 #[test]
 fn dependency_paths_skip_revisited_packages_and_backtrack_dead_ends() {
     let source = |name: &str, dependencies: &[&str]| PackageSource {
+        cfg: BTreeMap::new(),
         name: name.to_string(),
         version: "0.1.0".to_string(),
         allow_ffi: false,
@@ -2804,4 +2806,97 @@ library_paths = ["escaped-lib"]
         "unexpected error: {}",
         sym_err.message
     );
+}
+
+#[test]
+fn build_cfg_reads_entry_defaults_and_validates_names_and_values() {
+    use crate::BuildConfig;
+    let temp = TempDir::new("aura-package-build-cfg");
+    let root = write_package(
+        &temp,
+        "demo",
+        "demo",
+        "[build.cfg]\nplatform = 'portable'\nlogging = false\n",
+    );
+    let path = root.join("src/main.au");
+    let manifest = canonical_manifest_path(&temp, "demo");
+    let (config, reads) = crate::with_source_reads(|| BuildConfig::for_path(&path).unwrap());
+    assert!(reads.contains(&manifest));
+    assert_eq!(config.cfg["logging"], "false");
+    assert_eq!(config.cfg["platform"], "portable");
+
+    write_package(&temp, "demo", "demo", "[build]\ncfg = false");
+    assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+    for bad in ["123", "[]", "{ x = true }"] {
+        write_package(
+            &temp,
+            "demo",
+            "demo",
+            &format!("[build.cfg]\nplatform = {bad}\n"),
+        );
+        assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+        assert_eq!(
+            PackageGraph::discover_for_entry(&path).unwrap_err().code,
+            "AU2070"
+        );
+    }
+    write_package(&temp, "demo", "demo", "[build.cfg]\n'bad-name' = true\n");
+    assert_eq!(BuildConfig::for_path(&path).unwrap_err().code, "AU2070");
+    temp.write("Aura.toml", "[workspace]\nmembers = ['demo']\n");
+    assert!(BuildConfig::for_path(&temp.path.join("other.au"))
+        .unwrap()
+        .cfg
+        .is_empty());
+}
+
+#[test]
+fn build_cfg_uses_the_entry_packages_selection_for_dependencies() {
+    let temp = TempDir::new("aura-dependency-build-cfg");
+    write_package(
+        &temp,
+        "app",
+        "app",
+        "[build.cfg]\nboard = 'pico'\n[dependencies]\nio_driver = { path = '../driver' }",
+    );
+    write_package(&temp, "driver", "io_driver", "[build.cfg]\nboard = 'pc'\n");
+    temp.write(
+        "driver/src/lib.au",
+        "import build\npublic def board() -> str:\n    return build.cfg[\"board\"].clone()\n",
+    );
+    let main = temp.write(
+        "app/src/main.au",
+        "from io_driver.lib import board\ndef main():\n    print(board())\n",
+    );
+    assert_eq!(crate::run_path(&main).unwrap().stdout, "pico\n");
+    let mut override_config = crate::BuildConfig::default();
+    override_config.apply_option("board=pc").unwrap();
+    crate::with_build_config(override_config, || {
+        assert_eq!(crate::run_path(&main).unwrap().stdout, "pc\n");
+    });
+}
+
+#[test]
+fn build_cfg_cache_material_is_order_independent_and_separates_delimiters() {
+    use crate::BuildConfig;
+    let mut a = BuildConfig::default();
+    let mut b = BuildConfig::default();
+    for flag in ["a=:b", "x", "_"] {
+        a.apply_option(flag).unwrap();
+    }
+    for flag in ["_", "x=true", "a=:b"] {
+        b.apply_option(flag).unwrap();
+    }
+    assert_eq!(a.cache_key_material(), b.cache_key_material());
+    for bad in ["", "a-b", "3", "é", " space", "=x"] {
+        assert_eq!(a.apply_option(bad).unwrap_err().code, "AU2070");
+    }
+    b.apply_option("a=b:").unwrap();
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.target.push_str("-different");
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.debug = !b.debug;
+    b.release = !b.release;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
 }

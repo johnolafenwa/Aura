@@ -2452,7 +2452,10 @@ fn build_module_exposes_the_compilation_target_and_flags() {
         let output = crate::run_source(
             "import build\nfrom build import pointer_width as bits\ndef main():\n    print(build.os)\n    print(build.arch)\n    print(bits)\n    print(build.endianness)\n    print(build.freestanding)\n    print(build.hosted)\n    print(build.debug)\n    print(build.release)\n    print(build.cfg[\"driver\"])\n",
         ).unwrap();
-        assert_eq!(output.stdout, "none\nriscv64\n64\nlittle\ntrue\nfalse\nfalse\ntrue\nspi\n");
+        assert_eq!(
+            output.stdout,
+            "none\nriscv64\n64\nlittle\ntrue\nfalse\nfalse\ntrue\nspi\n"
+        );
     });
     assert_eq!(current_build_config(), previous);
 }

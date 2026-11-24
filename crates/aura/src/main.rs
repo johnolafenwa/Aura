@@ -1,3 +1,5 @@
+mod build_options;
+
 use std::fs;
 use std::io::Write;
 use std::io::{self, BufRead, Read};
@@ -53,6 +55,19 @@ fn main() {
     {
         print_command_usage_and_exit(&command);
     }
+    let mut config = aura_compiler::current_build_config();
+    let args = if matches!(command.as_str(), "build" | "run" | "check" | "test") {
+        build_options::take_cfg(rest.clone(), &mut config)
+            .unwrap_or_else(|error| {
+                let (format, _) = parse_diagnostic_format(rest);
+                emit_diagnostic(format, "<command line>", "", &error);
+                process::exit(2);
+            })
+            .into_iter()
+    } else {
+        args
+    };
+    let _config = config.enter();
     match command.as_str() {
         "help" | "--help" | "-h" => print_usage_and_exit(0),
         "version" | "--version" | "-V" => print_version_and_exit(),
@@ -75,6 +90,7 @@ fn main() {
                 .filter(|arg| arg != "--freestanding")
                 .collect::<Vec<_>>();
             let input = read_input(&mut input_args.into_iter());
+            let _target = freestanding.then(build_options::bare_host_scope);
             if freestanding {
                 report_freestanding_problems(&input, diagnostic_format);
             }
@@ -107,6 +123,8 @@ fn main() {
             let input_args = apply_target_cpu(input_args);
             let (run_backend, input_args) = parse_run_backend(input_args);
             let input = read_input(&mut input_args.into_iter());
+            let _package = (run_backend != RunBackend::Mir)
+                .then(|| build_options::package_scope(Path::new(&input.path), diagnostic_format));
             let mut json_native_fallback = None;
             if run_backend != RunBackend::Mir {
                 let mut native_progress = Vec::new();
@@ -234,6 +252,10 @@ fn main() {
             let remaining = apply_target_cpu(remaining);
             let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
+            let _target = build_options::target_scope(
+                aura_compiler::hosted_target().map(|target| target.name()),
+                debug,
+            );
             // A debug build keeps every check.
             let result = if remove_proved_checks && !debug {
                 let options = aura_compiler::verify::Options {
@@ -1012,6 +1034,7 @@ fn handle_test_command(args: Vec<String>) {
                 continue;
             }
         };
+        let _package = build_options::package_scope(&path, DiagnosticFormat::Human);
         let syntax = parse_source(&source)
             .expect("a source module that lowered successfully must still parse successfully");
         let checked = std::sync::Arc::new(checked);
@@ -3382,6 +3405,7 @@ fn native_cache_key_for_semantic_schema(
     let semantic_schema = semantic_schema_version.to_le_bytes();
     let keep_symbols = [u8::from(native_keep_symbols())];
     let target_cpu = aura_compiler::native_target_cpu_identity();
+    let config = aura_compiler::current_build_config().cache_key_material();
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -3393,6 +3417,7 @@ fn native_cache_key_for_semantic_schema(
         b"llvm",
         keep_symbols.as_slice(),
         target_cpu.as_bytes(),
+        config.as_slice(),
         runtime.as_slice(),
     ] {
         material.extend_from_slice(part);
@@ -4767,6 +4792,7 @@ fn build_freestanding(args: Vec<String>) {
             process::exit(2);
         }),
     };
+    let _target = build_options::target_scope(Some(target.name()), false);
     let (output_path, debug, _, input_args) = parse_build_args(rest);
     if debug {
         eprintln!("aura: `--debug` does not apply to a freestanding build");
@@ -6073,13 +6099,13 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run> [--offline] [--format human|json] <file.au>\n\
+    "usage: aura <check|run> [--offline] [--cfg name[=value]] [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
-       or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
-       or: aura build -o <output> --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
+       or: aura run [--cfg name[=value]] [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
+       or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--cfg name[=value]] --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
        or: aura check --freestanding [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
@@ -6088,7 +6114,7 @@ fn usage_text() -> &'static str {
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
-       or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
+       or: aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\

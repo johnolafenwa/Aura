@@ -70,12 +70,20 @@ pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<Str
 const IMPLICIT_PARTS: [&str; 2] = ["prelude", "iter"];
 
 thread_local! {
+    static CHECKED_CONFIG: RefCell<Option<crate::BuildConfig>> = const { RefCell::new(None) };
     static CHECKED: RefCell<BTreeMap<String, ModuleNamespace>> = const { RefCell::new(BTreeMap::new()) };
 }
 
 /// The exports of the Aura-source part of builtin module `name`.
 fn source_part(name: &str) -> Option<ModuleNamespace> {
     let source = module_source(name)?;
+    let config = crate::current_build_config();
+    CHECKED_CONFIG.with_borrow_mut(|previous| {
+        if previous.as_ref() != Some(&config) {
+            CHECKED.with_borrow_mut(BTreeMap::clear);
+            *previous = Some(config);
+        }
+    });
     if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(name).cloned()) {
         return Some(namespace);
     }
