@@ -1054,21 +1054,12 @@ fn absolutize(path: &Path) -> PathBuf {
 fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Result<PathBuf> {
     let entry_dir = entry_path.parent().unwrap_or(Path::new("."));
 
-    let parsed_entry = source_override
+    let import_paths = source_override
         .map(str::to_string)
         .or_else(|| fs::read_to_string(entry_path).ok())
-        .and_then(|source| parse_source(&source).ok());
+        .and_then(|source| parser::root_imports(&source).ok());
 
-    if let Some(module) = parsed_entry {
-        let import_paths = module
-            .imports
-            .iter()
-            .map(|import| match &import.kind {
-                ImportKind::From { module_path, .. } => module_path.clone(),
-                ImportKind::Module { path, .. } => path.clone(),
-            })
-            .collect::<Vec<_>>();
-
+    if let Some(import_paths) = import_paths {
         if !import_paths.is_empty() {
             for candidate in entry_dir.ancestors() {
                 if import_paths

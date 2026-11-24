@@ -9,6 +9,30 @@ mod resolver;
 mod statements;
 pub(super) use resolver::Resolver;
 
+/// Root discovery can use already selected imports. If a guard itself needs a
+/// user import, its unconditional imports identify the root before selection.
+pub(crate) fn root_imports(source: &str) -> Result<Vec<Vec<String>>> {
+    let imports = match super::parse(source) {
+        Ok(module) => module.imports,
+        Err(_) => super::parse_all_syntax(source)?
+            .imports
+            .into_iter()
+            .filter(|import| import.span.column == 1)
+            .collect(),
+    };
+    Ok(imports
+        .into_iter()
+        .map(|import| match import.kind {
+            ImportKind::From { module_path, .. } => module_path,
+            ImportKind::Module { path, .. } => path,
+        })
+        .filter(|path| {
+            path.first()
+                .is_some_and(|root| !crate::builtin_modules::is_builtin_root_module(root))
+        })
+        .collect())
+}
+
 pub(super) struct Suite {
     header: Span,
     required: bool,
