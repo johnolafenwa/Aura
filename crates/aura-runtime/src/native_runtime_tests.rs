@@ -26936,6 +26936,48 @@ fn pop_like_generated_code(list: *mut OpaqueValue) -> (i64, bool) {
 }
 
 #[test]
+fn a_shared_list_of_lists_takes_in_place_appends_in_for_two_readers_at_once() {
+    use super::DirectListAccess;
+    for _ in 0..64 {
+        // A list of two lists, each held in a box of the outer list.
+        let outer = super::aura_direct_vec_empty();
+        for _ in 0..2 {
+            super::aura_direct_vec_push_in_place(outer, super::aura_direct_vec_empty());
+        }
+        // Generated code appends to each inner list through its box: the
+        // first append by call, the rest in place, which only the box's
+        // list view records.
+        for index in 0..2 {
+            let lent = super::aura_direct_vec_lend(outer, index, 1, 1);
+            assert_eq!(lent as usize & 1, 1, "the outer list lends its boxes");
+            let inner = lent.wrapping_byte_sub(1);
+            assert!(!append_like_generated_code(inner, 10, DirectListAccess::Int64));
+            for bits in 11..14 {
+                assert!(append_like_generated_code(inner, bits, DirectListAccess::Int64));
+            }
+            assert_ne!(list_view_capacity(inner), 0);
+        }
+        // The outer list goes to two tasks, which read it at once.
+        unsafe { super::share_direct_value(outer) };
+        let address = outer as usize;
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(move || {
+                    let outer = address as *mut OpaqueValue;
+                    for index in 0..2 {
+                        let inner = super::aura_direct_vec_index(outer, index, 1, 1);
+                        assert_eq!(super::aura_direct_vec_len(inner), 4);
+                        assert_eq!(super::aura_direct_vec_index_scalar(inner, 3, 0), 13);
+                        unsafe { release_value(inner) };
+                    }
+                });
+            }
+        });
+        unsafe { release_value(outer) };
+    }
+}
+
+#[test]
 fn a_full_scalar_list_grows_from_what_generated_code_left() {
     use super::DirectListAccess;
     let header = |list: *mut OpaqueValue| unsafe { &*list };
