@@ -6756,12 +6756,19 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Loads the scrutinee of a match or a payload read: the box of a
-    /// followed read-only loan where its list keeps it, and any other
-    /// operand as usual.
+    /// followed read-only loan where its list keeps it, the box of a field
+    /// where its instance keeps it, and any other operand as usual.
     fn load_scrutinee(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         if let Operand::Place(place) = operand {
             if let Some(value) = self.pass_native_element(place)? {
                 return Ok(value);
+            }
+            // A box field of an instance kept in place is read where it
+            // lies: the match or the payload read is done with the box
+            // before anything can change the field.
+            if self.boxed_class_place(place)?.is_some() {
+                let ty = self.type_of_place(place)?;
+                return self.load_borrowed_field_argument(operand, &ty);
             }
         }
         self.load_operand(operand)
@@ -15445,7 +15452,11 @@ impl<'a> FunctionCompiler<'a> {
             (DirectType::Scalar(_), false) => None,
             _ => return Ok(None),
         };
-        let scrutinee = self.load_operand(scrutinee)?;
+        let scrutinee = if lent {
+            self.load_operand(scrutinee)?
+        } else {
+            self.load_scrutinee(scrutinee)?
+        };
         let scrutinee = self.ensure_opaque(scrutinee)?;
         let index = *index;
         // Without a scalar read of its own, the runtime copies the payload
