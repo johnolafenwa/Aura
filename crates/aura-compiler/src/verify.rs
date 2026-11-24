@@ -12,6 +12,8 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_bits.rs"]
+mod bits;
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;

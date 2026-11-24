@@ -11,6 +11,8 @@
 
 use std::collections::BTreeMap;
 
+use aura_core::integer_bits::BitMethod;
+
 use super::exec::{
     conjoin, key_sort, lit, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
     State, Val,
@@ -583,7 +585,7 @@ impl Exec<'_> {
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         if let Some(n) = parse_smt_int(&term) {
                             if let Some(neg) = n.checked_neg() {
-                                if neg < ty.lo || neg > ty.hi {
+                                if !ty.contains_literal(neg) {
                                     wd.push("false".to_string());
                                 }
                                 return Ok(Val::Int(lit(neg), ty));
@@ -776,6 +778,18 @@ impl Exec<'_> {
                     }
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let (Val::Int(value, ty), Some(method)) = (&receiver, BitMethod::of(field)) {
+                        let count = if let [arg] = args.as_slice() {
+                            let Val::Int(count, _) = self.spec(&arg.value, env, wd, depth)? else {
+                                return Err("the rotation count is not a modeled integer".into());
+                            };
+                            wd.push(format!("(>= {count} 0)"));
+                            Some(count)
+                        } else {
+                            None
+                        };
+                        return Ok(super::bits::evaluate(method, value, *ty, count.as_deref()));
+                    }
                     if let (Val::List { .. }, "contains", [arg]) =
                         (&receiver, field.as_str(), args.as_slice())
                     {
@@ -844,7 +858,7 @@ impl Exec<'_> {
                     ("abs", [Val::Int(term, ty)]) => {
                         if let Some(n) = parse_smt_int(term) {
                             if let Some(abs_n) = n.checked_abs() {
-                                if abs_n < ty.lo || abs_n > ty.hi {
+                                if !ty.contains_literal(abs_n) {
                                     wd.push("false".to_string());
                                 }
                                 return Ok(Val::Int(lit(abs_n), *ty));
@@ -1094,7 +1108,7 @@ impl Exec<'_> {
                             _ => None,
                         };
                         if let Some(res) = folded {
-                            if res < ty.lo || res > ty.hi {
+                            if !ty.contains_literal(res) {
                                 wd.push("false".to_string());
                             }
                             return Ok(Val::Int(lit(res), ty));
