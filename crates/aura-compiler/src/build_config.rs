@@ -129,7 +129,7 @@ impl BuildConfig {
             field(value);
         }
         out.extend_from_slice(&self.pointer_width.to_le_bytes());
-        out.extend([u8::from(self.freestanding), u8::from(self.debug)]);
+        out.extend([self.freestanding, self.hosted, self.debug, self.release].map(u8::from));
         out
     }
 

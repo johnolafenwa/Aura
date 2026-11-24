@@ -2897,6 +2897,11 @@ fn build_cfg_cache_material_is_order_independent_and_separates_delimiters() {
     assert_ne!(a.cache_key_material(), b.cache_key_material());
     b = a.clone();
     b.debug = !b.debug;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
     b.release = !b.release;
+    assert_ne!(a.cache_key_material(), b.cache_key_material());
+    b = a.clone();
+    b.hosted = !b.hosted;
     assert_ne!(a.cache_key_material(), b.cache_key_material());
 }
