@@ -448,6 +448,165 @@ class LandingAndInstallerTests(unittest.TestCase):
                 self.assertIn("https://", result.stderr)
                 self.assertFalse(prefix.exists())
 
+    def test_installer_rejects_unsafe_tar_members_and_protects_prefix_symlinks(self) -> None:
+        system = platform.system()
+        machine = platform.machine().lower()
+        if system == "Darwin" and machine in {"arm64", "aarch64"}:
+            target = "aarch64-apple-darwin"
+        elif system == "Darwin" and machine == "x86_64":
+            target = "x86_64-apple-darwin"
+        elif system == "Linux" and machine in {"x86_64", "amd64"}:
+            target = "x86_64-unknown-linux-gnu"
+        elif system == "Linux" and machine in {"aarch64", "arm64"}:
+            target = "aarch64-unknown-linux-gnu"
+        else:
+            self.skipTest(f"installer has no release archive for {system} {machine}")
+
+        archive_name = f"aura-v0.17.0-preview-{target}"
+
+        def build_base_tree(root: Path) -> Path:
+            tree = root / archive_name
+            (tree / "bin").mkdir(parents=True)
+            (tree / "lib" / "aura").mkdir(parents=True)
+            binary = tree / "bin" / "aura"
+            binary.write_text("#!/bin/sh\necho aura-test\n", encoding="utf-8")
+            binary.chmod(0o755)
+            (tree / "lib" / "aura" / "libaura_runtime.a").write_bytes(b"runtime")
+            (tree / "lib" / "aura" / "native-link-args.json").write_text("[]\n", encoding="utf-8")
+            (tree / "README.md").write_text("Aura\n", encoding="utf-8")
+            return tree
+
+        def run_with_tar(root: Path, tar_path: Path, prefix: Path) -> subprocess.CompletedProcess:
+            digest = hashlib.sha256(tar_path.read_bytes()).hexdigest()
+            (tar_path.parent / "SHA256SUMS").write_text(
+                f"{digest}  {tar_path.name}\n", encoding="utf-8"
+            )
+            return subprocess.run(
+                ["sh", str(INSTALL_SCRIPT)],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AURA_INSTALL_BASE_URL": tar_path.parent.as_uri(),
+                    "AURA_INSTALL_PREFIX": str(prefix),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+
+        # Case 1: top-level SHA256SUMS outside archive_root must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-sha-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            extra = root / "SHA256SUMS"
+            extra.write_text("override\n", encoding="utf-8")
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                handle.add(extra, arcname="SHA256SUMS")
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 2: symlink member inside archive_root must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-symlink-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                sym = tarfile.TarInfo(f"{archive_name}/lib/aura/link")
+                sym.type = tarfile.SYMTYPE
+                sym.linkname = "/etc/passwd"
+                handle.addfile(sym)
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 3: parent-traversal member must be rejected.
+        with tempfile.TemporaryDirectory(prefix="aura-install-dotdot-entry-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+                bad = tarfile.TarInfo(f"{archive_name}/../outside.txt")
+                payload = b"outside"
+                bad.size = len(payload)
+                import io
+                handle.addfile(bad, io.BytesIO(payload))
+            prefix = root / "prefix"
+            result = run_with_tar(root, archive, prefix)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(prefix.exists())
+
+        # Case 4: pre-existing destination symlinks under prefix must be unlinked, not followed.
+        with tempfile.TemporaryDirectory(prefix="aura-install-dest-sym-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+            canary_runtime = root / "canary-runtime"
+            canary_readme = root / "canary-readme"
+            canary_runtime.write_bytes(b"untouched-runtime")
+            canary_readme.write_bytes(b"untouched-readme")
+            prefix = root / "prefix"
+            (prefix / "lib" / "aura").mkdir(parents=True)
+            (prefix / "share" / "aura").mkdir(parents=True)
+            (prefix / "lib" / "aura" / "libaura_runtime.a").symlink_to(canary_runtime)
+            (prefix / "share" / "aura" / "README.md").symlink_to(canary_readme)
+            result = run_with_tar(root, archive, prefix)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(canary_runtime.read_bytes(), b"untouched-runtime")
+            self.assertEqual(canary_readme.read_bytes(), b"untouched-readme")
+            self.assertFalse((prefix / "lib" / "aura" / "libaura_runtime.a").is_symlink())
+            self.assertFalse((prefix / "share" / "aura" / "README.md").is_symlink())
+
+        # Case 5: wildcard --target must not expand against working directory files.
+        with tempfile.TemporaryDirectory(prefix="aura-install-glob-") as temp:
+            root = Path(temp)
+            release = root / "release"
+            release.mkdir()
+            tree = build_base_tree(root)
+            archive = release / f"{archive_name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(tree, arcname=archive_name)
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            (release / "SHA256SUMS").write_text(
+                f"{digest}  {archive.name}\n", encoding="utf-8"
+            )
+            (root / "sentinel-file-name").write_text("x", encoding="utf-8")
+            result = subprocess.run(
+                ["sh", str(INSTALL_SCRIPT), "--target", "*"],
+                cwd=root,
+                env={
+                    **os.environ,
+                    "AURA_INSTALL_BASE_URL": release.as_uri(),
+                    "AURA_INSTALL_PREFIX": str(root / "prefix"),
+                },
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+                check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("'*'", result.stderr)
+            self.assertNotIn("sentinel-file-name", result.stderr)
+
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
