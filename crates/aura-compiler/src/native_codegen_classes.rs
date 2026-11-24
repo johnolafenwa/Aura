@@ -379,6 +379,9 @@ impl FunctionCompiler<'_> {
         if let Some(snapshot) = self.class_check_snapshot.take() {
             matches = self.holds_in_copy(snapshot, matches);
         }
+        // An instance is out of its layout only while it is shared, so
+        // the runtime's way lies out of line.
+        self.builder.set_cold_block(slow_block);
         self.builder.brif(matches, fast_block, &[], slow_block, &[]);
     }
 
@@ -717,6 +720,11 @@ impl FunctionCompiler<'_> {
         let slow_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         let lent = self.builder.use_var(lend.lent);
+        // The field's box was lent as it is unless the instance is out of
+        // its layout, and it comes back as it went unless the operation
+        // replaced it.
+        self.builder.set_cold_block(slow_block);
+        self.builder.set_cold_block(restore_block);
         self.builder.brif(lent, lent_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(lent_block);
