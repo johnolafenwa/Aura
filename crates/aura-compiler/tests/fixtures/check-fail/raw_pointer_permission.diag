@@ -1,0 +1,2 @@
+error[AU2084]: typed raw pointers require a manifest-rooted package with allow_ffi = true
+ --> crates/aura-compiler/tests/fixtures/check-fail/raw_pointer_permission.au

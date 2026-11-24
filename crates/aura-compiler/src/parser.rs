@@ -4357,7 +4357,7 @@ impl Parser {
         // is an ordinary name.
         let starts_array = matches!(
             self.peek_kind(1),
-            Some(TokenKind::Identifier(name)) if name == "Array"
+            Some(TokenKind::Identifier(name)) if matches!(name.as_str(), "Array" | "ptr")
         ) && matches!(self.peek_kind(2), Some(TokenKind::LBracket));
         starts_trait_object
             || starts_array

@@ -29,6 +29,19 @@ impl MirRuntime {
                     vec![value; count].into(),
                 )))
             }
+            crate::mir::fixed_arrays::ADDRESS if args.len() == 5 => {
+                let (Operand::Int(line), Operand::Int(column), Operand::Int(stride)) =
+                    (&args[2].value, &args[3].value, &args[4].value)
+                    else { return Err(Diagnostic::new("missing array stride or position")); };
+                let (Value::Int(address), Value::Int(index)) = (self.evaluate_operand(&args[0].value,env)?, self.evaluate_operand(&args[1].value,env)?)
+                    else { return Err(Diagnostic::new("invalid array element address")); };
+                let i = index.as_i128().and_then(|i| usize::try_from(i).ok()).filter(|i| *i < count)
+                    .ok_or_else(|| Diagnostic::coded_at("AU4031", crate::diag::Span::new(*line as usize,*column as usize),
+                        format!("fixed array index `{index}` is out of bounds for length `{count}`")))?;
+                let base = address.as_i128().and_then(|n| u64::try_from(n).ok())
+                    .ok_or_else(||Diagnostic::coded("AU4032","invalid base address for a fixed array"))?;
+                Ok(Value::Int(IntegerValue::from_u64(base.wrapping_add((i as u64).wrapping_mul(*stride as u64)))))
+            }
             READ | WRITE if args.len() == if op == READ { 4 } else { 5 } => {
                 let Value::Vec(mut array) = self.evaluate_operand(&args[0].value, env)? else {
                     return Err(Diagnostic::new("MIR array access needs an inline array"));

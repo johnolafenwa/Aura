@@ -3032,6 +3032,18 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
                 widen(previous.into_int_value())
             }
+            MemoryAccess::PointerOffset => {
+                let displacement = built(self.builder.build_int_mul(
+                    self.int(operands[1])?,
+                    self.int(operands[2])?,
+                    "",
+                ))?;
+                built(
+                    self.builder
+                        .build_int_add(self.int(operands[0])?, displacement, ""),
+                )
+                .map(Some)
+            }
             MemoryAccess::Ordered(op, success, failure) => {
                 self.ordered_atomic(op, success, failure, width, operands)
             }

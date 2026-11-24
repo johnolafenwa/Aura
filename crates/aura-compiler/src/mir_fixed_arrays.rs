@@ -6,13 +6,14 @@ use crate::sema::fixed_arrays::{initializer, Initializer};
 pub(crate) const LITERAL: &str = "#fixed.literal";
 pub(crate) const REPEAT: &str = "#fixed.repeat";
 pub(crate) const READ: &str = "#fixed.read";
+pub(crate) const ADDRESS: &str = "#fixed.address";
 pub(crate) const WRITE: &str = "#fixed.write";
 
 pub(crate) fn is_operation(name: &str) -> bool {
-    matches!(name, LITERAL | REPEAT | READ | WRITE)
+    matches!(name, LITERAL | REPEAT | READ | WRITE | ADDRESS)
 }
 
-fn call(op: &str, ty: &Type, values: Vec<Operand>) -> Rvalue {
+pub(super) fn call(op: &str, ty: &Type, values: Vec<Operand>) -> Rvalue {
     Rvalue::Call {
         callee: CallTarget::Name(op.to_owned()),
         args: values
