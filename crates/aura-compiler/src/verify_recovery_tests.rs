@@ -210,6 +210,29 @@ def main():
 }
 
 #[test]
+fn the_trap_a_recovered_call_returns_is_not_modeled() {
+    let Some(report) = verify(&format!(
+        r#"{HALF}
+def code(x: int64) -> int64:
+    requires x >= 0
+    match control.recover(half, x):
+        case Ok(v):
+            return v
+        case Err(trap):
+            assert trap.line > 0
+            return -1
+
+def main():
+    print(code(4))
+"#
+    )) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["16 assert in code"]);
+    assert_eq!(open_failed(&report), [false]);
+}
+
+#[test]
 fn recover_runs_as_its_model_says() {
     // On a spread of inputs, an `Ok` result meets the callee's `ensures`
     // and an `Err` comes from a trap.

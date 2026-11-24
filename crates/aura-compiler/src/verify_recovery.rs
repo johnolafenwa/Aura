@@ -25,11 +25,18 @@ impl<'a> Exec<'a> {
         call: impl FnOnce(&mut Self, &mut State) -> Val,
     ) -> Option<Val> {
         let fresh = result_type.map(|ty| self.fresh(ty, "recovered"));
-        let Some(Val::Enum(name, tag, mut payloads)) = fresh else {
+        let (Some(Val::Enum(name, tag, mut payloads)), Some(Type::Named(_, args))) =
+            (fresh, result_type)
+        else {
             call(self, state);
             return None;
         };
         let ok = self.cx.variant_index(&name, "Ok")?;
+        let err = self.cx.variant_index(&name, "Err")?;
+        // Which trap ended the call, and where, is not modeled.
+        let trap = args.get(1)?;
+        let what = "the trap that `control.recover` returns";
+        payloads[err] = vec![self.unmodeled(what, |exec| exec.fresh(trap, "trap"))];
         // The callee's `ensures` holds only when it returned: a trap may
         // end it before any of them is true.
         let outer = state.pc.clone();

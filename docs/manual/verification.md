@@ -490,7 +490,8 @@ booleans, with each integer type's range as a check:
   Each task's function is verified like any other
 - `control.recover(f, args...)` with a named function: the call proves
   `f`'s `requires`, and the result is `Ok` with a value that has `f`'s
-  `ensures`, or `Err` with any trap. The verifier never assumes the call
+  `ensures`, or `Err` with a trap whose contents are not modeled. The
+  verifier never assumes the call
   returns `Ok`, since even a call free of checks can run out of stack. The
   caller's own values are unchanged on both paths
 - state that tasks share: the value a `with m.lock():` block starts with,
