@@ -64,6 +64,11 @@ in this file.
     `Result` and enum payloads, and lists; `match` as an expression and
     every decidable arm pattern; calls on a union-typed value, whose
     members' contracts now apply; `==` between unions and enum variants.
+- `aura verify` models `control.recover` of a named function (`Ok` with the
+  function's `ensures`, or `Err`), keeps what is known about a value inside
+  a held lock, and checks tensor shapes: `matmul`, broadcasting,
+  `reshape`, `transpose`, reductions along an axis, and `item`, with
+  `shape()` and `len()` readable in contracts.
 - `aura verify` names an enum variant in a counterexample instead of its
   index, and reports a recursive spec function that needs more than eight
   levels as not modeled instead of failed.

@@ -437,10 +437,10 @@ end of the list, cleanup runs inside the call and we receive `Err(trap)`.
 Our loop can inspect the code, message, location and call chain before
 moving on to the next line. An earlier print or write still happened.
 
-A recovered call is also where `aura verify` stops following. It proves the
-`requires` clauses of the function we pass, but it knows nothing about the
-`Result` that comes back, so the `Ok` arm can't rely on what that function
-promises.
+`aura verify` follows a recovered call too. It proves the `requires`
+clauses of the function we pass, and in the `Ok` arm it knows what that
+function's `ensures` promises. In the `Err` arm it knows only that the call
+trapped.
 
 If we own the parser, a line without an equals sign is something we can
 detect and explain to the person who wrote the file. In the next section

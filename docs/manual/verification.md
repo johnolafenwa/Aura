@@ -705,9 +705,9 @@ relies on it.
 | Lambdas and local `def` functions that escape, or are called in a loop while they keep state | Each body is verified with its captured values unknown, and a caller learns nothing about the result. One called where it is made is followed into its body with the values it captured. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
 | Decorated functions | A caller learns nothing from the contract, and its `requires` is reported as `AU5104`. |
 | Generator functions | Yielded values have no contract. The body is verified with the generator's `requires` known. |
-| `control.recover` | The target's `requires` is proved at the call. Nothing is known about the `Result`. |
-| `sync` values, `Queue` items, and `mem` reads | Unknown each time they are read, since another task or a device may change them. |
-| `tensor` values | Not modeled. A shape mismatch stays a runtime failure. An `Array` index is a check of the proof. |
+| `control.recover` of a lambda, and the contents of the trap in `Err` | Nothing. Recovering a named function gives `Ok` with its `ensures`, or `Err`. |
+| `sync` values, `Queue` items, atomics, and `mem` reads | Unknown each time they are read, since another task or a device may change them. Inside a held lock, the guarded value keeps what is known about it. |
+| `tensor` values, and tensor operations such as `permute`, `slice`, `cat`, `where`, and `softmax` | The numbers are not modeled. Shapes are: `matmul`, elementwise operators with broadcasting, `reshape`, `transpose`, reductions along an axis, and `item` check their shape rules and give the result's shape. Device and dtype mismatches stay runtime failures. |
 | Library calls, such as `json`, `io`, `regex`, and `time` | Nothing about the result. |
 | Recursive spec functions | Unfolded eight levels deep. A check that needs more is reported as `AU5104`. |
 
