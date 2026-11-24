@@ -3500,10 +3500,7 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_expr(object, scope);
                 if let Some(resolved) = self.resolve_member_expr(object, field, scope) {
                     let hover = self.narrowed_hover(expr, resolved.hover);
-                    let range = match field.strip_suffix(crate::ast::PROPERTY_SETTER_SUFFIX) {
-                        Some(property) => self.setter_use_range(expr.span, property),
-                        None => range_from_span(expr.span, field.len()),
-                    };
+                    let range = range_from_span(expr.span, method_source_name(field).len());
                     self.push_occurrence(range, hover, resolved.definition);
                 }
             }

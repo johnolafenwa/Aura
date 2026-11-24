@@ -64,37 +64,6 @@ impl AnalysisBuilder<'_> {
         }
     }
 
-    pub(super) fn setter_use_range(&self, span: Span, property: &str) -> AnalysisRange {
-        // Assignment lowering gives the setter the span of the whole place.
-        // Select the field immediately before the assignment operator, even
-        // when the receiver contains another field with the same name.
-        let line = self
-            .source_lines
-            .get(span.line.saturating_sub(1))
-            .copied()
-            .unwrap_or("");
-        if let Ok(tokens) = crate::lexer::lex(line) {
-            for (dot, field) in tokens.iter().zip(tokens.iter().skip(1)) {
-                if dot.kind != crate::lexer::TokenKind::Dot
-                    || !matches!(&field.kind, crate::lexer::TokenKind::Identifier(name) if name == property)
-                {
-                    continue;
-                }
-                let end = field.span.column - 1 + property.len();
-                let suffix = line[end..]
-                    .trim_start()
-                    .trim_start_matches(['+', '-', '*', '/', '%', '&', '|', '^', '<', '>']);
-                if suffix.starts_with('=') && !suffix.starts_with("==") {
-                    return range_from_span(
-                        Span::new(span.line, field.span.column),
-                        property.len(),
-                    );
-                }
-            }
-        }
-        range_from_span(span, property.len())
-    }
-
     pub(super) fn implementation_method_definition(
         &self,
         implementation: &crate::sema::TraitImplInfo,
