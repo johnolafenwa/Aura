@@ -56,9 +56,11 @@ declaration. Anywhere else it is an ordinary name. The declaration needs no
 permission in `Aura.toml`. In a hosted build it is an ordinary function and
 the binary does not export it.
 
-A freestanding build needs at least one exported function. It compiles the
-functions the exports reach, in every module of the program, and nothing
-else. An export in an imported module is also defined in the object.
+An exported function is a root for code generation. The compiler follows
+calls from each root across module boundaries. A retained function, a
+placed data definition or a module assembly block can also provide the
+object's contents. An export in an imported module is defined in the
+object.
 
 ## What A Freestanding Program May Hold
 
@@ -150,6 +152,96 @@ UART: uint64 = 268435456
 export "C" def put(byte: uint8) -> None:
     mem.volatile_write_uint8(UART, byte)
 ```
+
+## Assembly
+
+Write `asm` as a statement in a package with `allow_ffi = true`. This
+x86-64 function takes the bit pattern in an integer register, swaps its
+bytes and returns the result:
+
+```aura fragment
+export "C" def swap_bytes(value: uint64) -> uint64:
+    mut swapped: uint64 = 0
+    asm("movq $1, $0\nbswapq $0", output("reg", swapped), input("reg", value), options("pure", "preserves_flags"))
+    return swapped
+```
+
+| Clause | Contract |
+| --- | --- |
+| `input("reg", expr)` | Evaluate an integer or boolean expression once into a general-purpose register. |
+| `output("reg", binding)` | Store into a distinct mutable scalar binding. Its Aura type sets the width. |
+| `input("fpreg", expr)`, `output("fpreg", binding)` | Bind a `float32` or `float64` to a floating-point register. These registers are unavailable under `--kernel`. |
+| `clobber("rax", ...)` | List additional registers the template overwrites. A fixed register mentioned in the text needs an operand or clobber whenever its value matters to generated code. |
+| `options("pure")` | At least one output. The result depends only on the inputs. The template observes and changes no memory and has no other observable effects. |
+| `options("preserves_flags")` | The template preserves condition codes. |
+| `options("noreturn")` | Control never reaches the next statement. The template has no outputs. |
+
+Number the outputs first and the inputs second, starting at `$0`. Use
+`$$` for a literal dollar in inline assembly. On x86-64 use AT&T syntax.
+A register name in place of a class pins the operand, as in
+`input("dx", port)` for a `uint16`. A boolean input holds zero or one.
+A boolean output is true if its low byte is nonzero. For explicit register
+spellings use braced LLVM modifiers, such as `${0:k}` for an x86 32-bit
+general register and `${0:w}` or `${0:s}` for AArch64 integer or floating
+single-word registers. By default assembly can change memory and flags.
+
+Use `module_asm` at module scope for a complete routine. The linker sees
+the symbols you define in the template. Each imported module contributes
+its text once. The formatter preserves spaces and line breaks inside a
+template.
+
+```aura fragment
+module_asm(""".text
+.globl pause_once
+pause_once:
+    pause
+    ret""")
+```
+
+The checker validates the operand types, register names and declared
+clobbers for the selected target. LLVM checks instruction text while
+writing the object. See [Verification](/manual/verification#trust) for
+the proof boundary.
+
+## Machine Attributes
+
+Declare a hardware interrupt entry with `@machine.interrupt`. This handler
+receives an x86 exception's hardware error code. Startup supplies its
+address to the appropriate interrupt gate.
+
+```aura fragment
+@machine.interrupt("x86_64_error")
+@machine.section(".text.fault")
+@machine.align(16)
+@machine.used
+export "C" def fault(code: uint64) -> None:
+    pass
+```
+
+| Convention | Aura parameters | Entry and return |
+| --- | --- | --- |
+| `"x86_64"` | None | Preserves interrupted registers and returns with `iretq`. |
+| `"x86_64_error"` | One `uint64` | Passes the hardware error word to the handler and discards that word before `iretq`. |
+| `"aarch64"` | None | Uses an aligned EL1 stack with FP/NEON enabled. Preserves the exception return state and returns with `eret`. |
+| `"riscv64"` | None | Uses an aligned machine-mode stack. Preserves the exception PC, status and live floating-point state and returns with `mret`. |
+
+Each handler returns `None` and can call ordinary Aura or foreign
+functions. Only a hardware exception may enter it. Ordinary code that
+needs the same operation can call a helper shared with the handler.
+
+| Attribute | Effect |
+| --- | --- |
+| `@machine.naked` | The body is exactly one operand-free `asm("...")`. The template owns the stack, registers and return instruction. |
+| `@machine.section("name")` | Place the definition in a named ELF section. |
+| `@machine.align(bytes)` | Align the definition to a power of two in bytes, up to 2²⁹. |
+| `@machine.link_name("symbol")` | Write a function under the given object symbol. Aura callers use its source name. |
+| `@machine.used` | Keep a function and its section when linking with `--gc-sections`. |
+| `@machine.noinline`, `@machine.always_inline` | Set the function's inlining policy. Choose one. |
+
+Section and alignment also apply to an explicitly typed scalar module
+constant with a literal initializer. For example,
+`@machine.section(".board.config")` and `@machine.align(64)` above
+`MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary.
 
 ## Targets
 
@@ -256,9 +348,6 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 ## Current Limits
 
 - No heap values. A freestanding program cannot allocate.
-- No inline assembly and no port I/O instructions. Memory-mapped devices
-  are reached with the [`mem` module](/manual/mem), and everything else
-  through `extern "C"` functions.
 - No mutable module-level state. Keep state in the entry function's locals,
   behind `mut` parameters, or in C.
 - 32-bit targets are not supported.
