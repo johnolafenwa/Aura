@@ -45,7 +45,10 @@ pub(super) fn access_places(instruction: &Instruction) -> Option<(&str, &str, &s
 }
 
 pub(crate) fn is_operation(name: &str) -> bool {
-    matches!(checked_form(name), LITERAL | REPEAT | READ | WRITE | ADDRESS)
+    matches!(
+        checked_form(name),
+        LITERAL | REPEAT | READ | WRITE | ADDRESS
+    )
 }
 
 pub(super) fn call(op: &str, ty: &Type, values: Vec<Operand>) -> Rvalue {

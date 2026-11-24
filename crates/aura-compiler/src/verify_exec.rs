@@ -761,7 +761,11 @@ impl<'a> Exec<'a> {
             }
             ty if ty.as_fixed_array().is_some() => {
                 let (element, length) = ty.as_fixed_array().unwrap();
-                Val::List {len: length.to_string(), data: self.fresh_store(element, hint), elem: element.clone()}
+                Val::List {
+                    len: length.to_string(),
+                    data: self.fresh_store(element, hint),
+                    elem: element.clone(),
+                }
             }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
                 let len = self.fresh_const("Int", &format!("{hint}_len"));
@@ -2571,7 +2575,11 @@ impl<'a> Exec<'a> {
                     _ => fresh_target(self),
                 }
             }
-            Rvalue::Call { callee: CallTarget::Name(op), args, type_args } if crate::mir::fixed_arrays::is_operation(op) => {
+            Rvalue::Call {
+                callee: CallTarget::Name(op),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(op) => {
                 self.fixed_call(state, op, args, type_args.get("array"))
             }
             Rvalue::Call { callee, args, .. } => {

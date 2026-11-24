@@ -19,7 +19,6 @@ pub mod array_views;
 pub mod bytes_codec;
 pub mod c_layout;
 pub mod c_values;
-pub mod raw_wide_memory;
 pub mod collection_index;
 pub mod ffi;
 pub mod gzip_codec;
@@ -38,6 +37,7 @@ pub mod numbers_host;
 #[cfg(any(windows, test))]
 mod pipe_bridge;
 pub mod randomness;
+pub mod raw_wide_memory;
 pub mod runtime_config;
 pub mod runtime_reactor;
 pub mod runtime_value;
