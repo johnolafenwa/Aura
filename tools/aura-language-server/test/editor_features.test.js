@@ -282,3 +282,8 @@ test("wordAt finds the identifier under or just after the cursor", () => {
   assert.equal(wordAt("", 4, 0), null);
   assert.equal(wordAt(null, 0, 0), null);
 });
+
+test("semantic tokens use the method signature below decorator lines", () => {
+  const analysis = { occurrences: [occurrence(0, 4, 8, "@traced\n@tag(1)\nmethod call(self) -> int64", null)] };
+  assert.deepEqual(semanticTokens(analysis, "obj.call()").data, [0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("method"), 0]);
+});
