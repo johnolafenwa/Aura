@@ -461,6 +461,19 @@ A call through the value is a returned-view call:
 
 A `from self` result has no value type. A bound method that returns a view of its receiver cannot be stored and reports `AU3010`. A bound method whose view originates in another parameter keeps that contract. A `TaskCallable[...]` contract cannot return a view and reports `AU3008`.
 
+## Verification
+
+`aura verify` verifies the body of each lambda and each local `def` as a
+function of its own. It treats the captured values as unknown there, and a
+caller learns nothing about the result of calling one. A local `def` cannot
+have `requires` or `ensures` clauses.
+
+A [callable alias with a contract](/manual/contracts#callable-contracts)
+carries facts across a call through a function value. A call through a
+parameter of that alias proves its `requires` and assumes its `ensures`, and
+a named function passed as one is proved to fit the contract.
+
+
 ## Limits And Implementation-Defined Behavior
 
 ### Language Limits

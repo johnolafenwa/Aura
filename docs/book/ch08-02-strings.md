@@ -67,7 +67,7 @@ def main():
     print(f"{cheer.len()} scalars, {cheer.byte_len()} bytes")
 ```
 
-<span class="caption">Listing 8-8: Counting and slicing Unicode text</span>
+<span class="caption">Listing 8-9: Counting and slicing Unicode text</span>
 
 ```console
 $ aura run src/main.au
@@ -227,7 +227,7 @@ def main():
     print(comment.to_upper())
 ```
 
-<span class="caption">Listing 8-9: Searching and transforming a string</span>
+<span class="caption">Listing 8-10: Searching and transforming a string</span>
 
 ```console
 $ aura run src/main.au
@@ -296,7 +296,7 @@ def main():
         print(f"no colon in {trimmed}")
 ```
 
-<span class="caption">Listing 8-10: Parsing a line of text into a name and scores</span>
+<span class="caption">Listing 8-11: Parsing a line of text into a name and scores</span>
 
 ```console
 $ aura run src/main.au
@@ -440,7 +440,7 @@ def main():
     print(f"class average: {average:.1f} ({average / 100.0:.0%})")
 ```
 
-<span class="caption">Listing 8-11: Formatting a report with f-strings, `join`, and `repeat`</span>
+<span class="caption">Listing 8-12: Formatting a report with f-strings, `join`, and `repeat`</span>
 
 ```console
 $ aura run src/main.au
@@ -476,6 +476,43 @@ def main():
 $ aura run src/main.au
 scores: 72 95 88
 ```
+
+Contracts can talk about text as well as numbers. `aura verify`, the prover
+from [the lists section](/book/ch08-01-lists#proving-list-code), reads a
+`str` as a sequence of characters, so it can prove what a function that joins
+strings promises about the result:
+
+*Filename: src/main.au*
+
+```aura
+def report_line(name: str, mark: str) -> str:
+    requires len(name) > 0 and not name.contains(":")
+    ensures result.starts_with(name)
+    ensures len(result) == len(name) + len(mark) + 2
+    return name + ": " + mark
+
+def main():
+    print(report_line("Ada Lovelace", "B+"))
+```
+
+<span class="caption">Listing 8-13: A string function whose promises are proved</span>
+
+```console
+$ aura run src/main.au
+Ada Lovelace: B+
+$ aura verify src/main.au
+verified src/main.au: 4 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The `requires` clause says what a usable name is: not empty, and free of the
+colon we're about to use as a separator. The verifier proves that `main`'s
+literal meets it, and that every line `report_line` returns starts with the
+name and has exactly the length the pieces add up to. It knows `len`, `+`,
+`==` and the ordering comparisons, `in`, `contains`, `starts_with`, and
+`ends_with`. The results of the other methods in this section, such as
+`split`, `trim`, `find`, `replace`, and `to_upper`, and the text an f-string
+builds, are values it knows nothing about today, so a promise about
+`name.to_upper()` is reported as unproved.
 
 Strings compare with `==` and `!=`, and order with `<` and friends by their
 UTF-8 bytes, which is the same order `sort` uses. The full list of string

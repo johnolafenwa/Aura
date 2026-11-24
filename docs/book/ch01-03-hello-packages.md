@@ -247,6 +247,106 @@ ok tests/greeting_test.au::test_keeps_full_name
 run it directly. [Chapter 11](/book/ch11-00-testing) covers testing in depth,
 including setup and teardown functions and parameterized tests.
 
+## Proving with `aura verify`
+
+A test checks the inputs we wrote down. Aura has a second tool for the inputs
+we didn't: a function can state what it needs and what it promises, and
+`aura verify` proves that the promise holds for every input. We will use it
+all through the book, so let's meet it now with a small helper that centers a
+line of text. Create `src/layout.au`:
+
+*Filename: src/layout.au*
+
+```aura
+public def padding(text: str, width: int64) -> int64:
+    ensures result >= 0
+    return (width - len(text)) // 2
+```
+
+<span class="caption">Listing 1-9: A function with a promise it cannot keep yet</span>
+
+`padding` returns how many spaces to put in front of `text` to center it in a
+line `width` characters wide. The `ensures` line is new. It is a *contract*:
+a promise about `result`, the value the function returns, written as an
+ordinary `bool` expression at the top of the body. A quick test agrees with
+it:
+
+*Filename: tests/layout_test.au*
+
+```aura fragment
+from layout import padding
+
+
+def test_centers_a_short_line():
+    assert padding("Hello, Ada!", 41) == 15
+```
+
+```console
+$ aura test -k centers
+ok tests/layout_test.au::test_centers_a_short_line
+1 passed; 0 failed
+```
+
+Now let's ask about every input instead of one:
+
+```console
+$ aura verify src/layout.au
+error[AU5101]: cannot prove `ensures` clause `result >= 0`
+ --> src/layout.au:2:13
+  |
+2 |     ensures result >= 0
+  |             ^
+  = note: in `padding` (ensures check)
+  = note: counterexample: text = "", width = -9223372036854775808
+error[AU5101]: cannot prove integer result in range
+ --> src/layout.au:3:13
+  |
+3 |     return (width - len(text)) // 2
+  |             ^
+  = note: in `padding` (overflow check)
+  = note: counterexample: text = "A", width = -9223372036854775808
+verified src/layout.au: 2 of 4 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier did not run `padding`. It reasoned about the code, found inputs
+that break it, and printed them as *counterexamples*. The first says the
+promise is false when `width` is negative. The second is one we did not ask
+about: with the most negative `int64` there is, the subtraction overflows,
+which would stop the program. `aura verify` looks for every way a function
+can trap, whether or not we wrote a contract about it.
+
+Our test passed because we never thought to center text in a line narrower
+than the text. The fix is to say so. A `requires` line states what the caller
+must provide:
+
+*Filename: src/layout.au*
+
+```aura
+public def padding(text: str, width: int64) -> int64:
+    requires len(text) <= width
+    ensures result >= 0
+    return (width - len(text)) // 2
+```
+
+<span class="caption">Listing 1-10: Stating what `padding` needs from its caller</span>
+
+```console
+$ aura verify src/layout.au
+verified src/layout.au: 4 of 4 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+All four checks are proved. For every `text` and `width` that meet the
+`requires` clause, the subtraction stays in range and the result is never
+negative. That is a statement about all the inputs there are, which no number
+of tests can make. Contracts are also checked while a program runs, so a
+caller that breaks the `requires` clause is stopped with an `AU4009` error
+instead of printing a badly placed line.
+
+Contracts sit beside types and ownership as things Aura checks about your
+code, and the rest of the book uses all three together. We introduce `requires`
+and `ensures` properly in [Chapter 3](/book/ch03-03-functions), and
+[Chapter 11](/book/ch11-04-contracts-and-proofs) covers proofs in depth.
+
 ## Formatting with `aura fmt`
 
 Aura comes with a formatter, so that code written by different people looks
@@ -332,7 +432,8 @@ the same formatter as `aura fmt`.
 You have installed `aura`, and you have run a program as a script, with a
 `main` function, and as a native binary. You have read compiler errors and
 a test failure, created a package with `aura new`, split it into modules, and
-tested it with `aura test`. These are the commands you will use throughout
+tested it with `aura test`, and proved a contract with `aura verify`. These
+are the commands you will use throughout
 the book:
 
 - `aura run file.au` checks a program and runs it.
@@ -340,6 +441,8 @@ the book:
 - `aura build -o output file.au` compiles a native executable.
 - `aura new name` creates a package.
 - `aura test` runs the tests under `tests/`.
+- `aura verify file.au` proves a file's contracts and that its code cannot
+  trap.
 - `aura fmt` formats your code.
 
 It's time to write something more substantial. In the next chapter we build a

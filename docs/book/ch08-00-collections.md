@@ -25,3 +25,9 @@ able to pick the right collection for a job, read and change it without
 fighting the ownership checker, and use comprehensions and
 builtins such as `sum`, `sorted`, and `max` to answer questions in a line or
 two.
+
+Collections are also where most traps come from: an index past the end, a
+key that isn't there, a `pop` on an empty list. So this chapter is where we
+start stating what a function needs from a collection as a contract, and
+using [`aura verify`](/book/ch11-04-contracts-and-proofs) to prove, before the program runs, that those traps can't
+happen.

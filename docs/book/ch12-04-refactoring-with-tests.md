@@ -6,7 +6,7 @@ length. It is that every part can reach every other part, so nothing can be
 checked on its own. To find out whether `parse_line` handles a lowercase level,
 we would have to write a log file, run the whole program, and read the report.
 
-In this section we'll make four changes, in an order that keeps the program
+In this section we'll make five changes, in an order that keeps the program
 working after each one:
 
 1. Split `main.au` into modules, one per job.
@@ -14,6 +14,7 @@ working after each one:
 3. Move argument handling into a `Config` value, and add a `--min-level`
    option.
 4. Write tests for each module, and use one of them to drive a fix.
+5. Run `aura verify` on each module, to prove what the tests only sampled.
 
 Along the way we'll replace the raw `io.Error.NotFound` messages with ones a
 person can act on.
@@ -193,6 +194,7 @@ def bump[K](counts: mut dict[K, int64], key: own K):
             counts[key] = 1
 
 public def rank(level: Level) -> int32:
+    ensures 0 <= result and result <= 3
     match level:
         case Level.Debug:
             return 0
@@ -224,6 +226,11 @@ public def summarize(text: str, min_level: Level) -> Summary:
 ```
 
 <span class="caption">Listing 12-15: Counting, in its own module, with a level filter</span>
+
+`rank` states its promise as a contract: the `ensures` line says every level
+maps to a number from 0 to 3. It costs one line, it tells a reader the range
+without reading the `match`, and later in this section `aura verify` will
+prove it.
 
 `bump` has no `public`, so it stays an implementation detail of `stats`. No
 other module can call it, which means we can change how counting works later
@@ -706,6 +713,129 @@ ok tests/test_records.au::test_level_is_case_insensitive
 3 passed; 0 failed
 ```
 
+## Proving what the tests sampled
+
+Ten tests pass, and each one checks a line of input we thought of. Before we
+call the refactoring done, let's ask the other question from
+[Chapter 11](/book/ch11-04-contracts-and-proofs): which of the checks in this
+code can never fail, for any input? `aura verify` answers it one file at a
+time, so we run it on a module, not on the project. Start with the one that
+handles the most hostile input, the command line:
+
+```console
+$ aura verify src/config.au
+verified src/config.au: 7 of 7 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+We wrote no contracts in `config.au`, and the verifier still found seven
+things to prove, among them that each `args[...]` read is inside the list
+and that no addition to `index` overflows. All seven hold for every argument
+list anyone could type. That is a stronger statement than the tests make,
+and it is the goal we set for this module, that no command line turns into a
+trap, now with a proof behind it.
+
+To see what the proof rests on, delete the two lines of `parse_args` that
+handle a flag with no value:
+
+```aura fragment
+            if index + 1 >= args.len():
+                return Err(ConfigError.MissingValue(flag=arg))
+```
+
+Run the tests and all ten still pass, because none of them ends a command
+line with `--min-level`. The verifier doesn't need one that does:
+
+```console
+$ aura verify src/config.au
+error[AU5101]: cannot prove list index in range
+ --> src/config.au:21:25
+   |
+21 |             text = args[index + 1].clone()
+   |                         ^
+  = note: in `parse_args` (index in range check)
+  = note: counterexample: len(args) = 1
+error[AU5101]: cannot prove integer result in range
+ --> src/config.au:27:13
+   |
+27 |             index += 2
+   |             ^
+  = note: in `parse_args` (overflow check)
+  = note: counterexample: len(args) = 9223372036854775807
+verified src/config.au: 4 of 6 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The first counterexample is the missing test, written for us: an argument
+list of length 1, which is `logscan --min-level`. The guard we deleted was
+the only thing between that command and an out-of-range read. Put the two
+lines back.
+
+The parser is in the same shape:
+
+```console
+$ aura verify src/records.au
+verified src/records.au: 4 of 4 checks proved in 4 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The four checks are the reads of `fields[0]`, `fields[1]` (twice), and
+`fields[2]` in `parse_line`. The verifier knows nothing about what
+`split_whitespace` returns except that it is a list, and that turns out to
+be enough: the early return for `fields.len() < 4` means every later index
+is in range. A log line can hold anything, and `parse_line` cannot trap on
+it.
+
+`stats.au` is where we wrote a contract, on `rank`, and it is also where the
+proofs stop:
+
+```console
+$ aura verify src/stats.au
+error[AU5101]: cannot prove integer result in range
+ --> src/stats.au:16:9
+   |
+16 |         self.total += 1
+   |         ^
+  = note: in `Summary.add` (overflow check)
+  = note: counterexample: self.total = 9223372036854775807, len(self.skipped) = 0, len(self.by_service) = 1, len(self.errors_by_service) = 1, record.timestamp = "", variant of record.level = 0, record.service = "", record.message = ""
+error[AU5101]: cannot prove integer result in range
+ --> src/stats.au:25:27
+   |
+25 |             counts[key] = count + 1
+   |                           ^
+  = note: in `bump` (overflow check)
+error[AU5101]: cannot prove integer result in range
+ --> src/stats.au:49:5
+   |
+49 |     for number, line in enumerate(text.lines(), start=1):
+   |     ^
+  = note: in `summarize` (overflow check)
+  = note: counterexample: text = "", variant of min_level = 0
+verified src/stats.au: 1 of 4 checks proved in 6 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The one proved check is `rank`'s `ensures`. The other three are all the same
+complaint: a counter is incremented and nothing in the code says how large
+it already is. The verifier is right about that. A `Summary` whose `total`
+is already the largest `int64` would overflow on the next record. It is also
+true that no log has nine quintillion lines, so this is a report to read and
+decide about, not a bug to fix. We could bound the counters with a
+`requires`, but then every caller would have to prove the bound, and
+`summarize` can't, because it doesn't know how long its input is. So we
+leave these three as they are. They stay run-time checks, and if the
+impossible log ever arrives, `logscan` stops with an overflow diagnostic
+and does not print a wrong count.
+
+`report.au` has two unproved checks of a different kind. Its dictionary
+reads look up keys that came from `sorted(...)`, and the verifier doesn't
+model `sorted`, so it can't tell that those keys are in the dictionary.
+Chapter 11 lists [what the verifier doesn't model yet](/book/ch11-06-proving-types#what-the-verifier-doesn-t-model-yet).
+And `main.au` has no checks of its own: verifying it reads the contracts of
+the modules it imports but doesn't prove their bodies, which is why we ran
+each module separately.
+
+That is a typical first pass over a project. The code that faces
+untrusted input, the two parsers, is proved never to trap. One function has
+a stated range. A handful of checks are left to run time, and we know which
+ones and why.
+
 ## The finished tool
 
 Run the refactored program against the sample log. The counts are the same as
@@ -779,7 +909,8 @@ dictionary, and `mut self` for a method that updates counts. You saw the
 choice between `T | None` for an absence with nothing to say and
 `Result[T, E]` with an error enum when the caller needs a reason, and you
 split the program into modules with deliberate `public` boundaries and a test
-file for each.
+file for each. Then `aura verify` proved that neither parser can trap on any
+input, and showed exactly which checks remain for run time.
 
 Several helpers in this chapter took a value and did one fixed thing with it.
 The next chapter is about values that *are* behavior: closures that capture
