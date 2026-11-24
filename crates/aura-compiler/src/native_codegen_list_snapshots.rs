@@ -458,7 +458,12 @@ fn keeps_field_list(
             .into_iter()
             .map(|(place, _)| place),
     );
-    let of_root = || mentions.iter().copied().filter(|place| root(place) == root_name);
+    let of_root = || {
+        mentions
+            .iter()
+            .copied()
+            .filter(|place| root(place) == root_name)
+    };
     match instruction {
         Instruction::Lend { place, temp, .. } | Instruction::EndLend { place, temp, .. } => {
             place != list
@@ -575,10 +580,7 @@ pub(super) fn field_list_snapshot_regions(
                     }
                     // The one operation a lent box goes to, and the facts
                     // about its index.
-                    _ if lent.is_some_and(|temp| {
-                        mentioned_roots(instruction).contains(temp)
-                    }) =>
-                    {
+                    _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
                         let temp = lent.expect("checked above");
                         if view_use(instruction, temp, (rules.pure_index)(temp))
                             != Some(ViewUse::Reads)

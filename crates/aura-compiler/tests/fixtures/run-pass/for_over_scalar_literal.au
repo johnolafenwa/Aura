@@ -1,0 +1,64 @@
+# A loop over a short list literal of scalars reads its elements from
+# locals: each element is evaluated once, in order, before the first
+# iteration, and `break`, `continue` and nested loops behave as over a list.
+class Counter:
+    calls: int64
+
+
+def noted(counter: mut Counter, value: int64) -> int64:
+    counter.calls += 1
+    print(f"eval {value}")
+    return value
+
+
+def to_byte(value: float64) -> int64:
+    return (value * 255.0) as int64
+
+
+def main():
+    mut counter = Counter(calls=0)
+    mut total = 0
+    for value in [noted(counter, 3), noted(counter, 5), noted(counter, 7)]:
+        print(f"body {value}")
+        total += value
+    print(f"{total} {counter.calls}")
+
+    mut checksum = 0
+    for y in range(4):
+        shade = (y as float64) / 4.0
+        for value in [to_byte(shade), to_byte(shade / 2.0), to_byte(1.0 - shade)]:
+            checksum = (checksum * 131 + value) % 1000000007
+    print(checksum)
+
+    for value in [1.5, 2.5]:
+        print(value)
+    for flag in [true, false, true]:
+        if flag:
+            continue
+        print("unset")
+    for value in [10, 20, 30, 40, 50, 60, 70, 80]:
+        if value == 30:
+            continue
+        if value == 60:
+            break
+        print(value)
+    for only in [total]:
+        print(only)
+    # The loop's own name can be assigned in the body, and the elements
+    # are those of the literal as it was evaluated.
+    mut base = 1
+    for value in [base, base + 1, base + 2]:
+        base += 10
+        mut local = value
+        local += base
+        print(local)
+    for outer in [1, 2]:
+        for inner in [outer, outer * 10]:
+            print(f"{outer} {inner}")
+    # A longer literal, or one of text, is built as a list.
+    mut long = 0
+    for value in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
+        long += value
+    print(long)
+    for word in ["a", "b"]:
+        print(word)

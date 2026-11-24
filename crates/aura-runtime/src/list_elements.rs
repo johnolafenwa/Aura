@@ -1072,6 +1072,51 @@ impl ListElements {
         }
     }
 
+    /// [`Self::push_plain`] for a list that keeps values of `layout` in
+    /// storage no other list shares, after taking in the length `left`
+    /// that generated code left when it appended or popped in place (see
+    /// [`Self::adopt_appended`]). Returns the element address, the length
+    /// and the room of the list's view. `None`, with the list unchanged,
+    /// for any other list.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::push_plain`] and [`Self::adopt_appended`].
+    #[inline]
+    pub unsafe fn grow_plain(
+        &mut self,
+        layout: &'static PlainLayout,
+        src: *const u64,
+        left: Option<usize>,
+    ) -> Option<(usize, usize, usize)> {
+        let Self::Typed(typed) = self else {
+            return None;
+        };
+        if !std::ptr::eq(typed.layout, layout) {
+            return None;
+        }
+        let stride = typed.stride();
+        let words = typed.words.unshared_mut()?;
+        if let Some(len) = left.and_then(|len| len.checked_mul(stride)) {
+            if len > words.len() && len <= words.capacity() {
+                // SAFETY: the caller's contract.
+                unsafe { words.set_len(len) };
+            } else {
+                words.truncate(len);
+            }
+        }
+        if words.capacity() == 0 {
+            words.reserve(4 * stride);
+        }
+        // SAFETY: the caller's contract.
+        words.extend_from_slice(unsafe { std::slice::from_raw_parts(src, stride) });
+        Some((
+            words.as_ptr() as usize,
+            words.len() / stride,
+            words.capacity() / stride,
+        ))
+    }
+
     /// Replaces element `index`, which is in range, with the plain record
     /// whose words are at `src`, as [`Self::replace`] does with the value
     /// they hold.

@@ -19,6 +19,10 @@ in this file.
   a function that only calls small leaves keeps no frame record. `nbody`
   runs 40% fewer instructions than in 0.17.0, and `image_filters` and
   `bytecode_vm` about a quarter fewer.
+- Speed: `d[key]` on a dictionary of numbers or `bool` returns the value
+  without a box (`interpreter` runs a third fewer instructions), a `for`
+  over a short literal of numbers builds no list, and lists cost less to
+  create and grow.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 
