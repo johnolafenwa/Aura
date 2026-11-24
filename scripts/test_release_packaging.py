@@ -89,7 +89,18 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
         manifest = json.loads(
             (REPO_ROOT / "tools" / "vscode-aura" / "package.json").read_text(encoding="utf-8")
         )
-        self.assertIn("npx --yes @vscode/vsce@4.0.0 package", manifest["scripts"]["package:vsix"])
+        self.assertNotIn("npx", manifest["scripts"]["package:vsix"])
+        self.assertIn("packaging/vscode/node_modules/@vscode/vsce/vsce", manifest["scripts"]["package:vsix"])
+        tools_manifest = json.loads(
+            (REPO_ROOT / "packaging" / "vscode" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(tools_manifest["devDependencies"]["@vscode/vsce"], "4.0.0")
+        self.assertEqual(tools_manifest["devDependencies"]["ovsx"], "1.2.0")
+        tools_lock = json.loads(
+            (REPO_ROOT / "packaging" / "vscode" / "package-lock.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(tools_lock["packages"]["node_modules/@vscode/vsce"]["version"], "4.0.0")
+        self.assertEqual(tools_lock["packages"]["node_modules/ovsx"]["version"], "1.2.0")
 
     def test_cargo_color_is_disabled_at_workflow_scope(self) -> None:
         for workflow_path in (CI_WORKFLOW, RELEASE_WORKFLOW):
@@ -459,22 +470,29 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("HAS_VSCE_PAT: ${{ secrets.VSCE_PAT != '' }}", job_env)
         self.assertIn("HAS_OVSX_TOKEN: ${{ secrets.OVSX_TOKEN != '' }}", job_env)
         self.assertEqual(publish_job.count("VSCE_PAT: ${{ secrets.VSCE_PAT }}"), 1)
-        self.assertEqual(publish_job.count("OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}"), 1)
+        self.assertEqual(publish_job.count("OVSX_PAT: ${{ secrets.OVSX_TOKEN }}"), 1)
         self.assertIn("if: env.HAS_VSCE_PAT == 'true'", self.workflow)
         self.assertIn("if: env.HAS_VSCE_PAT != 'true'", self.workflow)
         self.assertIn("if: env.HAS_OVSX_TOKEN == 'true'", self.workflow)
         self.assertIn("if: env.HAS_OVSX_TOKEN != 'true'", self.workflow)
-        # Publishing tools run with marketplace tokens, so they are pinned to
-        # exact versions instead of whatever npm serves as latest.
+        # Publishing tools are installed from a checked-in lockfile with scripts
+        # disabled before any marketplace token enters the environment.
+        self.assertNotIn("npx --yes", self.workflow)
+        self.assertIn("run: npm --prefix packaging/vscode ci --ignore-scripts", publish_job)
+        self.assertLess(
+            publish_job.index("npm --prefix packaging/vscode ci --ignore-scripts"),
+            publish_job.index("VSCE_PAT: ${{ secrets.VSCE_PAT }}"),
+        )
         self.assertIn(
-            "npx --yes @vscode/vsce@4.0.0 publish --packagePath \"$VSIX_PATH\" -p \"$VSCE_PAT\"",
+            './packaging/vscode/node_modules/.bin/vsce publish --packagePath "$VSIX_PATH"',
             self.workflow,
         )
         self.assertIn(
-            "npx --yes ovsx@1.2.0 publish \"$VSIX_PATH\" -p \"$OVSX_TOKEN\"",
+            './packaging/vscode/node_modules/.bin/ovsx publish "$VSIX_PATH"',
             self.workflow,
         )
-        self.assertNotRegex(self.workflow, r"npx (--yes )?(@vscode/vsce|ovsx)(?!@\d)")
+        self.assertNotIn('-p "$VSCE_PAT"', self.workflow)
+        self.assertNotIn('-p "$OVSX_TOKEN"', self.workflow)
         self.assertIn("::notice::VSCE_PAT is not configured", self.workflow)
         self.assertIn("::notice::OVSX_TOKEN is not configured", self.workflow)
         self.assertIn("inputs.publish_extension", self.workflow)
@@ -482,6 +500,23 @@ class ReleaseWorkflowTests(unittest.TestCase):
             'gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"',
             self.workflow,
         )
+
+    def test_every_publish_job_uses_an_environment_and_checks_extension_source_lineage(self) -> None:
+        jobs_section = self.workflow.split("\njobs:\n", 1)[1]
+        parts = re.split(r"^  ([a-z_-]+):\n", jobs_section, flags=re.MULTILINE)
+        jobs = dict(zip(parts[1::2], parts[2::2]))
+        for job_name in (
+            "publish",
+            "publish-extension",
+            "publish-homebrew",
+            "publish-chocolatey",
+            "publish-apt",
+        ):
+            with self.subTest(job=job_name):
+                self.assertRegex(jobs[job_name], r"(?m)^    environment: [a-z0-9-]+$")
+        identity_job = jobs["release_identity"]
+        self.assertIn("git merge-base --is-ancestor HEAD refs/remotes/origin/main", identity_job)
+        self.assertIn("inputs.publish_extension && !inputs.publish", identity_job)
 
     def test_extension_publish_job_validates_plain_marketplace_identity(self) -> None:
         self.assertIn("name: Validate VSIX Marketplace identity", self.workflow)
@@ -543,7 +578,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("id: source", self.workflow)
-        self.assertEqual(self.workflow.count(immutable_ref), 4)
+        self.assertEqual(self.workflow.count(immutable_ref), 5)
         self.assertIn("needs: [release_identity, cli, target_packs, tools]", self.workflow)
         self.assertIn(
             "if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",

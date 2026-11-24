@@ -401,9 +401,13 @@ class PackageWorkflowTests(unittest.TestCase):
                 self.assertIn(f"::notice::{secret} is not configured", job)
                 # Only the publishing step receives the secret itself.
                 self.assertEqual(job.count(f"${{{{ secrets.{secret} }}}}"), 1)
-        self.assertIn("contents: read\n", self.job("publish-homebrew"))
-        self.assertIn("persist-credentials: false\n", self.job("publish-homebrew"))
-        self.assertIn("HOMEBREW_TAP: johnolafenwa/homebrew-aura\n", self.job("publish-homebrew"))
+        homebrew = self.job("publish-homebrew")
+        self.assertIn("contents: read\n", homebrew)
+        self.assertIn("persist-credentials: false\n", homebrew)
+        self.assertIn("HOMEBREW_TAP: johnolafenwa/homebrew-aura\n", homebrew)
+        self.assertNotIn("x-access-token:$HOMEBREW_TAP_TOKEN@", homebrew)
+        self.assertIn('GIT_CONFIG_KEY_0="http.https://github.com/.extraHeader"', homebrew)
+        self.assertIn('git clone --depth 1 "https://github.com/$HOMEBREW_TAP.git" "$tap"', homebrew)
         self.assertIn("--source https://push.chocolatey.org/", self.job("publish-chocolatey"))
 
     def test_release_starts_the_site_deployment_that_carries_apt(self) -> None:
