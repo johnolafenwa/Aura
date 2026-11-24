@@ -280,6 +280,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         picomatch = lockfile["packages"].get("node_modules/picomatch", {})
         self.assertNotIn("name", picomatch)
 
+    def test_install_docs_enforce_https_tls12(self) -> None:
+        for path in sorted((ROOT / "docs/install").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if "curl " in line and "https://" in line:
+                    self.assertIn(
+                        "--proto '=https' --tlsv1.2",
+                        line,
+                        f"{path.relative_to(ROOT)} missing TLS 1.2 flags: {line}",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
