@@ -1,0 +1,17 @@
+import build
+class Switch:
+    enabled: bool
+
+const switch = Switch(enabled=true)
+const n = 2
+if (switch).enabled and 1 < n <= 3 and n in [0, 2] and n in {2, 4}:
+    const chosen = n
+else:
+    import missing
+if (chosen if build.hosted else 9) == {"mode": n}["mode"] and (n as uint32) > 0:
+    def answer() -> int64:
+        return chosen
+else:
+    import also_missing
+def main():
+    print(answer())

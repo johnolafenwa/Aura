@@ -217,3 +217,74 @@ fn invalid_imported_predicate_preserves_its_defining_source() {
     assert!(origin.ends_with("conditional_support/features.au"));
     assert_eq!(error.span, Some(crate::Span::new(1, 31)));
 }
+
+#[test]
+fn shadowed_build_aliases_remain_runtime_bindings_in_each_suite() {
+    let source = include_str!("../tests/fixtures/parse-pass/conditional_runtime_bindings.au");
+    let module = parse_source(source).unwrap();
+    let lines: Vec<_> = source.lines().collect();
+    // Only references after leaving the match, for, and with scopes use the
+    // imported flag. The discarded while body contains a nested runtime if.
+    assert_eq!(module.inactive_lines.len(), 3);
+    let discarded: Vec<_> = module
+        .inactive_lines
+        .iter()
+        .flat_map(|range| &lines[range.clone()])
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert_eq!(
+        discarded,
+        [
+            "only_on_bare()",
+            "if running:",
+            "only_on_bare()",
+            "only_on_bare()"
+        ]
+    );
+}
+
+#[test]
+fn conditional_guards_compose_operators_and_structural_values() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_operator_guards.au");
+    assert_eq!(run_source(source).unwrap().stdout, "2\n");
+}
+
+#[test]
+fn fully_qualified_imports_supply_guard_values_without_an_alias() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-pass/conditional_imported.au");
+    let source = concat!(
+        "import conditional_support.features\n",
+        "if conditional_support.features.available:\n    const answer = 3\n",
+        "else:\n    import missing\n",
+        "def main():\n    print(answer)\n",
+    );
+    assert_eq!(
+        crate::run_path_with_source(&path, source).unwrap().stdout,
+        "3\n"
+    );
+}
+
+#[test]
+fn guard_dependencies_include_trait_impls_types_and_enum_variants() {
+    let source = include_str!("../tests/fixtures/run-pass/conditional_trait_dependency.au");
+    assert_eq!(run_source(source).unwrap().stdout, "8\n");
+}
+
+#[test]
+fn runtime_script_guard_keeps_later_bindings_local() {
+    let source = concat!(
+        "import build\ndef requested() -> bool:\n    return true\n",
+        "if build.hosted and requested():\n    print(1)\nelse:\n    print(2)\n",
+        "answer = 9\nprint(answer)\n",
+    );
+    assert!(parse_source(source).unwrap().constants.is_empty());
+    assert_eq!(run_source(source).unwrap().stdout, "1\n9\n");
+}
+
+#[test]
+fn guard_dependencies_ignore_foreign_declarations_with_the_same_name() {
+    let source = include_str!("../tests/fixtures/check-pass/conditional_local_or_foreign.au");
+    assert_eq!(run_source(source).unwrap().stdout, "7\n");
+}

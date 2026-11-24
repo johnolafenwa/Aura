@@ -1,0 +1,33 @@
+type Count = int64
+
+trait Measure:
+    def lanes(self) -> Count
+
+class Layout:
+    width: Count
+
+impl Measure for Layout:
+    def lanes(self) -> Count:
+        return self.width
+
+enum Mode:
+    Wide
+    Small
+
+def select_layout(mode: Mode) -> Layout:
+    match mode:
+        case Mode.Wide:
+            return Layout(width=8)
+        case Mode.Small:
+            return Layout(width=1)
+
+def count[T: Measure](layout: T) -> Count:
+    return layout.lanes()
+
+const width = count(select_layout(Mode.Wide))
+if width == 8:
+    const chosen = width
+else:
+    import missing
+def main():
+    print(chosen)
