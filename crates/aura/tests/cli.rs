@@ -17996,3 +17996,30 @@ fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
         "--no-rpath binary must not embed build-host library_paths in rpath"
     );
 }
+
+#[test]
+fn verify_proves_only_obligations_in_selected_suites() {
+    if !smt_solver_available() {
+        return;
+    }
+    let temp = TempDir::new("aura-verify-conditional");
+    let path = temp.path().join("api.au");
+    fs::write(
+        &path,
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/conditional_tooling.au"),
+    )
+    .unwrap();
+    let output = Command::new(aura_bin())
+        .args(["verify", "--no-cache", "--format", "json"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["proved"], 1);
+    assert_eq!(report["obligations"][0]["function"], "native_name");
+}
