@@ -14147,7 +14147,6 @@ def main():
     let referenced = object_referenced_symbols(&object);
     for symbol in [
         "aura_direct_compare_str_literal_at",
-        "aura_direct_compare_values_at",
         "aura_direct_vec_element_len",
         "aura_direct_vec_element_map_get_str_payload",
     ] {
@@ -14156,6 +14155,14 @@ def main():
             "the loops should call `{symbol}`, referenced: {referenced:?}"
         );
     }
+    // `other` reaches the view twin of `scan` as words, which compares the
+    // loaned element's bytes with them.
+    assert!(
+        referenced
+            .iter()
+            .any(|name| name.ends_with("aura_direct_bytes_equal")),
+        "the loop should compare bytes, referenced: {referenced:?}"
+    );
     // The loop's bound check covers each loan, and the literal key is not
     // boxed.
     for symbol in [

@@ -1,0 +1,72 @@
+# A method whose `str` parameter is only read takes it as words, as a
+# function does: a literal, a loaned element of a `list[str]`, or a
+# parameter held as words makes no box for the call.
+import control
+
+
+class Tokens:
+    pos: int64
+    texts: list[str]
+    seen: int64
+
+    def is_word(self, text: str) -> bool:
+        return self.texts[self.pos] == text
+
+    def code(self, text: str) -> int64:
+        if text == "select":
+            return 1
+        if text != "from":
+            return text.byte_len()
+        return 2
+
+    def count(mut self, text: str) -> int64:
+        if text == "where":
+            self.seen += 10
+        self.seen += text.byte_len()
+        return self.seen
+
+    def loud(self, text: str, limit: int64) -> str:
+        if text == "quiet":
+            return text.clone()
+        upper = text.to_upper()
+        assert upper.len() < limit, f"`{text}` is too long"
+        return upper
+
+    def relay(self, text: str) -> int64:
+        return self.code(text) + code_of(text)
+
+
+def code_of(text: str) -> int64:
+    if text == "from":
+        return 20
+    return 0
+
+
+def passes(tokens: Tokens, text: str) -> int64:
+    return tokens.code(text) * 100
+
+
+def too_long(index: int64) -> str:
+    tokens = Tokens(pos=1, texts=["select", "from", "where", "a much longer token than inline"], seen=0)
+    return tokens.loud(tokens.texts[index], 8)
+
+
+def main():
+    mut tokens = Tokens(pos=0, texts=["select", "from", "where", "a much longer token than inline"], seen=0)
+    words = ["select", "from", "x", "where", "quiet"]
+    for i in range(words.len()):
+        print(f"{tokens.is_word(words[i])} {tokens.code(words[i])} {tokens.relay(words[i])} {passes(tokens, words[i])}")
+    print(f"{tokens.is_word('select')} {tokens.code('from')} {tokens.code('')} {tokens.relay('from')}")
+    for round in range(2):
+        for i in range(words.len()):
+            tokens.count(words[i])
+        tokens.count("literal")
+    print(tokens.seen)
+    for i in range(words.len()):
+        print(tokens.loud(words[i], 40))
+    for index in range(4):
+        match control.recover(too_long, index):
+            case Ok(text):
+                print(text)
+            case Err(trap):
+                print(trap.message)

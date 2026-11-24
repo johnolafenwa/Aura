@@ -25,8 +25,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::mir::{
-    instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MirFunction,
-    MirModule, MirReceiverKind, Operand, Rvalue,
+    instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MethodDispatch,
+    MirFormatPart, MirFunction, MirModule, MirReceiverKind, Operand, Rvalue,
 };
 
 use super::*;
@@ -77,11 +77,8 @@ fn is_str(ty: &Type) -> bool {
 }
 
 /// The positions of the parameters of `function` that could be views: a
-/// borrowed `str` is only read.
+/// borrowed `str` is only read. A method's receiver is not among them.
 fn borrowed_strs(function: &MirFunction) -> HashMap<&str, usize> {
-    if function.receiver.is_some() {
-        return HashMap::new();
-    }
     function
         .params
         .iter()
@@ -106,8 +103,15 @@ fn param_uses(
         Operand::Place(place) => candidates.get(place.as_str()).copied(),
         _ => None,
     };
-    let views =
-        |operand: &Operand| matches!(operand, Operand::String(_)) || candidate(operand).is_some();
+    // A loaned element compares from its bytes.
+    let loans = read_str_loans(function);
+    let views = |operand: &Operand| match operand {
+        Operand::String(_) => true,
+        Operand::Place(place) => {
+            candidates.contains_key(place.as_str()) || loans.contains(place.as_str())
+        }
+        _ => false,
+    };
     for block in &function.blocks {
         for instruction in &block.instructions {
             let mut mentions = Vec::new();
@@ -152,25 +156,36 @@ fn param_uses(
                     (op, []) => receiver_view_read(*op).is_some(),
                     _ => false,
                 },
+                // An f-string part is pushed from its bytes.
                 Instruction::Assign {
-                    value:
-                        Rvalue::Call {
-                            callee: CallTarget::Name(callee),
-                            args,
-                            type_args,
-                        },
+                    value: Rvalue::FormatString { parts },
                     ..
-                } => {
-                    let callee_positions = positions.get(callee.as_str());
-                    type_args.is_empty()
+                } => parts.iter().all(|part| match part {
+                    MirFormatPart::Value(_) | MirFormatPart::Literal(_) => true,
+                    part => part.operand().and_then(candidate).is_none(),
+                }),
+                Instruction::Assign { value, .. } if direct_callee(value).is_some() => {
+                    let (callee, args) = direct_callee(value).expect("checked above");
+                    let callee_positions = positions.get(callee);
+                    // A receiver is passed as a box.
+                    let receiver = match value {
+                        Rvalue::Call {
+                            callee: CallTarget::Member { object, .. },
+                            ..
+                        } => candidate(object).is_none(),
+                        _ => true,
+                    };
+                    receiver
                         && args.iter().enumerate().all(|(index, argument)| {
                             let Some(position) = candidate(&argument.value) else {
                                 return true;
                             };
-                            let passed = callee_positions
-                                .is_some_and(|positions| positions.values().any(|at| *at == index));
+                            let passed = argument.writeback_place.is_none()
+                                && callee_positions.is_some_and(|positions| {
+                                    positions.values().any(|at| *at == index)
+                                });
                             if passed {
-                                forwards.push((position, (callee.clone(), index)));
+                                forwards.push((position, (callee.to_string(), index)));
                             }
                             passed
                         })
@@ -198,6 +213,29 @@ fn param_uses(
         }
     }
     uses
+}
+
+/// The function a call runs by name, with its arguments: a call of a
+/// function by name with no type arguments, or a method call that
+/// dispatches statically, whose arguments leave out the receiver.
+pub(super) fn direct_callee(value: &Rvalue) -> Option<(&str, &[MirArg])> {
+    match value {
+        Rvalue::Call {
+            callee: CallTarget::Name(callee),
+            args,
+            type_args,
+        } if type_args.is_empty() => Some((callee, args)),
+        Rvalue::Call {
+            callee:
+                CallTarget::Member {
+                    dispatch: Some(MethodDispatch::Static { function }),
+                    ..
+                },
+            args,
+            type_args,
+        } if type_args.is_empty() => Some((function, args)),
+        _ => None,
+    }
 }
 
 /// The loans of `function` that select a `str` to read.
@@ -294,25 +332,20 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
         let loans = read_str_loans(caller);
         let own = positions.get(caller.name.as_str());
         for instruction in caller.blocks.iter().flat_map(|block| &block.instructions) {
-            let Instruction::Assign {
-                value:
-                    Rvalue::Call {
-                        callee: CallTarget::Name(callee),
-                        args,
-                        type_args,
-                    },
-                ..
-            } = instruction
-            else {
+            let Some((callee, args)) = (match instruction {
+                Instruction::Assign { value, .. } => direct_callee(value),
+                _ => None,
+            }) else {
                 continue;
             };
-            if !type_args.is_empty() || !positions.contains_key(callee.as_str()) {
+            let Some((callee, _)) = positions.get_key_value(callee) else {
                 continue;
-            }
+            };
+            let callee = *callee;
             let mut params = args
                 .iter()
                 .enumerate()
-                .filter(|(index, _)| useful.contains(&(callee.as_str(), *index)))
+                .filter(|(index, _)| useful.contains(&(callee, *index)))
                 .map(|(_, argument)| &argument.value)
                 .peekable();
             let words = params.peek().is_some()
@@ -329,7 +362,7 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
                     _ => false,
                 });
             if words {
-                entered.insert(callee.as_str());
+                entered.insert(callee);
             }
         }
     }
@@ -726,12 +759,18 @@ impl FunctionCompiler<'_> {
         let Some(words) = self.str_slot_words(held) else {
             return Ok(None);
         };
-        let other = match (other, self.str_slot_words(other)) {
+        let mut released = None;
+        let other = match (other, self.words_of(other)) {
             (Operand::String(text), _) => ViewSide::Literal(text.clone()),
-            (_, Some((ptr, len))) => ViewSide::Words(ptr, len),
+            (_, Some(held @ (HeldWords::Slot(_) | HeldWords::Loan(_)))) => {
+                let words = self.load_held_words(&held, false)?;
+                released = words.released;
+                ViewSide::Words(words.ptr, words.len)
+            }
             _ => return Ok(None),
         };
         let mut equal = self.emit_view_equality(words, &other)?;
+        self.release_view_arguments(released.into_iter().collect());
         if op == BinaryOp::NotEq {
             equal = self.builder.bxor_imm(equal, 1);
         }
@@ -1123,6 +1162,14 @@ impl FunctionCompiler<'_> {
 }
 
 impl ViewTwin {
+    /// Whether the twin may load the box of its parameter at `position`, so
+    /// that a caller passes the box it has.
+    pub(super) fn boxes(&self, position: usize) -> bool {
+        self.params
+            .iter()
+            .any(|param| param.position == position && !param.pure)
+    }
+
     /// The body a call enters: the one without sinks when the call hands
     /// no sink over and the function has it.
     pub(super) fn callee(&self, sinks: bool) -> FuncRef {

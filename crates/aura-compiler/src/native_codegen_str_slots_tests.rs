@@ -171,3 +171,44 @@ fn a_copy_made_only_to_be_appended_is_planned_as_words() {
         .expect("the module has `main`");
     assert!(appended_copies(main).is_empty());
 }
+
+const METHODS: &str = r#"
+class Tokens:
+    pos: int64
+    texts: list[str]
+
+    def is_word(self, text: str) -> bool:
+        return self.texts[self.pos] == text
+
+    def code(self, text: str) -> int64:
+        if text == "select":
+            return 1
+        return text.byte_len()
+
+    def relay(self, text: str) -> int64:
+        return self.code(text)
+
+    def keeps(mut self, text: str):
+        self.texts.append(text.to_upper())
+
+def main():
+    mut tokens = Tokens(pos=0, texts=["a"])
+    print(tokens.is_word("a"))
+    print(tokens.code(tokens.texts[0]))
+    print(tokens.relay("b"))
+    tokens.keeps("c")
+"#;
+
+#[test]
+fn a_method_that_reads_the_bytes_of_a_str_parameter_gets_a_view_twin() {
+    let mir = lower_source_to_mir(METHODS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let views = plan_views(&module);
+    let mut twins = views.keys().map(String::as_str).collect::<Vec<_>>();
+    twins.sort_unstable();
+    // `is_word` compares its text with a copy of an element, and `keeps`
+    // only boxes its text.
+    assert_eq!(twins, ["Tokens.code", "Tokens.relay"]);
+    assert_eq!(views["Tokens.code"], [view(0, true)]);
+    assert_eq!(views["Tokens.relay"], [view(0, true)]);
+}

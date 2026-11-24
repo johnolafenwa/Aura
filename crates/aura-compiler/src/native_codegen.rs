@@ -10261,11 +10261,7 @@ impl<'a> FunctionCompiler<'a> {
         for (index, (argument, abi_expected)) in args.iter().zip(&expected).enumerate() {
             if let Some((twin, held)) = &view_twin {
                 if let Some(held) = held.get(&index) {
-                    let boxed = twin
-                        .params
-                        .iter()
-                        .any(|param| param.position == index && !param.pure);
-                    let words = self.load_held_words(held, boxed)?;
+                    let words = self.load_held_words(held, twin.boxes(index))?;
                     lowered_args.push(words.owner);
                     view_words.extend([words.ptr, words.len]);
                     view_copies.extend(words.released);
@@ -17022,7 +17018,20 @@ impl<'a> FunctionCompiler<'a> {
                 *slot = Some(place.to_string());
             }
         }
+        let view_twin = self.view_twin_call(function, args, false);
+        let mut view_words = Vec::new();
+        let mut view_copies = Vec::new();
         for (index, argument) in args.iter().enumerate() {
+            if let Some((twin, Some(held))) = view_twin
+                .as_ref()
+                .map(|(twin, held)| (twin, held.get(&index)))
+            {
+                let words = self.load_held_words(held, twin.boxes(index))?;
+                lowered_args.push(words.owner);
+                view_words.extend([words.ptr, words.len]);
+                view_copies.extend(words.released);
+                continue;
+            }
             let loaded = match &argument.value {
                 Operand::Place(place)
                     if self
@@ -17058,11 +17067,19 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
+        lowered_args.extend(view_words);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
-        let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-        let func_ref = self.result_twin_callee(&method_function_name, func_ref);
+        let func_ref = match &view_twin {
+            Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
+            None => {
+                let func_ref =
+                    self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
+                self.result_twin_callee(&method_function_name, func_ref)
+            }
+        };
         let results =
             self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
+        self.release_view_arguments(view_copies);
         let results = self.take_result_twin_words(&method_function_name, results);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
