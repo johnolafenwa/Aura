@@ -15,6 +15,12 @@ def use_cell() -> None:
     relay(p as uint64)
     assert cell.count == 0
 
+def replace_counter(p: ptr[Counter]) -> None:
+    p.write(Counter(count=9))
+
+def use_counter(address: uint64) -> None:
+    replace_counter(address as ptr[Counter])
+
 def untouched(value: int64) -> int64:
     ensures result == value
     return value

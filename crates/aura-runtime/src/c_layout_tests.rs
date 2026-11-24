@@ -12,6 +12,7 @@ fn scalars(name: &str, fields: &[FfiScalar]) -> CStruct {
                 kind: CFieldKind::Scalar(*scalar),
             })
             .collect(),
+        layout_controls: Default::default(),
         union: false,
     }
 }
@@ -28,6 +29,7 @@ fn of_kinds(name: &str, union: bool, kinds: Vec<CFieldKind>) -> CStruct {
                 kind,
             })
             .collect(),
+        layout_controls: Default::default(),
         union,
     }
 }
@@ -85,18 +87,22 @@ fn a_struct_is_laid_out_as_c_lays_it_out() {
         outer.leaves(),
         [
             CLeaf {
+                bits: None,
                 offset: 0,
                 scalar: I8
             },
             CLeaf {
+                bits: None,
                 offset: 2,
                 scalar: I16
             },
             CLeaf {
+                bits: None,
                 offset: 4,
                 scalar: I8
             },
             CLeaf {
+                bits: None,
                 offset: 6,
                 scalar: I8
             },
@@ -475,4 +481,42 @@ fn arrays_and_unions_are_classified_by_every_scalar_that_overlaps() {
     for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
         assert_eq!(big.passing(abi), CPassing::Memory);
     }
+}
+
+#[test]
+fn bit_field_storage_and_calling_classes_follow_the_record_abi() {
+    let mut s = scalars("Bits", &[U8, U16, U32, U8]);
+    s.layout_controls
+        .bit_widths
+        .extend([("f1".into(), 3), ("f2".into(), 6)]);
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (4, 4, vec![0, 1, 1, 3])
+    );
+    assert_eq!(s.leaves()[2].bits, Some((3, 6)));
+    s.layout_controls.microsoft_bit_fields = true;
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (12, 4, vec![0, 2, 4, 8])
+    );
+    s.layout_controls.packed = true;
+    assert_eq!(
+        (s.size(), s.align(), s.field_offsets()),
+        (8, 1, vec![0, 1, 3, 7])
+    );
+    s.layout_controls.alignment = Some(16);
+    assert_eq!((s.size(), s.align()), (16, 16));
+    let mut small = scalars("Small", &[U8, U32]);
+    small.layout_controls.packed = true;
+    assert_eq!(small.passing(CAbi::SysV64), CPassing::Memory);
+    assert_eq!(
+        small.passing(CAbi::Aapcs64),
+        CPassing::Registers(vec![int(0, 5)])
+    );
+    assert_eq!(small.passing(CAbi::Win64), CPassing::Memory);
+    assert_eq!(
+        bit_chunks(7, 3).collect::<Vec<_>>(),
+        [(0, 7, 128), (1, 0, 3)]
+    );
+    assert_eq!(bit_chunks(1, 64).count(), 9);
 }

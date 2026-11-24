@@ -6447,6 +6447,7 @@ impl<'a> FunctionCompiler<'a> {
                 let _ = (message, captures);
                 let (line, column) = self.span_values(Some(*span));
                 let code = match kind {
+                    AssertKind::CBitField => freestanding::TRAP_CAST,
                     AssertKind::Assert => freestanding::TRAP_ASSERT,
                     _ => freestanding::TRAP_CONTRACT,
                 };
@@ -6885,6 +6886,9 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
+            Rvalue::ModuleLoad { key } => self.load_state(key),
+            Rvalue::ModuleStore { key, value } => self.store_state(key, value),
+            Rvalue::ModuleAddress { key } => self.address_of_state(key),
             Rvalue::ModuleConstant { key, initializer } => {
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
@@ -9083,6 +9087,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
+        if self.freestanding.is_some() {
+            self.builder.set_cold_block(fail_block);
+        }
         let continue_block = self.builder.create_block();
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
@@ -20921,6 +20928,8 @@ fn validate_rvalue(
         | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
+        Rvalue::ModuleStore { value, .. } => validate_operand(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -22458,6 +22467,8 @@ mod list_snapshots;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_module_state.rs"]
+mod module_state;
 #[path = "native_codegen_range_loops.rs"]
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]

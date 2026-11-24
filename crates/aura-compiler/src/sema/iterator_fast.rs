@@ -1114,6 +1114,7 @@ fn generator_frame(
         doc: None,
         c_layout: false,
         c_arrays: BTreeMap::new(),
+        layout_controls: Default::default(),
         c_union: None,
     };
 

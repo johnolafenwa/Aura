@@ -160,6 +160,7 @@ impl AliasInfo {
 
 #[derive(Clone, Debug)]
 pub struct ConstantInfo {
+    pub state: Option<std::sync::Arc<super::StateImage>>,
     pub module_name: String,
     pub decl: crate::ast::ConstantDecl,
     pub ty: Type,
@@ -567,7 +568,24 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    check_with_profile(module, context, false)
+}
+
+pub(crate) fn check_with_profile(
+    module: Module,
+    context: ModuleContext,
+    freestanding: bool,
+) -> Result<Program> {
+    if !freestanding {
+        if let Some(cell) = module.constants.iter().find(|decl| decl.mutable) {
+            return Err(Diagnostic::coded_at("AU3030", cell.span, "hosted module bindings are immutable")
+                .with_help("share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"));
+        }
+    }
     let mut module = module;
+    if freestanding {
+        module.use_freestanding_c_layout();
+    }
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
     // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a
@@ -1402,6 +1420,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
 
     // A union's class holds as many bytes as the C union has. The parser
     // wrote the default of that field for a length it could not know.
+    super::c_union_writes::complete_lengths(&mut classes);
     let union_sizes = classes
         .iter()
         .filter(|(_, class)| class.decl.c_union.is_some())
@@ -2289,7 +2308,14 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             constant.name.clone(),
             ConstantInfo {
                 module_name: module_name.clone(),
-                decl: constant.clone(),
+                state: constant
+                    .mutable
+                    .then(|| {
+                        checker.state_image(expected.as_ref().unwrap_or(&inferred), &constant.value)
+                    })
+                    .transpose()?
+                    .map(std::sync::Arc::new),
+                decl: super::c_layout_queries::folded_binding(constant, &imported_modules, &classes),
                 ty: expected.unwrap_or(inferred),
             },
         );

@@ -69,6 +69,11 @@ mod init;
 pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
+mod module_state;
+#[cfg(test)]
+mod module_state_tests;
+pub use module_state::StateImage;
+pub(crate) use program::check_with_profile;
 mod program;
 mod tensor_derive;
 #[cfg(test)]
@@ -104,6 +109,8 @@ pub(crate) use type_param_calls::{
     collect_type_param_calls, lookup_type_param_call, specialized_functions,
 };
 pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
+pub(crate) mod c_layout_queries;
+mod c_union_writes;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -580,9 +587,17 @@ pub(crate) fn ffi_struct_layout(
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let mut layout_controls = holder.decl.layout_controls.clone();
+    layout_controls.inline_union = class.decl.layout_controls.inline_union;
+    for (field, info) in &holder.fields {
+        if matches!(&info.ty, Type::Named(name, _) if name == "fixed") {
+            layout_controls.inline_arrays.insert(field.clone());
+        }
+    }
     Some(CStruct {
         name: name.clone(),
         fields,
+        layout_controls,
         union: class.decl.c_union.is_some(),
     })
 }
@@ -3576,6 +3591,13 @@ impl<'a> FunctionChecker<'a> {
             let Some(binding) = locals.get_mut(&path.root) else {
                 continue;
             };
+            if binding
+                .borrow_origin
+                .as_deref()
+                .is_some_and(|origin| origin.starts_with("module state `"))
+            {
+                continue;
+            }
             binding.stale_narrowing.remove(&path.projections);
             binding.narrowed.insert(
                 path.projections.clone(),
@@ -4990,6 +5012,7 @@ impl<'a> FunctionChecker<'a> {
                     let view_source = range_endpoints
                         .map(|(object, _, _)| object)
                         .unwrap_or(&view.source);
+                    self.reject_state_loan(view_source, locals)?;
                     self.reject_property_place(view_source, "viewed", locals)?;
                     let syntactic_place = self.borrow_call_place(view_source);
                     let direct_parent = syntactic_place.as_ref().and_then(|place| {
@@ -6367,7 +6390,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 self.invalidate_narrowing(&path, assign.span, "assignment", locals);
             }
-            if !self.is_mutable_place(object, locals)? {
+            if self.imported_state(object, field).is_none()
+                && !self.is_mutable_place(object, locals)?
+            {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
                 }
@@ -11758,6 +11783,9 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(result) = self.c_layout_query(callee, args, locals) {
+            return result.map(|_| Type::named("uint64"));
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {
@@ -18000,6 +18028,9 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<Type> {
+        if let Some(cell) = self.imported_state(object, field) {
+            return Ok(cell.ty.clone());
+        }
         let object_ty = self.type_of_member_object_expr(object, locals)?;
         self.resolve_member_type(&object_ty, field, span)
     }

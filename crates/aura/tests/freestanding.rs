@@ -531,6 +531,39 @@ fn proved_checks_are_removed_from_a_freestanding_object() {
     assert!(!object
         .windows(b"aura_trap".len())
         .any(|window| window == b"aura_trap"));
+
+    workspace.write(
+        "state.au",
+        r#"
+mut tick: uint64 = 0
+
+def update(value: uint64):
+    tick = value
+
+export "C" def snapshot(value: uint64):
+    before = tick
+    update(value)
+    assert tick == before
+"#,
+    );
+    let output = workspace.aura(&[
+        "build",
+        "--freestanding",
+        "--remove-proved-checks",
+        "-o",
+        "state.o",
+        "state.au",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("0 checks proved and removed"),
+        "{}",
+        stderr(&output)
+    );
+    let object = fs::read(workspace.path.join("state.o")).unwrap();
+    assert!(object
+        .windows(b"aura_trap".len())
+        .any(|name| name == b"aura_trap"));
 }
 
 const MEMORY_MANIFEST: &str =
@@ -704,6 +737,96 @@ fn the_bare_metal_example_builds_for_its_boards() {
 }
 
 #[test]
+fn a_pointer_updates_an_array_inside_a_packed_module_cell() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write(
+        "src/main.au",
+        include_str!("../../aura-compiler/tests/fixtures/freestanding/systems/header.au"),
+    );
+    for target in [
+        "x86_64-unknown-none",
+        "aarch64-unknown-none",
+        "riscv64gc-unknown-none-elf",
+    ] {
+        let built = workspace.aura(&[
+            "build",
+            "--freestanding",
+            "--target",
+            target,
+            "-o",
+            "header.o",
+            "src/main.au",
+        ]);
+        assert!(built.status.success(), "{target}: {}", stderr(&built));
+    }
+    let Some(cc) = c_compiler() else {
+        return;
+    };
+    let built = workspace.aura(&["build", "--freestanding", "-o", "header.o", "src/main.au"]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    workspace.write(
+        "header.c",
+        r#"#include <stdint.h>
+#include <stdlib.h>
+uint16_t advance_header(uint16_t delta);
+uint16_t header_flags(void);
+void aura_trap(uint32_t c, const char *f, size_t n, uint32_t l, uint32_t k) { abort(); }
+int main(void) {
+    return header_flags() != 195 || advance_header(18) != 42 ||
+        header_flags() != 197 || advance_header(1) != 43;
+}
+"#,
+    );
+    let link = Command::new(cc)
+        .current_dir(&workspace.path)
+        .args(["header.c", "header.o", "-o", "header"])
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "{}", stderr(&link));
+    assert!(Command::new(workspace.path.join("header"))
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[test]
+fn module_state_keeps_its_value_between_calls() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "state.au",
+        include_str!("../../aura-compiler/tests/fixtures/freestanding/module_state/counter.au"),
+    );
+    for backend in ["mir", "direct"] {
+        let output = workspace.aura(&["run", "--backend", backend, "state.au"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("AU3030"), "{}", stderr(&output));
+        assert!(stderr(&output).contains("sync.Mutex"));
+    }
+    let output = workspace.aura(&["build", "--freestanding", "-o", "state.o", "state.au"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    if cfg!(target_os = "linux") {
+        workspace.write("state.c", r#"
+#include <stdint.h>
+#include <stdlib.h>
+extern uint32_t advance(uint32_t n);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) { abort(); }
+int main(void) { return advance(1) == 12 && advance(3) == 17 ? 0 : 1; }
+"#);
+        let cc = Command::new("cc")
+            .current_dir(&workspace.path)
+            .args(["state.c", "state.o", "-o", "test-state"])
+            .output()
+            .unwrap();
+        assert!(cc.status.success(), "{}", stderr(&cc));
+        assert!(Command::new(workspace.path.join("test-state"))
+            .status()
+            .unwrap()
+            .success());
+    }
+}
+
+#[test]
 fn ordered_subword_atomics_match_in_the_interpreter_and_native_code() {
     let workspace = Workspace::new();
     workspace.write("Aura.toml", MEMORY_MANIFEST);
@@ -792,4 +915,33 @@ fn a_constant_scale_and_offset_share_one_overflow_check() {
         ir.contains("6148914691236517204") || ir.contains("6148914691236517205"),
         "{ir}"
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn module_array_index_runs_once_and_rhs_updates_survive() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "ring.au",
+        include_str!("../../aura-compiler/tests/fixtures/freestanding/module_state/fixed.au"),
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "ring.o", "ring.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    workspace.write("test.c",r#"
+#include <stdint.h>
+#include <stdlib.h>
+extern int32_t write_ring(void);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) { abort(); }
+int main(void) { return write_ring() == 19 && write_ring() == 38 ? 0 : 1; }
+"#);
+    let cc = Command::new("cc")
+        .current_dir(&workspace.path)
+        .args(["test.c", "ring.o", "-o", "test-ring"])
+        .output()
+        .unwrap();
+    assert!(cc.status.success(), "{}", stderr(&cc));
+    assert!(Command::new(workspace.path.join("test-ring"))
+        .status()
+        .unwrap()
+        .success());
 }

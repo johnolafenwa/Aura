@@ -331,14 +331,14 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
 fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
     let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
         .expect_err("module-level mutable state must be rejected before entrypoint checking");
-    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(mutable_module.code, "AU3030");
     assert_eq!(
         mutable_module.message,
-        "module bindings are immutable; `mut` module state is not supported"
+        "hosted module bindings are immutable"
     );
     assert_eq!(
         mutable_module.help,
-        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+        vec!["share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"]
     );
 
     let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
@@ -8032,6 +8032,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     }
 }
@@ -33392,6 +33393,11 @@ def run() -> int32:
     };
     assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
 
+    check_ffi_source_for_test(
+        "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+    )
+    .expect("assigning a mutable union member checks");
+
     for (source, message, code) in [
         (
             "extern \"C\" union U:\n    name: str\n",
@@ -33402,11 +33408,6 @@ def run() -> int32:
             "extern \"C\" union U:\n    names: array[str, 2]\n",
             "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
             "AU2002",
-        ),
-        (
-            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
-            "",
-            "",
         ),
         (
             "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
@@ -34227,12 +34228,19 @@ fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
         "fixed[str, 2]",
         "fixed[Message, 2]",
     ] {
-        let source = format!(
-            "class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n"
-        );
+        let source = format!("class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n");
         let error = crate::check_source(&source).expect_err(ty);
         assert_eq!(error.code, "AU2081", "{ty}: {error}");
     }
+}
+
+#[test]
+fn c_bit_field_cannot_be_lent_as_an_independent_scalar() {
+    let source = "extern \"C\" class Flags:\n    code: uint8 bits(3)\n\ndef set(value: mut uint8) -> None:\n    value = 127\n\ndef change() -> None:\n    mut f = Flags(code=1)\n    set(f.code)\n";
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU3033"
+    );
 }
 
 #[test]

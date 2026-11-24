@@ -540,16 +540,27 @@ pub(crate) enum Extension {
 pub(crate) enum Indirect {
     /// The call copies the `size` bytes the pointer names to the argument
     /// area of the stack: LLVM's `byval`.
-    ByValue { size: u32 },
+    ByValue {
+        size: u32,
+    },
+    ByValueAligned {
+        size: u32,
+        alignment: u32,
+    },
     /// The call passes the `count` values of type `element` the pointer
     /// names as one array argument. AArch64 gives an array either
     /// consecutive registers or the stack, never both, and after one goes
     /// to the stack no later argument takes a register of its kind.
-    Aggregate { element: ScalarType, count: u32 },
+    Aggregate {
+        element: ScalarType,
+        count: u32,
+    },
     /// The callee writes its `size`-byte result through the pointer, which
     /// travels where the convention puts a struct result's address: LLVM's
     /// `sret`.
-    Result { size: u32 },
+    Result {
+        size: u32,
+    },
 }
 
 /// A function signature.
@@ -600,6 +611,8 @@ pub(crate) enum DataAddress {
 /// addresses written into it, in order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DataDescription {
+    /// Retain the complete object and its address through whole-module optimization.
+    pub(crate) preserve_address: bool,
     pub(crate) bytes: Vec<u8>,
     pub(crate) align: Option<u64>,
     pub(crate) addresses: Vec<(u32, DataAddress)>,

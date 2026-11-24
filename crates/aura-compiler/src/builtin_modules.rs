@@ -209,8 +209,10 @@ fn float_expr_from_bits(bits: u64) -> Expr {
 
 fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::sema::ConstantInfo {
     crate::sema::ConstantInfo {
+        state: None,
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            mutable: false,
             public: true,
             name: name.to_string(),
             annotation: Some(type_ref("float64", Vec::new())),
@@ -406,6 +408,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             doc: None,
             c_layout: false,
             c_arrays: BTreeMap::new(),
+            layout_controls: Default::default(),
             c_union: None,
         },
         type_param_bounds: BTreeMap::new(),

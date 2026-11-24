@@ -57,6 +57,9 @@ impl PlainRecord {
     /// the bytes that C expects. Distinct native and C padding take the
     /// field-by-field conversion path.
     pub(super) fn matches_c_layout(&self, layout: &crate::c_layout::CStruct) -> bool {
+        if layout.has_controlled_layout() {
+            return false;
+        }
         if !layout.is_plain() || layout.size() as i64 != self.stride {
             return false;
         }

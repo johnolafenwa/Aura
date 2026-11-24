@@ -2545,6 +2545,25 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             };
             globals.push(global);
         }
+        let retained = initialized
+            .iter()
+            .filter(|(index, _)| {
+                object.data[*index]
+                    .contents
+                    .as_ref()
+                    .is_some_and(|data| data.preserve_address)
+            })
+            .map(|(index, _)| globals[*index].as_pointer_value())
+            .collect::<Vec<_>>();
+        if !retained.is_empty() {
+            let pointers = context
+                .ptr_type(AddressSpace::default())
+                .const_array(&retained);
+            let used = module.add_global(pointers.get_type(), None, "llvm.compiler.used");
+            used.set_linkage(LlvmLinkage::Appending);
+            used.set_section(Some("llvm.metadata"));
+            used.set_initializer(&pointers);
+        }
         let lowerer = Self {
             context,
             module,
@@ -3469,6 +3488,24 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                 ))?;
                 for (index, indirect) in &signature.indirects {
                     let (name, size) = match indirect {
+                        Indirect::ByValueAligned { size, alignment } => {
+                            let location = AttributeLoc::Param(*index as u32);
+                            call.add_attribute(
+                                location,
+                                context.create_type_attribute(
+                                    Attribute::get_named_enum_kind_id("byval"),
+                                    context.i8_type().array_type(*size).as_any_type_enum(),
+                                ),
+                            );
+                            call.add_attribute(
+                                location,
+                                context.create_enum_attribute(
+                                    Attribute::get_named_enum_kind_id("align"),
+                                    u64::from(*alignment),
+                                ),
+                            );
+                            continue;
+                        }
                         Indirect::ByValue { size } => ("byval", *size),
                         Indirect::Result { size } => ("sret", *size),
                         Indirect::Aggregate { .. } => continue,

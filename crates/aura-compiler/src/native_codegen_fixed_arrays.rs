@@ -96,6 +96,7 @@ impl FixedArrayLayout {
             if let Some(name) = hosted_wide(ty) {
                 return CFieldKind::Struct(CStruct {
                     name: format!("#fixed.{name}"),
+                    layout_controls: Default::default(),
                     union: false,
                     fields: ["low", "high"]
                         .map(|word| CField {
@@ -112,6 +113,7 @@ impl FixedArrayLayout {
                 DirectType::PlainClass(class) => CFieldKind::Struct(CStruct {
                     name: class.class_name.clone(),
                     union: false,
+                    layout_controls: Default::default(),
                     fields: class
                         .fields
                         .iter()
@@ -141,6 +143,7 @@ impl FixedArrayLayout {
         let layout = CStruct {
             name: "fixed".to_owned(),
             union: false,
+            layout_controls: Default::default(),
             fields: vec![CField {
                 name: "elements".to_owned(),
                 kind: match count {

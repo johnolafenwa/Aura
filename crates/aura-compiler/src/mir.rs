@@ -1,3 +1,4 @@
+mod module_state;
 use crate::ast::{
     Argument, AssignStmt, AssignTarget, BinaryOp, BindingTarget, CompareLink, CompareOp,
     ComprehensionClause, ComprehensionOutput, DestructureStmt, Expr, ExprKind, IfStmt,
@@ -736,6 +737,8 @@ impl MirOwnership {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirConstant {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::sema::StateImage>,
     pub key: String,
     pub initializer: String,
     pub ty: Type,
@@ -1165,6 +1168,17 @@ pub enum Rvalue {
     /// union whose only `None` can come from a type parameter: `true` when
     /// the runtime value is unit `None` or a union holding it (ADR-0052 A7).
     NoneTest {
+        value: Operand,
+    },
+    /// Reads, writes and address formation for a freestanding data symbol.
+    ModuleLoad {
+        key: String,
+    },
+    ModuleAddress {
+        key: String,
+    },
+    ModuleStore {
+        key: String,
         value: Operand,
     },
     /// Read a once-initialized immutable module value. The initializer thunk
@@ -1615,6 +1629,8 @@ pub enum Terminator {
 /// The source check an `AssertFail` reports.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssertKind {
+    /// A value exceeds the declared bit width of a C field.
+    CBitField,
     /// An `assert` statement or a compiler-inserted check: `AU4001`.
     #[default]
     Assert,
@@ -1638,6 +1654,7 @@ impl AssertKind {
     pub const fn code(self) -> &'static str {
         match self {
             AssertKind::Assert => "AU4001",
+            AssertKind::CBitField => "AU4033",
             AssertKind::Requires
             | AssertKind::Ensures
             | AssertKind::Invariant
@@ -1649,6 +1666,7 @@ impl AssertKind {
     pub const fn word(self) -> i64 {
         match self {
             AssertKind::Assert => 0,
+            AssertKind::CBitField => 5,
             AssertKind::Requires => 1,
             AssertKind::Ensures => 2,
             AssertKind::Invariant => 3,
@@ -4757,6 +4775,9 @@ fn rebase_callable_rvalue(
             }
             identities
         }
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleStore { .. } | Rvalue::ModuleAddress { .. } => {
+            Vec::new()
+        }
         Rvalue::ModuleConstant { initializer, .. } => context
             .functions
             .get(initializer.as_str())
@@ -5172,6 +5193,8 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
             Rvalue::UnionTakePayload { place, .. } | Rvalue::TupleTakeElement { place, .. } => {
                 place.split('.').next() == Some(root)
             }
+            Rvalue::ModuleStore { value, .. } => operand_moves(value, root),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => false,
             Rvalue::UnionTagTest { .. } | Rvalue::ModuleConstant { .. } => false,
             Rvalue::Closure { captures, .. } => captures
                 .iter()
@@ -7458,6 +7481,8 @@ fn validate_loan_rvalue(
             validate_canonical_mir_identifier(function, field, false)?;
             validate_loan_operand(function, object, context, state)
         }
+        Rvalue::ModuleStore { value, .. } => validate_loan_operand(function, value, context, state),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             function: closure_function,
@@ -10531,6 +10556,8 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
         Rvalue::UnionTagTest { place, .. }
         | Rvalue::UnionTakePayload { place, .. }
         | Rvalue::TupleTakeElement { place, .. } => mentions.push(place),
+        Rvalue::ModuleStore { value, .. } => operand_place_mention(value, mentions),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
         Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -11001,8 +11028,18 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
             continue;
         }
         let initializer = format!("__aura_const_init::{key}");
+        if let Some(state) = &constant.state {
+            constants.push(MirConstant {
+                key,
+                initializer: String::new(),
+                ty: constant.ty.clone(),
+                state: Some(state.as_ref().clone()),
+            });
+            continue;
+        }
         functions.extend(lower_constant_initializer(program, &initializer, constant));
         constants.push(MirConstant {
+            state: None,
             key,
             initializer,
             ty: constant.ty.clone(),
@@ -14030,6 +14067,15 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
+        if constant.decl.mutable {
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::ModuleLoad {
+                    key: module_state::cell_key(constant),
+                },
+            });
+            return Operand::Place(temp);
+        }
         if is_scalar_literal_constant(constant)
             || constant.ty.as_fixed_array().is_some()
                 && fixed_arrays::constant_initializer(&constant.decl.value)
@@ -15682,6 +15728,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_assign(&mut self, assign: &AssignStmt) {
+        if self.lower_state_assignment(assign) {
+            return;
+        }
         let named_target_type = match (&assign.target, &assign.annotation) {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
@@ -16089,6 +16138,7 @@ impl<'a> Lowerer<'a> {
                 span: assign.span,
             };
             let value = self.lower_expr_for_owned_value(&compound, target_ty.as_ref());
+            self.check_member_bit_store(assign, &value);
             self.emit(Instruction::Assign {
                 target,
                 value: Rvalue::Use(value),
@@ -16104,6 +16154,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let value = self.lower_expr_for_owned_value(&assign.value, target_ty.as_ref());
+        self.check_member_bit_store(assign, &value);
         if let Some(target_ty) = target_ty {
             self.retarget_operand_place(&value, &target_ty);
         }
@@ -26021,6 +26072,14 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(Ok(value)) = self.c_layout_query(callee, args) {
+            let place = self.new_typed_temp(Type::named("uint64"));
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(Operand::Int(value as u128)),
+            });
+            return Operand::Place(place);
+        }
         if let Some(info) = self.recursive_local_call(callee).cloned() {
             let mut forwarded = info
                 .captures
@@ -26368,6 +26427,16 @@ impl<'a> Lowerer<'a> {
                         );
                         self.retarget_operand_place(&value, &field_type);
                     }
+                    self.check_bit_store(
+                        class
+                            .decl
+                            .layout_controls
+                            .bit_widths
+                            .get(&field_name)
+                            .copied(),
+                        &value,
+                        argument.span,
+                    );
                     provided.insert(field_name, value);
                 }
                 let fields = class
@@ -26889,6 +26958,16 @@ impl<'a> Lowerer<'a> {
                                     );
                                     self.retarget_operand_place(&value, &field_type);
                                 }
+                                self.check_bit_store(
+                                    class
+                                        .decl
+                                        .layout_controls
+                                        .bit_widths
+                                        .get(&field_name)
+                                        .copied(),
+                                    &value,
+                                    argument.span,
+                                );
                                 provided.insert(field_name, value);
                             }
                             let fields = class
@@ -29363,6 +29442,11 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if self.c_layout_query(callee, args)
+            .is_some()
+            {
+                return Some(Type::named("uint64"));
+            }
             if let Some(info) = self.recursive_local_call(callee) {
                 return Some(info.return_type.clone());
             }
@@ -32088,6 +32172,9 @@ fn mir_class_type_name(
 pub(crate) mod fixed_arrays;
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_c_bit_fields.rs"]
+mod c_bit_fields;
 
 #[path = "mir_simd.rs"]
 mod simd;

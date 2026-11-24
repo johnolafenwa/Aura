@@ -682,6 +682,8 @@ impl Substitution<'_> {
                 self.union(union_type, member_index)?;
                 self.types([member_type]);
             }
+            Rvalue::ModuleStore { value, .. } => self.operand(value),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
             Rvalue::ModuleConstant { .. } => {}
             Rvalue::Closure {
                 function,

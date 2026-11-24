@@ -24644,6 +24644,7 @@ def main() -> int32:
             field("on", CFieldKind::Scalar(FfiScalar::Bool)),
             field("level", CFieldKind::Scalar(FfiScalar::F32)),
         ],
+        layout_controls: Default::default(),
         union: false,
     };
     let outer = CStruct {
@@ -24652,6 +24653,7 @@ def main() -> int32:
             field("id", CFieldKind::Scalar(FfiScalar::I16)),
             field("flagged", CFieldKind::Struct(inner.clone())),
         ],
+        layout_controls: Default::default(),
         union: false,
     };
     let param = |passing| MirExternParam {
@@ -24885,6 +24887,7 @@ def main() -> int32:
             name: "key".to_string(),
             kind: crate::c_layout::CFieldKind::Scalar(crate::ffi::FfiScalar::I32),
         }],
+        layout_controls: Default::default(),
         union: false,
     };
     let param = |passing| MirExternParam {
