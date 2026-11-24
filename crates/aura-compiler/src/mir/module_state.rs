@@ -52,7 +52,7 @@ impl Lowerer<'_> {
         }
     }
 
-    fn state_union_setter(&self, target: &AssignTarget) -> Option<(String, Type)> {
+    fn state_union_member_type(&self, target: &AssignTarget) -> Option<Type> {
         let AssignTarget::Member { object, field } = target else {
             return None;
         };
@@ -62,8 +62,7 @@ impl Lowerer<'_> {
         let class = self.resolve_class_info(&name)?;
         class.decl.c_union.as_ref()?;
         let method = format!("__write_{field}");
-        let input = class.methods.get(&method)?.signature.params.last()?.clone();
-        Some((method, input))
+        class.methods.get(&method)?.signature.params.last().cloned()
     }
 
     pub(super) fn lower_state_assignment(&mut self, assign: &AssignStmt) -> bool {
@@ -88,10 +87,9 @@ impl Lowerer<'_> {
         let constant = self.state_binding(root).unwrap().clone();
         let root_span = root.span;
         let whole = self.state_binding(&target).is_some();
-        let setter = self.state_union_setter(&assign.target);
-        let expected = setter
-            .as_ref()
-            .map(|(_, ty)| ty.clone())
+        let member_ty = self.state_union_member_type(&assign.target);
+        let expected = member_ty
+            .clone()
             .or_else(|| self.infer_expr_type(&target))
             .unwrap_or_else(|| constant.ty.clone());
         self.capture_state_target(&mut target);
@@ -150,7 +148,7 @@ impl Lowerer<'_> {
                 annotation: None,
                 span: assign.span,
             };
-            if setter.is_some() {
+            if member_ty.is_some() {
                 let Some(Stmt::Expr(call)) = crate::sema::state_union_setter_statement(&write)
                 else {
                     unreachable!()
