@@ -129,6 +129,42 @@ fn query_type(
         .or_else(|| ffi_struct_layout(&ty, classes).map(CFieldKind::Struct))
 }
 
+/// Replace layout queries in a checked initializer with their target integer values.
+pub(super) fn folded_binding(
+    decl: &crate::ast::ConstantDecl,
+    modules: &BTreeMap<String, ModuleNamespace>,
+    classes: &BTreeMap<String, ClassInfo>,
+) -> crate::ast::ConstantDecl {
+    fn fold(
+        expr: &mut Expr,
+        modules: &BTreeMap<String, ModuleNamespace>,
+        classes: &BTreeMap<String, ClassInfo>,
+    ) {
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
+                expr.kind = ExprKind::Int(value as u128);
+                return;
+            }
+        }
+        // These initializer forms introduce no names of their own.
+        if matches!(
+            expr.kind,
+            ExprKind::Call { .. }
+                | ExprKind::List(_)
+                | ExprKind::Tuple(_)
+                | ExprKind::Group(_)
+                | ExprKind::Unary { .. }
+                | ExprKind::Binary { .. }
+                | ExprKind::Cast { .. }
+        ) {
+            expr.for_each_child_mut(&mut |child| fold(child, modules, classes));
+        }
+    }
+    let mut decl = decl.clone();
+    fold(&mut decl.value, modules, classes);
+    decl
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,41 +206,4 @@ mod tests {
             assert!(!format!("{mir:?}").contains("\"offset_of\""));
         }
     }
-}
-
-/// Fold a complete query in a module initializer after its original type
-/// has been checked. This gives freestanding storage an integer literal.
-pub(super) fn folded_binding(
-    decl: &crate::ast::ConstantDecl,
-    modules: &BTreeMap<String, ModuleNamespace>,
-    classes: &BTreeMap<String, ClassInfo>,
-) -> crate::ast::ConstantDecl {
-    fn fold(
-        expr: &mut Expr,
-        modules: &BTreeMap<String, ModuleNamespace>,
-        classes: &BTreeMap<String, ClassInfo>,
-    ) {
-        if let ExprKind::Call { callee, args } = &expr.kind {
-            if let Some(Ok(value)) = evaluate(callee, args, modules, classes, |_| false) {
-                expr.kind = ExprKind::Int(value as u128);
-                return;
-            }
-        }
-        // These initializer forms introduce no names of their own.
-        if matches!(
-            expr.kind,
-            ExprKind::Call { .. }
-                | ExprKind::List(_)
-                | ExprKind::Tuple(_)
-                | ExprKind::Group(_)
-                | ExprKind::Unary { .. }
-                | ExprKind::Binary { .. }
-                | ExprKind::Cast { .. }
-        ) {
-            expr.for_each_child_mut(&mut |child| fold(child, modules, classes));
-        }
-    }
-    let mut decl = decl.clone();
-    fold(&mut decl.value, modules, classes);
-    decl
 }
