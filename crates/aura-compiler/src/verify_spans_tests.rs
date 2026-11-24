@@ -422,8 +422,10 @@ def main():
 "#,
         &[
             "13 requires failed",
-            "14 assert failed",
-            "14 index in range failed",
+            // What the write left in the row is not modeled, so these
+            // are open without a counterexample.
+            "14 assert unsupported",
+            "14 index in range unsupported",
             "14 index in range failed",
         ],
     );

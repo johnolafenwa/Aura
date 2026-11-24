@@ -365,6 +365,11 @@ enum Loan {
     /// A loan the encoding does not follow. A write through it makes the
     /// root local unknown.
     Unknown(String),
+    /// A loan of something inside an element of the collection at this
+    /// place, which the encoding does not follow further. A write through
+    /// it may change any element, and leaves the collection's own length
+    /// and keys as they are.
+    Inside(String),
 }
 
 #[derive(Clone, Debug)]
@@ -1045,15 +1050,13 @@ impl<'a> Exec<'a> {
                 let source = join_path(&source, &rest.join("."));
                 return self.write_place(state, &source, value);
             }
-            // A write to one element keeps the list's length.
-            Some(Loan::Element { list, .. }) => match self.read_place(state, &list) {
-                Val::List { len, elem, .. } => {
-                    let data = self.fresh_store(&elem, "store");
-                    self.write_place(state, &list, Val::List { len, data, elem });
-                }
-                _ => self.havoc_place(state, &list),
-            },
-            Some(Loan::Unknown(source)) => self.havoc_root(state, &source),
+            Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                self.havoc_inside(state, &list)
+            }
+            Some(Loan::Unknown(source)) => self.unmodeled(
+                "a write through a borrow the verifier does not follow",
+                |exec| exec.havoc_root(state, &source),
+            ),
             None => {}
         }
         if rest.is_empty() {
@@ -1069,6 +1072,45 @@ impl<'a> Exec<'a> {
         } else {
             self.havoc_root(state, &root);
         }
+    }
+
+    /// Makes the elements of the collection at `place` unknown after a
+    /// write through a loan of something inside one of them. Such a write
+    /// cannot add or remove an element, so a list keeps its length and a
+    /// `dict` its length and keys.
+    fn havoc_inside(&mut self, state: &mut State, place: &str) {
+        self.unmodeled(
+            "a write through a borrow the verifier does not follow",
+            |exec| match exec.read_place(state, place) {
+                Val::List { len, elem, .. } => {
+                    let data = exec.fresh_store(&elem, "store");
+                    exec.write_place(state, place, Val::List { len, data, elem });
+                }
+                Val::Map {
+                    len,
+                    keys,
+                    key,
+                    value,
+                    ..
+                } => {
+                    let values = match (key_sort(&key), element_sort(&value)) {
+                        (Some(sort), Some(value_sort)) => Some(
+                            exec.fresh_const(&format!("(Array {sort} {value_sort})"), "values"),
+                        ),
+                        _ => None,
+                    };
+                    let after = Val::Map {
+                        len,
+                        keys,
+                        values,
+                        key,
+                        value,
+                    };
+                    exec.write_place(state, place, after);
+                }
+                _ => exec.havoc_place(state, place),
+            },
+        );
     }
 
     fn havoc_root(&mut self, state: &mut State, root: &str) {
@@ -2200,6 +2242,7 @@ impl<'a> Exec<'a> {
                             projection: projection.clone(),
                         }
                     }
+                    (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
                     _ => Loan::Unknown(root_of(source).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -2228,6 +2271,7 @@ impl<'a> Exec<'a> {
                         projection: join_path(&inner, projection),
                     },
                     Some(Loan::Unknown(root)) => Loan::Unknown(root),
+                    Some(Loan::Inside(place)) => Loan::Inside(place),
                     None => Loan::Unknown(root_of(parent).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -2253,12 +2297,16 @@ impl<'a> Exec<'a> {
                                     projection: projection.clone(),
                                 }
                             }
+                            (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(place),
                             _ => Loan::Unknown(root_of(&place).to_string()),
                         }
                     }
-                    Some(Loan::Element { list, .. }) | Some(Loan::Unknown(list)) => {
-                        Loan::Unknown(root_of(&list).to_string())
+                    // An element of an element is still inside the
+                    // collection the first one came from.
+                    Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                        Loan::Inside(list)
                     }
+                    Some(Loan::Unknown(root)) => Loan::Unknown(root),
                     None => Loan::Unknown(root_of(parent).to_string()),
                 };
                 state.loans.insert(loan.clone(), value);
@@ -2330,6 +2378,7 @@ impl<'a> Exec<'a> {
                         .unmodeled("a write through a borrow the verifier does not follow", |exec| {
                             exec.havoc_root(state, &root)
                         }),
+                    Some(Loan::Inside(place)) => self.havoc_inside(state, &place),
                     None => self.havoc_root(state, root_of(loan)),
                 }
             }
@@ -4785,7 +4834,7 @@ fn rvalue_name(value: &Rvalue) -> &'static str {
         Rvalue::StartTask { recover: true, .. } => "`control.recover`",
         Rvalue::StartTask { .. } => "a task started through a function value",
         Rvalue::Cast { .. } => "a conversion",
-        _ => "a value the verifier does not model",
+        _ => "a value",
     }
 }
 
