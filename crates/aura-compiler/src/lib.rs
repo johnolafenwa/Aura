@@ -11,12 +11,13 @@ pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
+mod freestanding_mode;
+pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
-mod freestanding_mode;
 mod native_backend;
 mod native_codegen;
 mod runtime_abi;
@@ -49,13 +50,15 @@ pub use diag::{
     Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
     StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
 };
+pub use freestanding_mode::{
+    enter_freestanding_target, freestanding_check_target, with_freestanding_target,
+};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
     run as run_mir, run_entry_with_stdout_sink_and_program_args as run_mir_entry,
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
-pub use freestanding_mode::{enter_freestanding_target, freestanding_check_target, with_freestanding_target};
 pub use native_backend::{
     hosted_target, set_hosted_target, target_arch as native_target_arch, FreestandingTarget,
     HostedTarget,
@@ -729,6 +732,29 @@ impl ModuleLoader {
         if is_entry_module {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
+            }
+            let mut imported: Vec<_> = self
+                .cache
+                .iter()
+                .filter(|(file, _)| **file != path)
+                .collect();
+            imported.sort_by_key(|(file, _)| *file);
+            for (_, loaded) in imported {
+                let module = &loaded.program;
+                program
+                    .foreign_link
+                    .module_asm
+                    .extend_from_slice(&module.module.module_asm);
+                if module.module.asm_span.is_some() {
+                    program.foreign_link.asm_arch =
+                        module.machine_target.map(|target| target.arch().to_owned());
+                    program.foreign_link.asm_externs.extend(
+                        module
+                            .extern_functions
+                            .values()
+                            .map(|f| f.decl.link_name().to_owned()),
+                    );
+                }
             }
             program.constant_init_plan = self.build_constant_init_plan(&path)?;
             self.cache.insert(

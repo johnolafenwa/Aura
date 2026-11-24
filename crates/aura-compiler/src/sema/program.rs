@@ -19,6 +19,7 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub(crate) machine_target: Option<crate::FreestandingTarget>,
     pub module: Module,
     pub module_name: String,
     pub source_path: Option<String>,
@@ -567,6 +568,9 @@ pub struct FunctionSignature {
 // crate-private. Public callers must use the source wrappers (which reject
 // unmanifested FFI) or path APIs (which enforce package opt-in and reports).
 pub(crate) fn check_with_context(module: Module, context: ModuleContext) -> Result<Program> {
+    if let Some(span) = module.asm_span {
+        crate::inline_asm::target_at(span)?;
+    }
     let mut module = module;
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
@@ -2319,6 +2323,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     constant_init_plan.extend(local_constants);
     let mut program = Program {
+        machine_target: crate::freestanding_check_target(),
         aliases,
         type_definitions: type_names.clone(),
         module: module.clone(),

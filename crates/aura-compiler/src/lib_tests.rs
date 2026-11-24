@@ -4588,3 +4588,79 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     .expect_err("the store definition is internal even in a type annotation");
     assert!(error.message.contains("collections.__Store"));
 }
+
+#[test]
+fn diamond_import_adds_module_assembly_once_and_checks_its_package_grant() {
+    let temp = TempDir::new("aura-shared-assembly");
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    let manifest = "[package]\nname = \"bits\"\nversion = \"1.0.0\"\nedition = \"2026\"\n";
+    let path = temp.path().join("Aura.toml");
+    fs::write(&path, format!("{manifest}allow_ffi = true\n")).unwrap();
+    fs::write(
+        src.join("common.au"),
+        "module_asm(\".text\\n.globl single_noop\\nsingle_noop: ret\")\n",
+    )
+    .unwrap();
+    for name in ["left", "right"] {
+        fs::write(src.join(format!("{name}.au")), "import common\n").unwrap();
+    }
+    let entry = src.join("main.au");
+    fs::write(&entry, "import left\nimport right\n").unwrap();
+    let target = crate::FreestandingTarget::X86_64;
+    let mir = crate::with_freestanding_target(target, || {
+        crate::lower_path_to_mir_with_source_locations(&entry)
+    })
+    .unwrap();
+    assert_eq!(mir.foreign_link.module_asm.len(), 1);
+    crate::emit_freestanding_object(&mir, "main.au", "", target).unwrap();
+    fs::write(path, manifest).unwrap();
+    let error = crate::with_freestanding_target(target, || crate::check_path(&entry)).unwrap_err();
+    assert!(error.message.contains("allow_ffi"), "{error:?}");
+}
+
+#[test]
+fn disassembles_inline_assembly_in_the_export_on_each_target() {
+    use std::process::Command;
+    let temp = TempDir::new("aura-asm-disassembly");
+    let obj = temp.path().join("entry.o");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let libdir = Command::new(rustc)
+        .args(["--print", "target-libdir"])
+        .output()
+        .unwrap();
+    assert!(libdir.status.success());
+    let libdir = String::from_utf8(libdir.stdout).unwrap();
+    let objdump = Path::new(libdir.trim())
+        .parent()
+        .unwrap()
+        .join("bin")
+        .join(format!("llvm-objdump{}", std::env::consts::EXE_SUFFIX));
+    for (target, instruction) in [
+        (crate::FreestandingTarget::X86_64, "pause"),
+        (crate::FreestandingTarget::Aarch64, "yield"),
+        (crate::FreestandingTarget::Riscv64, "wfi"),
+    ] {
+        let source = format!("export \"C\" def entry() -> None:\n    asm(\"{instruction}\")\n");
+        let program = crate::with_freestanding_target(target, || {
+            crate::check_module_with_builtin_imports(parse_source(&source).unwrap())
+        })
+        .unwrap();
+        let module = crate::mir::lower_with_source_locations(&program);
+        let bytes = crate::emit_freestanding_object(&module, "entry.au", &source, target).unwrap();
+        fs::write(&obj, bytes).unwrap();
+        let output = Command::new(&objdump)
+            .args(["-d", "--disassemble-symbols=entry"])
+            .arg(&obj)
+            .output()
+            .expect("rustup llvm-tools-preview supplies llvm-objdump");
+        assert!(output.status.success(), "{output:?}");
+        let listing = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            listing
+                .lines()
+                .any(|line| line.split_whitespace().last() == Some(instruction)),
+            "{listing}"
+        );
+    }
+}
