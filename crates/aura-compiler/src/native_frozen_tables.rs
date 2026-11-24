@@ -243,8 +243,12 @@ fn lower_match(
         else {
             return;
         };
-        let id = locals.len();
-        let test = format!("%frozen.tag.{id}");
+        let id = locals
+            .iter()
+            .filter_map(|l| l.name.strip_prefix("%t")?.parse::<u64>().ok())
+            .max()
+            .map_or(0, |n| n + 1);
+        let test = format!("%t{id}");
         let name = format!("$frozen.match.{id}");
         locals.push(crate::mir::MirLocalType {
             name: test.clone(),
