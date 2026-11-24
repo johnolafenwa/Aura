@@ -28,7 +28,7 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn unsupported_decorator_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU2005", span, message)
-        .with_help("decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property")
+        .with_help("decorators apply to module-level functions and class methods; write `@property` alone above a getter")
 }
 
 fn misplaced_decorator_error(span: Span) -> Diagnostic {
@@ -330,10 +330,11 @@ pub fn parse(source: &str) -> Result<Module> {
 /// decorator or the definition. Comment lines inside the group are skipped.
 fn record_decorator_text(module: &mut Module, source: &str) {
     let lines = source.lines().collect::<Vec<_>>();
-    for item in &mut module.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
+    for function in module.items.iter_mut().flat_map(|item| match item {
+        Item::Function(function) => std::slice::from_mut(function),
+        Item::Class(class) => class.methods.as_mut_slice(),
+        _ => &mut [],
+    }) {
         let ends = function
             .decorators
             .iter()
@@ -618,7 +619,7 @@ impl Parser {
         if self.at_simple(&TokenKind::At)
             && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
         {
-            return self.parse_decorated_function();
+            return self.parse_decorated_function(false).map(Item::Function);
         }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
@@ -1163,6 +1164,12 @@ impl Parser {
                 methods.push(self.parse_property_setter(&methods)?);
                 continue;
             }
+            if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                methods.push(self.parse_decorated_function(true)?);
+                continue;
+            }
             if self.at_simple(&TokenKind::At) {
                 let property = self.parse_property_marker()?;
                 let method_public = self.eat_simple(&TokenKind::KwPublic).is_some();
@@ -1521,9 +1528,9 @@ impl Parser {
         })
     }
 
-    /// Parses a group of `@expression` lines and the module-level function
+    /// Parses a group of `@expression` lines and the function or method
     /// they decorate. Comments and blank lines may sit inside the group.
-    fn parse_decorated_function(&mut self) -> Result<Item> {
+    fn parse_decorated_function(&mut self, method: bool) -> Result<FunctionDecl> {
         let first = self.current_span();
         let mut decorators = Vec::new();
         while self.at_simple(&TokenKind::At) {
@@ -1541,15 +1548,21 @@ impl Parser {
         }
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         if !self.at_keyword_def() {
+            if method {
+                return Err(Diagnostic::coded_at(
+                    "AU2047",
+                    first,
+                    "a method decorator must come directly before a method definition",
+                ));
+            }
             return Err(misplaced_decorator_error(first));
         }
-        let mut function = self.parse_function(public)?;
+        let mut function = self.parse_function_with_receiver(method, public)?;
         function.decorators = decorators;
-        Ok(Item::Function(function))
+        Ok(function)
     }
 
-    /// Parses one `@property` line. `@property` is the only marker Aura
-    /// accepts: a general decorator is not part of the language.
+    /// Parses the reserved stand-alone `@property` marker.
     fn parse_property_marker(&mut self) -> Result<Span> {
         let span = self.expect_simple(TokenKind::At)?.span;
         let name = match self.current_kind() {

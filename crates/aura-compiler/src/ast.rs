@@ -348,7 +348,7 @@ pub struct FunctionDecl {
     /// read-only computed property.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub property: Option<Span>,
-    /// The decorator expressions written above a module-level function, top
+    /// The decorator expressions written above a function or method, top
     /// to bottom.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub decorators: Vec<Decorator>,

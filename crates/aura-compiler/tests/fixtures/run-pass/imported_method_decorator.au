@@ -1,0 +1,7 @@
+import imported_method_decorator_support.scores as scores
+
+def main():
+    first = scores.Counter(value=6)
+    second = scores.Counter(value=10)
+    print(first.score())
+    print(second.score())

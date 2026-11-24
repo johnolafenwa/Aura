@@ -222,7 +222,11 @@ pub fn api_module_from_program(module_name: &str, program: &Program) -> ApiModul
                     .filter(|method| {
                         method.public && method.name != crate::ast::CLASS_INVARIANT_METHOD
                     })
-                    .map(|method| function_declaration("method", method))
+                    .map(|method| {
+                        let mut entry = function_declaration("method", method);
+                        entry.signature = decorated_signature(method, &entry.signature);
+                        entry
+                    })
                     .collect();
                 declarations.push(entry);
             }
