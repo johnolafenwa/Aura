@@ -201,10 +201,15 @@ fn power_of_ten(digits: u64) -> Result<BigInt> {
     Ok(BigInt::from(10u8).pow(digits as u32))
 }
 
+// 30103 / 100000 is greater than log10(2).
+fn decimal_digit_bound(value: &BigInt) -> u64 {
+    value.bits().saturating_mul(30103).div_ceil(100000).max(1)
+}
+
 /// How many decimal digits `value` has. Zero has one.
-fn decimal_digits(value: &BigInt) -> u64 {
+fn decimal_digits(value: &BigInt) -> Result<u64> {
     if value.is_zero() {
-        return 1;
+        return Ok(1);
     }
     let bits = value.bits();
     if bits < 64 {
@@ -214,9 +219,10 @@ fn decimal_digits(value: &BigInt) -> u64 {
             magnitude /= 10;
             digits += 1;
         }
-        return digits;
+        return Ok(digits);
     }
-    value.magnitude().to_str_radix(10).len() as u64
+    crate::builtin_limit::check(decimal_digit_bound(value))?;
+    Ok(value.magnitude().to_str_radix(10).len() as u64)
 }
 
 /// Removes trailing decimal zeros from `coefficient`, raising `exponent`
@@ -335,7 +341,7 @@ fn rounded_to_digits(
     mode: i64,
     sticky: bool,
 ) -> Result<(BigInt, i64)> {
-    let have = decimal_digits(&coefficient);
+    let have = decimal_digits(&coefficient)?;
     let digits = digits as u64;
     if have <= digits {
         return Ok((coefficient, exponent));
@@ -795,7 +801,7 @@ fn divided(
     // The quotient of the coefficients has `gap` or `gap + 1` digits before
     // its point. Scale so that the integer quotient has `digits` or
     // `digits + 1` digits, then round once.
-    let gap = decimal_digits(&numerator) as i128 - decimal_digits(&denominator) as i128;
+    let gap = decimal_digits(&numerator)? as i128 - decimal_digits(&denominator)? as i128;
     let shift = i128::from(digits) - gap;
     let scale = power_of_ten(
         u64::try_from(shift.unsigned_abs()).map_err(|_| too_large("a power of ten"))?,
@@ -811,7 +817,7 @@ fn divided(
         -i128::from(denominator_exponent),
         -shift,
     ])?;
-    if decimal_digits(&quotient) <= digits as u64 {
+    if decimal_digits(&quotient)? <= digits as u64 {
         // No digit to drop: round the last place from the remainder.
         let rounded = rounded_quotient(&scaled_numerator, &scaled_denominator, mode, false)?;
         return Ok((rounded, exponent));
@@ -871,8 +877,8 @@ pub fn host_dec_compare(args: Vec<Value>, _program_args: Option<&[String]>) -> R
         (Sign::NoSign, _) => Ordering::Equal,
         (sign, _) => {
             // Compare by size first, which needs no scaling.
-            let left_top = decimal_digits(&left.0) as i128 + i128::from(left.1);
-            let right_top = decimal_digits(&right.0) as i128 + i128::from(right.1);
+            let left_top = decimal_digits(&left.0)? as i128 + i128::from(left.1);
+            let right_top = decimal_digits(&right.0)? as i128 + i128::from(right.1);
             let by_size = if sign == Sign::Minus {
                 right_top.cmp(&left_top)
             } else {
@@ -903,7 +909,7 @@ fn rounded_to_places(
         return Ok((coefficient, exponent));
     }
     let drop = (i128::from(target) - i128::from(exponent)) as u128;
-    if drop > u128::from(decimal_digits(&coefficient)) + 1 {
+    if drop > u128::from(decimal_digits(&coefficient)?) + 1 {
         // Every digit is dropped: the result is zero or one unit.
         let unit = rounded_quotient(&coefficient.signum(), &BigInt::from(4u8), mode, false)?;
         return Ok((unit, target));
@@ -987,11 +993,7 @@ pub fn host_dec_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
 
 /// Plain notation: every digit written out, with no exponent.
 fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
-    let digit_bound = coefficient
-        .bits()
-        .saturating_mul(30103)
-        .div_ceil(100000)
-        .max(1);
+    let digit_bound = decimal_digit_bound(coefficient);
     let length = if exponent >= 0 {
         digit_bound.saturating_add(exponent as u64)
     } else {
@@ -1023,6 +1025,7 @@ fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
 /// between the seventh place after the point and the twenty-first before
 /// it, and `d.ddde30` otherwise, as a `float64` prints.
 fn display(coefficient: &BigInt, exponent: i64) -> Result<String> {
+    crate::builtin_limit::check(decimal_digit_bound(coefficient).saturating_add(22))?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let top = digits.len() as i128 + i128::from(exponent) - 1;
     if (-7..21).contains(&top) {
@@ -1076,6 +1079,7 @@ pub fn host_dec_to_float(args: Vec<Value>, _program_args: Option<&[String]>) -> 
     expect_arity(name, &args, 3)?;
     let (coefficient, exponent) = decimal(name, &args, 0)?;
     // The standard parser rounds a decimal text correctly.
+    crate::builtin_limit::check(decimal_digit_bound(&coefficient).saturating_add(22))?;
     let text = format!("{coefficient}e{exponent}");
     Ok(Value::Float(text.parse::<f64>().unwrap_or(f64::NAN)))
 }
@@ -1106,7 +1110,7 @@ pub fn host_dec_sqrt(args: Vec<Value>, _program_args: Option<&[String]>) -> Resu
     }
     // Scale to an even exponent and enough digits that the integer root
     // carries one digit more than asked for.
-    let have = decimal_digits(&coefficient) as i128;
+    let have = decimal_digits(&coefficient)? as i128;
     let mut shift = (2 * i128::from(digits) + 2 - have).max(0);
     if (i128::from(exponent) - shift) % 2 != 0 {
         shift += 1;
