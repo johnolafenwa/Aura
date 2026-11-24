@@ -801,7 +801,7 @@ impl<'a> AnalysisBuilder<'a> {
             .map(|completion| completion.name.clone())
             .collect::<BTreeSet<_>>();
         for (name, binding) in scope {
-            if names.insert(name.clone()) {
+            if !is_decorator_generated(&name) && names.insert(name.clone()) {
                 completions.push(AnalysisCompletion {
                     name,
                     kind: "variable".to_string(),

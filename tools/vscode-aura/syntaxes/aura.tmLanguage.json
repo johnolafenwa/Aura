@@ -542,7 +542,7 @@
           "begin": "^\\s*(impl)\\b(?=[^#]*\\bby\\s+[A-Za-z_]\\w*\\s*:?\\s*(?:#|$))",
           "beginCaptures": {
             "1": {
-              "name": "keyword.control.delegation.aura"
+              "name": "keyword.control.aura"
             }
           },
           "end": "$",
