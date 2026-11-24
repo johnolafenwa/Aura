@@ -7,7 +7,9 @@
 //! back as an address and a length inside it, so the caller keeps the input
 //! alive for as long as it reads the result.
 //!
-//! None of them can fail, so none crosses the runtime boundary.
+//! The entry points that only read cannot fail, so they do not cross the
+//! runtime boundary. A [`DirectStrBuffer`] can pass the string limit, which
+//! stops the program as it does for any other text.
 
 use std::slice;
 
@@ -303,6 +305,146 @@ pub unsafe extern "C-unwind" fn aura_direct_str_lines_next_view(
     }
 }
 
+/// A text being built in three words the caller owns: the address, the
+/// length and the capacity of its bytes. Three zero words are the empty
+/// buffer, which owns nothing. The caller ends every buffer exactly once,
+/// with [`aura_direct_str_buffer_finish`] or
+/// [`aura_direct_str_buffer_free`].
+#[repr(C)]
+pub struct DirectStrBuffer {
+    ptr: *mut u8,
+    len: usize,
+    capacity: usize,
+}
+
+impl DirectStrBuffer {
+    /// Takes the text out, leaving the empty buffer.
+    ///
+    /// # Safety
+    ///
+    /// The words are zero or what [`Self::put`] wrote.
+    unsafe fn take(&mut self) -> String {
+        let text = if self.capacity == 0 {
+            String::new()
+        } else {
+            // SAFETY: `put` wrote the parts of a `String` it forgot.
+            unsafe { String::from_raw_parts(self.ptr, self.len, self.capacity) }
+        };
+        *self = Self {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+        };
+        text
+    }
+
+    fn put(&mut self, text: String) {
+        let mut text = std::mem::ManuallyDrop::new(text);
+        *self = Self {
+            ptr: text.as_mut_ptr(),
+            len: text.len(),
+            capacity: text.capacity(),
+        };
+    }
+
+    /// Appends `part`, or stops the program when the text would pass the
+    /// string limit. The buffer keeps its text either way, so the cleanup
+    /// that follows a failure frees it.
+    ///
+    /// # Safety
+    ///
+    /// As [`Self::take`].
+    unsafe fn push(&mut self, part: &str) {
+        // SAFETY: the caller's contract.
+        let mut text = unsafe { self.take() };
+        let appended = crate::runtime_value::append_string_checked(&mut text, part);
+        self.put(text);
+        if let Err(error) = appended {
+            super::task_runtime_boundary(|| super::runtime_diagnostic_error(error))
+        }
+    }
+}
+
+/// Appends the text at `part` to `buffer`: one part of an f-string or one
+/// side of `+`, with no value made for the part or for the text so far.
+///
+/// # Safety
+///
+/// `buffer` addresses a buffer the caller owns, and the address and length
+/// name live UTF-8 bytes outside it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_buffer_push_view(
+    buffer: *mut DirectStrBuffer,
+    part: *const u8,
+    part_len: usize,
+) {
+    // SAFETY: the caller's contract.
+    unsafe { (*buffer).push(view(part, part_len)) }
+}
+
+/// Appends `value` in decimal to `buffer`, as `{value}` formats an
+/// `int64`.
+///
+/// # Safety
+///
+/// `buffer` addresses a buffer the caller owns.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_buffer_push_i64(
+    buffer: *mut DirectStrBuffer,
+    value: i64,
+) {
+    let mut digits = [0u8; super::I64_DECIMAL_BYTES];
+    // SAFETY: the caller's contract.
+    unsafe { (*buffer).push(super::i64_decimal(value, &mut digits)) }
+}
+
+/// Makes room in `buffer` for `additional` more bytes, so the appends that
+/// follow grow it at most once. A hint: it changes no text.
+///
+/// # Safety
+///
+/// `buffer` addresses a buffer the caller owns.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_buffer_reserve(
+    buffer: *mut DirectStrBuffer,
+    additional: usize,
+) {
+    // SAFETY: the caller's contract.
+    unsafe {
+        let mut text = (*buffer).take();
+        text.reserve(additional.min(super::FORMAT_RESERVE_LIMIT));
+        (*buffer).put(text);
+    }
+}
+
+/// The `str` box of the text in `buffer`, which is left empty.
+///
+/// # Safety
+///
+/// `buffer` addresses a buffer the caller owns.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_buffer_finish(
+    buffer: *mut DirectStrBuffer,
+) -> *mut super::OpaqueValue {
+    // SAFETY: the caller's contract.
+    let text = unsafe { (*buffer).take() };
+    super::task_runtime_boundary(|| {
+        super::boxed_value(crate::runtime_value::Value::String(text.into()))
+    })
+}
+
+/// Frees the text in `buffer`, which is left empty: the end of a buffer
+/// whose text was only read, or the cleanup of one a failure interrupted.
+///
+/// # Safety
+///
+/// `buffer` addresses a buffer the caller owns.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_buffer_free(buffer: *mut DirectStrBuffer) {
+    // SAFETY: the caller's contract.
+    drop(unsafe { (*buffer).take() });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -508,5 +650,53 @@ mod tests {
             let expected = text.lines().map(str::to_string).collect::<Vec<_>>();
             assert_eq!(lines_all(text), expected, "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_buffer_collects_parts_and_becomes_a_str() {
+        let mut buffer = DirectStrBuffer {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            capacity: 0,
+        };
+        let push = |buffer: &mut DirectStrBuffer, part: &str| unsafe {
+            aura_direct_str_buffer_push_view(buffer, part.as_ptr(), part.len());
+        };
+        unsafe { aura_direct_str_buffer_reserve(&mut buffer, 8) };
+        assert!(buffer.capacity >= 8 && buffer.len == 0);
+        push(&mut buffer, "héllo ");
+        push(&mut buffer, "");
+        unsafe {
+            aura_direct_str_buffer_push_i64(&mut buffer, -42);
+            aura_direct_str_buffer_push_i64(&mut buffer, i64::MIN);
+        }
+        push(
+            &mut buffer,
+            " a part long enough to move the text to a larger block",
+        );
+        let expected = format!(
+            "héllo -42{} a part long enough to move the text to a larger block",
+            i64::MIN
+        );
+        assert_eq!(text_of(buffer.ptr, buffer.len), expected);
+        let boxed = unsafe { aura_direct_str_buffer_finish(&mut buffer) };
+        assert_eq!((buffer.len, buffer.capacity), (0, 0));
+        let value = unsafe { super::super::take_value(boxed) };
+        assert_eq!(
+            value,
+            crate::runtime_value::Value::String(expected.as_str().into())
+        );
+        unsafe { super::super::aura_direct_release_value(boxed) };
+
+        // An empty buffer finishes as the empty text, and a freed buffer
+        // can be used again.
+        let empty = unsafe { aura_direct_str_buffer_finish(&mut buffer) };
+        let value = unsafe { super::super::take_value(empty) };
+        assert_eq!(value, crate::runtime_value::Value::String("".into()));
+        unsafe { super::super::aura_direct_release_value(empty) };
+        push(&mut buffer, "dropped");
+        unsafe { aura_direct_str_buffer_free(&mut buffer) };
+        assert_eq!((buffer.len, buffer.capacity), (0, 0));
+        unsafe { aura_direct_str_buffer_free(&mut buffer) };
     }
 }
