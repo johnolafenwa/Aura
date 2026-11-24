@@ -17474,18 +17474,6 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_if(&mut self, if_stmt: &IfStmt, needed_after: &BTreeSet<String>) {
-        if if_stmt.branches.is_empty() {
-            if let Some(body) = &if_stmt.else_body {
-                self.scoped_names.push(std::collections::HashMap::new());
-                self.lower_stmts_with_inherited_endings(body, BTreeSet::new());
-                self.pop_scoped_names();
-            }
-            return;
-        }
-        let after_block = self.new_block("if_end");
-        let mut next_condition_block = self.current_block;
-        let mut else_block_to_lower = None;
-        let mut false_cleanup_block = None;
         let ending_loans = self
             .view_sources
             .keys()
@@ -17510,6 +17498,18 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .collect::<BTreeSet<_>>();
 
+        if if_stmt.branches.is_empty() {
+            if let Some(body) = &if_stmt.else_body {
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.lower_stmts_with_inherited_endings(body, ending_loans);
+                self.pop_scoped_names();
+            }
+            return;
+        }
+        let after_block = self.new_block("if_end");
+        let mut next_condition_block = self.current_block;
+        let mut else_block_to_lower = None;
+        let mut false_cleanup_block = None;
         for (index, branch) in if_stmt.branches.iter().enumerate() {
             self.switch_to(next_condition_block);
             let then_block = self.new_block("if_then");
