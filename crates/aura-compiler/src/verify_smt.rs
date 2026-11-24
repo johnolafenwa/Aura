@@ -7,7 +7,9 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 /// The environment variable that names the solver to run.
 pub const SOLVER_ENV: &str = "AURA_SMT_SOLVER";
@@ -58,6 +60,31 @@ impl SolverCommand {
             .ok_or_else(|| {
                 format!("no SMT solver found; install Z3 or cvc5 on PATH, or set {SOLVER_ENV} to its path")
             })
+    }
+
+    /// The second solver of a cross-check: `explicit` when given, else the
+    /// other one of Z3 and cvc5, found on `PATH`.
+    pub fn second(&self, explicit: Option<&str>) -> Result<Self, String> {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        self.second_in(explicit, &path)
+    }
+
+    /// `second` with `PATH` given.
+    pub fn second_in(
+        &self,
+        explicit: Option<&str>,
+        path: &std::ffi::OsStr,
+    ) -> Result<Self, String> {
+        if explicit.is_some() {
+            return Self::find_in(explicit, None, path);
+        }
+        let other = match self.kind {
+            SolverKind::Z3 => "cvc5",
+            SolverKind::Cvc5 => "z3",
+        };
+        Self::find_in(Some(other), None, path).map_err(|_| {
+            format!("`--cross-check` asks a second solver, and `{other}` was not found on PATH; install it, or name one with `--cross-solver <path>`")
+        })
     }
 
     /// The solver's version line, for reports and the proof cache key.
@@ -113,14 +140,34 @@ pub enum SatResult {
     Unknown,
 }
 
+/// How much longer than its own time limit a solver may take to answer
+/// before it is stopped: Z3 does not always keep to its limit on string
+/// queries.
+pub const WATCHDOG_MARGIN_MS: u64 = 2_000;
+
 /// A running solver process.
 pub struct Solver {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// The lines the solver prints, read on a thread of their own so a
+    /// solver that never answers cannot block the verifier.
+    lines: Receiver<std::io::Result<String>>,
+    /// How long one answer may take before the process is killed.
+    patience: Duration,
     marker: u64,
+    /// The answer being read, when a command was sent and its answer is
+    /// not complete yet.
+    pending: Option<Pending>,
     /// Whether a write to the process or a read from it found it gone.
     stopped: bool,
+}
+
+/// An answer being read: the line that ends it, when the watchdog stops
+/// waiting for it, and what came so far.
+struct Pending {
+    marker: String,
+    deadline: Instant,
+    output: String,
 }
 
 impl Solver {
@@ -152,12 +199,26 @@ impl Solver {
                 )
             })?;
         let stdin = child.stdin.take().expect("piped solver stdin");
-        let stdout = BufReader::new(child.stdout.take().expect("piped solver stdout"));
+        let mut stdout = BufReader::new(child.stdout.take().expect("piped solver stdout"));
+        let (sender, lines) = std::sync::mpsc::channel();
+        // The thread ends at the end of the output, which killing the
+        // process brings, or once nobody listens. A line that is not
+        // text is reported and the reading goes on.
+        std::thread::spawn(move || loop {
+            let mut line = String::new();
+            let read = stdout.read_line(&mut line);
+            let more = !matches!(read, Ok(0));
+            if sender.send(read.map(|_| line)).is_err() || !more {
+                break;
+            }
+        });
         let mut solver = Self {
             child,
             stdin,
-            stdout,
+            lines,
+            patience: Duration::from_millis(timeout_ms + WATCHDOG_MARGIN_MS),
             marker: 0,
+            pending: None,
             stopped: false,
         };
         let mut setup = String::from("(set-option :print-success false)\n");
@@ -198,25 +259,61 @@ impl Solver {
     }
 
     /// Sends `text`, then reads everything the solver prints for it.
-    fn exchange(&mut self, text: &str) -> Result<String, String> {
+    /// `None` when the solver did not answer in time: the watchdog then
+    /// kills it, and it counts as stopped.
+    fn exchange(&mut self, text: &str) -> Result<Option<String>, String> {
+        self.begin(text)?;
+        loop {
+            if let Some(answer) = self.poll(self.patience)? {
+                return Ok(answer);
+            }
+        }
+    }
+
+    /// Sends `text` and a marker to wait for, without waiting.
+    fn begin(&mut self, text: &str) -> Result<(), String> {
         self.marker += 1;
         let marker = format!("aura-done-{}", self.marker);
         self.send(&format!("{text}\n(echo \"{marker}\")"))?;
-        let mut output = String::new();
+        self.pending = Some(Pending {
+            marker,
+            deadline: Instant::now() + self.patience,
+            output: String::new(),
+        });
+        Ok(())
+    }
+
+    /// Reads the answer `begin` asked for, for at most `wait`. `None` while
+    /// it is not complete, `Some(None)` when the watchdog stopped the
+    /// solver, and `Some(Some(answer))` once it is.
+    fn poll(&mut self, wait: Duration) -> Result<Option<Option<String>>, String> {
+        let mut pending = self.pending.take().expect("an answer was asked for");
+        let until = pending.deadline.min(Instant::now() + wait);
         loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?;
-            if read == 0 {
+            let left = until.saturating_duration_since(Instant::now());
+            let line = match self.lines.recv_timeout(left) {
+                Err(RecvTimeoutError::Timeout) if Instant::now() < pending.deadline => {
+                    self.pending = Some(pending);
+                    return Ok(None);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    self.stopped = true;
+                    return Ok(Some(None));
+                }
+                // The reader stops at the end of the output.
+                read => read
+                    .unwrap_or_else(|_| Ok(String::new()))
+                    .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?,
+            };
+            if line.is_empty() {
                 let ended = self.ended();
                 return Err(format!("the SMT solver exited before answering{ended}"));
             }
-            if line.trim().trim_matches('"') == marker {
-                return Ok(output);
+            if line.trim().trim_matches('"') == pending.marker {
+                return Ok(Some(Some(pending.output)));
             }
-            output.push_str(&line);
+            pending.output.push_str(&line);
         }
     }
 
@@ -237,24 +334,47 @@ impl Solver {
     /// Runs `(check-sat)`.
     pub fn check(&mut self) -> Result<SatResult, String> {
         let answer = self.exchange("(check-sat)")?;
-        let answer = answer.trim();
-        // A query stopped at the time limit answers `unknown`, after an
-        // error that says so. Z3's limit can also cancel a `push` or an
-        // `assert` sent before the query, under load, and then it answers
-        // for a different set of facts: that answer is not trusted either.
-        if answer.contains("canceled") {
-            return Ok(SatResult::Unknown);
-        }
-        if answer.contains("(error") {
-            return Err(format!("the SMT solver refused a query: {answer}"));
-        }
-        Ok(match answer.lines().last().map(str::trim) {
-            Some("unsat") => SatResult::Unsat,
-            Some("sat") => SatResult::Sat,
-            _ => SatResult::Unknown,
-        })
+        verdict(answer)
     }
 
+    /// Starts `(check-sat)` without waiting for the answer, which
+    /// [`Solver::poll_check`] reads.
+    pub fn start_check(&mut self) -> Result<(), String> {
+        self.begin("(check-sat)")
+    }
+
+    /// The answer to the query [`Solver::start_check`] started, once it
+    /// is there: waits for it at most `wait`.
+    pub fn poll_check(&mut self, wait: Duration) -> Result<Option<SatResult>, String> {
+        self.poll(wait)?.map(verdict).transpose()
+    }
+}
+
+/// What the answer to a `(check-sat)` says. `None` is no answer: the
+/// watchdog stopped the solver.
+fn verdict(answer: Option<String>) -> Result<SatResult, String> {
+    let Some(answer) = answer else {
+        return Ok(SatResult::Unknown);
+    };
+    let answer = answer.trim();
+    // A query stopped at the time limit answers `unknown`, after an
+    // error that says so. Z3's limit can also cancel a `push` or an
+    // `assert` sent before the query, under load, and then it answers
+    // for a different set of facts: that answer is not trusted either.
+    if answer.contains("canceled") {
+        return Ok(SatResult::Unknown);
+    }
+    if answer.contains("(error") {
+        return Err(format!("the SMT solver refused a query: {answer}"));
+    }
+    Ok(match answer.lines().last().map(str::trim) {
+        Some("unsat") => SatResult::Unsat,
+        Some("sat") => SatResult::Sat,
+        _ => SatResult::Unknown,
+    })
+}
+
+impl Solver {
     /// The model's value of each term, after a `sat` answer, as the solver
     /// printed them. `None` when the solver gives no model.
     pub fn values(&mut self, terms: &[String]) -> Option<Vec<String>> {
@@ -263,7 +383,7 @@ impl Solver {
         }
         let answer = self
             .exchange(&format!("(get-value ({}))", terms.join(" ")))
-            .ok()?;
+            .ok()??;
         if answer.contains("(error") {
             return None;
         }

@@ -424,6 +424,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "verify",
         title: "function marked verified has unproved checks",
     },
+    DiagnosticCodeInfo {
+        code: "AU5123",
+        band: "verify",
+        title: "solvers disagree",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
