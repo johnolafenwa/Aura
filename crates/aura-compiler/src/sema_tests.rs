@@ -34262,3 +34262,15 @@ fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements(
         assert_eq!(crate::check_source(source).unwrap_err().code, code);
     }
 }
+
+#[test]
+fn fixed_array_size_accounts_for_explicit_c_alignment() {
+    let source = r#"
+extern "C" align(128) class Header:
+    byte: uint8
+
+def unused(rows: fixed[fixed[Header, 1024], 32768]):
+    pass
+"#;
+    assert_eq!(check_ffi_source_for_test(source).unwrap_err().code, "AU2081");
+}
