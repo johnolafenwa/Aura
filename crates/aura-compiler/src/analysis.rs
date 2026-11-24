@@ -4222,6 +4222,7 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::IntegerToFloat
                 | BuiltinMember::DurationToMilliseconds
                 | BuiltinMember::DurationToSeconds => Some(Type::named("float64")),
+                BuiltinMember::IntegerBits(method) => Some(if method.counts() { Type::named("int64") } else { receiver_type.clone() }),
                 BuiltinMember::IntegerWrappingAdd
                 | BuiltinMember::IntegerWrappingSub
                 | BuiltinMember::IntegerWrappingMul

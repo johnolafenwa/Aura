@@ -464,7 +464,7 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 27);
+    assert_eq!(namespace.all_functions.len(), 37);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
@@ -687,8 +687,8 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
             "function value",
         ),
         (
-            "    wide: int128 = 5\n    return count\n",
-            "holds `wide` of type `int128`",
+            "    wide: Duration = Duration.ms(5)\n    return count\n",
+            "holds `wide` of type `Duration`",
         ),
     ] {
         assert_problem(&format!("{prelude}{body}"), expected);
