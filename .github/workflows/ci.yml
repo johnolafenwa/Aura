@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/integration-0.18]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
