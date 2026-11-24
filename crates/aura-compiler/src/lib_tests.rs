@@ -4724,3 +4724,37 @@ fn disassembles_inline_assembly_in_the_export_on_each_target() {
         );
     }
 }
+
+#[test]
+fn unused_imported_machine_routines_do_not_block_proof() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+
+    let program = check_source("def entry() -> None:\n    assert true\n").unwrap();
+    let mut module = crate::mir::lower_for_verification(&program);
+    let mut routine = module.functions[0].clone();
+    routine.module_name = "mem".into();
+    routine.name = "mem::halt".into();
+    routine.blocks[0].instructions = vec![Instruction::InlineAsm {
+        asm: MachineAsm {
+            arch: "x86_64".into(),
+            noreturn: false,
+            template: "hlt".into(),
+            constraints: "~{memory}".into(),
+            pure: false,
+            input_widths: vec![],
+            output_widths: vec![],
+        },
+        inputs: vec![],
+        outputs: vec![],
+        span: Span::new(1, 1),
+    }];
+    module.functions.push(routine);
+
+    // Reaching the normal solver lookup proves the unused routine was ignored.
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-unused-routine".into()),
+        ..Default::default()
+    };
+    assert_eq!(crate::verify::verify_module(&program, &module, &options).unwrap_err().code, "AU5103");
+}
