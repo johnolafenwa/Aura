@@ -183,70 +183,92 @@ struct Api {
     ) -> Status,
 }
 
-/// cuBLAS's matrix products of `float16` elements.
+/// cuBLAS's matrix products of `float16` elements. These are the calls
+/// that take the type the terms are added in: `cublasHgemm` adds in half
+/// precision, and its results drift from the CPU device's and from
+/// other libraries' by several half-precision steps.
 #[allow(non_snake_case)]
 struct HalfApi {
     #[allow(clippy::type_complexity)]
-    cublasHgemm: unsafe extern "C" fn(
+    cublasGemmEx: unsafe extern "C" fn(
         *mut c_void,
         c_int,
         c_int,
         c_int,
         c_int,
         c_int,
-        *const u16,
+        *const f32,
         DevicePointer,
         c_int,
-        DevicePointer,
-        c_int,
-        *const u16,
-        DevicePointer,
-        c_int,
-    ) -> Status,
-    #[allow(clippy::type_complexity)]
-    cublasHgemmBatched: unsafe extern "C" fn(
-        *mut c_void,
-        c_int,
-        c_int,
-        c_int,
-        c_int,
-        c_int,
-        *const u16,
-        DevicePointer,
         c_int,
         DevicePointer,
         c_int,
-        *const u16,
+        c_int,
+        *const f32,
         DevicePointer,
+        c_int,
+        c_int,
         c_int,
         c_int,
     ) -> Status,
     #[allow(clippy::type_complexity)]
-    cublasHgemmStridedBatched: unsafe extern "C" fn(
+    cublasGemmBatchedEx: unsafe extern "C" fn(
         *mut c_void,
         c_int,
         c_int,
         c_int,
         c_int,
         c_int,
-        *const u16,
+        *const f32,
         DevicePointer,
+        c_int,
+        c_int,
+        DevicePointer,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasGemmStridedBatchedEx: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
         c_int,
         i64,
         DevicePointer,
         c_int,
-        i64,
-        *const u16,
-        DevicePointer,
         c_int,
         i64,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+        i64,
+        c_int,
+        c_int,
         c_int,
     ) -> Status,
 }
 
-/// One and zero as half-precision bits.
-const HALF_ONE: u16 = 0x3C00;
-const HALF_ZERO: u16 = 0;
+/// `CUDA_R_16F`: the elements of a product are halves.
+const HALF_TYPE: c_int = 2;
+/// `CUBLAS_COMPUTE_32F`: the terms of a product are added in `float32`,
+/// so the scale factors are `float32` too.
+const ADD_IN_SINGLE: c_int = 68;
+/// `CUBLAS_GEMM_DEFAULT`.
+const DEFAULT_ALGORITHM: c_int = -1;
 
 /// Opens the first of `names` the loader finds.
 fn open(names: &[&str]) -> Option<*mut c_void> {
@@ -281,9 +303,9 @@ macro_rules! load {
 impl HalfApi {
     fn load(cublas: *mut c_void) -> Option<Self> {
         Some(Self {
-            cublasHgemm: load!(cublas, cublasHgemm),
-            cublasHgemmBatched: load!(cublas, cublasHgemmBatched),
-            cublasHgemmStridedBatched: load!(cublas, cublasHgemmStridedBatched),
+            cublasGemmEx: load!(cublas, cublasGemmEx),
+            cublasGemmBatchedEx: load!(cublas, cublasGemmBatchedEx),
+            cublasGemmStridedBatchedEx: load!(cublas, cublasGemmStridedBatchedEx),
         })
     }
 }
@@ -568,8 +590,26 @@ impl Runtime {
         // SAFETY: the caller upholds the sizes of the three matrices.
         Ok(unsafe {
             match product.kind {
-                Element::Half => (self.half()?.cublasHgemm)(
-                    handle, ta, tb, m, n, k, &HALF_ONE, a.0, a.1, b.0, b.1, &HALF_ZERO, c.0, c.1,
+                Element::Half => (self.half()?.cublasGemmEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
                 ),
                 Element::Single => (api.cublasSgemm_v2)(
                     handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1,
@@ -600,9 +640,27 @@ impl Runtime {
         // SAFETY: the caller upholds the tables and the matrices.
         Ok(unsafe {
             match product.kind {
-                Element::Half => (self.half()?.cublasHgemmBatched)(
-                    handle, ta, tb, m, n, k, &HALF_ONE, a.0, a.1, b.0, b.1, &HALF_ZERO, c.0, c.1,
+                Element::Half => (self.half()?.cublasGemmBatchedEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
                     count,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
                 ),
                 Element::Single => (api.cublasSgemmBatched)(
                     handle, ta, tb, m, n, k, &1.0, a.0, a.1, b.0, b.1, &0.0, c.0, c.1, count,
@@ -634,9 +692,30 @@ impl Runtime {
         // SAFETY: the caller upholds the sizes and the spacing.
         Ok(unsafe {
             match product.kind {
-                Element::Half => (self.half()?.cublasHgemmStridedBatched)(
-                    handle, ta, tb, m, n, k, &HALF_ONE, a.0, a.1, a.2, b.0, b.1, b.2, &HALF_ZERO,
-                    c.0, c.1, c.2, count,
+                Element::Half => (self.half()?.cublasGemmStridedBatchedEx)(
+                    handle,
+                    ta,
+                    tb,
+                    m,
+                    n,
+                    k,
+                    &1.0,
+                    a.0,
+                    HALF_TYPE,
+                    a.1,
+                    a.2,
+                    b.0,
+                    HALF_TYPE,
+                    b.1,
+                    b.2,
+                    &0.0,
+                    c.0,
+                    HALF_TYPE,
+                    c.1,
+                    c.2,
+                    count,
+                    ADD_IN_SINGLE,
+                    DEFAULT_ALGORITHM,
                 ),
                 Element::Single => (api.cublasSgemmStridedBatched)(
                     handle, ta, tb, m, n, k, &1.0, a.0, a.1, a.2, b.0, b.1, b.2, &0.0, c.0, c.1,

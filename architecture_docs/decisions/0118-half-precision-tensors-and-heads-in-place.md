@@ -43,8 +43,13 @@ conversions are the PTX `cvt` instructions. A software conversion is
 used when the kernels are compiled for the CPU in the tests, and on the
 GPU when `AURA_TENSOR_SOFT_HALF=1` is set.
 
-Matrix products of halves call `cublasHgemm`, `cublasHgemmBatched` and
-`cublasHgemmStridedBatched`. `index_add` on halves runs in host memory.
+Matrix products of halves call `cublasGemmEx`, `cublasGemmBatchedEx`
+and `cublasGemmStridedBatchedEx` with half elements and a `float32`
+compute type, so the terms are added in `float32` and the sum is rounded
+once, as on the CPU device. `cublasHgemm` adds in half precision: on an
+A40 its results were several half-precision steps from the CPU device's,
+and GPT-2 named a different token from PyTorch on one row of a batch.
+`index_add` on halves runs in host memory.
 
 The Metal device keeps `float16` tensors in host memory until its
 kernels learn the dtype.
