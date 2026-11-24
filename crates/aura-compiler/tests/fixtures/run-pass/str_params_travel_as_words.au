@@ -117,6 +117,21 @@ def render(template: Template, row: dict[str, str], context: dict[str, str]) -> 
     return "".join(out)
 
 
+def is_long_greeting(text: str) -> bool:
+    return text == "a greeting longer than two words"
+
+
+class Bag:
+    items: list[str]
+
+    def keep(mut self, words: list[str]):
+        self.items.append(words[0].clone())
+
+
+def gather(words: list[str], out: mut dict[str, list[str]]):
+    out["k"].append(words[1].clone())
+
+
 def main():
     words = ["alpha", "beta", "", "gamma", "quiet", "skip", "ignored", "a longer text that no small string holds"]
     for round in range(3):
@@ -182,3 +197,12 @@ def main():
                 print(answer)
             case Err(trap):
                 print(trap.message)
+    greetings = ["a greeting longer than two words", "a greeting longer than two wordz"]
+    print(f"{is_long_greeting(greetings[0])} {is_long_greeting(greetings[1])} {is_long_greeting('hi')}")
+    mut bag = Bag(items=[])
+    bag.keep(greetings)
+    mut lists: dict[str, list[str]] = {"k": []}
+    gather(greetings, lists)
+    mut nested: list[list[str]] = [[]]
+    nested[0].append(greetings[0].clone())
+    print(f"{bag.items[0]} {lists['k'][0]} {nested[0][0]}")
