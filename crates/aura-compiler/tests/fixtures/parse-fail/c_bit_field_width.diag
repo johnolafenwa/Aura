@@ -1,0 +1,5 @@
+error[AU2085]: a C bit-field needs an unsigned integer type and a positive width within that type
+ --> crates/aura-compiler/tests/fixtures/parse-fail/c_bit_field_width.au:2:17
+  |
+2 |     flag: uint8 bits(9)
+  |                 ^

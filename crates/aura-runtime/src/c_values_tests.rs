@@ -16,6 +16,7 @@ fn layout(name: &str, union: bool, fields: Vec<(&str, CFieldKind)>) -> CStruct {
                 kind,
             })
             .collect(),
+        layout_controls: Default::default(),
         union,
     }
 }
@@ -344,4 +345,28 @@ fn a_struct_array_crosses_element_by_element() {
         kind_type(&array(CFieldKind::Struct(point), 3)).to_string(),
         "list[Point]"
     );
+}
+
+#[test]
+fn bit_field_pack_checks_width_and_keeps_the_other_bits() {
+    let mut record = layout(
+        "Tiny",
+        false,
+        vec![("tag", CFieldKind::Scalar(FfiScalar::U8))],
+    );
+    record.layout_controls.bit_widths.insert("tag".into(), 3);
+    let mut value = unpack(&record, &[0xf5]).unwrap();
+    let mut bytes = [0xa0];
+    pack(&value, &record, &mut bytes).unwrap();
+    assert_eq!(bytes, [0xa5]);
+    let Value::Instance(instance) = &mut value else {
+        panic!("expected a Tiny")
+    };
+    instance
+        .fields
+        .insert("tag", Value::Int(IntegerValue::from_u64(8)))
+        .unwrap();
+    let problem = pack(&value, &record, &mut bytes).unwrap_err();
+    assert_eq!(problem.code(), "AU4033");
+    assert!(problem.to_string().contains("3-bit"));
 }

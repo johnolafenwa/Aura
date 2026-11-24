@@ -737,6 +737,60 @@ fn the_bare_metal_example_builds_for_its_boards() {
 }
 
 #[test]
+fn a_pointer_updates_an_array_inside_a_packed_module_cell() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write(
+        "src/main.au",
+        include_str!("../../aura-compiler/tests/fixtures/freestanding/systems/header.au"),
+    );
+    for target in [
+        "x86_64-unknown-none",
+        "aarch64-unknown-none",
+        "riscv64gc-unknown-none-elf",
+    ] {
+        let built = workspace.aura(&[
+            "build",
+            "--freestanding",
+            "--target",
+            target,
+            "-o",
+            "header.o",
+            "src/main.au",
+        ]);
+        assert!(built.status.success(), "{target}: {}", stderr(&built));
+    }
+    let Some(cc) = c_compiler() else {
+        return;
+    };
+    let built = workspace.aura(&["build", "--freestanding", "-o", "header.o", "src/main.au"]);
+    assert!(built.status.success(), "{}", stderr(&built));
+    workspace.write(
+        "header.c",
+        r#"#include <stdint.h>
+#include <stdlib.h>
+uint16_t advance_header(uint16_t delta);
+uint16_t header_flags(void);
+void aura_trap(uint32_t c, const char *f, size_t n, uint32_t l, uint32_t k) { abort(); }
+int main(void) {
+    return header_flags() != 195 || advance_header(18) != 42 ||
+        header_flags() != 197 || advance_header(1) != 43;
+}
+"#,
+    );
+    let link = Command::new(cc)
+        .current_dir(&workspace.path)
+        .args(["header.c", "header.o", "-o", "header"])
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "{}", stderr(&link));
+    assert!(Command::new(workspace.path.join("header"))
+        .status()
+        .unwrap()
+        .success());
+}
+
+#[test]
 fn module_state_keeps_its_value_between_calls() {
     let workspace = Workspace::new();
     workspace.write(

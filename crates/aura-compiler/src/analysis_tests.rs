@@ -6255,6 +6255,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             doc: None,
             c_layout: false,
             c_arrays: Default::default(),
+            layout_controls: Default::default(),
             c_union: None,
         },
         type_param_bounds: Default::default(),

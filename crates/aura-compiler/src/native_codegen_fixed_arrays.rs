@@ -82,6 +82,7 @@ impl FixedArrayLayout {
                 DirectType::PlainClass(class) => CFieldKind::Struct(CStruct {
                     name: class.class_name.clone(),
                     union: false,
+                    layout_controls: Default::default(),
                     fields: class
                         .fields
                         .iter()
@@ -111,6 +112,7 @@ impl FixedArrayLayout {
         let layout = CStruct {
             name: "fixed".to_owned(),
             union: false,
+            layout_controls: Default::default(),
             fields: vec![CField {
                 name: "elements".to_owned(),
                 kind: CFieldKind::Array(Box::new(kind(&self.element)), self.count as usize),

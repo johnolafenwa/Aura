@@ -629,21 +629,42 @@ struct CallStorage {
     elements: Vec<(usize, Vec<u64>)>,
     /// The bytes of each struct argument, in storage aligned for every
     /// scalar, with the index of the argument.
-    structs: Vec<(usize, Vec<u64>)>,
+    structs: Vec<(usize, AlignedWords)>,
 }
 
-/// `bytes` in storage aligned for every scalar, with room for at least
-/// `least` words.
-fn aligned_bytes(bytes: &[u8], least: usize) -> Vec<u64> {
-    let mut words = vec![0_u64; bytes.len().div_ceil(8).max(least)];
-    // SAFETY: the storage holds at least `bytes.len()` bytes.
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast(), bytes.len());
+/// A heap allocation and the naturally or explicitly aligned slice within it.
+/// Moving the owner keeps the address passed to libffi stable.
+struct AlignedWords {
+    allocation: Vec<u64>,
+    start: usize,
+    len: usize,
+}
+
+impl AlignedWords {
+    fn new(bytes: &[u8], least: usize, align: usize) -> Self {
+        let len = bytes.len().div_ceil(8).max(least);
+        let mut allocation = vec![0u64; len + (align.saturating_sub(1) / 8)];
+        let start = allocation.as_ptr().align_offset(align.max(8));
+        // SAFETY: the aligned subslice holds at least bytes.len() bytes.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                allocation[start..].as_mut_ptr().cast(),
+                bytes.len(),
+            )
+        }
+        Self {
+            allocation,
+            start,
+            len,
+        }
     }
-    words
+
+    fn words(&mut self) -> &mut [u64] {
+        &mut self.allocation[self.start..self.start + self.len]
+    }
 }
 
-/// The first `count` bytes of `words`.
 fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
     // SAFETY: every caller made `words` with room for `count` bytes.
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
@@ -656,7 +677,13 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
 /// the same way. A struct that is or holds a union is described by what
 /// decides how it is passed: its size, its alignment, and the class of
 /// each of its register pieces on this machine.
+#[path = "ffi_controlled_struct.rs"]
+mod controlled_struct;
+
 fn struct_type(layout: &CStruct) -> Type {
+    if layout.has_controlled_layout() {
+        return controlled_struct::descriptor(layout);
+    }
     if layout.holds_union() {
         return overlapping_struct_type(layout);
     }
@@ -688,7 +715,22 @@ fn overlapping_struct_type(layout: &CStruct) -> Type {
         4 => FfiScalar::U32,
         _ => FfiScalar::U64,
     };
-    let words = |size: usize| std::iter::repeat_n(scalar_type(word), size / align);
+    let words = |size: usize| {
+        let mut remaining = size;
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                return None;
+            }
+            let ty = match remaining.min(word.size()) {
+                8 => FfiScalar::U64,
+                4..=7 => FfiScalar::U32,
+                2..=3 => FfiScalar::U16,
+                _ => FfiScalar::U8,
+            };
+            remaining -= ty.size();
+            Some(scalar_type(ty))
+        })
+    };
     let pieces = match CAbi::host().map(|abi| layout.passing(abi)) {
         Some(CPassing::Registers(pieces)) => pieces,
         _ => return Type::structure(words(layout.size()).collect::<Vec<_>>()),
@@ -916,18 +958,18 @@ fn append_argument(
             storage.elements.push((index, packed));
         }
         (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
-            let words = aligned_bytes(bytes, 1);
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
             types.push(struct_type(layout));
             // Moving the `Vec` keeps its heap buffer where it is.
-            values.push(AbiArgument::Struct(words.as_ptr(), words.len()));
+            values.push(AbiArgument::Struct(words.words().as_ptr(), words.len));
             storage.structs.push((index, words));
         }
-        (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) => {
-            let mut words = aligned_bytes(bytes, 1);
+        (FfiType::StructPointer(layout), FfiValue::Struct(_, bytes)) => {
+            let mut words = AlignedWords::new(bytes, 1, layout.align());
             // An empty run passes a null pointer, as an empty view does.
             let pointer = match bytes.is_empty() {
                 true => std::ptr::null_mut(),
-                false => words.as_mut_ptr().cast(),
+                false => words.words().as_mut_ptr().cast(),
             };
             types.push(Type::pointer());
             values.push(AbiArgument::MutPointer(pointer));
@@ -1044,11 +1086,12 @@ unsafe fn invoke(
         }
         FfiType::Struct(layout) => {
             // libffi widens a small result to a whole register.
-            let mut words = aligned_bytes(&[], layout.size().div_ceil(8).max(2));
+            let mut words =
+                AlignedWords::new(&[], layout.size().div_ceil(8).max(2), layout.align());
             unsafe {
-                cif.call_return_into(function, arguments, Ret::new(words.as_mut_slice()));
+                cif.call_return_into(function, arguments, Ret::new(words.words()));
             }
-            FfiValue::Struct(layout, leading_bytes(&words, layout.size()))
+            FfiValue::Struct(layout, leading_bytes(words.words(), layout.size()))
         }
         // `result_type` refused these before the call was built.
         _ => return Err(FfiError::UnsupportedReturnType(result)),
@@ -1128,11 +1171,11 @@ pub unsafe fn call_host_function(
         }
     }
     // A struct passed by pointer takes the bytes the function left.
-    for (index, words) in storage.structs {
+    for (index, mut words) in storage.structs {
         if let (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) =
             (signature.parameters[index], &mut arguments[index])
         {
-            *bytes = leading_bytes(&words, bytes.len());
+            *bytes = leading_bytes(words.words(), bytes.len());
         }
     }
     // A `mut` pointer argument takes the scalars the function left.
@@ -1733,6 +1776,7 @@ mod tests {
                     name: "value".to_string(),
                     kind: CFieldKind::Scalar(scalar),
                 }],
+                layout_controls: Default::default(),
                 union: false,
             }
             .interned()
@@ -2020,6 +2064,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
+            layout_controls: Default::default(),
             union: false,
         }
         .interned()
