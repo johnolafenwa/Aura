@@ -11705,6 +11705,8 @@ fn decorated_associated_methods_show_source_decorators_and_definitions() {
     let source = "type F = Callable[def() -> int64]\ndef traced(f: own F) -> F:\n    return f\nclass Number:\n    @traced\n    def answer() -> int64:\n        return 42\ndef main():\n    print(Number.answer())\n";
     let output = analyze_source(source);
     assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let items = complete_source(source, 8, 4, None).unwrap();
+    assert!(items.iter().all(|item| !item.name.starts_with("__aura_")));
     let definition = definition_of(&output, "@traced\nmethod answer()");
     assert_eq!((definition.line, definition.start_character), (5, 8));
     let decorator = output
