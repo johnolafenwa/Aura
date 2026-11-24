@@ -393,6 +393,11 @@ fn hosted_engines_refuse_freestanding_module_operations() {
 
     // Embedded MIR can reach a cell operation even when its declaration is absent.
     mir.constants.clear();
+    let error = crate::emit_host_native_object(&mir).unwrap_err();
+    assert!(
+        error.contains("mutable module storage requires freestanding execution"),
+        "{error}"
+    );
     let data = serde_json::to_vec(&mir).unwrap();
     let error = crate::run_serialized_mir(&data, "main.au", source).unwrap_err();
     assert_eq!(error.code, "AU4030", "{error:?}");
