@@ -4,7 +4,7 @@ Last updated: 2026-11-24
 
 ## Compile-Time Evaluation And Conditional Compilation
 
-The 0.18 integration branch is the delivery target. The compiler, command line, editor and examples are implemented on the feature branch. Combined verification and the integration pull request are pending. [Work note](2026-11-24-compile-time.md)
+Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)
 
 ## Release 0.17.0-preview (complete)
 

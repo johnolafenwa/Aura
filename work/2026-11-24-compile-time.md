@@ -8,4 +8,6 @@ The baseline is commit `6642a7c2`. On Linux x86-64, five runs of the release com
 
 The initial parse and emission regressions failed on the baseline. The editor runs passed 165 language-server tests and 68 extension tests against a combined compiler. Language-server coverage was 100% for lines, statements, branches and functions. The live debugger test needs a host with LLDB's debug adapter.
 
-The combined compiler suite, coverage measurement, release comparison and hosted integration checks are in progress.
+All 11 compiler fixture groups passed, including diagnostics, runtime output, debug objects and MIR parity with source locations. The manual and book passed all 1,126 documentation examples. QEMU booted the AArch64 and RV64 kernels and exercised the computed decimal table.
+
+The Linux compiler coverage baseline was 96.53% lines, 97.48% functions and 95.43% regions. The macOS baseline was 96.51% lines, 97.46% functions and 95.42% regions. Both measurements used the same Git tree as the baseline commit. [Baseline workflow](https://github.com/johnolafenwa/Aura/actions/runs/45333109317)
