@@ -304,6 +304,9 @@ mod tests {
             FfiValue::U32(7),
         ];
         let function = HostFunction::new(bump as *const () as *mut _).unwrap();
+        // SAFETY: this is bump's exact C signature and all values are live.
+        let direct = unsafe { ffi::call_host_function(function, &sig, &mut args) }.unwrap_err();
+        assert!(direct.to_string().contains("aligned stack adapter"));
         for _ in 0..2 {
             let FfiValue::Struct(_, got) = invoke(function, &sig, &mut args).unwrap() else {
                 panic!()
