@@ -315,6 +315,43 @@ mod tests {
     }
 
     #[test]
+    fn named_mir_arguments_preserve_the_callers_addressed_array() {
+        let mut module = lower(include_str!("../tests/fixtures/typed-pointers/fixed.au"));
+        // Source lowering normally puts these arguments in parameter order.
+        // Public MIR can also pass them by name, in either order.
+        let probe = module
+            .functions
+            .iter_mut()
+            .find(|f| f.name == "probe")
+            .unwrap();
+        let args = probe
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Name(name),
+                            args,
+                            ..
+                        },
+                    ..
+                } if name == "identity" => Some(args),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(args.len(), 2);
+        args[0].name = Some("a".into());
+        args[1].name = Some("p".into());
+        args.reverse();
+        // identity checks that the borrowed array's first element has the
+        // same address as the pointer formed in its caller.
+        let output = crate::mir_runtime::run_trusted(&module).unwrap();
+        assert!(matches!(output.value, Value::Unit));
+    }
+
+    #[test]
     fn malformed_pointer_access_reports_shape_and_address_errors_before_writing() {
         use crate::c_layout::{CField, CFieldKind};
         let fixed_bool = CStruct {
