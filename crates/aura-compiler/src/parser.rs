@@ -2353,6 +2353,8 @@ impl Parser {
         let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let span = self.current_span();
         let target = self.parse_assign_target()?;
+        let member_span =
+            matches!(target, AssignTarget::Member { .. }).then(|| self.tokens[self.index - 1].span);
         let annotation = if matches!(target, AssignTarget::Name(_))
             && self.eat_simple(&TokenKind::Colon).is_some()
         {
@@ -2365,6 +2367,7 @@ impl Parser {
         self.expect_statement_terminator()?;
 
         Ok(AssignStmt {
+            member_span,
             mutable,
             target,
             annotation,
@@ -3740,6 +3743,7 @@ impl Parser {
             })
             .collect();
         Ok(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             op: None,
             span: name_span,

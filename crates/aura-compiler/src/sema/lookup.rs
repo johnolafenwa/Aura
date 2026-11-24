@@ -278,6 +278,7 @@ pub(crate) fn desugar_lookup_match(
             key_arg.value.span.line, key_arg.value.span.column
         );
         stmts.push(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             target: AssignTarget::Name(hidden.clone()),
             annotation: None,
@@ -329,6 +330,7 @@ pub(crate) fn desugar_lookup_match(
         let mutable = match_stmt.capability == ReceiverKind::BorrowMut;
         found_body.push(if copy_element && !mutable {
             Stmt::Assign(AssignStmt {
+                member_span: None,
                 mutable: false,
                 target: AssignTarget::Name(binding.name.clone()),
                 annotation: None,

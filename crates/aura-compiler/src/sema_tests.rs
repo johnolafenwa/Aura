@@ -8227,6 +8227,7 @@ fn assign_stmt(
     value: Expr,
 ) -> AssignStmt {
     AssignStmt {
+        member_span: None,
         mutable,
         target,
         annotation,

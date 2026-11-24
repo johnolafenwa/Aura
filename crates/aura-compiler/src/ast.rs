@@ -872,6 +872,9 @@ pub struct AssertStmt {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct AssignStmt {
+    /// Source position of the final identifier of a written member target.
+    #[serde(skip)]
+    pub member_span: Option<Span>,
     pub mutable: bool,
     pub target: AssignTarget,
     pub annotation: Option<TypeRef>,
