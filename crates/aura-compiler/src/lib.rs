@@ -11,6 +11,7 @@ pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
+mod freestanding_mode;
 pub mod lexer;
 pub mod limits;
 mod machine_attributes;
@@ -18,7 +19,6 @@ mod machine_data;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
-mod freestanding_mode;
 mod native_backend;
 mod native_codegen;
 mod runtime_abi;
@@ -51,13 +51,15 @@ pub use diag::{
     Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
     StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
 };
+pub use freestanding_mode::{
+    enter_freestanding_target, freestanding_check_target, with_freestanding_target,
+};
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
     run as run_mir, run_entry_with_stdout_sink_and_program_args as run_mir_entry,
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
-pub use freestanding_mode::{enter_freestanding_target, freestanding_check_target, with_freestanding_target};
 pub use native_backend::{
     hosted_target, set_hosted_target, target_arch as native_target_arch, FreestandingTarget,
     HostedTarget,

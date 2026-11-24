@@ -575,6 +575,9 @@ impl LlvmModule {
                 return Err(format!("LLVM failed to optimize the module: {error}"));
             }
         }
+        if self.freestanding == Some(super::FreestandingTarget::X86_64Kernel) {
+            x86_kernel::disable_red_zone(&context, &module);
+        }
         place_functions_in_own_sections(&module, &machine.get_triple());
         if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
             dump_unit_ir(&module, prefix, unit)?;
@@ -696,6 +699,9 @@ fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, Str
 /// while the system control register forbids it. RISC-V is RV64GC with
 /// the `lp64d` calling convention, and reaches every symbol relative to
 /// the program counter.
+///
+/// On x86-64 only the kernel profile enforces the no-red-zone rule. That
+/// profile also uses static relocation and the kernel code model (ADR-0148).
 fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<TargetMachine, String> {
     use super::FreestandingTarget;
     static INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -706,6 +712,7 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         Target::initialize_riscv(&config);
     });
     let (triple, cpu, features, abi, code_model) = match target {
+        FreestandingTarget::X86_64Kernel => x86_kernel::TARGET,
         FreestandingTarget::X86_64 => (
             "x86_64-unknown-none-elf",
             "x86-64",
@@ -737,6 +744,9 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         .set_level(OptimizationLevel::Default)
         .set_reloc_mode(RelocMode::PIC)
         .set_code_model(code_model);
+    if target == FreestandingTarget::X86_64Kernel {
+        options = options.set_reloc_mode(RelocMode::Static);
+    }
     if let Some(abi) = abi {
         options = options.set_abi(abi);
     }
@@ -3743,6 +3753,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         Ok(built(value)?.into())
     }
 }
+
+#[path = "native_backend_x86_kernel.rs"]
+mod x86_kernel;
 
 #[path = "native_backend_llvm_units.rs"]
 mod units;

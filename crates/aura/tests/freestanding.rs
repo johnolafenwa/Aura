@@ -702,3 +702,85 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn kernel_profile_emits_integer_register_float_code() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "kernel.au",
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/kernel_soft_float.au"),
+    );
+    for command in ["check", "build"] {
+        let mut args = vec![command, "--freestanding", "--kernel", "--target"];
+        if command == "build" {
+            args.extend(["x86_64-unknown-none", "-o", "kernel.o", "kernel.au"]);
+        } else {
+            args.extend(["x86_64-unknown-none", "kernel.au"]);
+        }
+        let result = workspace.aura(&args);
+        assert!(result.status.success(), "{}", stderr(&result));
+
+        let target_index = args.iter().position(|arg| *arg == "--target").unwrap() + 1;
+        args[target_index] = "aarch64-unknown-none";
+        let result = workspace.aura(&args);
+        assert_eq!(result.status.code(), Some(2));
+        assert!(stderr(&result).contains("--kernel"), "{}", stderr(&result));
+    }
+
+    let bytes = fs::read(workspace.path.join("kernel.o")).unwrap();
+    assert!(bytes.windows(8).any(|window| window == b"__adddf3"));
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        let disassembly = Command::new("objdump")
+            .args(["-dr", "kernel.o"])
+            .current_dir(&workspace.path)
+            .output()
+            .expect("GNU objdump should disassemble the x86-64 ELF object");
+        assert!(disassembly.status.success(), "{}", stderr(&disassembly));
+        let text = stdout(&disassembly);
+        assert!(text.contains("__adddf3"), "{text}");
+        for register in ["%xmm", "%ymm", "%zmm", "%mm", "%st("] {
+            assert!(!text.contains(register), "{text}");
+        }
+    }
+}
+
+#[test]
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn kernel_profile_reserves_space_for_leaf_spills() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    // Twenty independent volatile reads force a leaf to spill registers.
+    let mut source = String::from("import mem\n\nexport \"C\" def spill(port: uint64) -> None:\n");
+    for index in 0..20 {
+        source.push_str(&format!(
+            "    value{index} = mem.volatile_read_uint64(port)\n"
+        ));
+    }
+    for index in (0..20).rev() {
+        source.push_str(&format!(
+            "    mem.volatile_write_uint64(port, value{index})\n"
+        ));
+    }
+    workspace.write("src/kernel.au", &source);
+    for kernel in [false, true] {
+        let mut args = vec!["build", "--freestanding", "--target", "x86_64-unknown-none"];
+        if kernel {
+            args.push("--kernel");
+        }
+        args.extend(["-o", "spill.o", "src/kernel.au"]);
+        let build = workspace.aura(&args);
+        assert!(build.status.success(), "{}", stderr(&build));
+        let disassembly = Command::new("objdump")
+            .args(["-d", "-j", ".text.spill", "spill.o"])
+            .current_dir(&workspace.path)
+            .output()
+            .expect("GNU objdump should disassemble the leaf");
+        assert!(disassembly.status.success(), "{}", stderr(&disassembly));
+        let text = stdout(&disassembly);
+        assert!(text.contains("(%rsp)"), "expected stack spills: {text}");
+        let red_zone = text
+            .lines()
+            .any(|line| line.contains("-0x") && line.contains("(%rsp)"));
+        assert_eq!(red_zone, !kernel, "{text}");
+    }
+}
