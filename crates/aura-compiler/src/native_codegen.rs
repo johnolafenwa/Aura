@@ -2704,6 +2704,9 @@ impl<'a> NativeCodegen<'a> {
         if matches!(function.name.as_str(), "main" | "__script") {
             let module_constant = builder.import_function(self.runtime[RuntimeFn::ModuleConstant]);
             for constant in &self.module.constants {
+                if constant.frozen.is_some() {
+                    continue;
+                }
                 let initializer =
                     self.function_thunks
                         .get(&constant.initializer)
@@ -6847,6 +6850,11 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             Rvalue::ModuleConstant { key, initializer } => {
+                if let Some(constant) = self.module_constants.iter().find(|entry| entry.key == *key) {
+                    if let Some(value) = &constant.frozen {
+                        return self.read_frozen_constant(constant, value, target);
+                    }
+                }
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
                         "direct backend cannot find module constant initializer `{initializer}`"
@@ -22415,3 +22423,6 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
                 && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }
+
+#[path = "native_codegen_frozen.rs"]
+mod frozen;

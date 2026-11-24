@@ -16247,7 +16247,12 @@ def main():
 #[test]
 fn native_module_constant_reads_find_their_frozen_value_untagged() {
     let source = r#"
+def configured_names() -> list[str]:
+    print("loading names")
+    return ["alpha", "beta"]
+
 NAMES: list[str] = ["alpha", "beta"]
+DYNAMIC_NAMES = configured_names()
 LIMITS: dict[str, int64] = {"alpha": 1}
 
 def count() -> int64:

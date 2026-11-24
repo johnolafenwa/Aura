@@ -23297,3 +23297,6 @@ mod tests;
 #[cfg(test)]
 #[path = "native_union_injection_security_tests.rs"]
 mod union_injection_security_tests;
+
+#[path = "native_frozen.rs"]
+mod frozen;
