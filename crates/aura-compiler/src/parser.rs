@@ -433,6 +433,8 @@ fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -
     Ok(expr)
 }
 
+mod layout_controls;
+
 struct Parser {
     tokens: Vec<Token>,
     index: usize,
@@ -444,6 +446,7 @@ struct Parser {
     /// Whether the fields being parsed are those of an `extern "C"` class,
     /// where `array[T, N]` spells a fixed-size C array.
     extern_fields: bool,
+    c_bit_widths: std::collections::BTreeMap<String, u8>,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
     generated_items: Vec<Item>,
@@ -468,6 +471,7 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            c_bit_widths: Default::default(),
             generated_items: Vec::new(),
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
@@ -845,6 +849,9 @@ impl Parser {
             }));
         }
 
+        if self.at_layout_modifier() {
+            return self.parse_controlled_c_class(public).map(Item::Class);
+        }
         if self.at_simple(&TokenKind::KwClass) {
             return Ok(Item::Class(self.parse_extern_class(public)?));
         }
@@ -1202,6 +1209,7 @@ impl Parser {
             doc,
             c_layout: false,
             c_arrays: std::collections::BTreeMap::new(),
+            layout_controls: Default::default(),
             c_union: None,
         })
     }
@@ -1213,6 +1221,9 @@ impl Parser {
         let class = self.parse_class(public);
         self.extern_fields = outer;
         let mut class = class?;
+        class.layout_controls.bit_widths = std::mem::take(&mut self.c_bit_widths);
+        class.layout_controls.microsoft_bit_fields =
+            cfg!(windows) && !class.layout_controls.bit_widths.is_empty();
         let name = &class.name;
         let rejected = if !class.type_params.is_empty() {
             Some((
@@ -1321,6 +1332,9 @@ impl Parser {
                 "    @property\n    {visible}def {member}(self) -> uint8:\n        return __{name}_get_{member}(self){read}\n\
                  \x20   {visible}def from_{member}(value: uint8) -> {name}:\n        return __{name}_set_{member}({stored})\n"
             ));
+            class_text.push_str(&format!(
+                "    {visible}def __write_{member}(mut self, value: uint8) -> None:\n        updated = __{name}_set_{member}({stored})\n        for i in range(0):\n            self.bytes[i] = updated.bytes[i]\n"
+            ));
             if boxed {
                 items_text.push_str(&format!(
                     "extern \"C\" class __{name}_box_{member}:\n    value: uint8\n"
@@ -1348,10 +1362,11 @@ impl Parser {
         for mut item in generated.items {
             match &mut item {
                 Item::Class(class) if class.name == name => {
-                    for (pair, member) in class.methods.chunks_mut(2).zip(&members.fields) {
+                    for (pair, member) in class.methods.chunks_mut(3).zip(&members.fields) {
                         pair[0].return_type = member.ty.clone();
                         pair[0].doc = member.doc.clone();
                         pair[1].params[0].ty = member.ty.clone();
+                        pair[2].params[0].ty = member.ty.clone();
                     }
                     class.span = members.span;
                     class.doc = members.doc.take();
@@ -1498,6 +1513,9 @@ impl Parser {
         let name = self.expect_identifier()?;
         self.expect_simple(TokenKind::Colon)?;
         let ty = self.parse_type()?;
+        if self.extern_fields {
+            self.parse_field_width(&name, &ty)?;
+        }
         let default = if self.eat_simple(&TokenKind::Equal).is_some() {
             Some(self.parse_expr()?)
         } else {

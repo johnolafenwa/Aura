@@ -15,6 +15,16 @@ extern "C" def header_alignment() -> uint64
 extern "C" def serial_offset() -> uint64
 extern "C" def update_header(h: mut Header) -> uint8
 
+extern "C" packed class Small:
+    tag: uint8
+    serial: uint32
+
+extern "C" align(32) class Line:
+    value: uint32
+
+extern "C" def make_small(s: Small, delta: uint32) -> Small
+extern "C" def aligned_line(line: mut Line) -> uint8
+
 def main() -> int32:
     print(mem.size_of(Header) == header_size())
     print(mem.align_of(Header) == header_alignment())
@@ -26,4 +36,8 @@ def main() -> int32:
     mut w = Word.from_whole(305419896)
     w.low = 10
     print(w.whole == 305419786)
+    small = make_small(Small(tag=2, serial=127), 4096)
+    print(small.tag == 3 and small.serial == 4223)
+    mut line = Line(value=17)
+    print(aligned_line(line) == 1)
     return 0

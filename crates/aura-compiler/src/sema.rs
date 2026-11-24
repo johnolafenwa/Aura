@@ -101,6 +101,8 @@ pub(crate) use type_param_calls::{
     collect_type_param_calls, lookup_type_param_call, specialized_functions,
 };
 pub use type_param_calls::{GenericUse, TypeParamCall, TypeParamCallId};
+pub(crate) mod c_layout_queries;
+mod c_union_writes;
 #[cfg(test)]
 mod type_budget_tests;
 mod types;
@@ -577,9 +579,17 @@ pub(crate) fn ffi_struct_layout(
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let mut layout_controls = holder.decl.layout_controls.clone();
+    layout_controls.inline_union = class.decl.layout_controls.inline_union;
+    for (field, info) in &holder.fields {
+        if matches!(&info.ty, Type::Named(name, _) if name == "fixed") {
+            layout_controls.inline_arrays.insert(field.clone());
+        }
+    }
     Some(CStruct {
         name: name.clone(),
         fields,
+        layout_controls,
         union: class.decl.c_union.is_some(),
     })
 }
@@ -11718,6 +11728,11 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        if let Some(layout) =
+            c_layout_queries::evaluate(callee, args, self.imported_modules, self.classes)
+        {
+            return layout.map(|_| Type::named("uint64"));
+        }
         let indexed = callee.indexed_collection_callee(|object| {
             self.type_of_expr_without_move_state(object, locals, None)
                 .is_ok_and(|ty| {

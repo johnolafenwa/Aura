@@ -275,6 +275,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "not available in a freestanding build",
     },
     DiagnosticCodeInfo {
+        code: "AU2085",
+        band: "names/types",
+        title: "invalid C layout declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2086",
+        band: "names/types",
+        title: "invalid C layout query",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -388,6 +398,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4010",
         band: "runtime",
         title: "generator misuse",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4033",
+        band: "runtime",
+        title: "value exceeds C bit-field width",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

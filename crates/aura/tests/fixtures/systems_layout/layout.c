@@ -17,3 +17,22 @@ uint8_t update_header(struct Header *h) {
     h->mode = 5;
     return ok;
 }
+
+struct __attribute__((packed)) Small {
+    uint8_t tag;
+    uint32_t serial;
+};
+
+struct Small make_small(struct Small x, uint32_t delta) {
+    x.tag += 1;
+    x.serial += delta;
+    return x;
+}
+
+struct __attribute__((aligned(32))) Line {
+    uint32_t value;
+};
+
+uint8_t aligned_line(struct Line *line) {
+    return (uintptr_t)line % _Alignof(struct Line) == 0 && line->value == 17;
+}

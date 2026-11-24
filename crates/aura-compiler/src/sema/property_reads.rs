@@ -210,6 +210,14 @@ impl Rewriter<'_> {
     fn stmt(&mut self, stmt: &mut Stmt) {
         match stmt {
             Stmt::Assign(assign) => {
+                let write_site = (assign.span.line, usize::MAX - assign.span.column);
+                if self.sites.contains(&write_site) {
+                    if let Some(setter) = super::c_union_writes::setter_statement(assign) {
+                        *stmt = setter;
+                        self.rewritten.insert(write_site);
+                        return;
+                    }
+                }
                 match &mut assign.target {
                     crate::ast::AssignTarget::Name(_) => {}
                     crate::ast::AssignTarget::Member { object, .. } => self.expr(object, false),
@@ -563,7 +571,23 @@ impl FunctionChecker<'_> {
             crate::ast::AssignTarget::Name(_) => Ok(()),
             crate::ast::AssignTarget::Member { object, field } => {
                 if let Ok(object_ty) = self.type_of_member_object_expr(object, locals) {
-                    if self.property_getter(&object_ty, field).is_some() {
+                    if let Some(getter) = self.property_getter(&object_ty, field) {
+                        if getter.class.decl.c_union.is_some()
+                            && assign.op.is_none()
+                            && !assign.mutable
+                            && assign.annotation.is_none()
+                        {
+                            PROPERTY_STATE.with(|state| {
+                                if let Some(state) = state.borrow_mut().last_mut() {
+                                    if state.module == self.module_name {
+                                        state.discovered.insert((
+                                            assign.span.line,
+                                            usize::MAX - assign.span.column,
+                                        ));
+                                    }
+                                }
+                            });
+                        }
                         return Err(property_use_error(assign.span, field, action));
                     }
                 }

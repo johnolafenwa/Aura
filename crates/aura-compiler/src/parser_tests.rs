@@ -5926,10 +5926,13 @@ fn an_extern_c_union_is_a_class_of_bytes_with_a_property_for_each_member() {
         [
             ("kind", true, true),
             ("from_kind", false, true),
+            ("__write_kind", false, true),
             ("key", true, true),
             ("from_key", false, true),
+            ("__write_key", false, true),
             ("text", true, true),
             ("from_text", false, true),
+            ("__write_text", false, true),
         ]
     );
     assert_eq!(
@@ -5941,9 +5944,9 @@ fn an_extern_c_union_is_a_class_of_bytes_with_a_property_for_each_member() {
         _ => panic!("a member has a named type"),
     };
     assert_eq!(named(&event.methods[0].return_type), "uint32");
-    assert_eq!(named(&event.methods[2].return_type), "Key");
-    assert_eq!(named(&event.methods[3].params[0].ty), "Key");
-    assert_eq!(named(&event.methods[4].return_type), "list");
+    assert_eq!(named(&event.methods[3].return_type), "Key");
+    assert_eq!(named(&event.methods[4].params[0].ty), "Key");
+    assert_eq!(named(&event.methods[6].return_type), "list");
 
     // The members are the fields of a class of their own.
     let members = class("__Event_members");

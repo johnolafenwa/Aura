@@ -1867,7 +1867,7 @@ impl<'a> Exec<'a> {
                 // call proves it, and a loop's checks are proved apart.
                 let obligation = match kind {
                     AssertKind::Requires => None,
-                    AssertKind::Assert => Some(ObligationKind::Assert),
+                    AssertKind::Assert | AssertKind::CBitField => Some(ObligationKind::Assert),
                     AssertKind::Ensures => Some(ObligationKind::Ensures),
                     AssertKind::Invariant => Some(ObligationKind::LoopInvariant),
                     AssertKind::Decreases => Some(ObligationKind::Decreases),

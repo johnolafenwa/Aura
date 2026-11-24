@@ -23055,7 +23055,11 @@ fn direct_assert_string(value: i64, field: &str) -> String {
 /// The code a failed check reports: `AU4001` for an `assert` (kind 0) and
 /// `AU4009` for a contract clause (kinds 1 and 2).
 fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) -> Diagnostic {
-    let code = if kind == 0 { "AU4001" } else { "AU4009" };
+    let code = match kind {
+        0 => "AU4001",
+        5 => "AU4033",
+        _ => "AU4009",
+    };
     match runtime_span(line, column) {
         Some(span) => Diagnostic::coded_at(code, span, message),
         None => Diagnostic::coded(code, message),

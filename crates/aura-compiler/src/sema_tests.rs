@@ -8032,6 +8032,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     }
 }

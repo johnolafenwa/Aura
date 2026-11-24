@@ -1402,6 +1402,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
 
     // A union's class holds as many bytes as the C union has. The parser
     // wrote the default of that field for a length it could not know.
+    super::c_union_writes::complete_lengths(&mut classes);
     let union_sizes = classes
         .iter()
         .filter(|(_, class)| class.decl.c_union.is_some())
