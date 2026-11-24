@@ -227,7 +227,6 @@ fn exported_bindings_preserve_public_opaque_handle_identity_and_privacy() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn manifest_authorized_path_run_uses_the_trusted_ffi_runtime_route() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -3207,7 +3206,11 @@ fn categorized_examples_run_with_expected_output() {
             (
                 "examples/io/process_run.au",
                 EXAMPLE_CASES[45].1,
-                "aura process\n13\n0\nExitStatus.Exited(0)\n",
+                if cfg!(windows) {
+                    "aura process\n14\n0\nExitStatus.Exited(0)\n"
+                } else {
+                    "aura process\n13\n0\nExitStatus.Exited(0)\n"
+                },
             ),
             (
                 "examples/io/process_pipes.au",
@@ -3217,7 +3220,7 @@ fn categorized_examples_run_with_expected_output() {
         ];
 
     for (path, source, expected_stdout) in cases {
-        if example_needs_unix_paths(source) {
+        if path != "examples/io/process_run.au" && example_needs_unix_paths(source) {
             continue;
         }
         let output = run_source(source).unwrap_or_else(|error| {
@@ -4587,4 +4590,68 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     ))
     .expect_err("the store definition is internal even in a type annotation");
     assert!(error.message.contains("collections.__Store"));
+}
+
+#[test]
+fn platform_examples_select_the_targets_process_abi_and_command() {
+    use crate::const_eval::FrozenValue;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    for (target, symbol, command) in [
+        ("x86_64-pc-windows-msvc", "GetCurrentProcessId", "cmd.exe"),
+        ("aarch64-unknown-linux-gnu", "getpid", "/bin/echo"),
+    ] {
+        let config = crate::BuildConfig::for_target(target, false).unwrap();
+        crate::with_build_config(config, || {
+            let program = check_path(&root.join("packages/ffi_getpid/src/main.au")).unwrap();
+            let declaration = &program.extern_functions["getpid"].decl;
+            assert_eq!(
+                declaration.symbol.as_ref().unwrap_or(&declaration.name),
+                symbol
+            );
+            let program = check_path(&root.join("io/process_run.au")).unwrap();
+            let (_, FrozenValue::List(_, argv)) = program
+                .frozen_constants
+                .iter()
+                .find(|(key, _)| key.ends_with("::echo_command"))
+                .expect("the selected command is compiled into the example")
+            else {
+                panic!("expected a command argument list");
+            };
+            assert_eq!(argv.first(), Some(&FrozenValue::Str(command.into())));
+        });
+    }
+}
+
+#[test]
+fn bare_board_examples_freeze_their_uart_address_and_decimal_divisors() {
+    use crate::const_eval::FrozenValue;
+
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/freestanding/kernel/src/main.au");
+    for (target, uart) in [
+        ("aarch64-unknown-none", 0x0900_0000),
+        ("riscv64gc-unknown-none-elf", 0x1000_0000),
+    ] {
+        crate::with_build_config(
+            crate::BuildConfig::for_target(target, false).unwrap(),
+            || {
+                let program = check_path(&source).unwrap();
+                let value =
+                    |name| &program.frozen_constants[&format!("{}::{name}", program.module_name)];
+                assert!(
+                    matches!(value("serial_port"), FrozenValue::Int(n) if n.as_i128() == Some(uart))
+                );
+                let FrozenValue::List(_, powers) = value("decimal_powers") else {
+                    panic!("expected the decimal power table");
+                };
+                assert_eq!(powers.len(), 20);
+                for (i, entry) in powers.iter().enumerate() {
+                    assert!(
+                        matches!(entry, FrozenValue::Int(n) if n.as_i128() == Some(10i128.pow(i as u32)))
+                    );
+                }
+            },
+        );
+    }
 }

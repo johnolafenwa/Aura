@@ -17,14 +17,14 @@ examples/freestanding/kernel/run.sh aarch64 target/release/aura
 ```
 
 The script needs `clang`, `ld.lld`, and `qemu-system-riscv64` or
-`qemu-system-aarch64`. Both boards print:
+`qemu-system-aarch64`. Both boards print the same output.
 
 ```text
 p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:154:13
+trap 1 main.au:179:13
 ```
 
 - `p` is the number of primes below 1000 and `c` the Collatz steps from 27.
@@ -33,6 +33,9 @@ trap 1 main.au:154:13
   `mem.atomic_compare_exchange_uint32`.
 - The last line is the `aura_trap` hook reporting a `uint8` overflow the
   program makes on purpose: code 1, then the file, line, and column.
+
+The compiler selects the QEMU serial register from the target architecture
+and computes the decimal lookup table used by the serial output routine.
 
 The startup code does three things the Aura program cannot: it sets the
 stack pointer, turns the float registers on, and powers the machine off.
