@@ -1026,6 +1026,19 @@ class Node:
     tags: list[int64]
     children: list[int64]
 
+copy class Point:
+    x: int64
+    y: int64
+
+    def norm(self) -> int64:
+        return self.x * self.x + self.y
+
+    def twice(self) -> int64:
+        return self.norm() * 2
+
+    def itself(self) -> Point:
+        return self
+
 class Holder:
     tags: list[int64]
 
@@ -1108,6 +1121,9 @@ def main():
     print(copies(nodes))
     print(walks(nodes))
     holder = Holder(tags = [1, 2])
+    point = Point(x = 1, y = 2)
+    print(point.twice())
+    print(point.itself().norm())
     print(holder.probe())
     print(holder.mixed())
 "#;
@@ -1123,7 +1139,8 @@ fn copies_module() -> (
     let mut borrowing = crate::mir::ownership::kept_arguments(&module);
     for (name, undropped) in crate::mir::ownership::undropped_shared_params(&module) {
         let callee = borrowing.get_mut(&name).expect("a recorded function");
-        for (kept, undropped) in callee.params.iter_mut().zip(undropped) {
+        let slots = callee.params.iter_mut().chain(callee.receiver.as_mut());
+        for (kept, undropped) in slots.zip(undropped) {
             if undropped {
                 *kept = crate::mir::MirReceiverKind::Borrow;
             }
@@ -1139,7 +1156,8 @@ fn kept_copies(name: &str) -> Vec<bool> {
         .iter()
         .find(|function| function.name == name)
         .expect("the function should exist");
-    let candidates = vec![true; function.params.len()];
+    let receiver = usize::from(function.receiver.is_some());
+    let candidates = vec![true; function.params.len() + receiver];
     super::kept_copy_params(function, &candidates, |instruction| {
         crate::mir::ownership::callee_borrowed_operands(instruction, |name| borrowing.get(name))
     })
@@ -1332,4 +1350,19 @@ fn a_copy_of_a_part_made_in_place_reads_the_element() {
         )
     });
     assert!(!found.lists.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_copy_receiver_only_read_stays_with_the_caller() {
+    let undropped = crate::mir::ownership::undropped_shared_params(
+        &lower_source_to_mir(COPIES).expect("the source should lower"),
+    );
+    // A method's receiver comes after its parameters.
+    assert_eq!(undropped.get("Point.norm"), Some(&vec![true]));
+    assert_eq!(undropped.get("Holder.probe"), Some(&vec![false]));
+    // Reads of its parts, and a method that borrows it.
+    assert_eq!(kept_copies("Point.norm"), vec![true]);
+    assert_eq!(kept_copies("Point.twice"), vec![true]);
+    // Returned, so the method owns it.
+    assert_eq!(kept_copies("Point.itself"), vec![false]);
 }

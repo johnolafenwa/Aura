@@ -487,9 +487,10 @@ pub(super) fn recorded_borrowing(
 
 /// The shared parameters of each recorded function (see
 /// [`recorded_borrowing`]) that the module passes by the owning convention
-/// only because their type needs no drop, by position. A backend that
-/// boxes such a value may keep the box with the caller when the callee
-/// only reads it. A function a runtime type picks owns its parameters.
+/// only because their type needs no drop, by position, followed by its
+/// shared receiver for a method. A backend that boxes such a value may
+/// keep the box with the caller when the callee only reads it. A function
+/// a runtime type picks owns its parameters.
 pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Vec<bool>> {
     if module.ownership != MirOwnership::Explicit || module.borrowing.is_empty() {
         return BTreeMap::new();
@@ -506,6 +507,14 @@ pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Ve
                 && !dispatched.contains(function.name.as_str())
         })
         .map(|function| {
+            let receiver = function.receiver.map(|passing| {
+                passing == MirReceiverKind::Borrow
+                    && function
+                        .local_types
+                        .iter()
+                        .find(|local| local.name == "self")
+                        .is_some_and(|local| !type_needs_drop(&context, &local.ty))
+            });
             let params = function
                 .params
                 .iter()
@@ -513,6 +522,7 @@ pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Ve
                     param.passing == MirReceiverKind::Borrow
                         && !type_needs_drop(&context, &param.ty)
                 })
+                .chain(receiver)
                 .collect();
             (function.name.clone(), params)
         })

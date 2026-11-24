@@ -1,0 +1,63 @@
+enum Shape:
+    Circle(float64)
+    Rect(float64, float64)
+
+
+trait Measured:
+    def area(self) -> float64
+    def twice(self) -> float64
+    def same(self, other: Shape) -> bool
+    def itself(self) -> Shape
+    def listed(self) -> list[Shape]
+
+
+impl Measured for Shape:
+    # Only matches on its receiver and reads its payloads.
+    def area(self) -> float64:
+        match self:
+            case Shape.Circle(r):
+                return r * r
+            case Shape.Rect(w, h):
+                return w * h
+
+    # Passes its receiver on to a method that only reads it.
+    def twice(self) -> float64:
+        return self.area() * 2.0
+
+    # Compares its receiver.
+    def same(self, other: Shape) -> bool:
+        return self == other
+
+    # Returns its receiver: keeps a copy of its own.
+    def itself(self) -> Shape:
+        return self
+
+    # Stores its receiver in a list it returns.
+    def listed(self) -> list[Shape]:
+        mut shapes = list[Shape]()
+        shapes.append(self)
+        return shapes
+
+
+def main():
+    mut shapes = [Shape.Circle(2.0), Shape.Rect(1.0, 3.0), Shape.Circle(2.0)]
+    mut total = 0.0
+    for i in range(shapes.len()):
+        total += shapes[i].area() + shapes[i].twice()
+        if shapes[i].same(shapes[0]):
+            total += 100.0
+    print(total)
+
+    # A temporary receiver the caller makes and releases.
+    print(Shape.Circle(3.0).area())
+    print(Shape.Rect(2.0, 4.0).twice())
+
+    kept = shapes[1].itself()
+    listed = shapes[0].listed()
+    first = shapes[0]
+    shapes[0] = Shape.Circle(7.0)
+    shapes[1] = Shape.Rect(8.0, 8.0)
+    print(kept.area())
+    print(listed[0].area())
+    print(first.area())
+    print(shapes[0].twice())

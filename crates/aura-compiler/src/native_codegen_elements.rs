@@ -300,32 +300,35 @@ fn reads_kept_copy(instruction: &Instruction, local: &str, borrowed: &[&Operand]
             })
 }
 
-/// Which of `function`'s parameters `candidates` marks, each a boxed
-/// value of a Copy type, the function only reads where the caller keeps
-/// it (see [`reads_kept_copy`]). `borrowed` are the operands the callee of
-/// an instruction borrows.
+/// Which of `function`'s parameters, followed by `self` for a method,
+/// that `candidates` marks, each a boxed value of a Copy type, the
+/// function only reads where the caller keeps it (see
+/// [`reads_kept_copy`]). `borrowed` are the operands the callee of an
+/// instruction borrows.
 pub(super) fn kept_copy_params<'f>(
     function: &'f MirFunction,
     candidates: &[bool],
     borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
 ) -> Vec<bool> {
     let assigned = assignments(function);
-    let mut kept = function
+    let names = function
         .params
         .iter()
-        .zip(candidates)
-        .map(|(param, candidate)| *candidate && !assigned.contains_key(param.name.as_str()))
+        .map(|param| param.name.as_str())
+        .chain(function.receiver.map(|_| "self"))
         .collect::<Vec<_>>();
-    kept.resize(function.params.len(), false);
+    let mut kept = names
+        .iter()
+        .zip(candidates)
+        .map(|(name, candidate)| *candidate && !assigned.contains_key(name))
+        .collect::<Vec<_>>();
+    kept.resize(names.len(), false);
     for block in &function.blocks {
         for instruction in &block.instructions {
             let roots = mentioned_roots(instruction);
             let borrowed = borrowed(instruction);
-            for (param, kept) in function.params.iter().zip(&mut kept) {
-                if *kept
-                    && roots.contains(param.name.as_str())
-                    && !reads_kept_copy(instruction, &param.name, &borrowed)
-                {
+            for (name, kept) in names.iter().zip(&mut kept) {
+                if *kept && roots.contains(name) && !reads_kept_copy(instruction, name, &borrowed) {
                     *kept = false;
                 }
             }
@@ -338,8 +341,8 @@ pub(super) fn kept_copy_params<'f>(
             _ => None,
         };
         for place in terminator_place_mentions(&block.terminator) {
-            for (param, kept) in function.params.iter().zip(&mut kept) {
-                if place == param.name && Some(place) != match_scrutinee {
+            for (name, kept) in names.iter().zip(&mut kept) {
+                if root(place) == *name && Some(place) != match_scrutinee {
                     *kept = false;
                 }
             }
