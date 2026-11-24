@@ -4177,6 +4177,8 @@ fn proofs_stop_at_raw_writes_and_their_callers() {
         "use_cell",
         "replace_counter",
         "use_counter",
+        "arm_a_store",
+        "drop_owned_value",
     ] {
         assert!(
             report.obligations.iter().any(|obligation| {

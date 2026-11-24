@@ -24,3 +24,15 @@ def use_counter(address: uint64) -> None:
 def untouched(value: int64) -> int64:
     ensures result == value
     return value
+
+class StoreOnDrop:
+    destination: ptr[int64]
+
+    def __drop__(mut self) -> None:
+        self.destination.write(7)
+
+def arm_a_store(destination: ptr[int64]) -> None:
+    guard = StoreOnDrop(destination=destination)
+
+def drop_owned_value(guard: own StoreOnDrop) -> None:
+    pass
