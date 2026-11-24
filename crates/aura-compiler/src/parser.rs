@@ -1,4 +1,5 @@
 mod conditional;
+pub(crate) use conditional::root_imports;
 pub(crate) const CONDITION_RESULT: &str = "conditional predicate";
 
 use crate::ast::{
