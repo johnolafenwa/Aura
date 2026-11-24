@@ -1,28 +1,40 @@
 # The lists of a freestanding program.
 #
 # A `list` value is the address of a header block from the allocation
-# hooks: a reference count, the length, the capacity, and the address of
-# the buffer, 8 bytes each. The buffer holds one 8-byte word for each
-# element. The compiler writes the store and the load of an element, at
-# the address a slot function returns plus 8. `aura build --freestanding`
+# hooks: a reference count, the length, the capacity, the address of the
+# buffer, and the number of words in an element, 8 bytes each. The buffer
+# holds that many 8-byte words for each element. The compiler writes the
+# store and the load of an element, at the address a slot function
+# returns plus 8. `aura build --freestanding`
 # adds these functions to a program that uses a list.
 
 import mem
 
 
-# A new empty list with room for `capacity` elements and one reference.
-def value_list_new(capacity: uint64) -> uint64:
-    address = mem.alloc(32, 8)
+# A new empty list with room for `capacity` elements of `words` words
+# each, and one reference.
+def value_list_new(capacity: uint64, words: uint64) -> uint64:
+    address = mem.alloc(40, 8)
     assert address != 0, "out of memory"
     mut buffer: uint64 = 0
     if capacity != 0:
-        buffer = mem.alloc(capacity * 8, 8)
+        buffer = mem.alloc(capacity * words * 8, 8)
         assert buffer != 0, "out of memory"
     mem.write_uint64(address, 1)
     mem.write_uint64(address + 8, 0)
     mem.write_uint64(address + 16, capacity)
     mem.write_uint64(address + 24, buffer)
+    mem.write_uint64(address + 32, words)
     return address
+
+
+# Gives back the buffer and the header of the list at `address`. Its
+# elements own nothing, or the caller has released what they own.
+def value_list_free(address: uint64) -> None:
+    capacity = mem.read_uint64(address + 16)
+    if capacity != 0:
+        mem.free(mem.read_uint64(address + 24), capacity * mem.read_uint64(address + 32) * 8, 8)
+    mem.free(address, 40, 8)
 
 
 # One reference fewer to the list at `address`, which is freed with its
@@ -34,10 +46,7 @@ def value_list_release(address: uint64) -> None:
     if count > 1:
         mem.write_uint64(address, count - 1)
         return
-    capacity = mem.read_uint64(address + 16)
-    if capacity != 0:
-        mem.free(mem.read_uint64(address + 24), capacity * 8, 8)
-    mem.free(address, 32, 8)
+    value_list_free(address)
 
 
 # The number of elements.
@@ -50,18 +59,19 @@ def value_list_length(address: uint64) -> int64:
 def value_list_push_slot(address: uint64) -> uint64:
     length = mem.read_uint64(address + 8)
     capacity = mem.read_uint64(address + 16)
+    size = mem.read_uint64(address + 32) * 8
     mut buffer = mem.read_uint64(address + 24)
     if length == capacity:
         if capacity == 0:
-            buffer = mem.alloc(32, 8)
+            buffer = mem.alloc(4 * size, 8)
             mem.write_uint64(address + 16, 4)
         else:
-            buffer = mem.realloc(buffer, capacity * 8, 8, capacity * 16)
+            buffer = mem.realloc(buffer, capacity * size, 8, capacity * 2 * size)
             mem.write_uint64(address + 16, capacity * 2)
         assert buffer != 0, "out of memory"
         mem.write_uint64(address + 24, buffer)
     mem.write_uint64(address + 8, length + 1)
-    return buffer + length * 8 - 8
+    return buffer + length * size - 8
 
 
 # The slot of the element at `index`, which counts from the end when it
@@ -72,13 +82,13 @@ def value_list_slot(address: uint64, index: int64) -> uint64:
     if at < 0:
         at = at + length
     assert at >= 0 and at < length, "list index out of range"
-    return mem.read_uint64(address + 24) + (at as uint64) * 8 - 8
+    return mem.read_uint64(address + 24) + (at as uint64) * mem.read_uint64(address + 32) * 8 - 8
 
 
 # The slot of the element at `index`, which the compiler has shown to be
 # in range.
 def value_list_slot_unchecked(address: uint64, index: int64) -> uint64:
-    return mem.read_uint64(address + 24) + (index as uint64) * 8 - 8
+    return mem.read_uint64(address + 24) + (index as uint64) * mem.read_uint64(address + 32) * 8 - 8
 
 
 # Removes every element and keeps the buffer.

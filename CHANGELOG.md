@@ -30,9 +30,11 @@ in this file.
   address and a length. An f-string may hold text, integers, and `bool`.
   Indexing, the other text methods, and floats or format specs in
   f-strings are still reported as `AU2052`.
-- Freestanding builds compile lists of integers, floats, and `bool`:
-  literals, `append`, `len`, `is_empty`, `clear`, element reads and
-  writes, and `for` loops. A list is a counted header and a buffer that
+- Freestanding builds compile lists of integers, floats, `bool`, text,
+  classes, tuples, enums, and lists: literals, `append`, `len`,
+  `is_empty`, element reads and writes, `view` of an element, and `for`
+  loops, with `clear` on lists of numbers. A list releases what its
+  elements own when its last reference goes. A list is a counted header and a buffer that
   grows through `aura_realloc`, and its operations are written in Aura.
   An index out of range calls the trap hook with code 3.
 - Freestanding builds compile an enum with an `indirect` payload of its own

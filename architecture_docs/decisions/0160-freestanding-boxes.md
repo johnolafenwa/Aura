@@ -84,9 +84,11 @@ count, and a way to drop what the block holds.
 
 ## Lists
 
-- **A `list` of a scalar type is a class of one word, the address of a
-  header block:** a reference count, the length, the capacity, and the
-  address of a buffer of one 8-byte word for each element. The header
+- **A `list` is a class of one word, the address of a header block:** a
+  reference count, the length, the capacity, the address of a buffer,
+  and the number of 8-byte words in one element. An element is a scalar
+  or a class of words with no union in it: text, a tuple, an enum, a
+  class of the program, or another list. The header
   never moves, so a `mut` parameter and its caller name the same list.
 - **The list functions are Aura source** in `std/freestanding_list.au`.
   A slot function checks the index and returns where the element lies,
@@ -101,8 +103,17 @@ count, and a way to drop what the block holds.
 - **An index out of range is a failed assertion in the library**, trap
   code 3 with the library's file name. The position in the program and
   a code of its own are a later step.
-- A list of any other type, and every other list operation, is still
-  refused.
+- **A list whose elements own heap memory gets a function of its own**,
+  `drop_list::<class>`, which the pass writes in MIR: one reference
+  fewer, and at the last one it releases each element and frees the
+  list. Other lists use the library's release.
+- **An element read is a new reference.** `items[i]` and a shared loan
+  of a whole element load the element and retain what it owns, and the
+  end of the loan releases it. A write loads the old element, releases
+  it, and stores the new one. `clear` stays with lists of elements that
+  own nothing.
+- A list of a union, a `mut` loan of an element, a loan of a part of an
+  element, and every other list operation are still refused.
 
 ## Consequences
 

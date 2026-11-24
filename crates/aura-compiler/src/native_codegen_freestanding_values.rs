@@ -96,6 +96,12 @@ const LIST_PUSH_SLOT: &str = "aura::values::value_list_push_slot";
 const LIST_SLOT: &str = "aura::values::value_list_slot";
 const LIST_SLOT_UNCHECKED: &str = "aura::values::value_list_slot_unchecked";
 const LIST_CLEAR: &str = "aura::values::value_list_clear";
+const LIST_FREE: &str = "aura::values::value_list_free";
+
+/// The function the pass makes for a list class whose elements own heap
+/// memory: one reference fewer, and at the last one each element is
+/// released and the list freed.
+const DROP_LIST: &str = "drop_list";
 
 /// The functions the pass makes for a class, each named with its kind and
 /// the class. The emitter writes the code of a call of the first two.
@@ -163,7 +169,7 @@ struct Values {
     next: usize,
     /// Whether the program holds a `str`.
     text: bool,
-    /// The element type of each list class.
+    /// The element type of each list class, after the rewrite.
     lists: HashMap<String, Type>,
     /// The functions whose shared parameters stay with the caller.
     borrowing: HashSet<String>,
@@ -237,10 +243,28 @@ impl Values {
                     | "uint64" | "float32" | "float64"
             )
         );
-        if !scalar {
-            return None;
-        }
-        let name = format!("{LIST_CLASS_PREFIX}{element}");
+        // Any other element is a class of words with no union in it: text,
+        // a tuple or an enum the pass rewrote, or a class of the program.
+        let element = &self.rewritten(element);
+        let suffix = match element {
+            _ if scalar => element.to_string(),
+            Type::Named(class, args)
+                if args.is_empty()
+                    && self
+                        .classes
+                        .get(class)
+                        .is_some_and(|known| known.type_params.is_empty())
+                    && super::freestanding::words_only(element, &self.classes)
+                    && !self.holds_a_union(class, &mut HashSet::new()) =>
+            {
+                class
+                    .strip_prefix(CLASS_PREFIX)
+                    .unwrap_or(class)
+                    .to_string()
+            }
+            _ => return None,
+        };
+        let name = format!("{LIST_CLASS_PREFIX}{suffix}");
         if !self.lists.contains_key(&name) {
             self.lists.insert(name.clone(), element.clone());
             let class = MirClass {
@@ -542,15 +566,44 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
         elements.sort_by_key(|element| element.to_string());
         for element in elements {
             let name = element.to_string();
+            // A box of the same type has already made the two.
+            if made
+                .iter()
+                .any(|function| function.name == class_function(STORE, &name))
+            {
+                continue;
+            }
+            // The store takes a value that needs drop, and drops it.
+            let drops = matches!(
+                &element,
+                Type::Named(class, _) if values.classes.get(class).is_some_and(|class| !class.copy)
+            );
             made.push(made_function(
                 class_function(STORE, &name),
                 vec![
                     ("address", MirReceiverKind::Borrow, Type::named("uint64")),
-                    ("value", MirReceiverKind::Borrow, element.clone()),
+                    (
+                        "value",
+                        if drops {
+                            MirReceiverKind::Value
+                        } else {
+                            MirReceiverKind::Borrow
+                        },
+                        element.clone(),
+                    ),
                 ],
                 Type::Unit,
                 Vec::new(),
-                one_block(Vec::new(), Terminator::Return(Operand::Unit)),
+                one_block(
+                    if drops {
+                        vec![Instruction::Release {
+                            place: "value".to_string(),
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                    Terminator::Return(Operand::Unit),
+                ),
             ));
             let mut fresh = Fresh {
                 count: 0,
@@ -857,6 +910,31 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
     let excluded = excluded_variants(&function.blocks);
     // The indexes whose range fact the pass drops.
     let mut unproven = HashSet::new();
+    // The shared loans of a whole element of a list the pass rewrote.
+    let mut loans = HashSet::new();
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if let Instruction::BeginElementLoan {
+            loan,
+            source,
+            projection,
+            mutable: false,
+            ..
+        } = instruction
+        {
+            let listed = matches!(
+                place_type(source, &types, values),
+                Some(Type::Named(class, _)) if values.lists.contains_key(&class)
+            );
+            let whole = matches!(
+                (place_type(source, &types, values), types.get(loan)),
+                (Some(Type::Named(class, _)), Some(ty))
+                    if values.lists.get(&class).cloned() == Some(values.rewritten(ty))
+            );
+            if listed && whole && projection.is_empty() {
+                loans.insert(loan.clone());
+            }
+        }
+    }
     let mut blocks = Vec::with_capacity(function.blocks.len());
     for block in std::mem::take(&mut function.blocks) {
         let BasicBlock {
@@ -894,6 +972,77 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         &mut current.instructions,
                     );
                     current.instructions.push(Instruction::Release { place });
+                }
+                // A shared loan of an element is a reference to it, held
+                // until the loan ends.
+                Instruction::BeginElementLoan {
+                    loan,
+                    source,
+                    selector,
+                    checked,
+                    ..
+                } if loans.contains(&loan) => {
+                    let element = types.get(&loan).map(|ty| values.rewritten(ty));
+                    let address = fresh.local(Type::named("uint64"));
+                    current.instructions.push(Instruction::Assign {
+                        target: address.clone(),
+                        value: Rvalue::Member {
+                            object: Operand::Place(source),
+                            field: TEXT_FIELD.to_string(),
+                        },
+                    });
+                    let slot = call(
+                        &mut fresh,
+                        &mut current.instructions,
+                        if checked {
+                            LIST_SLOT.to_string()
+                        } else {
+                            LIST_SLOT_UNCHECKED.to_string()
+                        },
+                        vec![Operand::Place(address), selector],
+                        Type::named("uint64"),
+                    );
+                    let name = element.map(|ty| ty.to_string()).unwrap_or_default();
+                    current.instructions.push(Instruction::Assign {
+                        target: loan.clone(),
+                        value: Rvalue::Call {
+                            callee: CallTarget::Name(class_function(LOAD, &name)),
+                            args: vec![MirArg {
+                                name: None,
+                                value: Operand::Place(slot),
+                                writeback_place: None,
+                            }],
+                            type_args: Default::default(),
+                        },
+                    });
+                    counted &= count_references(
+                        RETAIN,
+                        &loan,
+                        &types,
+                        values,
+                        &mut fresh,
+                        &mut current.instructions,
+                    );
+                }
+                Instruction::EndLoan { loan } if loans.contains(&loan) => {
+                    counted &= count_references(
+                        RELEASE,
+                        &loan,
+                        &types,
+                        values,
+                        &mut fresh,
+                        &mut current.instructions,
+                    );
+                    let drops = matches!(
+                        types.get(&loan).map(|ty| values.rewritten(ty)),
+                        Some(Type::Named(class, _))
+                            if values.classes.get(&class).is_some_and(|class| !class.copy)
+                    );
+                    if drops {
+                        current
+                            .instructions
+                            .push(Instruction::Release { place: loan });
+                    }
                 }
                 // The fact that an index is in range served the element
                 // read the pass replaces with a library call.
@@ -988,6 +1137,13 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                             | Rvalue::TupleTakeElement { .. }
                             | Rvalue::VariantPayload { .. }
                             | Rvalue::Member { .. }
+                            | Rvalue::Call {
+                                callee: CallTarget::Runtime {
+                                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                                    ..
+                                },
+                                ..
+                            }
                     );
                     let root = target.split(['.', '[']).next().unwrap_or(&target);
                     if root.len() != target.len() && owner(root, &types, values).is_some() {
@@ -1376,14 +1532,19 @@ fn lower_text(
                     element_type,
                 };
             };
+            let element_type = values.lists[&class_name].clone();
             let address = call(
                 fresh,
                 out,
                 LIST_NEW.to_string(),
-                vec![Operand::Int(elements.len() as u128)],
+                vec![
+                    Operand::Int(elements.len() as u128),
+                    Operand::Int(values.words(&element_type)),
+                ],
                 word(),
             );
             for element in elements {
+                let element = owned_text(element, values, fresh, out);
                 let slot = call(
                     fresh,
                     out,
@@ -1421,13 +1582,24 @@ fn lower_text(
                 Some(Type::Named(class, _)) => values.lists.get(&class).cloned(),
                 _ => None,
             };
+            // Whether an element owns heap memory, and the class it is.
+            let owner = match &element {
+                Some(Type::Named(inner, _)) if values.holds_a_box(inner) => Some(inner.clone()),
+                _ => None,
+            };
             let known = matches!(
                 (op, args.len()),
-                (ListOp::Len | ListOp::IsEmpty | ListOp::Clear, 0)
-                    | (ListOp::PushScalar(_), 1)
-                    | (ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_), 3)
-                    | (ListOp::SetIndexScalar(_), 4)
-            );
+                (ListOp::Len | ListOp::IsEmpty, 0)
+                    | (ListOp::Push | ListOp::PushScalar(_), 1)
+                    | (
+                        ListOp::Index
+                            | ListOp::IndexUnchecked
+                            | ListOp::IndexScalar(_)
+                            | ListOp::IndexScalarUnchecked(_),
+                        3
+                    )
+                    | (ListOp::SetIndex | ListOp::SetIndexScalar(_), 4)
+            ) || (op == ListOp::Clear && args.is_empty() && owner.is_none());
             let (Some(element), true) = (element, known) else {
                 return Rvalue::Call {
                     callee: CallTarget::Runtime {
@@ -1475,23 +1647,39 @@ fn lower_text(
                         trap: Default::default(),
                     }
                 }
-                ListOp::PushScalar(_) => {
+                ListOp::Push | ListOp::PushScalar(_) => {
+                    let value = args.next().unwrap_or(Operand::Unit);
+                    let value = owned_text(value, values, fresh, out);
                     let slot = call(fresh, out, LIST_PUSH_SLOT.to_string(), vec![list], word());
-                    named(
-                        store,
-                        vec![Operand::Place(slot), args.next().unwrap_or(Operand::Unit)],
-                    )
+                    named(store, vec![Operand::Place(slot), value])
                 }
-                ListOp::SetIndexScalar(_) => {
+                ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
                     let index = args.next().unwrap_or(Operand::Unit);
+                    let value = args.next().unwrap_or(Operand::Unit);
+                    let value = owned_text(value, values, fresh, out);
                     let slot = call(fresh, out, LIST_SLOT.to_string(), vec![list, index], word());
-                    named(
-                        store,
-                        vec![Operand::Place(slot), args.next().unwrap_or(Operand::Unit)],
-                    )
+                    // The element the write replaces is released first.
+                    if let Some(inner) = &owner {
+                        let old = call(
+                            fresh,
+                            out,
+                            load,
+                            vec![Operand::Place(slot.clone())],
+                            element.clone(),
+                        );
+                        call(
+                            fresh,
+                            out,
+                            class_function(RELEASE, inner),
+                            vec![Operand::Place(old.clone())],
+                            Type::Unit,
+                        );
+                        out.push(Instruction::Release { place: old });
+                    }
+                    named(store, vec![Operand::Place(slot), value])
                 }
                 _ => {
-                    let function = if matches!(op, ListOp::IndexScalar(_)) {
+                    let function = if matches!(op, ListOp::Index | ListOp::IndexScalar(_)) {
                         LIST_SLOT
                     } else {
                         LIST_SLOT_UNCHECKED
@@ -2490,8 +2678,13 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                             BOX_RETAIN.to_string()
                         } else if class == TEXT_CLASS {
                             TEXT_RELEASE.to_string()
-                        } else if values.lists.contains_key(&class) {
-                            LIST_RELEASE.to_string()
+                        } else if let Some(element) = values.lists.get(&class).cloned() {
+                            match &element {
+                                Type::Named(inner, _) if values.holds_a_box(inner) => {
+                                    class_function(DROP_LIST, &class)
+                                }
+                                _ => LIST_RELEASE.to_string(),
+                            }
                         } else {
                             match values.rewritten(&found.content) {
                                 Type::Named(content, _) => class_function(DROP_BOX, &content),
@@ -2526,6 +2719,131 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                 one_block(instructions, Terminator::Return(Operand::Unit)),
             ));
         }
+    }
+    let mut lists = values
+        .lists
+        .iter()
+        .map(|(class, element)| (class.clone(), element.clone()))
+        .collect::<Vec<_>>();
+    lists.sort_by(|left, right| left.0.cmp(&right.0));
+    for (class, element) in lists {
+        let Type::Named(inner, _) = &element else {
+            continue;
+        };
+        if !values.holds_a_box(inner) {
+            continue;
+        }
+        let address = || Operand::Place("address".to_string());
+        let whole = || Type::named("int64");
+        let mut fresh = new_fresh();
+        let mut entry = Vec::new();
+        let last = call(
+            &mut fresh,
+            &mut entry,
+            BOX_RELEASE.to_string(),
+            vec![address()],
+            Type::named("bool"),
+        );
+        let mut setup = Vec::new();
+        let length = call(
+            &mut fresh,
+            &mut setup,
+            LIST_LENGTH.to_string(),
+            vec![address()],
+            whole(),
+        );
+        let index = fresh.local(whole());
+        setup.push(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        let more = fresh.local(Type::named("bool"));
+        let test = vec![Instruction::Assign {
+            target: more.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(index.clone()),
+                right: Operand::Place(length),
+                span: crate::diag::Span::new(0, 0),
+                trap: Default::default(),
+            },
+        }];
+        let mut body = Vec::new();
+        let slot = call(
+            &mut fresh,
+            &mut body,
+            LIST_SLOT_UNCHECKED.to_string(),
+            vec![address(), Operand::Place(index.clone())],
+            word(),
+        );
+        let held = call(
+            &mut fresh,
+            &mut body,
+            class_function(LOAD, inner),
+            vec![Operand::Place(slot)],
+            element.clone(),
+        );
+        call(
+            &mut fresh,
+            &mut body,
+            class_function(RELEASE, inner),
+            vec![Operand::Place(held.clone())],
+            Type::Unit,
+        );
+        body.push(Instruction::Release { place: held });
+        body.push(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(index),
+                right: Operand::Int(1),
+                span: crate::diag::Span::new(0, 0),
+                trap: crate::mir::ArithmeticTrap::Overflow,
+            },
+        });
+        let mut free = Vec::new();
+        call(
+            &mut fresh,
+            &mut free,
+            LIST_FREE.to_string(),
+            vec![address()],
+            Type::Unit,
+        );
+        let block = |label: &str, instructions, terminator| BasicBlock {
+            label: label.to_string(),
+            instructions,
+            terminator,
+        };
+        functions.push(made_function(
+            class_function(DROP_LIST, &class),
+            vec![("address", MirReceiverKind::Borrow, word())],
+            Type::Unit,
+            fresh.locals,
+            vec![
+                block(
+                    "entry",
+                    entry,
+                    Terminator::Branch {
+                        condition: Operand::Place(last),
+                        then_label: "setup".to_string(),
+                        else_label: "done".to_string(),
+                    },
+                ),
+                block("setup", setup, Terminator::Goto("test".to_string())),
+                block(
+                    "test",
+                    test,
+                    Terminator::Branch {
+                        condition: Operand::Place(more),
+                        then_label: "body".to_string(),
+                        else_label: "free".to_string(),
+                    },
+                ),
+                block("body", body, Terminator::Goto("test".to_string())),
+                block("free", free, Terminator::Return(Operand::Unit)),
+                block("done", Vec::new(), Terminator::Return(Operand::Unit)),
+            ],
+        ));
     }
     functions
 }

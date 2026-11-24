@@ -569,6 +569,21 @@ fn lists_of_numbers_compute_what_the_hosted_program_prints_and_free_every_block(
     );
 }
 
+/// A list of text, classes, enums, or lists releases what its elements
+/// own when the list goes.
+#[test]
+fn lists_of_values_compute_what_the_hosted_program_prints_and_free_every_block() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_list_values.au"),
+        "entry",
+        "48407\n",
+    );
+}
+
 /// An index outside a list stops the program through the trap hook.
 #[test]
 fn a_list_index_out_of_range_calls_the_trap_hook() {

@@ -21,7 +21,7 @@ Last updated: 2026-11-24
   of words in freestanding builds, kept in machine words (ADR-0129), with
   `try` on them, and enums that hold themselves in counted heap blocks
   (ADR-0160), `str` with its first operations and f-strings, and lists of numbers,
-  21 compiler tests and 5 command tests.
+  text, classes, enums, and lists, 22 compiler tests and 6 command tests.
   [Notes](2026-11-24-freestanding-values.md)
 - Remaining: lists of other values, `dict`,
   and closures in freestanding builds, by route D1 of

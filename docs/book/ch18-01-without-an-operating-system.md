@@ -49,8 +49,8 @@ of them, tuples and enums of them, `T | None`, functions, generics,
 traits, loops, `match`, `assert`, and contracts.
 
 Most of the values Aura keeps on the heap for you are out:
-dictionaries, sets, closures, tasks. Three kinds are in. A list of numbers
-works, with `append`, indexing, and `for`. A `str` works, with `+`, comparisons, and a few methods, so a kernel
+dictionaries, sets, closures, tasks. Three kinds are in. A list
+works, of numbers, text, classes, enums, or other lists, with `append`, indexing, and `for`. A `str` works, with `+`, comparisons, and a few methods, so a kernel
 can build a message and hand it to its console. And an enum may hold
 itself through an `indirect` payload, so you can write a linked list or a
 tree. The compiler frees each block when nothing refers to it. You do not have to remember the list. Ask
@@ -197,9 +197,9 @@ output is the same.
 ## What is missing
 
 This is the first step toward systems work in Aura, and it is honest to
-say where it stops. The heap holds blocks of bytes, text, lists of numbers, and the nodes of
-enums that hold themselves: there are no dictionaries or sets yet, a list
-cannot hold text, and text cannot format a float. There is no inline assembly, so startup code and x86 port
+say where it stops. The heap holds blocks of bytes, text, lists, and the nodes of
+enums that hold themselves: there are no dictionaries or sets yet,
+and text cannot format a float. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`. The
 [Freestanding Builds](/manual/freestanding) and

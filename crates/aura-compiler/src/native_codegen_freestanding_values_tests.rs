@@ -139,7 +139,7 @@ export "C" def go(n: int64) -> int64:
 fn an_enum_that_holds_a_collection_is_still_refused() {
     let source = r#"
 enum Token:
-    Word(list[str])
+    Word(list[int64 | None])
     End
 
 def length(token: Token) -> int64:
@@ -261,10 +261,39 @@ fn a_list_of_numbers_becomes_calls_of_the_list_library_on_every_target() {
     }
 }
 
+/// Lists of text, classes, enums that own blocks, and lists.
+const LIST_VALUES: &str = include_str!("../../aura/tests/freestanding_list_values.au");
+
+#[test]
+fn a_list_of_values_releases_its_elements_on_every_target() {
+    let module = prepared(LIST_VALUES);
+    for made in [
+        "aura::values::list::str",
+        "aura::values::list::Point",
+        "aura::values::list::list::int64",
+        "aura::values::drop_list::list::str",
+        "aura::values::drop_list::list::list::int64",
+        "aura::values::value_list_free",
+        "aura::values::box_store::str",
+        "aura::values::box_load::Point",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    // A list of a class that owns nothing needs no function of its own.
+    assert!(!module.contains("aura::values::drop_list::list::Point"));
+    for gone in ["VecLiteral", "BeginElementLoan", "EndLoan", "\"List\""] {
+        assert!(!module.contains(gone), "{gone}");
+    }
+    for target in FreestandingTarget::ALL {
+        object(LIST_VALUES, target);
+    }
+}
+
 #[test]
 fn a_list_of_other_values_and_other_list_operations_are_still_refused() {
     for body in [
-        "    names = [\"a\", \"b\"]\n    return names.len() + n\n",
+        "    items: list[int64 | None] = [n, None]\n    return items.len()\n",
+        "    mut names = [\"a\", \"b\"]\n    names.clear()\n    return names.len() + n\n",
         "    mut items = [n, 2]\n    items.reverse()\n    return items[0]\n",
     ] {
         let source = format!("export \"C\" def run(n: int64) -> int64:\n{body}");
