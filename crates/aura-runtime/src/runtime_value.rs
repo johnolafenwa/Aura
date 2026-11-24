@@ -740,7 +740,7 @@ impl FfiHandleValue {
 /// additionally carries the uniform boxed-argument thunk address used for
 /// indirect calls and task starts. The source metadata keeps task ancestry
 /// diagnostics as precise for calls through stored values as for direct names.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunctionValue {
     pub name: String,
     pub signature: Type,
@@ -755,6 +755,35 @@ pub struct FunctionValue {
     /// The inline callable that compiled code boxed into this value.
     /// Compiled code that reads the value back calls through it directly.
     pub direct_callable: Option<Arc<DirectCallable>>,
+}
+
+impl Clone for FunctionValue {
+    fn clone(&self) -> Self {
+        let direct_callable = match self.direct_callable.as_ref() {
+            Some(callable) if callable.is_mutable() => {
+                // Mutable inline words are updated without locking, so clones
+                // settle the state into the synchronized closure environment
+                // and drop the shared DirectCallable handle.
+                if let Some(env) = &self.closure_environment {
+                    env.settle();
+                } else {
+                    callable.release();
+                }
+                None
+            }
+            other => other.cloned(),
+        };
+        Self {
+            name: self.name.clone(),
+            signature: self.signature.clone(),
+            source_path: self.source_path.clone(),
+            entry_span: self.entry_span,
+            direct_thunk: self.direct_thunk,
+            direct_default_binder: self.direct_default_binder,
+            closure_environment: self.closure_environment.clone(),
+            direct_callable,
+        }
+    }
 }
 
 /// An inline callable of compiled code kept inside a boxed function value:
@@ -837,7 +866,7 @@ impl DirectCallable {
     /// the key `abi_key`, or `None` when the words were released or belong
     /// to another contract.
     pub fn words_for(&self, abi_key: i64) -> Option<*mut i64> {
-        (self.abi_key == abi_key && !self.released.load(Ordering::Relaxed))
+        (self.abi_key == abi_key && !self.released.load(Ordering::Acquire))
             .then(|| self.words.get().cast::<i64>())
     }
 
@@ -874,7 +903,7 @@ impl DirectCallable {
 
     /// The address of the words while they are live.
     pub fn live_words(&self) -> Option<*mut i64> {
-        (!self.released.load(Ordering::Relaxed)).then(|| self.words.get().cast::<i64>())
+        (!self.released.load(Ordering::Acquire)).then(|| self.words.get().cast::<i64>())
     }
 
     pub fn capture_count(&self) -> usize {
@@ -970,12 +999,11 @@ impl ClosureEnvironment {
     /// Boxes the captures of a deferred environment. A Mutable closure's
     /// state moves to the boxed captures, so its inline words are released.
     fn settle(&self) {
-        let pending = self
+        let mut pending = self
             .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let Some(callable) = pending else {
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(callable) = pending.take() else {
             return;
         };
         let captures = (callable.boxed_captures)(&callable);
@@ -986,6 +1014,7 @@ impl ClosureEnvironment {
         if callable.is_mutable() {
             callable.release();
         }
+        drop(pending);
     }
 
     /// Takes the captures out, leaving the environment consumed.

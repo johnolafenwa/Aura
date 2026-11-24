@@ -34319,3 +34319,61 @@ def main():
         assert_eq!(error.code, "AU3002", "{label}: {error:?}");
     }
 }
+
+#[test]
+fn sync_map_get_rejects_non_cloneable_values() {
+    let cases = [
+        (
+            "TaskCallable[mut def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[mut def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "TaskCallable[own def]",
+            "AU3007",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, TaskCallable[own def() -> int64]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "Task[list[int64]]",
+            "AU3009",
+            r#"
+import sync
+
+def main():
+    m = sync.Map[str, Task[list[int64]]]()
+    _ = m.get("k")
+"#,
+        ),
+        (
+            "dyn TransferTrait",
+            "AU3007",
+            r#"
+import sync
+
+trait Job: Transfer:
+    def id(self) -> int64
+
+def main():
+    m = sync.Map[str, dyn Job]()
+    _ = m.get("k")
+"#,
+        ),
+    ];
+    for (label, expected_code, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` in sync.Map.get to fail"));
+        assert_eq!(error.code, expected_code, "{label}: {error:?}");
+    }
+}

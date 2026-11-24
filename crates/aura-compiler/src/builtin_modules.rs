@@ -2289,19 +2289,25 @@ fn sync_namespace() -> ModuleNamespace {
                 ),
                 &["T"],
             ),
-            with_transfer_bounds(
-                generic_function_info(
-                    "sync",
-                    "__aura_map_get",
-                    vec!["K", "V"],
-                    vec![
-                        value_param("cell", cell()),
-                        value_param("key", type_ref("K", Vec::new())),
-                    ],
-                    type_ref("Lookup", vec![type_ref("V", Vec::new())]),
-                ),
-                &["K", "V"],
-            ),
+            {
+                let mut info = with_transfer_bounds(
+                    generic_function_info(
+                        "sync",
+                        "__aura_map_get",
+                        vec!["K", "V"],
+                        vec![
+                            value_param("cell", cell()),
+                            value_param("key", type_ref("K", Vec::new())),
+                        ],
+                        type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+                    ),
+                    &["K", "V"],
+                );
+                info.signature
+                    .rng_clone_safe_type_params
+                    .insert("V".to_string());
+                info
+            },
             function_info(
                 "sync",
                 "__aura_cell_poisoned",
