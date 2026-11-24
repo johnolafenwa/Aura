@@ -459,7 +459,13 @@ fn values_with_a_live_drop_hook_keep_their_runtime_owner() {
     def __drop__(mut self):
         assert self.n > 0, "invalid guard"
 
-values = [Guard(42)]
+class Holder:
+    guard: Guard
+
+    def __drop__(mut self):
+        assert false, "module owner must stay live"
+
+values = [Holder(Guard(42))]
 "#;
     assert!(!check_source(source)
         .unwrap()
