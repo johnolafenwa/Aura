@@ -177,8 +177,7 @@ error[AU2002]: an extern function cannot return a str view because no foreign li
 The message says exactly what is missing. A returned pointer and length
 could describe static memory, a buffer the caller must free, or something
 that will change on the next call, and the declaration has no way to say
-which. Raw pointers are refused for the same reason, with a parser error
-that suggests the alternatives:
+which. Write a typed pointer as `ptr[T]`. Using C’s `*T` spelling produces a parser diagnostic.
 
 ```aura fragment
 extern "C" def strlen(text: *uint8) -> uint64
@@ -186,7 +185,7 @@ extern "C" def strlen(text: *uint8) -> uint64
 
 ```console
 $ aura check src/bad.au
-error[AU1101]: FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle
+error[AU1101]: use `ptr[T]` for a typed pointer in an extern declaration
  --> src/bad.au:1:29
   |
 1 | extern "C" def strlen(text: *uint8) -> uint64
@@ -530,8 +529,7 @@ as `mut` too, and pass a `mut` variable.
 
 Our `Timespec` has only scalar fields, so assignment copies it. We can
 build one with keyword arguments, read its fields, and keep it in a list.
-C lays out nested structs inline. If a field contains a fixed-size array or
-a union, even inside a nested struct, assignment moves the value. An
+C lays out nested structs inline. A `fixed[T, N]` field copies when `T` copies. A hosted C union or a list-backed `array[T, N]` field moves with its containing struct. An
 `extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same

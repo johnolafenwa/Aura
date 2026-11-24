@@ -435,10 +435,7 @@ def main() -> int32:
   or a fixed-size [array](#array-fields) of values with those layouts.
   Any other field type is `AU2002`.
   The class needs at least one field.
-- **An ordinary value.** A struct is Copy when each field is a scalar or
-  another Copy struct. A struct that contains an array or a union moves on
-  assignment. Construct it with keyword arguments, read and assign its fields,
-  and keep it in a list or another class. It has no C identity until it crosses.
+- **An ordinary value.** A struct copies when each field copies, including a `fixed[T, N]` field with Copy elements. A hosted union or a list-backed `array[T, N]` field moves with its containing struct. Construct a struct with keyword arguments, read and assign its fields, and keep it in a list or another class.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -648,9 +645,7 @@ parts:
 - **The bytes keep their length.** A union whose `bytes` list is not
   exactly as long as the C union fails with `AU4005` when it crosses or
   when a member is read.
-- **A union is not `Copy`.** It holds a list, so assignment moves it, as
-  for a class with an array field. A class that holds a union is not
-  `Copy` either.
+- **Assignment follows the storage profile.** In a hosted build a union moves with its backing byte list. In a freestanding build it copies its inline bytes.
 - **A member cannot be named `bytes`.**
 
 A union crosses wherever an `extern "C"` class does: by value, as `mut

@@ -991,7 +991,7 @@ impl Parser {
             if matches!(kind, TokenKind::Star) {
                 return Err(parse_error(
                     self.tokens[index].span,
-                    "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
+                    "use `ptr[T]` for a typed pointer in an extern declaration",
                 ));
             }
             index += 1;

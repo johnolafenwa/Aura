@@ -255,10 +255,10 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
     );
 
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
-        .expect_err("FFI v0 reserves raw pointer syntax");
+        .expect_err("C-style pointer syntax is rejected");
     assert_eq!(
         raw_pointer.message,
-        "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle"
+        "use `ptr[T]` for a typed pointer in an extern declaration"
     );
 }
 
