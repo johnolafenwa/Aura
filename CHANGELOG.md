@@ -19,6 +19,12 @@ in this file.
 - `aura verify` prints how many open checks failed, are not modeled, or are
   undecided, and the JSON report carries `failed`, `not_modeled` and
   `undecided` counts.
+- `aura verify` reasons about `Span[T]` and list views like lists: `len`,
+  indexes, and elements, in code and in contracts. A write through a `mut`
+  span or view now reaches the viewed list in the proof; before, an
+  assertion about the list after such a call could be proved wrongly.
+- `aura verify` checks every `Array[T]` element read and write: the rank
+  and each coordinate. Before, an `Array` index created no check at all.
 - `aura verify` proves the body of a generator function with its `requires`
   clauses known, and reports its checks under the generator's name.
 

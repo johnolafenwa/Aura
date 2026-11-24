@@ -251,6 +251,16 @@ booleans, with each integer type's range as a check:
   literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `get`,
   `remove`, `keys`, `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
   `clear` of a `set`, with `==` of whole collections
+- `Span[T]` and `view` bindings of a list: `len`, each index against the
+  span's own length, the bounds of the range where a span is made, and the
+  elements, in code and in contracts. A write through a `mut` span or view
+  reaches the list it views
+- `Array[T]`: its element count and its `shape()`. Each element read and
+  write is an index check: the number of coordinates is the rank, and each
+  coordinate is inside its dimension. A one-coordinate read such as `a[i]`
+  therefore needs `requires len(a.shape()) == 1`, because it traps on an
+  `Array` of any other rank. The elements themselves, slices, and slice
+  assignment are not modeled
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
@@ -282,8 +292,8 @@ Anything else is a value the verifier knows nothing about: a `dict` or
 follow, such as one passed as an argument, stored in a collection, or
 chosen on different paths. Such a value's `requires` is reported as
 `AU5104` where it leaves the function, and stays checked when it is
-called. A check that depends on one of them can
-still be proved when the contract around it says enough.
+called. A check that reads one of them is reported as not modeled
+(`AU5104`, naming the step), never as a failure with a counterexample.
 
 A loop that builds a list proves what it builds with a quantified
 invariant:
