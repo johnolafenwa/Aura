@@ -346,3 +346,21 @@ fn duplicate_setters_are_diagnosed_in_the_selected_class_members() {
         assert!(error.message.contains("duplicate setter"));
     });
 }
+
+#[test]
+fn a_class_in_an_inactive_module_arm_does_not_validate_setter_bindings() {
+    let source = concat!(
+        "import build\n",
+        "if build.freestanding:\n",
+        "    class Device:\n",
+        "        @property\n",
+        "        def count(self) -> int64:\n            return absent()\n",
+        "        @count.setter\n",
+        "        def count(mut self, value: int64):\n            pass\n",
+        "        @count.setter\n",
+        "        def count(mut self, value: int64):\n            pass\n",
+        "def main():\n    print(9)\n",
+    );
+    crate::parser::parse_all_syntax(source).unwrap();
+    assert_eq!(run_source(source).unwrap().stdout, "9\n");
+}
