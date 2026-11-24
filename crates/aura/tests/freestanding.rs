@@ -862,3 +862,58 @@ fn a_constant_scale_and_offset_share_one_overflow_check() {
         "{ir}"
     );
 }
+
+#[test]
+fn a_freestanding_union_updates_its_overlapping_c_representation() {
+    let Some(cc) = c_compiler() else {
+        return;
+    };
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write(
+        "src/main.au",
+        r#"extern "C" union Word:
+    whole: uint32
+    low: uint8
+
+export "C" def replace_low(original: uint32, low: uint8) -> uint32:
+    mut word = Word.from_whole(original)
+    word.low = low
+    return word.whole
+
+export "C" def from_zero(low: uint8) -> uint32:
+    mut word = Word()
+    word.low = low
+    return word.whole
+"#,
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "word.o", "src/main.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    workspace.write(
+        "word.c",
+        r#"#include <stdint.h>
+#include <stdlib.h>
+uint32_t replace_low(uint32_t, uint8_t);
+uint32_t from_zero(uint8_t);
+void aura_trap(uint32_t code, const char *file, uint64_t n, uint32_t line, uint32_t column) {
+    abort();
+}
+int main(void) {
+    union { uint32_t whole; uint8_t low; } w = { .whole = 0x12345678 };
+    w.low = 10;
+    if (replace_low(0x12345678, 10) != w.whole) return 1;
+    w.whole = 0;
+    w.low = 15;
+    return from_zero(15) != w.whole;
+}
+"#,
+    );
+    let linked = Command::new(cc)
+        .current_dir(&workspace.path)
+        .args(["word.c", "word.o", "-o", "word-test"])
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{}", stderr(&linked));
+    let run = Command::new(workspace.path.join("word-test")).output().unwrap();
+    assert!(run.status.success(), "{run:?}");
+}
