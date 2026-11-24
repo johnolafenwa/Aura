@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-24
 
+## Dict and set speed (in progress)
+
+- Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
+  Details and measurements are in `2026-11-24-dict-and-set-speed.md`.
+- Done: one-call hashing, single-probe `int64` inserts, removes that build
+  no `Lookup`, and loops over `items()`, `keys()` and `values()` that walk
+  the dict and make no list. `dict_remove` went from 9.9 to 2.6 times
+  Rust's instructions and one entry of an `items()` loop from 4,046
+  instructions to 252.
+- Next: look up a `str` key without copying it first.
+
 ## Release 0.17.0-preview (complete)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

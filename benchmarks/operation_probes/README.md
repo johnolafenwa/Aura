@@ -209,3 +209,34 @@ has a body with no frame record, which is inlined into its direct callers
 [the native backend notes](../../architecture_docs/08-native-codegen-and-runtime.md)),
 and a method that only touches scalar fields of its receiver needs no tag
 check. No other probe changed.
+
+`dict_get_int`, `dict_set_int`, `dict_insert_int`, `dict_count_str`,
+`dict_contains_str`, `set_add_int`, `set_contains_int`, `set_contains_str`
+and `dict_items_loop` (plan step `dict`, added on 24 November 2026) count
+one dict or set operation each. `dict_count_str` is the counting idiom,
+`match mut table.lookup(key)` with an insert on `Missing`.
+`dict_items_loop` counts one entry of `for key, value in table.items()`.
+The first column of Aura figures is `main` at `6642a7c` (0.17.0), the
+second is after the dict work recorded in
+[the work note](../../work/2026-11-24-dict-and-set-speed.md):
+
+| operation | count | Rust instr/op | Aura at `6642a7c` | Aura | Aura/Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `dict_remove` | 2,000 | 202.6 | 2,030.0 | 524.3 | 2.6x |
+| `dict_get_str` | 100,000 | 242.9 | 1,222.0 | 1,219.0 | 5.0x |
+| `dict_get_int` | 100,000 | 197.0 | 846.0 | 820.0 | 4.2x |
+| `dict_set_int` | 100,000 | 204.2 | 368.0 | 364.1 | 1.8x |
+| `dict_insert_int` | 100,000 | 455.4 | 686.0 | 513.5 | 1.1x |
+| `dict_count_str` | 100,000 | 254.9 | 1,976.0 | 1,829.8 | 7.2x |
+| `dict_contains_str` | 100,000 | 233.8 | 1,050.0 | 985.1 | 4.2x |
+| `set_add_int` | 100,000 | 316.8 | 386.0 | 394.1 | 1.2x |
+| `set_contains_int` | 100,000 | 193.9 | 284.0 | 255.0 | 1.3x |
+| `set_contains_str` | 100,000 | 232.3 | 1,087.0 | 995.5 | 4.3x |
+| `dict_items_loop` | 100,000 | 16.5 | 4,046.0 | 252.2 | 15.3x |
+
+Hashing a key and finding its entry cost about what they cost in Rust:
+both use SipHash-1-3 and the same table. What is left is around the
+lookup. A `str` key read from a list is copied into a box before the
+lookup and released after it, which is most of the four `str` rows. The
+value `dict_get_int` reads comes back in a box. Each entry of
+`dict_items_loop` is two calls into the runtime.

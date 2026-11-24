@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- Speed: `d.remove(key)` builds no `Lookup` value when its result is
+  matched or dropped, and takes about a quarter of the instructions. A loop
+  over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`
+  keys and values walks the dict and makes no list: one entry of an
+  `items()` loop went from about 4,000 instructions to about 250.
+
 ## VS Code extension 0.17.0 — 2026-11-24
 
 - Bundles language server 0.17.0. The semantic interface version stays 20.
