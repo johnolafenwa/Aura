@@ -32083,6 +32083,31 @@ fn a_tasks_last_reference_to_a_str_box_frees_the_text_and_the_block() {
 }
 
 #[test]
+fn appending_a_text_read_in_place_copies_it_into_the_list() {
+    let long = "a text that is too long to keep in the value itself";
+    let vec = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_str_view(vec, long.as_ptr(), long.len());
+    super::aura_direct_vec_push_str_view(vec, "é".as_ptr(), "é".len());
+    // The text may lie in the list it is appended to.
+    let (ptr, len) = super::with_vector(vec, |vector| match vector.elements.at(1).as_ref() {
+        Value::String(text) => (text.as_str().as_ptr(), text.as_str().len()),
+        other => panic!("expected a string, found {other:?}"),
+    });
+    super::aura_direct_vec_push_str_view(vec, ptr, len);
+    let texts = super::with_vector(vec, |vector| {
+        assert_eq!(*vector.element_type, Type::named("str"));
+        (0..vector.elements.len())
+            .map(|index| match vector.elements.at(index).into_owned() {
+                Value::String(text) => text.into_string(),
+                other => panic!("expected a string, found {other:?}"),
+            })
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(texts, [long, "é", "é"]);
+    unsafe { release_value(vec) };
+}
+
+#[test]
 fn appending_an_only_str_box_moves_its_text_into_the_list() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let result = run_lightweight_root_task(move || {
@@ -32162,6 +32187,28 @@ fn an_owned_literal_replace_keeps_the_only_box() {
     });
     assert_eq!(diagnostic.message, "expected `str`, found `integer`");
     unsafe { release_value(number) };
+}
+
+#[test]
+fn an_owned_clone_of_the_only_str_box_is_the_box() {
+    let text = string_value("only");
+    assert_eq!(unsafe { super::aura_direct_clone_str_owned(text) }, text);
+    assert_eq!(expect_string(text), "only");
+
+    // A box another reference holds is copied, and the caller's reference
+    // released.
+    let shared = string_value("shared");
+    unsafe { retain_value(shared) };
+    let cloned = unsafe { super::aura_direct_clone_str_owned(shared) };
+    assert_ne!(cloned, shared);
+    assert_eq!(expect_string(cloned), "shared");
+    assert_eq!(expect_string(shared), "shared");
+
+    // Any other value is cloned as `clone` clones it.
+    let number = int_value(7);
+    let cloned = unsafe { super::aura_direct_clone_str_owned(number) };
+    assert_ne!(cloned, number);
+    assert_eq!(expect_int(cloned), 7);
 }
 
 #[test]

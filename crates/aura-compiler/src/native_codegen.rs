@@ -2638,6 +2638,10 @@ impl<'a> NativeCodegen<'a> {
             emptied_store_root: None,
             str_append_root: None,
             owned_replace_receiver: None,
+            owned_clone_receiver: None,
+            str_view_wanted: false,
+            str_view_found: None,
+            pushed_str_view: None,
             extended_str_bytes: None,
             lent_temps: HashMap::new(),
             field_lend_temps,
@@ -4149,6 +4153,20 @@ struct FunctionCompiler<'a> {
     /// The `str` temporary whose box the current instruction's literal
     /// `replace` takes over, as [`owned_replace_receiver`] finds it.
     owned_replace_receiver: Option<String>,
+    /// The `str` temporary whose box the `clone` being compiled takes
+    /// over, as [`owned_clone_receiver`] finds it.
+    owned_clone_receiver: Option<String>,
+    /// Set while the clone of a `str` element that the next instruction
+    /// appends is compiled: the element's copy may then be left unmade
+    /// (see [`pushed_str_clone`]).
+    str_view_wanted: bool,
+    /// The bytes and length of the `str` element whose copy was left
+    /// unmade. The copy's word is then null wherever the list was read in
+    /// place.
+    str_view_found: Option<(Val, Val)>,
+    /// The bytes and length the append being compiled copies into its list
+    /// when the box it is given is null.
+    pushed_str_view: Option<(Val, Val)>,
     /// The `str` whose bytes the current instruction's `extend` appends, as
     /// [`extended_str_bytes`] finds it.
     extended_str_bytes: Option<Operand>,
@@ -5271,6 +5289,71 @@ impl<'a> FunctionCompiler<'a> {
                 let taken = self.owned_replace_receiver.take().is_none();
                 compiled?;
                 skipped = usize::from(taken);
+                continue;
+            }
+            if pushed_str_clone(&block.instructions[instruction_index..])
+                .is_some_and(|(loan, list)| self.appends_str_element(loan, list))
+            {
+                // The append copies the element's text into its list, so
+                // the clone makes no box wherever it reads the list in
+                // place.
+                self.str_view_wanted = true;
+                let compiled =
+                    self.compile_instruction(&block.label, instruction_index, instruction);
+                self.str_view_wanted = false;
+                let view = self.str_view_found.take();
+                compiled?;
+                if let Some(view) = view {
+                    self.current_snapshot_instruction = instruction_index + 1;
+                    self.pushed_str_view = Some(view);
+                    let compiled = self.compile_instruction(
+                        &block.label,
+                        instruction_index + 1,
+                        &block.instructions[instruction_index + 1],
+                    );
+                    let taken = self.pushed_str_view.take().is_none();
+                    compiled?;
+                    if !taken {
+                        return Err(
+                            "direct backend left a fused `append(text.clone())` without its text"
+                                .to_string(),
+                        );
+                    }
+                    skipped = 1;
+                }
+                continue;
+            }
+            if self.compile_dict_str_clone(&block.instructions[instruction_index..])? {
+                skipped = 2;
+                continue;
+            }
+            if let Some((receiver, release)) =
+                owned_clone_receiver(&block.instructions[instruction_index..])
+                    .filter(|(receiver, _)| self.owns_str_temporary(receiver))
+            {
+                // A release of another place that comes between goes
+                // first: a `Lookup` and the payload unpacked from it are
+                // one box, which the clone can take only once the payload
+                // holds its last reference.
+                if release == 2 {
+                    self.current_snapshot_instruction = instruction_index + 1;
+                    self.compile_instruction(
+                        &block.label,
+                        instruction_index + 1,
+                        &block.instructions[instruction_index + 1],
+                    )?;
+                    self.current_snapshot_instruction = instruction_index;
+                }
+                // The clone takes the temporary's box, so the release
+                // after it has nothing left to release.
+                self.owned_clone_receiver = Some(receiver.to_string());
+                let compiled =
+                    self.compile_instruction(&block.label, instruction_index, instruction);
+                // A clone compiled some other way left the box where it
+                // was, for the release to free.
+                let taken = self.owned_clone_receiver.take().is_none();
+                compiled?;
+                skipped = release - 1 + usize::from(taken);
                 continue;
             }
             self.str_append_root =
@@ -8418,6 +8501,66 @@ impl<'a> FunctionCompiler<'a> {
             values: vec![inst.results[0]],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
+    }
+
+    /// Whether `loan` lends one `str` element of a list and `list` is a
+    /// `list[str]` local, as [`pushed_str_clone`] needs them.
+    fn appends_str_element(&self, loan: &str, list: &str) -> bool {
+        let text = Type::named("str");
+        let texts = Type::Named("list".to_string(), vec![text.clone()]);
+        let plain_list = !self.view_places.contains_key(list)
+            && !self.loan_locals.contains(list)
+            && matches!(self.local_type(list), Ok(DirectType::Opaque(found)) if found == texts);
+        if !plain_list || !self.view_places.contains_key(loan) {
+            return false;
+        }
+        let Ok(resolved) = self.resolve_view_place(loan) else {
+            return false;
+        };
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return false;
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return false;
+        };
+        alternative.conditions.is_empty()
+            && alternative.union_payloads.is_empty()
+            && selector.projection.is_empty()
+            && matches!(selector.kind, DirectElementKind::List)
+            && selector.element_type == text
+    }
+
+    /// `x = map[key].clone()` on a `dict[str, str]` local: MIR states it as
+    /// a loan of the entry, a clone of the loan, and the loan's end. One
+    /// lookup that copies the text it finds does the same, and reports a
+    /// missing key as the loan would.
+    fn compile_dict_str_clone(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<bool, String> {
+        let Some((target, map, key, span)) = dict_str_clone(instructions) else {
+            return Ok(false);
+        };
+        let text = Type::named("str");
+        let dict = Type::Named("dict".to_string(), vec![text.clone(), text.clone()]);
+        let plain = |codegen: &Self, place: &str, ty: &Type| {
+            !place.contains('.')
+                && !codegen.view_places.contains_key(place)
+                && !codegen.loan_locals.contains(place)
+                && matches!(codegen.local_type(place), Ok(DirectType::Opaque(found)) if found == *ty)
+        };
+        if !plain(self, map, &dict) || !plain(self, key, &text) || !plain(self, target, &text) {
+            return Ok(false);
+        }
+        let map = self.load_place(map)?.values[0];
+        let key = self.load_place(key)?.values[0];
+        let (line, column) = self.span_operands(span);
+        let call = self
+            .builder
+            .call(self.runtime[RuntimeFn::MapIndex], &[map, key, line, column]);
+        let copy = self.owned_opaque_result(call.results, text);
+        self.store_place(target, copy)?;
+        Ok(true)
     }
 
     /// A character immediately compared against a one-scalar literal and then
@@ -12444,17 +12587,38 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(field_block);
         self.builder.seal_block(field_block);
         let copy = self.emit_str_element_copy(field, index, selector.span);
-        self.builder.jump(join_block, &[copy]);
+        // A copy left unmade keeps its bytes and length past this join.
+        let view = self.str_view_found.take();
+        match view {
+            Some((bytes, len)) => {
+                self.builder.append_block_param(join_block, types::I64);
+                self.builder.append_block_param(join_block, types::I64);
+                self.builder.jump(join_block, &[copy, bytes, len]);
+            }
+            None => {
+                self.builder.jump(join_block, &[copy]);
+            }
+        }
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let (collection, projection) = self.load_element_path_root(&alternative.place)?;
         let copy = self.element_path_load(collection.values[0], &projection, alternative)?;
-        self.builder.jump(join_block, &[copy]);
+        if view.is_some() {
+            let none = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join_block, &[copy, none, none]);
+        } else {
+            self.builder.jump(join_block, &[copy]);
+        }
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        Ok(Some(self.builder.block_params(join_block)[0]))
+        let params = self.builder.block_params(join_block);
+        let copy = params[0];
+        if view.is_some() {
+            self.str_view_found = Some((params[1], params[2]));
+        }
+        Ok(Some(copy))
     }
 
     /// Stores through one view alternative: a static place directly, or the
@@ -13729,6 +13893,13 @@ impl<'a> FunctionCompiler<'a> {
         let fast_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
+        // An append that follows copies the text itself, from where the
+        // list keeps it.
+        let viewed = std::mem::take(&mut self.str_view_wanted);
+        if viewed {
+            self.builder.append_block_param(join_block, types::I64);
+            self.builder.append_block_param(join_block, types::I64);
+        }
         self.emit_list_access_check(list, DirectListAccess::Str, &layout, slow_block, fast_block);
 
         self.builder.switch_to_block(fast_block);
@@ -13748,10 +13919,15 @@ impl<'a> FunctionCompiler<'a> {
         let len = self
             .builder
             .load(types::I64, flags, entry, DIRECT_STR_VIEW_LEN_OFFSET);
-        let copy = self
-            .builder
-            .call(self.runtime[RuntimeFn::StringFromView], &[bytes, len]);
-        self.builder.jump(join_block, &[copy.results[0]]);
+        if viewed {
+            let none = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join_block, &[none, bytes, len]);
+        } else {
+            let copy = self
+                .builder
+                .call(self.runtime[RuntimeFn::StringFromView], &[bytes, len]);
+            self.builder.jump(join_block, &[copy.results[0]]);
+        }
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
@@ -13760,11 +13936,22 @@ impl<'a> FunctionCompiler<'a> {
             self.runtime[RuntimeFn::VecStrElement],
             &[list, index, line, column],
         );
-        self.builder.jump(join_block, &[copy.results[0]]);
+        if viewed {
+            let none = self.builder.iconst(types::I64, 0);
+            self.builder
+                .jump(join_block, &[copy.results[0], none, none]);
+        } else {
+            self.builder.jump(join_block, &[copy.results[0]]);
+        }
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        self.builder.block_params(join_block)[0]
+        let params = self.builder.block_params(join_block);
+        let copy = params[0];
+        if viewed {
+            self.str_view_found = Some((params[1], params[2]));
+        }
+        copy
     }
 
     /// Loads the `DirectListAccess` code of `list`, widened to 64 bits.
@@ -17683,6 +17870,15 @@ impl<'a> FunctionCompiler<'a> {
             .result_type(Some(&receiver_ty), &[])
             .ok_or_else(|| format!("direct backend does not know the result type of `{op:?}`"))?;
         let object = self.ensure_opaque(object)?;
+        // A temporary released next hands its box over to be the clone.
+        if let (ValueOp::Clone, Some(receiver)) = (op, self.owned_clone_receiver.take()) {
+            let text = self.take_place(&receiver)?;
+            let text = self.transfer_owned_opaque_value(&text);
+            let call = self
+                .builder
+                .call(self.runtime[RuntimeFn::CloneStrOwned], &[text]);
+            return Ok(self.owned_opaque_result(call.results, result_ty));
+        }
         // A fresh copy of a `str` element is already the clone.
         if matches!(op, ValueOp::Clone | ValueOp::Copy)
             && self.fresh_str_copies.remove(&object.values[0])
@@ -17690,6 +17886,13 @@ impl<'a> FunctionCompiler<'a> {
         {
             self.clear_temporary_opaque_owned(&object);
             return Ok(self.owned_opaque_result(object.values, result_ty));
+        }
+        if self.str_view_found.is_some() {
+            // Only a fresh copy is ever left unmade, and the branch above
+            // took it.
+            return Err(
+                "direct backend cloned a `str` element whose copy it left unmade".to_string(),
+            );
         }
         let results = self.runtime_call_results(
             self.runtime[runtime_op.runtime_call().function],
@@ -17892,7 +18095,27 @@ impl<'a> FunctionCompiler<'a> {
                 let value =
                     self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                self.builder.call(function, &[list, value]);
+                if let Some((bytes, len)) = self.pushed_str_view.take() {
+                    // A null box stands for the text still in its list.
+                    let boxed_block = self.builder.create_block();
+                    let viewed_block = self.builder.create_block();
+                    let done_block = self.builder.create_block();
+                    self.builder
+                        .brif(value, boxed_block, &[], viewed_block, &[]);
+                    self.builder.switch_to_block(boxed_block);
+                    self.builder.seal_block(boxed_block);
+                    self.builder.call(function, &[list, value]);
+                    self.builder.jump(done_block, &[]);
+                    self.builder.switch_to_block(viewed_block);
+                    self.builder.seal_block(viewed_block);
+                    self.builder
+                        .call(self.runtime[RuntimeFn::VecPushStrView], &[list, bytes, len]);
+                    self.builder.jump(done_block, &[]);
+                    self.builder.switch_to_block(done_block);
+                    self.builder.seal_block(done_block);
+                } else {
+                    self.builder.call(function, &[list, value]);
+                }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
@@ -21609,6 +21832,135 @@ fn owned_replace_receiver(instructions: &[Instruction]) -> Option<&str> {
         && args.len() == 2
         && args.iter().all(literal))
     .then_some(receiver.as_str())
+}
+
+/// The temporary `%t` of `instructions` that start `x = %t.clone()` and
+/// release `%t` next, or after one release of another place, with the
+/// position of that release: the clone is the last to read the temporary,
+/// so it may take the temporary's box for its result.
+fn owned_clone_receiver(instructions: &[Instruction]) -> Option<(&str, usize)> {
+    let [Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Value(ValueOp::Clone),
+                        receiver: Some(Operand::Place(receiver)),
+                        ..
+                    },
+                args,
+                ..
+            },
+    }, rest @ ..] = instructions
+    else {
+        return None;
+    };
+    if receiver == target
+        || !receiver.starts_with('%')
+        || receiver.contains('.')
+        || !args.is_empty()
+    {
+        return None;
+    }
+    fn released(instruction: &Instruction) -> Option<&str> {
+        match instruction {
+            Instruction::Release { place } => Some(place.as_str()),
+            _ => None,
+        }
+    }
+    let first = released(rest.first()?)?;
+    if first == receiver {
+        return Some((receiver.as_str(), 1));
+    }
+    // A release of another root reads nothing of the temporary.
+    let root = |place: &str| place.split('.').next() == Some(receiver.as_str());
+    (!root(first) && first != target && released(rest.get(1)?)? == receiver)
+        .then_some((receiver.as_str(), 2))
+}
+
+/// The loan and the list of `instructions` that start `%t = loan.clone();
+/// list.append(move %t)`, as `out.append(texts[i].clone())` lowers once
+/// the loan of `texts[i]` has begun: the append is the only reader of the
+/// clone, so it may copy the element's text straight into its list.
+fn pushed_str_clone(instructions: &[Instruction]) -> Option<(&str, &str)> {
+    let [Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Value(ValueOp::Clone),
+                        receiver: Some(Operand::Place(loan)),
+                        ..
+                    },
+                args: clone_args,
+                ..
+            },
+    }, Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::Push),
+                        receiver: Some(Operand::Place(list)),
+                        ..
+                    },
+                args,
+                ..
+            },
+        ..
+    }, ..] = instructions
+    else {
+        return None;
+    };
+    let [MirArg {
+        value: Operand::MovePlace(moved),
+        ..
+    }] = args.as_slice()
+    else {
+        return None;
+    };
+    (moved == target
+        && target.starts_with('%')
+        && clone_args.is_empty()
+        && !loan.contains('.')
+        && !list.contains('.')
+        && list != loan)
+        .then_some((loan.as_str(), list.as_str()))
+}
+
+/// The target, dictionary, key and index span of `instructions` that start
+/// with a checked loan of `map[key]`, a clone of the loan into the target,
+/// and the loan's end.
+fn dict_str_clone(instructions: &[Instruction]) -> Option<(&str, &str, &str, Span)> {
+    let [Instruction::BeginElementLoan {
+        loan,
+        source,
+        selector: Operand::Place(key),
+        projection,
+        mutable: false,
+        span,
+        checked: true,
+    }, Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Value(ValueOp::Clone),
+                        receiver: Some(Operand::Place(cloned)),
+                        ..
+                    },
+                args,
+                ..
+            },
+    }, Instruction::EndLoan { loan: ended }, ..] = instructions
+    else {
+        return None;
+    };
+    (projection.is_empty() && cloned == loan && ended == loan && target != loan && args.is_empty())
+        .then_some((target.as_str(), source.as_str(), key.as_str(), *span))
 }
 
 /// The temporaries that hold the result of Array arithmetic and are read

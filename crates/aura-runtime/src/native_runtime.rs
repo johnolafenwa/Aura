@@ -2801,6 +2801,10 @@ pub(crate) struct RuntimeTypeTag {
     /// For a list type, its element type, shared once so that each new
     /// list of the type takes a reference to it instead of a copy.
     pub(crate) list_element: Option<SharedType>,
+    /// For a dict type, its key and value types, shared once so that a
+    /// dict of the type is compared with them by address and takes a
+    /// reference to each instead of a copy.
+    pub(crate) dict_types: Option<(SharedType, SharedType)>,
 }
 
 /// The name of a variant of enum `base` tagged with `runtime_type_name`.
@@ -2908,6 +2912,13 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         }
         _ => None,
     };
+    let dict_types = match &parsed {
+        Type::Named(name, args) if name == "dict" && args.len() == 2 => Some((
+            SharedType::from(args[0].clone()),
+            SharedType::from(args[1].clone()),
+        )),
+        _ => None,
+    };
     let tag = Arc::new(RuntimeTypeTag {
         name: RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str())),
         parsed: Arc::new(parsed),
@@ -2917,6 +2928,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         descriptor,
         tagged_enum_name,
         list_element,
+        dict_types,
     });
     let mut registry = registry
         .lock()
@@ -2999,11 +3011,11 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
             [element] if name == "set" => set.element_type != *element,
             _ => true,
         },
-        (Value::Map(map), Type::Named(name, args)) => match args.as_slice() {
-            [key_type, value_type] if name == "dict" => {
+        (Value::Map(map), _) => match &tag.dict_types {
+            Some((key_type, value_type)) => {
                 map.key_type != *key_type || map.value_type != *value_type
             }
-            _ => true,
+            None => true,
         },
         (Value::Tuple(tuple), Type::Tuple(element_types)) => {
             element_types.len() == tuple.elements.len() && tuple.element_types != *element_types
@@ -3067,10 +3079,12 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             }
         }
         Value::Map(map) => {
-            if let Type::Named(name, args) = parsed {
-                if name == "dict" && args.len() == 2 {
-                    assign_shared_type(&mut map.key_type, &args[0]);
-                    assign_shared_type(&mut map.value_type, &args[1]);
+            if let Some((key_type, value_type)) = &tag.dict_types {
+                if map.key_type != *key_type {
+                    map.key_type = key_type.clone();
+                }
+                if map.value_type != *value_type {
+                    map.value_type = value_type.clone();
                 }
             }
         }
@@ -9538,6 +9552,20 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
         return false;
     }
     let text = std::mem::replace(cell, Value::Unit);
+    push_str_value(vec, text);
+    // SAFETY: the caller's reference, which this function took.
+    unsafe {
+        if !free_emptied_box(value) {
+            aura_direct_release_value(value);
+        }
+    }
+    true
+}
+
+/// Appends `text`, a `str`, to the list `vec`, which learns its element
+/// type from it when it has none.
+#[inline]
+fn push_str_value(vec: *mut OpaqueValue, text: Value) {
     with_vector_mut(vec, |vector| {
         if is_unknown_runtime_type(&vector.element_type) {
             let inferred = inferred_collection_type(&text);
@@ -9550,13 +9578,24 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
             elements => elements.push(text),
         }
     });
-    // SAFETY: the caller's reference, which this function took.
-    unsafe {
-        if !free_emptied_box(value) {
-            aura_direct_release_value(value);
-        }
-    }
-    true
+}
+
+/// Appends a copy of the text at `ptr`, an element of a `list[str]` read
+/// in place, to the list `vec`: `out.append(texts[i].clone())` with no box
+/// for the copy. The text is copied before `vec` is touched, so `vec` may
+/// be the list the text lies in.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_view(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: generated code read `ptr` and `len` from a live list's
+        // view of its `str` elements, which are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
+        push_str_value(vec, Value::String(text.into()));
+    })
 }
 
 /// Appends a `str` literal of a list literal, read where the program keeps
@@ -14638,10 +14677,58 @@ pub extern "C-unwind" fn aura_direct_set_take_index_in_place(
 pub extern "C-unwind" fn aura_direct_clone_value(value: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         crate::runtime_value::representation_stats::note_clone();
+        // A confined `str` is copied where it lies: it has no type name to
+        // carry over and holds no Array.
+        // SAFETY: generated code passes a live box, and no write to a
+        // confined box is in progress while its task reads it.
+        let text = unsafe { value.as_ref() }.and_then(|header| {
+            if header.shared_lock().is_some() {
+                return None;
+            }
+            match unsafe { (&*header.value.get(), &*header.runtime_type_name.get()) } {
+                (Value::String(text), None) => Some(text.clone()),
+                _ => None,
+            }
+        });
+        if let Some(text) = text {
+            return boxed_value(Value::String(text));
+        }
         let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
         let cloned = unsafe { with_value(value, try_clone_array_containing_value) };
         boxed_value_with_type(direct_array_result(cloned, 0, 0), runtime_type_name)
     })
+}
+
+/// `value.clone()` on a `str` box the caller owns one reference to and
+/// hands over, as `return found.clone()` does with a temporary it releases
+/// next. The only reference to a confined `str` box is the clone: nothing
+/// else can read the box, so a copy of its text would be freed unread. Any
+/// other box is cloned and the caller's reference released.
+///
+/// # Safety
+///
+/// `value` is a live box the caller owns one reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_clone_str_owned(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let only = unsafe { value.as_ref() }.is_some_and(|header| {
+        header.ref_count.load(Ordering::Acquire) == 1
+            && header.shared_lock().is_none()
+            // SAFETY: no other access to a confined box with one reference
+            // is in progress.
+            && matches!(unsafe { &*header.value.get() }, Value::String(_))
+    });
+    if only {
+        crate::runtime_value::representation_stats::note_clone();
+        return value;
+    }
+    let cloned = aura_direct_clone_value(value);
+    // SAFETY: the caller's contract.
+    unsafe { aura_direct_release_value(value) };
+    cloned
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
