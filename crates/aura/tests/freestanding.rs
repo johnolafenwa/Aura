@@ -702,3 +702,32 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn a_constant_scale_and_offset_share_one_overflow_check() {
+    let workspace = Workspace::new();
+    let source = workspace.write(
+        "scale.au",
+        "export \"C\" def scale(x: uint64) -> uint64:\n    return 3 * x + 1\n",
+    );
+    let build = Command::new(aura_bin())
+        .args([
+            "build",
+            "--freestanding",
+            "--target",
+            "x86_64-unknown-none",
+            "-o",
+        ])
+        .arg(workspace.path.join("scale.o"))
+        .arg(source)
+        .env("AURA_DUMP_LLVM_IR", workspace.path.join("scale"))
+        .output()
+        .expect("aura should start");
+    assert!(build.status.success(), "{}", stderr(&build));
+    let ir = fs::read_to_string(workspace.path.join("scale.0.ll")).unwrap();
+    assert!(!ir.contains("with.overflow"), "{ir}");
+    assert!(
+        ir.contains("6148914691236517204") || ir.contains("6148914691236517205"),
+        "{ir}"
+    );
+}
