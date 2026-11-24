@@ -36,6 +36,23 @@ impl Lowerer<'_> {
     }
 
     fn pointer_class_layout(&self, element: &Type) -> Option<crate::c_layout::CStruct> {
+        if let Some((inner, length)) = element.as_fixed_array() {
+            use crate::c_layout::{CField, CFieldKind, CStruct};
+            let kind = if let Some(scalar) = crate::sema::ffi_scalar(inner) {
+                CFieldKind::Scalar(scalar)
+            } else {
+                let layout = self.pointer_class_layout(inner)?;
+                if inner.as_fixed_array().is_some() {
+                    layout.fields.into_iter().next()?.kind
+                } else {
+                    CFieldKind::Struct(layout)
+                }
+            };
+            return Some(CStruct {
+                name: "#fixed".into(), union: false,
+                fields: vec![CField { name: "elements".into(), kind: CFieldKind::Array(Box::new(kind), length) }],
+            });
+        }
         let Type::Named(name, _) = element else {
             return None;
         };
@@ -139,41 +156,44 @@ impl Lowerer<'_> {
 
 impl Lowerer<'_> {
     pub(super) fn lower_raw_address(&mut self, place: &Expr) -> Operand {
-        let mut path = Vec::new();
-        let mut base = place;
-        while let ExprKind::Member { object, field } = &base.kind {
-            path.push(field.as_str());
-            base = object;
+        let addr = self.storage_address(place);
+        let element = self.infer_expr_type(place).expect("checked pointed-to type");
+        self.pointer_cast(addr, Type::Named("ptr".into(), vec![element]), place.span)
+    }
+
+    fn storage_address(&mut self, place: &Expr) -> Operand {
+        let word = Type::named("uint64");
+        if let Some(key) = self.state_binding(place).map(super::module_state::cell_key) {
+            return self.pointer_temp(word, Rvalue::ModuleAddress { key });
         }
-        let root = self
-            .render_place_expr_option(base)
-            .expect("checked addressable place");
-        let root_ty = self.infer_expr_type(base).expect("checked storage type");
-        let layout = self
-            .pointer_class_layout(&root_ty)
-            .expect("checked C class");
-        let mut offset = 0;
-        let mut current = &layout;
-        for name in path.iter().rev() {
-            let (field, delta) = current
-                .fields
-                .iter()
-                .zip(current.field_offsets())
-                .find(|(field, _)| field.name == **name)
-                .expect("checked C field");
-            offset += delta;
-            if let crate::c_layout::CFieldKind::Struct(inner) = &field.kind {
-                current = inner;
+        let place = grouped_mir_expr(place);
+        match &place.kind {
+            ExprKind::Index { object, index } => {
+                let array = self.infer_expr_type(object).expect("checked fixed array");
+                let element = array.as_fixed_array().expect("checked inline element").0;
+                let stride = self.pointer_element_size(element).expect("checked element size");
+                let base = self.storage_address(object);
+                let index_value = self.lower_index_domain_expr(index);
+                let values = vec![base, index_value, Operand::Int(index.span.line as u128),
+                    Operand::Int(index.span.column as u128), Operand::Int(stride as u128)];
+                self.pointer_temp(word, super::fixed_arrays::call(super::fixed_arrays::ADDRESS, &array, values))
+            }
+            ExprKind::Member { object, field } if self.infer_expr_type(object)
+                .and_then(|owner| self.pointer_class_layout(&owner)).is_some() => {
+                let owner = self.infer_expr_type(object).expect("checked C field");
+                let layout = self.pointer_class_layout(&owner).expect("checked containing layout");
+                let offset = layout.fields.iter().zip(layout.field_offsets()).find(|(member, _)| &member.name == field)
+                    .expect("checked C field").1;
+                let base = self.storage_address(object);
+                if offset == 0 { return base; }
+                self.pointer_mem_call("__pointer_offset", word, vec![base, Operand::Int(offset as u128), Operand::Int(1)])
+            }
+            _ => {
+                let root = self.render_place_expr_option(place).expect("checked addressable place");
+                let ty = self.infer_expr_type(place).expect("checked storage type");
+                let layout = self.pointer_class_layout(&ty).expect("checked C storage");
+                self.pointer_temp(word, Rvalue::CFieldAddress { root, layout, offset:0 })
             }
         }
-        let element = self.infer_expr_type(place).expect("checked field type");
-        self.pointer_temp(
-            Type::Named("ptr".into(), vec![element]),
-            Rvalue::CFieldAddress {
-                root,
-                layout,
-                offset,
-            },
-        )
     }
 }

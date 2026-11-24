@@ -825,6 +825,8 @@ fn validate_runtime_module_complexity_with_limits(
 }
 
 struct MirRuntime {
+    borrowed_raw_cells: raw_cells::SharedCells,
+    raw_parameters: Arc<raw_cells::ParameterLayouts>,
     module: Arc<MirModule>,
     /// Explicit-tag layout plans keyed by canonical union identity
     /// (ADR-0052 A9); an injection into an unplanned union is refused.
@@ -946,7 +948,7 @@ mod raw_cells;
 
 #[derive(Default)]
 struct Env {
-    raw_cells: HashMap<String, raw_cells::CellBytes>,
+    raw_cells: raw_cells::SharedCells,
     values: HashMap<String, Value>,
     shared_values: HashMap<String, Arc<Value>>,
     types: HashMap<String, Type>,
@@ -1503,7 +1505,7 @@ impl Env {
         if rest.is_empty() {
             self.shared_values.remove(root);
             self.values.insert((*root).to_string(), value);
-            return Ok(());
+            return self.update_addressed_members(root);
         }
 
         let root_value = self
@@ -1514,7 +1516,8 @@ impl Env {
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place(root_value, &rest_refs, value, place)
+        write_nested_place(root_value, &rest_refs, value, place)?;
+        self.update_addressed_members(root)
     }
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
@@ -2705,6 +2708,8 @@ impl MirRuntime {
                 .collect::<HashMap<_, _>>(),
         );
         Self {
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::new(raw_cells::parameter_layouts(&module)),
             module: Arc::new(module),
             union_layouts,
             safepoints_enabled,
@@ -3585,6 +3590,7 @@ impl MirRuntime {
         receiver_type: Option<&Type>,
         registered_exit: bool,
     ) -> Result<CallOutcome> {
+        let borrowed_cells = std::mem::take(&mut self.borrowed_raw_cells);
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
@@ -3672,7 +3678,7 @@ impl MirRuntime {
                 }
             }
 
-            let mut env = Env::default();
+            let mut env = Env { raw_cells: borrowed_cells, ..Default::default() };
             for local in &function.local_types {
                 env.set_place_type(&local.name, substitute_type(&local.ty, &substitutions));
             }
@@ -5914,6 +5920,9 @@ impl MirRuntime {
                 let evaluated_args = evaluate_named_args(args, env)?;
                 let writeback_places =
                     bind_function_writeback_places(&function.params, &evaluated_args)?;
+                if !env.raw_cells.is_empty() || self.raw_parameters.contains_key(&function.name) {
+                    self.borrowed_raw_cells = env.borrowed_cells(&function, args, self.raw_parameters.get(&function.name))?;
+                }
                 let outcome = self.call_function_for_target(
                     &function,
                     None,
@@ -6936,6 +6945,8 @@ impl MirRuntime {
     /// its indices, output and program-wide constant states.
     fn fork_for_child(&self, cancellation: CancellationContext) -> MirRuntime {
         MirRuntime {
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::clone(&self.raw_parameters),
             module: Arc::clone(&self.module),
             union_layouts: Arc::clone(&self.union_layouts),
             safepoints_enabled: self.safepoints_enabled,

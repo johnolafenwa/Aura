@@ -2509,6 +2509,7 @@ impl<'a> NativeCodegen<'a> {
         .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
             raw_cells: HashMap::new(),
+            addressed_members: HashMap::new(),
             builder,
             blocks,
             variables,
@@ -3922,6 +3923,7 @@ fn direct_reverse_postorder(
 
 struct FunctionCompiler<'a> {
     raw_cells: HashMap<String, (crate::c_layout::CStruct, Val)>,
+    addressed_members: HashMap<String, Vec<String>>,
     builder: &'a mut dyn FunctionBackend,
     /// The machine of a freestanding object, whose checks call the trap
     /// hook in place of the runtime.
@@ -6887,6 +6889,11 @@ impl<'a> FunctionCompiler<'a> {
                 layout,
                 volatile,
             } => self.compile_pointer_class(address, store.as_ref(), layout, *volatile, target),
+            Rvalue::CFieldAddress { root, layout, offset } if layout.name == "#fixed" => {
+                let (base, _) = self.fixed_local_address(root).ok_or("missing inline storage")?;
+                let address = self.builder.iadd_imm(base, *offset as i64);
+                Ok(ValueRef { values: vec![address], ty: DirectType::Scalar(ScalarKind::Uint64) })
+            }
             Rvalue::CFieldAddress { root, offset, .. } => {
                 let (_, slot) = self.raw_cells.get(root).ok_or("missing C local storage")?;
                 let address = self.builder.iadd_imm(*slot, *offset as i64);
@@ -12756,6 +12763,9 @@ impl<'a> FunctionCompiler<'a> {
                 *handle = self.snapshot_handle(name, *handle);
             }
         }
+        if self.addressed_members.contains_key(name) {
+            value = self.refresh_addressed_members(name, value)?;
+        }
         Ok(value)
     }
 
@@ -14514,6 +14524,9 @@ impl<'a> FunctionCompiler<'a> {
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
             self.write_raw_class(&layout, &value, slot)?;
+        }
+        if self.addressed_members.contains_key(name) {
+            self.store_addressed_members(name, &value)?;
         }
         let expected = self.local_type(name)?;
         // These locals may hold a payload box or the null success marker.

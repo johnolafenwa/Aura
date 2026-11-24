@@ -7512,8 +7512,8 @@ fn validate_loan_rvalue(
             offset,
         } => {
             if *offset >= layout.size()
-                || context.operand_type(function, &Operand::Place(root.clone()))?
-                    != Some(Type::named(&layout.name))
+                || !context.operand_type(function, &Operand::Place(root.clone()))?
+                    .is_some_and(|ty| if layout.name == "#fixed" { ty.as_fixed_array().is_some() } else { ty == Type::named(&layout.name) })
             {
                 return Err(format!("invalid MIR address of C field in `{root}`"));
             }

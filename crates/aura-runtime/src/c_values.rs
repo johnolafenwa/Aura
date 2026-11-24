@@ -198,7 +198,7 @@ fn scalar_value(scalar: FfiScalar, word: u64) -> Result<Value, CValueError> {
 
 /// Writes `value`, of kind `kind`, at the start of `bytes`. `field` names
 /// the field for a message.
-pub(crate) fn pack_kind(
+pub fn pack_kind(
     value: &Value,
     kind: &CFieldKind,
     field: &str,
@@ -248,7 +248,7 @@ pub(crate) fn pack_kind(
 }
 
 /// The value of kind `kind` at the start of `bytes`.
-pub(crate) fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
+pub fn unpack_kind(kind: &CFieldKind, bytes: &[u8]) -> Result<Value, CValueError> {
     match kind {
         CFieldKind::Scalar(scalar) => {
             let size = scalar.size();

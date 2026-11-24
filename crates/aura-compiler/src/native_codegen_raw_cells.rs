@@ -56,7 +56,7 @@ impl FunctionCompiler<'_> {
             else {
                 continue;
             };
-            if self.raw_cells.contains_key(root) {
+            if layout.name == "#fixed" || self.raw_cells.contains_key(root) {
                 continue;
             }
             let size =
@@ -64,9 +64,13 @@ impl FunctionCompiler<'_> {
             let align_shift = layout.align().trailing_zeros() as u8;
             let slot = self.builder.create_sized_stack_slot(size, align_shift);
             let address = self.builder.stack_addr(types::I64, slot, 0);
-            if function.params.iter().any(|param| param.name == *root) {
-                let value = self.load_root(root)?;
+            let (binding, projection) = root.split_once('.').map_or((root.as_str(), None), |(base, rest)| (base, Some(rest)));
+            if function.params.iter().any(|param| param.name == binding) {
+                let value = self.load_place(root)?;
                 self.store_foreign_struct(layout, &value, address)?;
+            }
+            if let Some(projection) = projection {
+                self.addressed_members.entry(binding.to_owned()).or_default().push(projection.to_owned());
             }
             self.raw_cells
                 .insert(root.clone(), (layout.clone(), address));
@@ -76,6 +80,28 @@ impl FunctionCompiler<'_> {
 }
 
 impl FunctionCompiler<'_> {
+    pub(in super::super) fn refresh_addressed_members(&mut self, root:&str, mut value: ValueRef) -> Result<ValueRef,String> {
+        for projection in self.addressed_members[root].clone() {
+            let name = format!("{root}.{projection}");
+            let (layout,address) = self.raw_cells[&name].clone();
+            let member_type = self.type_of_place(&name)?;
+            let member = self.read_raw_class(&layout,address, member_type)?;
+            let path = projection.split('.').collect::<Vec<_>>();
+            value = self.replace_nested_field(value, &path, member)?;
+        }
+        Ok(value)
+    }
+
+    pub(in super::super) fn store_addressed_members(&mut self, root:&str, value:&ValueRef) -> Result<(),String> {
+        for projection in self.addressed_members[root].clone() {
+            let mut member = value.clone();
+            for field in projection.split('.') { member = self.extract_field(member,field)?; }
+            let (layout,address) = self.raw_cells[&format!("{root}.{projection}")].clone();
+            self.write_raw_class(&layout,&member,address)?;
+        }
+        Ok(())
+    }
+
     pub(in super::super) fn compile_pointer_class(
         &mut self,
         address: &Operand,
@@ -95,11 +121,19 @@ impl FunctionCompiler<'_> {
         if let Some(value) = store {
             let value = self.load_operand(value)?;
             self.copy_raw_bytes(None, scratch, size, false, false);
-            self.store_foreign_struct(layout, &value, scratch)?;
+            if let DirectType::Fixed(_) = &value.ty {
+                self.builder.store(MemFlags::trusted(), value.values[0], scratch, 0);
+            } else {
+                self.store_foreign_struct(layout, &value, scratch)?;
+            }
             self.copy_raw_bytes(Some(scratch), address, size, false, volatile);
             Ok(unit_value(self.builder))
         } else {
             self.copy_raw_bytes(Some(address), scratch, size, volatile, false);
+            if let DirectType::Fixed(fixed) = target {
+                let value = self.builder.load(fixed.storage(), MemFlags::trusted(), scratch, 0);
+                return Ok(ValueRef { values: vec![value], ty: target.clone() });
+            }
             self.read_raw_class(layout, scratch, target.clone())
         }
     }

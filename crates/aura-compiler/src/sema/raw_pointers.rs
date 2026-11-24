@@ -7,16 +7,17 @@ pub(super) fn pointer_type(
     span: crate::diag::Span,
 ) -> Result<Type> {
     names.uses_raw_pointer.set(true);
+    fn eligible(ty: &Type, names: &TypeDefinitions) -> bool {
+        ffi_scalar_type(ty)
+            || ty.as_fixed_array().is_some_and(|(element, _)| eligible(element, names))
+            || matches!(ty, Type::Named(name, _) if names.c_class_names.contains(name))
+    }
     match args.as_slice() {
-        [ty] if ffi_scalar_type(ty)
-            || matches!(ty, Type::Named(name, _) if names.c_class_names.contains(name)) =>
-        {
-            Ok(Type::Named("ptr".into(), args))
-        }
+        [ty] if eligible(ty, names) => Ok(Type::Named("ptr".into(), args)),
         _ => Err(Diagnostic::coded_at(
             "AU2083",
             span,
-            "ptr[T] needs a scalar or C-layout element type",
+            "ptr[T] needs a scalar, a C class or a fixed array of those types",
         )),
     }
 }
@@ -94,24 +95,26 @@ impl FunctionChecker<'_> {
                 "mem.address_of takes one addressable place",
             ));
         };
-        let place = &arg.value;
-        let ExprKind::Member { object, field } = &place.kind else {
-            return Err(Diagnostic::coded_at(
-                "AU3032",
-                span,
-                "mem.address_of requires module storage, a fixed element or a C field",
-            ));
+        let place = grouped_expr(&arg.value);
+        let state = self.is_state_place(place, locals);
+        let valid = match &place.kind {
+            ExprKind::Name(_) => state,
+            ExprKind::Index { object, .. } => self.type_of_expr(object, locals)?.as_fixed_array().is_some(),
+            ExprKind::Member { object, field } => {
+                self.imported_state(object, field).is_some()
+                    || matches!(self.type_of_member_object_expr(object, locals)?, Type::Named(name, _)
+                        if self.resolve_class_info(&name).is_some_and(|class|
+                            class.decl.c_layout && class.fields.contains_key(field)))
+            }
+            _ => false,
         };
-        let owner = self.type_of_member_object_expr(object, locals)?;
-        let valid = matches!(&owner, Type::Named(name, _) if self.resolve_class_info(name).is_some_and(|class| class.decl.c_layout && class.fields.contains_key(field)));
         if !valid || self.borrow_call_place(place).is_none() {
-            return Err(Diagnostic::coded_at(
-                "AU3032",
-                span,
-                "a field address needs a stable C class place",
-            ));
+            return Err(Diagnostic::coded_at("AU3032", span,
+                "mem.address_of requires module storage, a fixed element or a C field in a stable place"));
         }
-        self.require_mutable_receiver(place, "mem.address_of", span, locals)?;
+        if !state {
+            self.require_mutable_receiver(place, "mem.address_of", span, locals)?;
+        }
         let element = self.type_of_expr(place, locals)?;
         pointer_type(vec![element], self.type_names, span)
     }

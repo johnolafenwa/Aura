@@ -873,6 +873,7 @@ fn typed_pointers_run_on_both_hosted_backends() {
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/aggregate.au"),
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/links.au"),
         include_str!("../../aura-compiler/tests/fixtures/typed-pointers/widths.au"),
+        include_str!("../../aura-compiler/tests/fixtures/typed-pointers/fixed.au"),
     ] {
         workspace.write("src/main.au", source);
         for backend in ["mir", "direct"] {
