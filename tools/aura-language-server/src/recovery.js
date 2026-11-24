@@ -10,6 +10,7 @@ const KEYWORDS = [
   "break",
   "case",
   "class",
+  "const",
   "continue",
   "def",
   "dyn",
@@ -115,14 +116,14 @@ function declarationForLine(line, lineNumber) {
   }
 
   const match = line.match(
-    /^(\s*)(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def)\s+([A-Za-z_][A-Za-z0-9_]*)/
+    /^(\s*)(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
   );
   if (!match) {
     return null;
   }
-  const [, prefix, declaration, name] = match;
-  const startCharacter = line.indexOf(name, prefix.length);
-  const kind = declaration === "def" ? "function" : declaration;
+  const [, , declaration, name] = match;
+  const startCharacter = match[0].length - name.length;
+  const kind = ({ def: "function", const: "constant" })[declaration] || declaration;
   return {
     name,
     kind,
@@ -250,16 +251,24 @@ function wordAtPosition(text, line, character) {
   return null;
 }
 
-function recoveredDeclaration(text, name) {
-  return flattenSymbols(documentSymbols(text)).find((symbol) => symbol.name === name) || null;
+function recoveredDeclaration(text, name, inactiveSuite) {
+  const matches = flattenSymbols(recoverSymbols(text)).filter((symbol) => symbol.name === name);
+  if (!inactiveSuite) {
+    return matches[0] || null;
+  }
+  // Two targets can define the same function. Prefer the queried suite.
+  // Outside it, only an unindented declaration is unconditionally visible.
+  const local = matches.filter(({ line }) => inactiveSuite.start <= line && line < inactiveSuite.end);
+  const candidates = local.length ? local : matches.filter(({ indent }) => indent === 0);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
-function definitionForPosition(text, line, character) {
+function definitionForPosition(text, line, character, inactiveSuite) {
   const word = wordAtPosition(text, line, character);
   if (!word) {
     return null;
   }
-  const declaration = recoveredDeclaration(text, word.name);
+  const declaration = recoveredDeclaration(text, word.name, inactiveSuite);
   if (!declaration) {
     return null;
   }
@@ -270,12 +279,12 @@ function definitionForPosition(text, line, character) {
   };
 }
 
-function hoverForPosition(text, line, character) {
+function hoverForPosition(text, line, character, inactiveSuite) {
   const word = wordAtPosition(text, line, character);
   if (!word) {
     return null;
   }
-  const declaration = recoveredDeclaration(text, word.name);
+  const declaration = recoveredDeclaration(text, word.name, inactiveSuite);
   if (!declaration) {
     return null;
   }

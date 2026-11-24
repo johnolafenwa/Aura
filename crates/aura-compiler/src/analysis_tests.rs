@@ -11664,7 +11664,11 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
 fn editor_analysis_reports_only_discarded_suites() {
     let program = "import build\nif build.hosted:\n    def answer() -> int64:\n        return 3\nelse:\n    def answer() -> int64:\n        return unavailable()\ndef main():\n    print(answer())\n";
     let analysis = analyze_source(program);
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
     assert_eq!(analysis.inactive_lines.len(), 1);
     assert_eq!(analysis.inactive_lines[0], 5..7);
     let suggestions = complete_source(program, 0, 0, None).expect("top-level completions");
@@ -11684,7 +11688,11 @@ fn editor_sees_package_cfg_when_parsing_unsaved_source() {
     .unwrap();
     let source = "import build\nif build.cfg[\"mode\"] == \"fixed\":\n    def fixed() -> int64:\n        return 1\nelse:\n    def other() -> int64:\n        return absent()\n";
     let analysis = analyze_path_source(&main, source);
-    assert!(analysis.diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
     assert_eq!(analysis.inactive_lines.len(), 1);
     assert_eq!(analysis.inactive_lines[0], 5..7);
     assert!(analysis.symbols.iter().any(|symbol| symbol.name == "fixed"));

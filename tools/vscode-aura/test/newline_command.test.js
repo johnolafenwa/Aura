@@ -102,7 +102,7 @@ async function activateWithEditor(editor, settings = {}) {
       registerDebugAdapterDescriptorFactory: () => ({ dispose() {} })
     },
     workspace: {
-      createFileSystemWatcher: () => ({ dispose() {} }),
+      createFileSystemWatcher: (globPattern) => ({ globPattern, dispose() {} }),
       getConfiguration: () => ({
         get: (key, fallback) => (key in settings ? settings[key] : fallback)
       }),
@@ -218,6 +218,7 @@ test("aura.compilerPath reaches the server and a change restarts it", async () =
   );
   assert.equal(clients.length, 1);
   assert.equal(clients[0].serverOptions.run.options.env.AURA_LSP_AURA_PATH, "~/.local/bin/aura");
+  assert.equal(clients[0].clientOptions.synchronize.fileEvents.globPattern, "**/{*.au,Aura.toml}");
   assert.deepEqual(
     clients[0].clientOptions.documentSelector.map((selector) => selector.scheme),
     ["file", "untitled"]

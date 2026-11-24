@@ -7332,4 +7332,5 @@ test("discarded suites become unnecessary hints over whole lines, including a Un
     source: "aura-compiler",
     message: "Inactive for this build configuration"
   }]);
+  assert.deepEqual(compilerDiagnosticsToLsp(analysis)[0].range.end, { line: 4, character: 0 });
 });
