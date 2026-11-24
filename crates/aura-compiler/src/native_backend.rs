@@ -270,6 +270,8 @@ pub fn target_arch() -> &'static str {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FreestandingTarget {
     X86_64,
+    /// x86-64 with the kernel code model and integer-register soft-float ABI.
+    X86_64Kernel,
     Aarch64,
     Riscv64,
 }
@@ -281,7 +283,7 @@ impl FreestandingTarget {
     /// The name `--target` takes.
     pub fn name(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64-unknown-none",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64-unknown-none",
             Self::Aarch64 => "aarch64-unknown-none",
             Self::Riscv64 => "riscv64gc-unknown-none-elf",
         }
@@ -304,7 +306,7 @@ impl FreestandingTarget {
     /// The architecture, as `std::env::consts::ARCH` spells it.
     pub fn arch(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64",
             Self::Aarch64 => "aarch64",
             Self::Riscv64 => "riscv64",
         }
