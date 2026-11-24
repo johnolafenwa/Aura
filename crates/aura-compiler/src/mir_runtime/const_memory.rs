@@ -44,14 +44,19 @@ pub(super) fn value_bytes(value: &Value, depth: usize) -> usize {
                 .iter()
                 .map(|v| WORD.saturating_add(nested(&v)))),
         },
+        Value::Array(array) => array.len().saturating_mul(
+            ScalarLayout::of_name(array.dtype().runtime_type_name())
+                .unwrap()
+                .size() as usize,
+        ),
         Value::Set(set) => sum(set.elements.iter().map(|v| WORD.saturating_add(nested(v)))),
         Value::Map(map) => sum(map.entries.iter().map(|(k, v)| {
             (WORD * 2)
                 .saturating_add(nested(k))
                 .saturating_add(nested(v))
         })),
-        Value::Tuple(t) => sum(t.elements.iter().map(nested)),
-        Value::Instance(i) => sum(i.fields.values().map(|v| nested(&v))),
+        Value::Tuple(t) => WORD.saturating_add(sum(t.elements.iter().map(nested))),
+        Value::Instance(i) => WORD.saturating_add(sum(i.fields.values().map(|v| nested(&v)))),
         Value::EnumVariant(v) => WORD.saturating_add(sum(v.payloads.iter().map(|v| nested(&v)))),
         Value::Union(u) => WORD.saturating_add(nested(&u.payload)),
         Value::TraitObject(o) => WORD.saturating_add(nested(&o.value)),
@@ -169,4 +174,33 @@ pub(super) fn format_bytes(parts: &[MirFormatPart], env: &Env) -> usize {
         }
         MirFormatPart::Int64(value) | MirFormatPart::Value(value) => operand_bytes(value, env),
     }))
+}
+
+/// Bounds materialization by third-party map parsers and string serializers
+/// that do not accept an output limit. Delimiters can introduce another
+/// owned field, table or list slot. Escaping one input byte takes up to
+/// six bytes of serialized text.
+pub(super) fn host_output_bound(name: &str, args: &[MirArg], env: &Env) -> usize {
+    match name {
+        "json::stringify_map" | "toml::stringify_map" => args
+            .first()
+            .map_or(0, |arg| operand_bytes(&arg.value, env).saturating_mul(8)),
+        "toml::parse_string_map" | "toml::is_valid" | "json::parse_string_map" => args
+            .first()
+            .and_then(|arg| text(&arg.value, env))
+            .map_or(0, |source| {
+                let fields = source
+                    .bytes()
+                    .filter(|b| matches!(b, b',' | b'.' | b'=' | b':' | b'[' | b'{'))
+                    .count();
+                source.len().saturating_add(fields.saturating_mul(WORD * 4))
+            }),
+        "path::join" => args.iter().fold(1usize, |size, arg| {
+            size.saturating_add(operand_bytes(&arg.value, env))
+        }),
+        "path::file_name" | "path::extension" | "path::parent" => {
+            args.first().map_or(0, |arg| operand_bytes(&arg.value, env))
+        }
+        _ => 0,
+    }
 }

@@ -171,7 +171,11 @@ fn no_value() -> Value {
 /// The wire form of `value` with decimal exponent `exponent`.
 fn wire(value: &BigInt, exponent: i64) -> Value {
     let limbs = value.iter_u64_digits();
-    let mut out = Vec::with_capacity(HEADER + limbs.len().max(1));
+    let length = HEADER + limbs.len().max(1);
+    if !crate::builtin_limit::fits(length as u64 * 8) {
+        return no_value();
+    }
+    let mut out = Vec::with_capacity(length);
     out.push(u64::from(value.to_i64().is_none()));
     out.push(u64::from(value.is_negative()));
     out.push(u64::from(exponent < 0));
@@ -371,6 +375,14 @@ pub fn host_big_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let op = int_argument(name, &args[0])?;
     let left = integer(name, &args, 1)?;
     let right = integer(name, &args, 3)?;
+    if crate::builtin_limit::active() {
+        let bits = if matches!(op, 2 | 12) {
+            left.bits().saturating_add(right.bits())
+        } else {
+            left.bits().max(right.bits()).saturating_add(1)
+        };
+        crate::builtin_limit::check((HEADER as u64 + bits.div_ceil(64)) * 8)?;
+    }
     let result = match op {
         0 => left + right,
         1 => left - right,
@@ -688,6 +700,8 @@ pub fn host_big_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             "`BigInt` radix must be from 2 to 36, found {radix}"
         )));
     }
+    let bits_per_digit = u64::from((radix as u32).ilog2());
+    crate::builtin_limit::check(value.bits().div_ceil(bits_per_digit).saturating_add(1))?;
     Ok(Value::string(value.to_str_radix(radix as u32)))
 }
 
@@ -973,7 +987,17 @@ pub fn host_dec_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
 
 /// Plain notation: every digit written out, with no exponent.
 fn plain(coefficient: &BigInt, exponent: i64) -> Result<String> {
-    crate::builtin_limit::check(exponent.unsigned_abs())?;
+    let digit_bound = coefficient
+        .bits()
+        .saturating_mul(30103)
+        .div_ceil(100000)
+        .max(1);
+    let length = if exponent >= 0 {
+        digit_bound.saturating_add(exponent as u64)
+    } else {
+        digit_bound.max(exponent.unsigned_abs()).saturating_add(2)
+    };
+    crate::builtin_limit::check(length.saturating_add(1))?;
     let digits = coefficient.magnitude().to_str_radix(10);
     let sign = if coefficient.is_negative() { "-" } else { "" };
     if exponent >= 0 {

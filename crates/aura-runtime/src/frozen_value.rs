@@ -77,6 +77,13 @@ impl FrozenValue {
                     .map(Self::freeze)
                     .collect::<Option<_>>()?,
             ),
+            // These built-in wrappers store an index in the local pattern
+            // registry. Transport only classes whose fields stand alone.
+            Value::Instance(object)
+                if matches!(object.class_name.as_ref(), "regex.Regex" | "regex.Captures") =>
+            {
+                return None
+            }
             Value::Instance(object) => Self::Class(
                 object.class_name.to_string(),
                 object
