@@ -1,4 +1,5 @@
-//! Integer operations beyond `+`, `-`, `*`, `//`, and `%`.
+//! Integer operations beyond `+`, `-`, `*`, `//`, and `%`, casts in
+//! contracts, and the `math` module.
 //!
 //! An integer is a mathematical SMT `Int` inside its type's range, so a
 //! bit operation is written as arithmetic. Two's complement makes this
@@ -18,6 +19,14 @@
 //! Bit-vector terms would be exact for that last case. They are not used
 //! because one such fact in scope makes unrelated arithmetic checks time
 //! out.
+//!
+//! The `wrapping_` and `saturating_` methods, a power with a literal
+//! exponent or base, and the rounding and counting functions of `math` are
+//! exact too. A power of two unknowns and the other `math` functions here
+//! are unknown functions with the facts that hold of each use.
+//!
+//! Every model was checked against the interpreter on edge values of each
+//! integer type; see `verify_integers_tests.rs`.
 
 use super::exec::{and, lit, Exec, FloatTy, Goal, IntTy, Val};
 use super::ObligationKind;
@@ -32,18 +41,18 @@ const BITAND: &str = "bitand!";
 /// `2^count` for a shift count in `0..64`.
 const POW2: &str = "aura.pow2";
 
+/// The `**` of two integers that are not literals.
+const INTPOW: &str = "intpow!";
+
+/// The largest literal exponent a power is written out for.
+const MAX_EXPONENT: i128 = 63;
+
 impl IntTy {
     /// The number of bits of the type.
     pub(super) fn width(self) -> u32 {
         (self.hi - self.lo + 1).trailing_zeros()
     }
 }
-
-/// The `**` of two integers that are not literals.
-const INTPOW: &str = "intpow!";
-
-/// The largest literal exponent a power is written out for.
-const MAX_EXPONENT: i128 = 63;
 
 /// The operator a fixed-width method computes, and whether a result
 /// outside the type wraps around; otherwise it stops at the nearest end.
@@ -355,10 +364,10 @@ impl Exec<'_> {
         &mut self,
         pc: &str,
         kind: (BinaryOp, bool),
-        receiver: Option<Val>,
-        rhs: Val,
+        ty: IntTy,
+        (receiver, rhs): (Option<Val>, Val),
     ) -> Option<Val> {
-        let (Some(Val::Int(a, ty)), Val::Int(b, _)) = (receiver, rhs) else {
+        let (Some(Val::Int(a, _)), Val::Int(b, _)) = (receiver, rhs) else {
             return None;
         };
         let (term, in_range) = self.width_term(kind, &a, &b, ty);

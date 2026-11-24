@@ -1868,3 +1868,35 @@ fn bounds_of_math_functions_allow_the_interpreter_results() {
     }
     check_allowed(&claims);
 }
+
+// ----- Integer types the encoding has no range for ---------------------
+
+#[test]
+fn operations_on_128_bit_integers_stay_not_modeled() {
+    // A 128-bit literal reads as an `int64` term. Its width and its bits
+    // are not an `int64`'s, so nothing is concluded from them: no shift is
+    // reported as out of range, and no wrong value is proved.
+    assert_open(
+        r#"
+def main():
+    one: int128 = 1
+    last: int128 = 127
+    print(one << last)
+    print(one.wrapping_shl(last))
+    print(one.saturating_shr(last))
+    most: uint128 = 5
+    flipped = ~most
+    assert flipped < most
+    masked = most & 4
+    assert masked == 5
+    power = one ** last
+"#,
+        &[
+            "5 overflow unsupported",
+            "9 overflow unsupported",
+            "10 assert unsupported",
+            "12 assert unsupported",
+            "13 overflow unsupported",
+        ],
+    );
+}

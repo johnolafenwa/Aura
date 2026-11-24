@@ -2803,8 +2803,13 @@ impl<'a> Exec<'a> {
                         }
                         Val::Int(result, ty)
                     }
-                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
-                        let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
+                    (UnaryOp::BitNot, Val::Int(term, _))
+                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                    {
+                        let ty = target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .expect("checked above");
                         let flipped = super::integers::bitnot(&term, ty);
                         Val::Int(self.define("Int", "bits", flipped), ty)
                     }
@@ -3242,6 +3247,7 @@ impl<'a> Exec<'a> {
         let right_ty = self.operand_int_ty(right);
         let target_int = target_type.and_then(IntTy::of);
         let hint = left_ty.or(right_ty).or(target_int);
+        let sized = hint.is_some();
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -3296,11 +3302,17 @@ impl<'a> Exec<'a> {
                         }
                         Val::Int(result, ty)
                     }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                        self.int_bitwise(op, a, b, ty)
+                    // A literal of a type the encoding has no range for,
+                    // such as `int128`, reads as an `int64`; its bits and
+                    // width are not those.
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if sized => {
+                        self.int_bitwise(op, a, b, hint.unwrap_or(ty))
                     }
-                    BinaryOp::Shl | BinaryOp::Shr => self.int_shift(&pc, op, (a, b), ty, span),
-                    BinaryOp::Pow => self.int_pow(&pc, a, b, ty, span),
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
+                    BinaryOp::Shl | BinaryOp::Shr if sized => {
+                        self.int_shift(&pc, op, (a, b), hint.unwrap_or(ty), span)
+                    }
+                    BinaryOp::Pow if sized => self.int_pow(&pc, a, b, hint.unwrap_or(ty), span),
                     _ => {
                         if trap == ArithmeticTrap::Runtime {
                             self.oblige(
@@ -4812,12 +4824,14 @@ impl<'a> Exec<'a> {
             }
             RuntimeOp::Scalar(op) if super::integers::fixed_width(op).is_some() => {
                 let kind = super::integers::fixed_width(op)?;
-                let hint = match &receiver {
-                    Some(Val::Int(_, ty)) => Some(*ty),
-                    _ => None,
-                };
-                let rhs = arg(self, state, 0, hint);
-                self.int_method(&pc, kind, receiver, rhs)
+                // The result has the receiver's type. Without a range
+                // for it, as for `int128`, the method is not modeled.
+                let ty = target
+                    .and_then(|target| self.place_type(target))
+                    .as_ref()
+                    .and_then(IntTy::of)?;
+                let rhs = arg(self, state, 0, Some(ty));
+                self.int_method(&pc, kind, ty, (receiver, rhs))
             }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {
