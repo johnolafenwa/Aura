@@ -883,3 +883,22 @@ test("local function capture lists have a declaration scope", () => {
     ["def", "add"]);
   assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });
+
+test("grammar highlights class-item syntax in its declaration context", async () => {
+  const tokens = await tokenizeAura([
+    "impl[T: Named] Named for Car[T] by engine: # override",
+    "by = 5",
+    "class Car:",
+    "    @count.setter",
+    "    def count(mut self, value: int64):",
+    "        pass",
+    "    @tools.traced",
+    "    def __drop__(mut self):",
+    "        pass",
+  ].join("\n"));
+  assert.ok(scopesAt(tokens, 0, "by").includes("keyword.control.delegation.aura"));
+  assert.ok(!scopesAt(tokens, 1, "by").includes("keyword.control.delegation.aura"));
+  assert.ok(scopesAt(tokens, 3, "setter").includes("storage.modifier.attribute.aura"));
+  assert.ok(scopesAt(tokens, 6, "traced").includes("storage.modifier.attribute.aura"));
+  assert.ok(scopesAt(tokens, 7, "__drop__").includes("entity.name.function.aura"));
+});

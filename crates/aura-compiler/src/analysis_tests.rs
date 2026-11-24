@@ -11665,3 +11665,81 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
     assert!(read.hover.contains("index: int64"));
     assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
 }
+
+#[test]
+fn property_setter_edits_navigate_to_source_names_and_hide_cleanup_hooks() {
+    let source = "class Counter:\n    stored: int64\n    @property\n    def count(self) -> int64:\n        return self.stored\n    @count.setter\n    def count(mut self, value: int64):\n        self.stored = value\n    def __drop__(mut self):\n        pass\ndef update(counter: mut Counter):\n    counter.count = 1\n    print(counter.count)\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    for (line, column, target, hover) in [
+        (5, 5, 3, "property count: int64"),
+        (11, 12, 6, "@count.setter"),
+        (12, 18, 3, "property count: int64"),
+    ] {
+        let occurrence = output
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == line && occurrence.start_character == column)
+            .expect("member occurrence");
+        assert_eq!(occurrence.end_character, column + "count".len());
+        assert!(occurrence.hover.contains(hover), "{}", occurrence.hover);
+        let definition = occurrence.definition.as_ref().unwrap();
+        assert_eq!(
+            (
+                definition.line,
+                definition.start_character,
+                definition.end_character
+            ),
+            (target, 8, 13)
+        );
+    }
+    let members = complete_source(source, 11, 12, Some('.')).unwrap();
+    assert!(members
+        .iter()
+        .any(|item| item.name == "count" && item.kind == "property"));
+    assert!(members
+        .iter()
+        .all(|item| !item.name.contains('$') && item.name != "__drop__"));
+    assert!(output.symbols[0]
+        .children
+        .iter()
+        .all(|item| !item.name.contains('$')));
+}
+
+#[test]
+fn decorated_associated_methods_show_source_decorators_and_definitions() {
+    let source = "type F = Callable[def() -> int64]\ndef traced(f: own F) -> F:\n    return f\nclass Number:\n    @traced\n    def answer() -> int64:\n        return 42\ndef main():\n    print(Number.answer())\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let items = complete_source(source, 8, 4, None).unwrap();
+    assert!(items.iter().all(|item| !item.name.starts_with("__aura_")));
+    let definition = definition_of(&output, "@traced\nmethod answer()");
+    assert_eq!((definition.line, definition.start_character), (5, 8));
+    let decorator = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 4 && occurrence.hover.contains("function traced"))
+        .unwrap();
+    assert_eq!(decorator.definition.as_ref().unwrap().line, 1);
+}
+
+#[test]
+fn delegated_field_hover_and_definitions_point_to_authored_source() {
+    let source = "trait Named:\n    def name(self) -> str\nclass Engine:\n    pass\nimpl Named for Engine:\n    def name(self) -> str:\n        return \"engine\"\nclass Car:\n    engine: Engine\nimpl Named for Car by engine\ndef show(car: Car):\n    print(car.name())\n";
+    let output = analyze_source(source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    let field = output
+        .occurrences
+        .iter()
+        .find(|occurrence| {
+            occurrence.line == 9 && occurrence.hover.contains("field engine: Engine")
+        })
+        .unwrap();
+    assert_eq!(field.definition.as_ref().unwrap().line, 8);
+    let method = output
+        .occurrences
+        .iter()
+        .find(|occurrence| occurrence.line == 11 && occurrence.hover.contains("method name(self)"))
+        .unwrap();
+    assert_eq!(method.definition.as_ref().unwrap().line, 1);
+}
