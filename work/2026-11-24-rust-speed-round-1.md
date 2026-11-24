@@ -74,11 +74,35 @@ measured on its own branch against `6642a7c2`:
 The `result_call` probe went from 561 to 46 instructions per call, and
 `dict_get_str` from 1,222 to 709.
 
+## Second pass
+
+The same three lines of work went one step further before the pull
+request was merged:
+
+- `d[key]` on a dictionary whose values are integers, floats or `bool`
+  returns the scalar itself, with the same missing-key diagnostic.
+  `interpreter` runs 8,970M instructions against 13,181M, 2.0 times Rust
+  (was 2.9).
+- A full list of scalars or records grows through a slim call, a list no
+  longer allocates a holder count until it is shared, a list of scalars
+  gets its first storage with no growth call, and the allocator grows the
+  block last cut from a chunk in place. `regex_match` runs 4,133M against
+  4,954M.
+- A `for` over a literal of at most eight `int64`, `float64` or `bool`
+  values builds no list. `raytracer` runs 545M against 871M with this and
+  the list changes.
+- A loop that only reads a list held in a field checks the field's list
+  once at entry. With it `raytracer` runs 610M on the loop branch alone,
+  and `order_book` 141M against 156M.
+
 ## Follow-up
 
-- `d[key]` with a scalar value still boxes it: 39% of `interpreter`.
-- Enums other than `Result` are still boxed when built and matched.
-- List creation, growth through the runtime, and a `for` over a list
-  literal (`regex_match`, `graph_paths`, `raytracer`).
-- List fields of `self` indexed in loops are checked on every access
-  (`order_book`, `raytracer`).
+- Enums other than `Result` are still boxed when they are stored, and a
+  list element or a field passed to a function is copied into a box first
+  (`enum_match` probe: 963 instructions against Rust's 9.5).
+- Each list still costs about 590 instructions to create, fill once and
+  release against about 100 in Rust (`regex_match`).
+- Straight-line `self.field[i]` accesses and overlapping loop regions are
+  still checked on every access (`order_book`, `spreadsheet`).
+- A local `str` is still a box. The design to keep it as words is in
+  progress with the text and dictionary work.

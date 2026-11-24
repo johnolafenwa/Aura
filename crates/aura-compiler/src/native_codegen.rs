@@ -2598,11 +2598,11 @@ impl<'a> NativeCodegen<'a> {
         };
         let scalar_list = |ty: Option<&DirectType>| {
             matches!(ty, Some(DirectType::Opaque(Type::Named(name, args)))
-                if name == "list" && matches!(args.as_slice(), [element]
-                    if matches!(
-                        direct_type(element, &self.classes),
-                        Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
-                    )))
+            if name == "list" && matches!(args.as_slice(), [element]
+                if matches!(
+                    direct_type(element, &self.classes),
+                    Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+                )))
         };
         let field_regions = list_snapshots::field_list_snapshot_regions(
             function,
@@ -2620,9 +2620,9 @@ impl<'a> NativeCodegen<'a> {
             &list_snapshots::FieldListRules {
                 lend_temps: &field_lend_temps,
                 candidate: &|place, temp| {
-                    field_type(place).is_some_and(
-                        |ty| matches!(ty, Type::Named(name, _) if name == "list"),
-                    ) && scalar_list(variable_types.get(temp))
+                    field_type(place)
+                        .is_some_and(|ty| matches!(ty, Type::Named(name, _) if name == "list"))
+                        && scalar_list(variable_types.get(temp))
                 },
                 pure_index: &|temp| scalar_list(variable_types.get(temp)),
                 scalar_field: &|place| {
