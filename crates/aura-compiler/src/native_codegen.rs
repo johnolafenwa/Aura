@@ -17702,6 +17702,8 @@ impl<'a> FunctionCompiler<'a> {
                 let second = self.load_word(args[1], int64, false)?;
                 if let Some(kind) = ScalarElement::of(&element_ty) {
                     self.emit_scalar_list_swap(list, first, second, kind, function);
+                } else if let Some(record) = self.plain_record(&element_direct_ty)? {
+                    self.emit_plain_list_swap(&record, list, first, second, function);
                 } else {
                     self.builder.call(function, &[list, first, second]);
                 }
