@@ -5,8 +5,8 @@ use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
 use super::{
-    appended_copies, element_slots, literal_chunks, plan_views, receiver_view_read, ViewParam,
-    ViewRead,
+    appended_copies, element_slots, literal_chunks, payload_clone_moves, plan_views,
+    receiver_view_read, ViewParam, ViewRead,
 };
 
 const SOURCE: &str = r#"
@@ -270,4 +270,43 @@ fn a_loop_variable_read_through_its_bytes_is_an_element_slot() {
     assert!(element_slots(main, |_| false, borrowed, &views)
         .lists
         .is_empty());
+}
+
+const LOOKUPS: &str = r#"
+def lookup(name: str, row: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return ""
+
+def shouted(name: str, row: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            copy = value.clone()
+            return value.to_upper() + copy
+        case Lookup.Missing:
+            return ""
+
+def main():
+    row = {"a": "b"}
+    print(lookup("a", row) + shouted("a", row))
+"#;
+
+#[test]
+fn a_copy_that_is_the_last_read_of_a_found_payload_may_move_its_box() {
+    let mir = lower_source_to_mir(LOOKUPS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the module has the function")
+    };
+    let moves = payload_clone_moves(function("lookup"));
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    // The payload is read again after the copy.
+    assert!(payload_clone_moves(function("shouted")).is_empty());
+    assert!(payload_clone_moves(function("main")).is_empty());
 }

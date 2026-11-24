@@ -2680,6 +2680,10 @@ impl<'a> NativeCodegen<'a> {
             view_twin_refs,
             str_slots,
             str_element_lists: str_elements.lists,
+            payload_clone_moves: match self.freestanding {
+                Some(_) => HashMap::new(),
+                None => str_slots::payload_clone_moves(function),
+            },
             appended_copies: str_slots::appended_copies(function),
             deferred_str_copies: HashMap::new(),
             checked_scalar_body: checked_entry.then_some(func_id),
@@ -4128,6 +4132,9 @@ struct FunctionCompiler<'a> {
     str_slots: HashMap<String, str_slots::StrSlot>,
     /// Each `str` local that holds a list element as words, with the list.
     str_element_lists: HashMap<String, String>,
+    /// The copies of a lookup's payload that may move its box instead,
+    /// each with the payload and the lookup (see `str_slots`).
+    payload_clone_moves: HashMap<String, (String, String)>,
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
     appended_copies: HashSet<String>,
@@ -6397,7 +6404,9 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_text_byte_slice(target, value)?;
                 } else if self.lent_elements.contains_key(target.as_str()) {
                     self.compile_lent_element_assign(target, value)?;
-                } else if self.compile_str_element_assign(target, value)? {
+                } else if self.compile_str_element_assign(target, value)?
+                    || self.compile_payload_clone_move(target)?
+                {
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
                     self.store_place(target, scalar)?;
                 } else if let Some(found) = self.compile_fused_entry_probe(target, value)? {

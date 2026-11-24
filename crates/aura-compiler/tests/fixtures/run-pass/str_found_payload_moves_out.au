@@ -1,0 +1,62 @@
+# A copy of a lookup's found `str` that is the lookup's last use takes the
+# box the lookup holds instead of copying it, whether the payload is lent
+# from the lookup or holds a reference of its own.
+import control
+
+
+def lookup(name: str, row: dict[str, str], context: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return context[name].clone()
+
+
+def first_long(row: dict[str, str], keys: list[str]) -> str:
+    for key in keys:
+        match row.get(key):
+            case Lookup.Found(value):
+                if value.byte_len() > 3:
+                    return value.clone()
+            case Lookup.Missing:
+                pass
+    return ""
+
+
+def shouted(row: dict[str, str], key: str) -> str:
+    match row.get(key):
+        case Lookup.Found(value):
+            loud = value.to_upper()
+            copy = value.clone()
+            return loud + copy
+        case Lookup.Missing:
+            return "-"
+
+
+def checked(key: str, limit: int64) -> str:
+    row = {"name": "Ada", "note": "a note longer than any inline text"}
+    match row.get(key):
+        case Lookup.Found(value):
+            assert value.byte_len() < limit, f"`{key}` is too long"
+            return value.clone()
+        case Lookup.Missing:
+            return "?"
+
+
+def main():
+    row = {"name": "Ada", "note": "a note longer than any inline text", "x": "y"}
+    context = {"title": "Page", "user": "root"}
+    keys = ["name", "title", "note", "user"]
+    mut out: list[str] = []
+    for round in range(3):
+        for key in keys:
+            out.append(lookup(key, row, context))
+    print(" ".join(out))
+    print(first_long(row, keys))
+    print(f"{shouted(row, 'name')} {shouted(row, 'note')} {shouted(row, 'none')}")
+    for limit in [5, 50]:
+        match control.recover(checked, "note", limit):
+            case Ok(text):
+                print(text)
+            case Err(trap):
+                print(trap.message)
