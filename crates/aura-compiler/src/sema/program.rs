@@ -3390,3 +3390,41 @@ fn inherited_assoc_depth(
         .max()
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+#[test]
+fn property_write_discovery_rewrites_only_sites_in_the_current_module() {
+    use super::property_reads::check_with_property_reads;
+
+    let declaration = include_str!("../../tests/fixtures/parse-pass/property_setter.au");
+    let original = crate::parser::parse(declaration).unwrap();
+    let with_write = format!(
+        "{declaration}\ndef main():\n    mut counter = Counter(stored=0)\n    counter.count = 1\n"
+    );
+    let generated = crate::parser::parse(&with_write).unwrap();
+    // A preceding expansion can supply a body with sites absent from the
+    // module the rewriter is walking. Report that site instead of retrying.
+    let error = check_with_property_reads(original, ModuleContext::default(), |_, context| {
+        check_with_context_once(generated.clone(), context)
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "AU2064");
+    assert_eq!(
+        error.span,
+        Some(crate::diag::Span::new(with_write.lines().count(), 5))
+    );
+    assert!(error.message.contains("cannot lower a property assignment"));
+
+    // A check of a different module cannot publish its write positions into
+    // this rewrite, even when both modules use the same line and column.
+    let foreign = ModuleContext {
+        module_name: "foreign".into(),
+        ..ModuleContext::default()
+    };
+    let direct_error = check_with_context_once(generated.clone(), foreign.clone()).unwrap_err();
+    let error = check_with_property_reads(generated.clone(), ModuleContext::default(), |_, _| {
+        check_with_context_once(generated.clone(), foreign.clone())
+    })
+    .unwrap_err();
+    assert_eq!(error, direct_error);
+}
