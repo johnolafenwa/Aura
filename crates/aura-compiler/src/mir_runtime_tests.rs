@@ -3087,6 +3087,129 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
 }
 
 #[test]
+fn mir_runtime_ffi_commits_handle_writeback_before_flag_validation_trap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OLD_DROPS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn count_old_drop(_ptr: *mut c_void) {
+        OLD_DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    OLD_DROPS.store(0, Ordering::SeqCst);
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let old_ptr = 0x1111usize as *mut c_void;
+    let new_ptr = 0x2222usize as *mut c_void;
+    let nullable_token = Type::normalize_union(
+        vec![Type::named("Token"), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("nullable token union");
+
+    env.define_typed(
+        "flags",
+        Type::Named("list".to_string(), vec![Type::named("bool")]),
+        Value::Vec(VecValue::new(
+            Type::named("bool"),
+            vec![Value::Bool(false)].into(),
+        )),
+    );
+    let old_handle =
+        FfiHandleValue::owned("Token".to_string(), old_ptr, Some(count_old_drop)).expect("old");
+    let Type::Union(union_def) = &nullable_token else {
+        panic!("expected union");
+    };
+    let token_index = union_def
+        .members
+        .iter()
+        .position(|member| *member == Type::named("Token"))
+        .expect("Token member");
+    env.define_typed(
+        "slot",
+        nullable_token.clone(),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: nullable_token.clone().into(),
+            member_index: token_index,
+            payload: Value::FfiHandle(old_handle),
+        })),
+    );
+
+    let call = MirExternCall {
+        name: String::new(),
+        symbol: "replace_and_flag".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "flags".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::Named("list".to_string(), vec![Type::named("bool")]),
+                c_string: false,
+                pointer: true,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "slot".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: nullable_token.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::Unit,
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Place("flags".to_string()),
+            writeback_place: Some("flags".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("slot".to_string()),
+            writeback_place: Some("slot".to_string()),
+        },
+    ];
+
+    let error = runtime
+        .evaluate_extern_call_with(&call, &args, &mut env, |_symbol, _sig, arguments| {
+            // Simulate C writing non-canonical bool byte `2` to flags[0]
+            // and replacing *slot with `new_ptr` after freeing `old_ptr`.
+            let crate::ffi::FfiValue::Elements(_, words) = &mut arguments[0] else {
+                panic!("expected bool elements");
+            };
+            words[0] = 2;
+            arguments[1] = crate::ffi::FfiValue::OpaqueHandle(
+                crate::ffi::OpaqueHandle::new(new_ptr).expect("new handle"),
+            );
+            Ok(crate::ffi::FfiValue::Unit)
+        })
+        .expect_err("non-canonical bool element must trap");
+    assert_eq!(error.code, "AU4001");
+
+    // `slot` must already hold `new_ptr`, and `old_ptr` must have been given up
+    // so dropping `env` does not double-free `old_ptr`.
+    let updated = env.read_place("slot").expect("slot remains live");
+    match updated {
+        Value::Union(union) => match &union.payload {
+            Value::FfiHandle(handle) => assert_eq!(handle.as_ptr(), new_ptr),
+            other => panic!("expected updated FfiHandle, got {other:?}"),
+        },
+        other => panic!("expected union value, got {other:?}"),
+    }
+    drop(env);
+    assert_eq!(
+        OLD_DROPS.load(Ordering::SeqCst),
+        0,
+        "old handle must be given up before AU4001 trap so drop does not run again"
+    );
+}
+
+#[test]
 fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
     let mut runtime = test_runtime();
     let mut env = Env::default();

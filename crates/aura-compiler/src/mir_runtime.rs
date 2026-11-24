@@ -6640,38 +6640,98 @@ impl MirRuntime {
         CALLBACK_RUNTIME.set(outer);
         let callback_failure = CALLBACK_FAILURE.take();
 
-        // A `mut` parameter is copy-in/out: fixed-length bytes, one
-        // scalar, or one nullable handle. Apply what the engine read back
-        // to the original Aura place before interpreting the foreign
-        // return, so both backends share the same post-call state even
-        // when return validation traps.
-        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(arguments) {
+        // Commit opaque handle ownership updates and wrap any returned owned
+        // handle before running potentially-trapping out-parameter validations
+        // (such as bool or struct checks), so mid-writeback traps neither
+        // double-free a replaced handle nor leak a newly returned one.
+        let mut result = result;
+        let mut owned_handle_result = if matches!(result, Ok(FfiValue::OpaqueHandle(_))) {
+            let Ok(value) = std::mem::replace(&mut result, Ok(FfiValue::Unit)) else {
+                unreachable!("matched Ok(OpaqueHandle) above");
+            };
+            Some(
+                runtime_value_from_ffi_with(value, &call.return_type, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                )?,
+            )
+        } else {
+            None
+        };
+        let mut deferred_writebacks = Vec::new();
+        for (((index, param), argument), ffi_value) in
+            call.params.iter().enumerate().zip(&ordered).zip(arguments)
+        {
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
+            if signature.parameters()[index] == FfiType::OpaqueHandleOut {
+                let written = match stored_handle(&argument.value, &ffi_value) {
+                    Some(kept) => kept,
+                    None => runtime_value_from_ffi_with(ffi_value, &param.ty, &call.handle_drops)
+                        .map_err(|error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    })?,
+                };
+                let place = argument.writeback_place.as_deref().ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: mutable parameter `{}` requires a writeback place",
+                            call.symbol, param.name
+                        ),
+                    )
+                })?;
+                env.write_place(place, written)?;
+            } else {
+                deferred_writebacks.push((param, argument, ffi_value));
+            }
+        }
+
+        // A `mut` parameter is copy-in/out: fixed-length bytes, one
+        // scalar, or one struct/array. Apply what the engine read back
+        // to the original Aura place before interpreting the foreign
+        // return, so both backends share the same post-call state even
+        // when return validation traps.
+        let mut writeback_error: Option<Diagnostic> = None;
+        for (param, argument, ffi_value) in deferred_writebacks {
             let written = match ffi_value {
-                FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                FfiValue::Bytes(bytes) => Ok(bytes_runtime_value(&bytes)),
                 FfiValue::Elements(scalar, words) => match &argument.value {
-                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
-                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
+                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed),
+                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol),
                 },
                 FfiValue::Struct(layout, bytes) if param.pointer => {
                     aura_runtime::c_values::unpack_elements(layout, &bytes)
-                        .map_err(|error| c_value_diagnostic(&call.symbol, error))?
+                        .map_err(|error| c_value_diagnostic(&call.symbol, error))
                 }
                 FfiValue::Struct(layout, bytes) => {
-                    struct_runtime_value(layout, &bytes, &call.symbol)?
+                    struct_runtime_value(layout, &bytes, &call.symbol)
                 }
-                other => match stored_handle(&argument.value, &other) {
-                    Some(kept) => kept,
-                    None => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops)
-                        .map_err(|error| {
-                            Diagnostic::coded(
-                                "AU4005",
-                                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-                            )
-                        })?,
-                },
+                other => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                ),
+            };
+            let written = match written {
+                Ok(value) => value,
+                Err(error) => {
+                    if writeback_error.is_none() {
+                        writeback_error = Some(error);
+                    }
+                    continue;
+                }
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -6684,9 +6744,15 @@ impl MirRuntime {
             })?;
             env.write_place(place, written)?;
         }
+        if let Some(error) = writeback_error {
+            return Err(error);
+        }
 
         if let Some(failure) = callback_failure {
             return Err(failure);
+        }
+        if let Some(value) = owned_handle_result.take() {
+            return Ok(value);
         }
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
         if let FfiValue::Struct(layout, bytes) = &result {

@@ -1024,6 +1024,39 @@ impl FunctionCompiler<'_> {
         for copy in list_copies {
             self.release_foreign_allocation(copy, RuntimeFn::ReleaseValue);
         }
+        // Commit opaque handle ownership updates and register any returned
+        // handle before running potentially-trapping flag, scalar, or struct
+        // checks so unwinding neither double-frees replaced handles nor leaks
+        // newly returned ones.
+        let mut handle_writebacks = Vec::new();
+        let mut other_writebacks = Vec::new();
+        for entry in writebacks {
+            if matches!(entry.2, ForeignWriteback::Handle(..)) {
+                handle_writebacks.push(entry);
+            } else {
+                other_writebacks.push(entry);
+            }
+        }
+        for (place, expected, writeback) in handle_writebacks {
+            let ForeignWriteback::Handle(name, union_type, slot, before) = writeback else {
+                unreachable!("partitioned handle writebacks only");
+            };
+            let address = self.builder.load(types::I64, MemFlags::trusted(), slot, 0);
+            let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+            let drop = self.foreign_handle_drop(call, &name)?;
+            let handle = self.builder.call(
+                self.runtime[RuntimeFn::FfiStoredHandle],
+                &[before, address, name_ptr, name_len, drop],
+            );
+            let value = self.foreign_nullable(handle.results[0], &union_type)?;
+            let writeback = self.coerce_value(value, &expected)?;
+            self.store_place(&place, writeback)?;
+        }
+        let prewrapped_result_handle = match result_handle {
+            Some(name) => Some(self.foreign_handle(invocation.results[0], name, call)?),
+            None => None,
+        };
+
         // A C function can leave any byte in a `bool` it writes through.
         // When multiple `mut ptr[bool]` parameters cross the call, sanitize
         // every list before trapping so recovery cannot observe raw bytes.
@@ -1045,7 +1078,7 @@ impl FunctionCompiler<'_> {
             }
             self.trap_on_bad_bool(first_bad, &call.symbol)?;
         }
-        for (place, expected, writeback) in writebacks {
+        for (place, expected, writeback) in other_writebacks {
             let flags = MemFlags::trusted();
             let value = match writeback {
                 ForeignWriteback::Same(value) => value,
@@ -1053,16 +1086,7 @@ impl FunctionCompiler<'_> {
                     let raw = self.builder.load(scalar.ty, flags, slot, 0);
                     self.foreign_scalar_result(&scalar, raw, &call.symbol)?
                 }
-                ForeignWriteback::Handle(name, union_type, slot, before) => {
-                    let address = self.builder.load(types::I64, flags, slot, 0);
-                    let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
-                    let drop = self.foreign_handle_drop(call, &name)?;
-                    let handle = self.builder.call(
-                        self.runtime[RuntimeFn::FfiStoredHandle],
-                        &[before, address, name_ptr, name_len, drop],
-                    );
-                    self.foreign_nullable(handle.results[0], &union_type)?
-                }
+                ForeignWriteback::Handle(..) => unreachable!("committed above"),
                 ForeignWriteback::Struct(layout, slot, _) if layout.is_plain() => {
                     self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
                 }
@@ -1156,13 +1180,13 @@ impl FunctionCompiler<'_> {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
             }
             (None, None) if result_text => self.foreign_text_result(invocation.results[0], call)?,
-            (None, Some(name)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
-                let handle = self.foreign_handle(invocation.results[0], name, call)?;
+            (None, Some(_)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
+                let handle = prewrapped_result_handle.expect("wrapped above");
                 self.trap_on_null_handle(handle, &call.symbol)?;
                 self.owned_opaque_result(vec![handle], call.return_type.clone())
             }
-            (None, Some(name)) => {
-                let handle = self.foreign_handle(invocation.results[0], name, call)?;
+            (None, Some(_)) => {
+                let handle = prewrapped_result_handle.expect("wrapped above");
                 self.foreign_nullable(handle, &call.return_type)?
             }
             (None, None) => unit_value(&mut *self.builder),

@@ -17149,6 +17149,61 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_commits_handle_writeback_before_flag_and_scalar_checks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" def st_close(store: own Store) -> None
+extern "C" def replace_and_check(
+    flags: mut ptr[bool],
+    ok: mut bool,
+    out: mut Store | None
+) -> None
+
+def main() -> int32:
+    mut flags: list[bool] = [false]
+    mut ok: bool = false
+    mut slot: Store | None = None
+    replace_and_check(flags, ok, slot)
+    return 0
+"#,
+    );
+    let object_bytes =
+        emit_unoptimized_object(&module).expect("handle + flag writeback call should emit");
+    let file = object::File::parse(&*object_bytes).expect("parse object");
+    let mut call_offsets: HashMap<String, u64> = HashMap::new();
+    for section in file.sections() {
+        for (offset, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if let Ok(name) = sym.name() {
+                        let clean = name.trim_start_matches('_').to_string();
+                        call_offsets.entry(clean).or_insert(offset);
+                    }
+                }
+            }
+        }
+    }
+    let stored = *call_offsets
+        .get("aura_direct_ffi_stored_handle")
+        .expect("missing aura_direct_ffi_stored_handle");
+    let check_flags = *call_offsets
+        .get("aura_direct_ffi_check_flags")
+        .expect("missing aura_direct_ffi_check_flags");
+    let bad_bool = *call_offsets
+        .get("aura_direct_ffi_bad_bool")
+        .expect("missing aura_direct_ffi_bad_bool");
+    assert!(
+        stored < check_flags,
+        "handle writeback ({stored}) must precede flag validation ({check_flags})"
+    );
+    assert!(
+        stored < bad_bool,
+        "handle writeback ({stored}) must precede bool scalar validation ({bad_bool})"
+    );
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"
