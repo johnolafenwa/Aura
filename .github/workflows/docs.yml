@@ -141,7 +141,7 @@ jobs:
         run: bash scripts/install-llvm.sh
 
       - name: Build Aura
-        run: cargo build -p aura
+        run: cargo build --locked -p aura
 
       - name: Check every aura code block
         run: python3 scripts/check_doc_examples.py

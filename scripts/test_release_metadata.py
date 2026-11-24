@@ -249,6 +249,26 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("AURA_STRESS_RUNS=10 scripts/stress-scheduler.sh", workflow)
         self.assertNotIn("AURA_STRESS_RUNS=50 scripts/stress-scheduler.sh", workflow)
 
+    def test_all_lockfiles_are_audited_and_ci_builds_stay_locked(self) -> None:
+        package_manifest = json.loads((ROOT / "package.json").read_text())
+        check_audit = package_manifest["scripts"]["check:audit"]
+        for lockfile in (
+            "Cargo.lock",
+            "fuzz/Cargo.lock",
+            "benchmarks/rust_baselines/Cargo.lock",
+            "benchmarks/numbers/Cargo.lock",
+            "benchmarks/image_codec/rust/Cargo.lock",
+        ):
+            self.assertIn(f"-f {lockfile}", check_audit)
+
+        fuzz_lock = (ROOT / "fuzz/Cargo.lock").read_text()
+        self.assertNotIn('name = "url"\nversion = "2.5.8"', fuzz_lock)
+
+        docs_workflow = (ROOT / ".github/workflows/docs.yml").read_text()
+        self.assertIn("cargo build --locked -p aura", docs_workflow)
+        safety_workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        self.assertIn("cargo bench --locked -p aura-compiler", safety_workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

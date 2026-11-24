@@ -34,7 +34,7 @@
     "check:format": "cargo fmt --all --check",
     "check:clippy": "cargo clippy --all-targets -p aura-core -p aura-runtime -p aura-compiler -p aura -- -D warnings",
     "check:hygiene": "bash scripts/check-hygiene.sh",
-    "check:audit": "npm audit --audit-level=moderate && cargo audit",
+    "check:audit": "npm audit --audit-level=moderate && cargo audit -f Cargo.lock && cargo audit -f fuzz/Cargo.lock && cargo audit -f benchmarks/rust_baselines/Cargo.lock && cargo audit -f benchmarks/numbers/Cargo.lock && cargo audit -f benchmarks/image_codec/rust/Cargo.lock",
     "build:extension": "npm --prefix tools/vscode-aura run build",
     "package:extension": "npm --prefix tools/vscode-aura run package:vsix",
     "check:lsp": "npm --prefix tools/aura-language-server run check",
