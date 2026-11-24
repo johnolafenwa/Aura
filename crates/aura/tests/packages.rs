@@ -875,3 +875,48 @@ def main() -> int32:
     assert!(lockfile.contains(&new_util_rev));
     assert!(lockfile.contains(&new_jsonx_rev));
 }
+
+#[test]
+fn build_cfg_applies_manifest_values_and_ordered_cli_overrides() {
+    let temp = TempDir::new("build-cfg");
+    temp.write("Aura.toml", "[package]\nname = \"driver\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[build.cfg]\nmode = \"manifest\"\nlogging = false\n");
+    let source = temp.write("src/main.au", "import build\ndef main():\n    print(build.cfg[\"mode\"])\n    print(build.cfg[\"logging\"])\n    print(build.cfg[\"fast\"])\n");
+    let output = Command::new(aura_bin())
+        .args([
+            "run",
+            "--cfg",
+            "fast",
+            "--cfg",
+            "mode=first",
+            "--cfg=mode=a=b",
+        ])
+        .arg(source)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "a=b\nfalse\ntrue\n"
+    );
+}
+
+#[test]
+fn invalid_cfg_is_reported_by_each_command() {
+    for command in ["run", "build", "check", "test"] {
+        let output = Command::new(aura_bin())
+            .args([command, "--cfg", "1bad"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("AU2070"),
+            "{command}"
+        );
+    }
+}

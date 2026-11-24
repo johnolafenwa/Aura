@@ -11,6 +11,9 @@ use crate::sema::{
     FunctionInfo, FunctionParamContract, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
 };
 
+#[path = "builtin_modules_build.rs"]
+mod build;
+
 fn builtin_span() -> Span {
     Span::new(1, 1)
 }
@@ -3508,6 +3511,7 @@ fn numbers_namespace() -> ModuleNamespace {
 
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
+        "build" => Some(build::namespace()),
         "io" => Some(io_namespace()),
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
@@ -3676,7 +3680,9 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
 pub(crate) fn is_builtin_root_module(name: &str) -> bool {
     matches!(
         name,
-        "io" | "fs"
+        "build"
+            | "io"
+            | "fs"
             | "net"
             | "process"
             | "random"
@@ -3715,6 +3721,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
+        "build",
         "io",
         "fs",
         "net",

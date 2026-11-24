@@ -1,5 +1,7 @@
 pub mod analysis;
 pub mod ast;
+pub mod build_config;
+pub use build_config::{current_build_config, with_build_config, BuildConfig};
 mod builtin_modules;
 mod builtin_sources;
 pub(crate) use aura_runtime::bytes_codec;
@@ -493,13 +495,17 @@ pub(crate) fn with_source_reads<T>(operation: impl FnOnce() -> T) -> (T, BTreeSe
     (result, reads.unwrap_or_default())
 }
 
-/// Reads a source file, preferring an active overlay for the same file.
-pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+fn record_source_read(path: &Path) {
     SOURCE_READS.with(|reads| {
         if let Some(reads) = reads.borrow_mut().as_mut() {
             reads.insert(absolutize(path));
         }
     });
+}
+
+/// Reads a source file, preferring an active overlay for the same file.
+pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+    record_source_read(path);
     let overlay = SOURCE_OVERLAYS.with(|overlays| {
         let overlays = overlays.borrow();
         if overlays.is_empty() {
@@ -650,11 +656,21 @@ impl ModuleLoader {
         })
     }
 
+    fn package_config(&self) -> Option<build_config::BuildConfigGuard> {
+        if !self.stack.is_empty() {
+            return None;
+        }
+        let defaults = self.package_graph.as_ref()?.entry_cfg();
+        (!defaults.is_empty()).then(|| current_build_config().with_manifest(defaults).enter())
+    }
+
     fn load_program(&mut self, path: &Path) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, None)
     }
 
     fn load_program_with_source(&mut self, path: &Path, source: &str) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, Some(source))
     }
 

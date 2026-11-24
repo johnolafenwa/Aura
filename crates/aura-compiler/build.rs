@@ -1,6 +1,11 @@
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
 
+    println!(
+        "cargo::rustc-env=AURA_COMPILER_TARGET={}",
+        std::env::var("TARGET").expect("Cargo target")
+    );
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "linux" {
         // The coverage FFI integration test resolves its own no-mangle C
