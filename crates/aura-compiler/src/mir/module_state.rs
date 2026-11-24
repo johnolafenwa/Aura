@@ -138,6 +138,7 @@ impl Lowerer<'_> {
                 _ => unreachable!("projected module store"),
             };
             let write = AssignStmt {
+                member_span: assign.member_span,
                 target,
                 value: Expr {
                     kind: ExprKind::Name(stored),
