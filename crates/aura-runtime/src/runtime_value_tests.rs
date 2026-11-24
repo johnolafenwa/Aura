@@ -6168,11 +6168,11 @@ fn float_floor_divmod_matches_python_sign_precision_and_zero_rules() {
 fn float_power_uses_destination_width_and_shared_exception_rules() {
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float32).expect("float32 power should succeed"),
-        (1.5_f32.powf(2.0)) as f64
+        2.25
     );
     assert_eq!(
         float_power(1.5, 2.0, FloatPowerWidth::Float64).expect("float64 power should succeed"),
-        1.5_f64.powf(2.0)
+        2.25
     );
 
     let float32_overflow = float_power(100.0, 100.0, FloatPowerWidth::Float32)
