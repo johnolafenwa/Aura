@@ -875,6 +875,7 @@ fn systems_integer_operations_emit_self_contained_objects() {
     for source in [
         include_str!("../tests/fixtures/systems-integers/atomic_orders.au"),
         include_str!("../tests/fixtures/systems-integers/wide_arithmetic.au"),
+        include_str!("../tests/fixtures/systems-integers/wide_vectors.au"),
         "export \"C\" def count(n: uint64) -> int64:\n    return n.rotate_left(3).count_ones()\n",
     ] {
         for target in TARGETS {
@@ -888,16 +889,14 @@ fn systems_integer_operations_emit_self_contained_objects() {
 fn load_rejects_release_order_during_checking() {
     let source = include_str!("../tests/fixtures/systems-integers/invalid_order.au");
     let module = crate::parse_source(source).expect("valid syntax");
-    let errors = crate::check_module_with_builtin_imports(module)
-        .err()
-        .expect("invalid order");
+    let errors = crate::check_module_with_builtin_imports(module).expect_err("invalid order");
     assert_eq!(errors.code, "AU2087", "{errors:?}");
 }
 
 #[test]
 fn rotation_count_type_diagnostic() {
     let source = include_str!("../tests/fixtures/check-fail/rotation_count_type.au");
-    let error = crate::check_source(source).err().expect("invalid count");
+    let error = crate::check_source(source).expect_err("invalid count");
     assert_eq!(error.code, "AU2088");
 }
 
@@ -930,9 +929,22 @@ fn atomic_order_diagnostics_cover_aliases_and_dynamic_orders() {
         let source =
             format!("{import}\n\ndef check(address: uint64, order: str) -> None:\n    {stmt}\n");
         let parsed = crate::parse_source(&source).expect("ordering test source parses");
-        let error = crate::check_module_with_builtin_imports(parsed)
-            .err()
-            .expect("invalid ordering");
+        let error = crate::check_module_with_builtin_imports(parsed).expect_err("invalid ordering");
         assert_eq!(error.code, "AU2087", "{stmt}: {error}");
     }
+}
+
+#[test]
+fn hosted_ordered_atomics_emit_without_generic_order_wrappers() {
+    let source = include_str!("../tests/fixtures/systems-integers/atomic_orders.au");
+    let mir = lower(&format!("{source}\n\ndef main() -> int32:\n    return 0\n"));
+    let kept = super::reachability::prune_unreachable_functions(&mir);
+    assert!(kept
+        .functions
+        .iter()
+        .all(|f| f.name != "mem::atomic_store_uint8"));
+    emit_host_object(&mir).expect("every memory order is available at the call site");
+
+    let named = lower("import mem\n\ndef main() -> None:\n    print(\"mem::fence\")\n");
+    emit_host_object(&named).expect("a string naming the generic wrapper can compile");
 }

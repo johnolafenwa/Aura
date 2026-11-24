@@ -18339,3 +18339,25 @@ def main():
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
+
+#[test]
+fn hosted_bit_methods_lower_at_every_word_width_and_on_wide_values() {
+    let source = r#"
+def word_bits(a: int8, b: uint16, c: int32, d: uint64, n: int64) -> int64:
+    x = a.swap_bytes().rotate_left(n).leading_zeros()
+    y = b.rotate_right(n).swap_bytes().trailing_zeros()
+    return x + y + c.rotate_right(n).count_ones() + d.swap_bytes().count_ones()
+
+def wide_bits(a: int128, b: uint128, n: int64) -> int64:
+    return a.rotate_right(n).count_ones() + b.rotate_left(n).leading_zeros()
+
+def main() -> None:
+    print(word_bits(-1, 1, 2, 3, 2))
+    print(wide_bits(-1, 1, 3))
+"#;
+    let module = lower_source_to_mir(source).expect("bit methods should lower to MIR");
+    let references = object_referenced_symbols(&emit_unoptimized_object(&module).unwrap());
+    assert!(references
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_bits")));
+}
