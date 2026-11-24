@@ -11,3 +11,7 @@ The initial parse and emission regressions failed on the baseline. The editor ru
 All 11 compiler fixture groups passed, including diagnostics, runtime output, debug objects and MIR parity with source locations. The manual and book passed all 1,126 documentation examples. QEMU booted the AArch64 and RV64 kernels and exercised the computed decimal table.
 
 The Linux compiler coverage baseline was 96.53% lines, 97.48% functions and 95.43% regions. The macOS baseline was 96.51% lines, 97.46% functions and 95.42% regions. Both measurements used the same Git tree as the baseline commit. [Baseline workflow](https://github.com/johnolafenwa/Aura/actions/runs/45333109317)
+
+A release build with the repaired runtime produced a 1,163,504-byte hello-world executable, 12,368 bytes smaller than baseline. The formatter reads strided arrays directly. An ordinary program that prints a string does not link the evaluator's allocation allowance through array formatting.
+
+In 24 interleaved release checks per compiler, the reference package used 126.31 ms median process CPU on the baseline and 125.47 ms after the ordinary-build fast paths. Compile-time evaluation skips decorator-generated bindings with callable results. The parser skips the conditional selection pass when every statement guard uses runtime names.
