@@ -505,6 +505,31 @@ mod method_tests {
     }
 
     #[test]
+    fn method_decorator_mismatch_prints_the_complete_unbound_signature() {
+        let source = r#"type Empty = Callable[def() -> None]
+
+def keep(f: own Empty) -> Empty:
+    return f
+
+class Pipeline:
+    @keep
+    def run(mut self, visit: Callable[mut def((int64,)) -> None], finish: Callable[own def(own str) -> None]):
+        pass
+"#;
+        let error = check_source(source).unwrap_err();
+        assert_eq!(error.code, "AU2002");
+        assert!(
+            error.message.starts_with(concat!(
+            "decorator on `Pipeline.run` must take and return `Callable[def(self: mut Pipeline, ",
+            "visit: Callable[mut def((int64,)) -> None], ",
+            "finish: Callable[own def(own str) -> None]) -> None]`: ",
+        )),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
     fn decorated_associated_method_resolves_nested_self_types_and_docs() {
         let source = r#"type Group = Callable[def(items: list[(Box, Box | None)]) -> Box]
 def keep(f: own Group) -> Group:
