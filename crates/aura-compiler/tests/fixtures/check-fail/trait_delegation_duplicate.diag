@@ -1,0 +1,5 @@
+error[AU2062]: trait `Named` is delegated twice for `Car`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_delegation_duplicate.au:11:23
+   |
+11 | impl Named for Car by engine
+   |                       ^

@@ -1,0 +1,42 @@
+trait Named:
+    def number(self) -> int64
+
+trait Motor: Named:
+    def step(mut self, n: int64)
+    def finish(own self) -> int64
+    def kind(self) -> int64:
+        return 10
+
+class Engine:
+    rpm: int64
+
+impl Named for Engine:
+    def number(self) -> int64:
+        return self.rpm
+
+impl Motor for Engine:
+    def step(mut self, n: int64):
+        self.rpm += n
+
+    def finish(own self) -> int64:
+        return self.rpm
+
+    def kind(self) -> int64:
+        return 20
+
+class Car[T]:
+    engine: T
+
+impl[T: Motor] Motor for Car[T] by engine:
+    def kind(self) -> int64:
+        return 30
+
+def main():
+    mut car = Car(engine=Engine(rpm=40))
+    car.step(2)
+    print(car.number())
+    print(car.kind())
+    print(car.finish())
+    obj: dyn Motor = Car(engine=Engine(rpm=7))
+    print(obj.number())
+    print(obj.kind())
