@@ -8,9 +8,10 @@ use crate::runtime_ops::{DictOp, ListOp, SetOp};
 pub(crate) fn evaluate_constants(module: MirModule) -> Result<BTreeMap<String, FrozenValue>> {
     // Recursive Aura calls use Rust stack frames. Give evaluation one stack size
     // on every platform and account for each active frame in its memory budget.
+    let windows_paths = crate::current_build_config().os == "windows";
     thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
-        .spawn(move || evaluate_on_stack(module))
+        .spawn(move || evaluate_on_stack(module, windows_paths))
         .map_err(|err| {
             Diagnostic::coded(
                 "AU3028",
@@ -21,7 +22,10 @@ pub(crate) fn evaluate_constants(module: MirModule) -> Result<BTreeMap<String, F
         .unwrap_or_else(|panic| panic::resume_unwind(panic))
 }
 
-fn evaluate_on_stack(module: MirModule) -> Result<BTreeMap<String, FrozenValue>> {
+fn evaluate_on_stack(
+    module: MirModule,
+    windows_paths: bool,
+) -> Result<BTreeMap<String, FrozenValue>> {
     let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
         module,
         Default::default(),
@@ -36,7 +40,10 @@ fn evaluate_on_stack(module: MirModule) -> Result<BTreeMap<String, FrozenValue>>
         if constant.frozen.is_some() || !runtime.pure_initializer(&constant.initializer) {
             continue;
         }
-        runtime.eval_budget = Some(Budget::default());
+        runtime.eval_budget = Some(Budget {
+            windows_paths,
+            ..Budget::default()
+        });
         let value = runtime
             .read_module_constant(&constant.key, &constant.initializer)
             .and_then(|value| {
@@ -234,7 +241,7 @@ fn pure_op(op: RuntimeOp) -> bool {
         RuntimeOp::Host(host) if matches!(host.name(), "str.to_bytes" | "str.from_bytes") => true,
         RuntimeOp::Host(host) => matches!(
             host.name().split_once("::"),
-            Some(("bytes" | "text" | "math" | "json" | "toml", _))
+            Some(("bytes" | "text" | "math" | "json" | "toml" | "path", _))
         ),
         _ => false,
     }
@@ -242,11 +249,38 @@ fn pure_op(op: RuntimeOp) -> bool {
 
 #[derive(Default)]
 pub(super) struct Budget {
+    windows_paths: bool,
     steps: usize,
     bytes: usize,
 }
 
 impl Budget {
+    /// Lexical path operations use the output platform's separators and root rules.
+    pub(super) fn path_builtin(&self, name: &str, args: &[EvaluatedMirArg]) -> Result<Value> {
+        use typed_path::Utf8TypedPath;
+        let text = |index: usize| match &args[index].value {
+            Value::String(text) => Ok(text.as_str()),
+            _ => Err(Diagnostic::new("expected a string path")),
+        };
+        let base = text(0)?;
+        let path = if self.windows_paths {
+            Utf8TypedPath::windows(base)
+        } else {
+            Utf8TypedPath::unix(base)
+        };
+        let component = match name {
+            "path::join" => return Ok(Value::string(path.join(text(1)?).as_str())),
+            "path::is_absolute" => return Ok(Value::Bool(path.is_absolute())),
+            "path::parent" => path.parent().map(|p| Value::string(p.as_str())),
+            "path::file_name" => path.file_name().map(Value::string),
+            "path::extension" => path.extension().map(Value::string),
+            _ => return Err(Diagnostic::new("unknown lexical path operation")),
+        };
+        Ok(component
+            .map(|value| optional_present(Type::named("str"), value))
+            .unwrap_or_else(|| optional_absent(Type::named("str"))))
+    }
+
     pub(super) fn step(&mut self) -> Result<()> {
         self.steps += 1;
         if self.steps > STEP_LIMIT {

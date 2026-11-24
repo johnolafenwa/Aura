@@ -97,3 +97,41 @@ runtime_trap = later_effect()
         .frozen_constants
         .contains_key("<main>::runtime_trap"));
 }
+
+#[test]
+fn lexical_paths_follow_the_selected_targets_path_rules() {
+    let source = r#"import path
+const joined = path.join("one", "two")
+const parent = path.parent("one/two.name")
+const leaf = path.file_name("one/two.name")
+const ext = path.extension("one/two.name")
+const absolute = path.is_absolute("C:/data")
+"#;
+    for (target, separator, absolute) in [
+        ("x86_64-unknown-linux-gnu", "/", false),
+        ("x86_64-pc-windows-msvc", "\\", true),
+    ] {
+        crate::with_build_config(
+            crate::BuildConfig::for_target(target, false).unwrap(),
+            || {
+                let program = check_source(source).unwrap();
+                assert_eq!(
+                    program.frozen_constants["<main>::joined"],
+                    FrozenValue::Str(format!("one{separator}two"))
+                );
+                assert_eq!(
+                    program.frozen_constants["<main>::absolute"],
+                    FrozenValue::Bool(absolute)
+                );
+                for (name, expected) in [("parent", "one"), ("leaf", "two.name"), ("ext", "name")] {
+                    let FrozenValue::Union(_, _, value) =
+                        &program.frozen_constants[&format!("<main>::{name}")]
+                    else {
+                        panic!("expected an optional path component")
+                    };
+                    assert_eq!(value.as_ref(), &FrozenValue::Str(expected.to_string()));
+                }
+            },
+        );
+    }
+}
