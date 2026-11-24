@@ -17330,13 +17330,26 @@ impl<'a> FunctionChecker<'a> {
                             "function values have a concrete signature and do not take explicit type arguments",
                         ));
                     }
-                    return self.type_check_function_value_args(
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Function {
+                                params: params.clone(),
+                                return_type: return_type.clone(),
+                            },
+                            ReceiverKind::Borrow,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &params,
                         &return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
                 }
                 if let Ok(Type::Callable(callable)) =
@@ -17364,16 +17377,32 @@ impl<'a> FunctionChecker<'a> {
                                     "hold the owner in a `mut` local, or take it as a `mut` parameter",
                                 ));
                             }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
                         ClosureCallKind::Repeatable => {}
                     }
-                    return self.type_check_function_value_args(
+                    let passing = match callable.call_kind {
+                        ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                        ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                        ClosureCallKind::Consuming => ReceiverKind::Value,
+                    };
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Callable(callable.clone()),
+                            passing,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &callable.params,
                         &callable.return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
                 }
                 match (&receiver_ty, field.as_str()) {
@@ -17526,6 +17555,7 @@ impl<'a> FunctionChecker<'a> {
                                     )
                                     .with_help("hold the collection in a `mut` local"));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
@@ -17559,14 +17589,29 @@ impl<'a> FunctionChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
-                    } => self.type_check_function_value_args(
-                        &params,
-                        &return_type,
-                        args,
-                        span,
-                        locals,
-                        expected,
-                    ),
+                    } => {
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Function {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                },
+                                ReceiverKind::Borrow,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
+                            &params,
+                            &return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            receiver,
+                        )
+                    }
                     Type::Callable(callable) => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17590,25 +17635,41 @@ impl<'a> FunctionChecker<'a> {
                                         "store the callable in a `mut` local, or take it as a `mut` parameter",
                                     ));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
+                        let passing = match callable.call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Callable(callable.clone()),
+                                passing,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
                         let params = callable.params.clone();
                         let return_type = callable.return_type.clone();
-                        self.type_check_function_value_args(
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
                     Type::Closure {
                         params,
                         return_type,
+                        captures,
                         call_kind,
-                        ..
                     } => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17619,29 +17680,51 @@ impl<'a> FunctionChecker<'a> {
                         }
                         if call_kind == ClosureCallKind::Consuming {
                             self.consume_value_expr(base_callee, locals)?;
-                        } else if call_kind == ClosureCallKind::MutableRepeatable
-                            && !grouped_name(base_callee)
+                        } else if call_kind == ClosureCallKind::MutableRepeatable {
+                            if !grouped_name(base_callee)
                                 .and_then(|name| locals.get(name))
                                 .is_some_and(|binding| {
                                     binding.local_function
                                         == Some(LocalFunctionBinding::Declaration)
                                 })
-                            && !self.is_mutable_place(base_callee, locals)?
-                        {
-                            return Err(Diagnostic::coded_at(
-                                "AU3003",
-                                base_callee.span,
-                                "a mutable-repeatable closure must be called through a mutable closure place",
-                            )
-                            .with_help("store the closure in a `mut` local before calling it"));
+                                && !self.is_mutable_place(base_callee, locals)?
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3003",
+                                    base_callee.span,
+                                    "a mutable-repeatable closure must be called through a mutable closure place",
+                                )
+                                .with_help("store the closure in a `mut` local before calling it"));
+                            }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
-                        self.type_check_function_value_args(
+                        let passing = match call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Closure {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                    captures,
+                                    call_kind,
+                                },
+                                passing,
+                                "closure value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
                     _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
@@ -17651,6 +17734,22 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
         }
+    }
+
+    fn ensure_mutable_callable_place_unlocked(
+        &self,
+        callee: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(place) = self.borrow_call_place(callee) {
+            self.ensure_place_mutation_allowed(&place, callee.span, locals)?;
+            let through_view = locals
+                .get(&place.root)
+                .and_then(|binding| binding.view.as_ref())
+                .map(|_| place.root.as_str());
+            self.ensure_place_not_locked_by_view(&place, through_view, callee.span, locals)?;
+        }
+        Ok(())
     }
 
     /// Types the callee of `factory(...)(args)`. When the factory is generic

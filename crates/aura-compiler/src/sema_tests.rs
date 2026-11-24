@@ -34210,3 +34210,112 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         "{error:?}"
     );
 }
+
+#[test]
+fn calling_a_callable_field_borrows_its_owner_and_respects_view_locks() {
+    let cases = [
+        (
+            "mut argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    h.cb = lambda x: x + 1
+    return 1
+
+def main():
+    mut h = Holder(cb=lambda x: x)
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "mutable callable field with mut overlapping argument",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self, x: int64) -> int64:
+        self.value += x
+        return self.value
+
+class Holder:
+    cb: Callable[mut def(x: int64) -> int64]
+
+def replace(h: mut Holder) -> int64:
+    c = Count(value=10)
+    h.cb = lambda [own c] x: c.bump(x)
+    return 1
+
+def main():
+    c = Count(value=0)
+    mut h = Holder(cb=lambda [own c] x: c.bump(x))
+    _ = h.cb(replace(h))
+"#,
+        ),
+        (
+            "own argument overlapping callable field owner",
+            r#"
+class Holder:
+    cb: Callable[def(x: int64) -> int64]
+
+def consume(h: own Holder) -> int64:
+    return 1
+
+def main():
+    h = Holder(cb=lambda x: x)
+    _ = h.cb(consume(h))
+"#,
+        ),
+        (
+            "mutable callable field called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+class Counter:
+    cb: Callable[mut def() -> int64]
+
+def make_counter() -> Counter:
+    count = Count(value=0)
+    return Counter(cb=lambda [own count]: count.bump())
+
+def main():
+    mut c = make_counter()
+    view v = c
+    _ = c.cb()
+    _ = v
+"#,
+        ),
+        (
+            "mutable local callable called under live shared view",
+            r#"
+class Count:
+    value: int64
+
+    def bump(mut self) -> int64:
+        self.value += 1
+        return self.value
+
+def make_cb() -> Callable[mut def() -> int64]:
+    count = Count(value=0)
+    return lambda [own count]: count.bump()
+
+def main():
+    mut cb = make_cb()
+    view v = cb
+    _ = cb()
+    _ = v
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to be rejected with AU3002"));
+        assert_eq!(error.code, "AU3002", "{label}: {error:?}");
+    }
+}

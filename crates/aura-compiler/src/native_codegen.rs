@@ -9237,11 +9237,33 @@ impl<'a> FunctionCompiler<'a> {
                 let abi_key =
                     callables::contract_abi_key(&param_types, &mutable_params, &return_direct);
                 let through = self.in_place_callees.get(place).cloned();
-                let stored = self.stored_callable_in_place(
-                    through.as_deref().unwrap_or(place),
-                    signature,
-                    abi_key,
-                )?;
+                let target_place = through.as_deref().unwrap_or(place);
+                let aliases_arg = through.is_none()
+                    && self
+                        .stored_callable_plan(target_place)?
+                        .is_some_and(|plan| {
+                            let stored_root = plan
+                                .alternative
+                                .place
+                                .split('.')
+                                .next()
+                                .unwrap_or(&plan.alternative.place);
+                            args.iter().any(|arg| {
+                                matches!(
+                                    &arg.value,
+                                    Operand::Place(p) | Operand::MovePlace(p)
+                                        if p.split('.').next() == Some(stored_root)
+                                ) || arg
+                                    .writeback_place
+                                    .as_deref()
+                                    .is_some_and(|p| p.split('.').next() == Some(stored_root))
+                            })
+                        });
+                let stored = if aliases_arg {
+                    None
+                } else {
+                    self.stored_callable_in_place(target_place, signature, abi_key)?
+                };
                 if through.is_some() && stored.is_none() {
                     return Err(format!(
                         "direct backend left out the read of callee `{place}` and cannot call it in place"
