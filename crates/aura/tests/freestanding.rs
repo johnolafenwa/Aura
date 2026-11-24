@@ -525,6 +525,72 @@ int main(void) {
     assert_eq!(stdout(&run), stdout(&hosted));
 }
 
+/// A type inside itself lives in counted blocks from the allocation hooks:
+/// the program computes what the hosted one prints and frees every block.
+#[test]
+fn values_that_hold_themselves_free_every_block_they_allocate() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    let workspace = Workspace::new();
+    workspace.write("boxes.au", include_str!("freestanding_boxes.au"));
+    let hosted = workspace.aura(&["run", "boxes.au"]);
+    assert!(hosted.status.success(), "{}", stderr(&hosted));
+    assert_eq!(stdout(&hosted), "16043307\n");
+    let build = workspace.aura(&["build", "--freestanding", "-o", "boxes.o", "boxes.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let harness = workspace.write(
+        "boxes.c",
+        r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+int64_t total(int64_t n);
+static long made, live;
+void *aura_alloc(uint64_t size, uint64_t align) {
+    (void)align;
+    made++;
+    live++;
+    return malloc(size);
+}
+void aura_free(void *block, uint64_t size, uint64_t align) {
+    (void)size;
+    (void)align;
+    live--;
+    free(block);
+}
+void *aura_realloc(void *block, uint64_t old_size, uint64_t align, uint64_t new_size) {
+    (void)old_size;
+    (void)align;
+    return realloc(block, new_size);
+}
+void aura_trap(uint32_t code, const char *file, uint64_t file_len, uint32_t line, uint32_t column) {
+    printf("trap %u at %.*s:%u:%u\n", code, (int)file_len, file, line, column);
+    exit(1);
+}
+int main(void) {
+    printf("%lld\n", (long long)total(40));
+    printf("made %d live %ld\n", made > 0, live);
+    return 0;
+}
+"#,
+    );
+    let binary = workspace.path.join("boxes.bin");
+    let link = Command::new(compiler)
+        .arg(&harness)
+        .arg(workspace.path.join("boxes.o"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("the C compiler should start");
+    assert!(link.status.success(), "{}", stderr(&link));
+    let run = Command::new(&binary)
+        .output()
+        .expect("the linked program should start");
+    assert!(run.status.success(), "{}", stdout(&run));
+    assert_eq!(stdout(&run), "16043307\nmade 1 live 0\n");
+}
+
 #[test]
 fn a_failed_check_calls_the_trap_hook_with_its_code_and_position() {
     let Some(compiler) = c_compiler() else {

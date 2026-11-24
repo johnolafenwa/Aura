@@ -43,10 +43,29 @@ values that need no heap (ADR-0129).
 - By hand: equality of tuples and of enum values, and tuple unpacking in a
   loop, give the hosted results.
 
+## Enums that hold themselves (ADR-0160)
+
+- An `indirect` payload of an enum's own type is the `uint64` address of a
+  block: a reference count, then the payload's words. The block functions
+  are Aura source in `crates/aura-compiler/std/freestanding_values.au`.
+- The pass makes store, load, drop, retain, and release functions for
+  each class that owns a block, calls retain and release where the
+  ownership pass stated a reference, reads a moved part as a copy with a
+  reference, and replaces a lend by a reference for the call.
+- `try` now consumes a result that needs drop.
+- The last variant of a `match` is a jump, not a test.
+- 5 more compiler tests and 1 more command test.
+  `crates/aura/tests/freestanding_boxes.au` (a binary tree, an expression
+  tree, a list, a class, a tuple, a generic enum, and results that hold
+  them) prints 16043307 hosted and freestanding, and the linked program
+  ends with every block freed.
+
 ## Follow-up
 
-- `try` on a result that needs drop.
-- Unions as enum payloads.
+- Unions as enum payloads, and unions of values that own a block.
+- A write to a field that owns a block.
+- A part moved out without a retain and a release.
+- A trap code of its own for a heap that is full.
 - Variants that share space.
-- Values that need a heap block: `str`, `bytes`, `list`, enums that hold
-  them, and `indirect` payloads.
+- Values with operations of their own: `str`, `bytes`, `list`, and enums
+  that hold them.

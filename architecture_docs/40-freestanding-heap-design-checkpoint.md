@@ -100,8 +100,10 @@ The owner chose D1 on 2026-11-24.
    and the default allocator (ADR-0128).
 2. Tuples, enums, and `Result` whose parts are all words, kept in machine
    words with no heap (ADR-0129). Done.
-3. Boxed values that need no library of operations: enums and tuples
-   that hold a heap value, and classes with an `indirect` field.
+3. Boxed values that need no library of operations: an enum that holds
+   itself through an `indirect` payload, in a block with a reference
+   count (ADR-0160). Done. A union that holds one and a write to a part
+   of one are still refused.
 4. `str`, `bytes`, and `list`. Then `dict` and `set`. Then closures and
    trait objects.
 

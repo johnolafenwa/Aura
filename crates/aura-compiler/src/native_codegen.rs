@@ -9106,6 +9106,9 @@ impl<'a> FunctionCompiler<'a> {
         type_args: &BTreeMap<String, Type>,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.compile_box_call(callee, args, target)? {
+            return Ok(value);
+        }
         match callee {
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),

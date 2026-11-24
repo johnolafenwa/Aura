@@ -20,8 +20,13 @@ in this file.
 - Freestanding builds compile tuples, enums, and `Result` whose parts are
   all numbers, `bool`, classes of those, or other such tuples and enums,
   with `match` and `try` on them. The compiler keeps each in machine words with no
-  heap. An enum that holds text, a collection, a union, or an `indirect`
-  payload is still reported as `AU2052`.
+  heap. An enum that holds text, a collection, or a union is still
+  reported as `AU2052`.
+- Freestanding builds compile an enum with an `indirect` payload of its own
+  type, such as a list or a tree. Each such payload lives in a block from
+  the allocation hooks with a reference count, and the program frees
+  every block when its last reference goes. Classes, tuples, and `Result`
+  may hold such an enum, and `match own` and `try` work on them.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

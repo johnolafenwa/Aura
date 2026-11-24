@@ -143,46 +143,62 @@ fn uses_heap(module: &MirModule) -> bool {
 /// The allocator's functions as a program holds them: lowered from its
 /// source and renamed.
 fn allocator_functions() -> Vec<MirFunction> {
-    let module = crate::parse_source(ALLOCATOR_SOURCE).expect("the allocator parses");
+    library_functions(ALLOCATOR_SOURCE, "heap_", ALLOCATOR_PREFIX, ALLOCATOR_PATH)
+}
+
+/// The functions of `source`, a library written in Aura, whose names
+/// start with `own`, as a program holds them: lowered, renamed to start
+/// with `prefix`, and reporting `path` to the trap hook.
+pub(super) fn library_functions(
+    source: &str,
+    own: &str,
+    prefix: &str,
+    path: &str,
+) -> Vec<MirFunction> {
+    let module = crate::parse_source(source).expect("the library parses");
     let program =
-        crate::check_module_with_builtin_imports(module).expect("the allocator type-checks");
+        crate::check_module_with_builtin_imports(module).expect("the library type-checks");
     let lowered = crate::mir::lower(&program);
     let names = lowered
         .functions
         .iter()
         .map(|function| function.name.clone())
-        .filter(|name| name.starts_with("heap_"))
+        .filter(|name| name.starts_with(own))
         .collect::<HashSet<_>>();
     // The lowered module also holds a function for each host builtin.
-    // The program has its own, and the allocator's are left behind.
-    let own = lowered
+    // The program has its own, and the library's are left behind.
+    let kept = lowered
         .functions
         .iter()
         .filter(|function| names.contains(&function.name))
         .collect::<Vec<_>>();
     // A function's name appears in its own record and in each call of
-    // it, and nowhere else: no local of the allocator shares a name with
-    // a function.
-    fn rename(value: &mut serde_json::Value, names: &HashSet<String>) {
+    // it, and nowhere else: no local of a library shares a name with a
+    // function.
+    fn rename(value: &mut serde_json::Value, names: &HashSet<String>, prefix: &str) {
         match value {
             serde_json::Value::String(text) if names.contains(text.as_str()) => {
-                *text = allocator_name(text);
+                *text = format!("{prefix}{text}");
             }
             serde_json::Value::Array(items) => {
-                items.iter_mut().for_each(|item| rename(item, names));
+                items
+                    .iter_mut()
+                    .for_each(|item| rename(item, names, prefix));
             }
             serde_json::Value::Object(fields) => {
-                fields.values_mut().for_each(|item| rename(item, names));
+                fields
+                    .values_mut()
+                    .for_each(|item| rename(item, names, prefix));
             }
             _ => {}
         }
     }
-    let mut value = serde_json::to_value(&own).expect("MIR functions are JSON values");
-    rename(&mut value, &names);
+    let mut value = serde_json::to_value(&kept).expect("MIR functions are JSON values");
+    rename(&mut value, &names, prefix);
     let mut functions: Vec<MirFunction> =
         serde_json::from_value(value).expect("renamed MIR functions read back");
     for function in &mut functions {
-        function.source_path = Some(ALLOCATOR_PATH.to_string());
+        function.source_path = Some(path.to_string());
     }
     functions
 }

@@ -20,7 +20,7 @@ fn object(source: &str, target: FreestandingTarget) -> Vec<u8> {
     )
 }
 
-/// The module the emitter gets for , as JSON text.
+/// The module the emitter gets for `source`, as JSON text.
 fn prepared(source: &str) -> String {
     let module = super::super::freestanding::prepare(&lower(source)).unwrap_or_else(|problems| {
         panic!(
@@ -164,28 +164,112 @@ export "C" def run() -> int64:
         .any(|message| message.contains("matches on an enum value")));
 }
 
+/// Trees, a list, values that hold them, and `try` on results of them.
+const BOXES: &str = include_str!("../../aura/tests/freestanding_boxes.au");
+
 #[test]
-fn an_enum_that_holds_itself_is_still_refused() {
+fn a_type_inside_itself_is_kept_in_a_counted_block_on_every_target() {
+    let module = prepared(BOXES);
+    for made in [
+        "aura::values::value_box_new",
+        "aura::values::box_store::",
+        "aura::values::box_load::",
+        "aura::values::drop_box::",
+        "aura::values::retain::",
+        "aura::values::release::",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    // No lend, enum, or `try` is left for the emitter.
+    for gone in ["\"Lend\"", "\"EndLend\"", "\"Try\"", "\"EnumVariant\""] {
+        assert!(!module.contains(gone), "{gone}");
+    }
+    for target in FreestandingTarget::ALL {
+        object(BOXES, target);
+    }
+}
+
+#[test]
+fn a_program_without_a_type_inside_itself_gets_no_box_functions() {
+    let module = prepared(PLAIN_VALUES);
+    assert!(!module.contains("aura::values::value_box_new"));
+    assert!(!module.contains("aura::values::box_store::"));
+}
+
+#[test]
+fn the_last_variant_of_a_match_needs_no_test() {
     let source = r#"
 enum Chain:
     End
     Link(int64, indirect Chain)
 
-export "C" def run(n: int64) -> int64:
-    chain = Chain.Link(n, Chain.End)
-    match chain:
-        case Chain.Link(value, _):
-            return value
+def first(chain: own Chain) -> int64:
+    match own chain:
         case Chain.End:
             return 0
+        case Chain.Link(value, _):
+            return value
+
+export "C" def run(n: int64) -> int64:
+    return first(Chain.Link(n, Chain.End))
+"#;
+    let module = super::super::freestanding::prepare(&lower(source)).expect("the program builds");
+    let first = module
+        .functions
+        .iter()
+        .find(|function| function.name.ends_with("first"))
+        .expect("the function is there");
+    let branches = first
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, Terminator::Branch { .. }))
+        .count();
+    assert_eq!(branches, 1, "{:?}", first.blocks);
+    object(source, FreestandingTarget::ALL[0]);
+}
+
+#[test]
+fn a_write_to_a_part_that_owns_heap_memory_is_refused() {
+    let source = r#"
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+class Holder:
+    chain: Chain
+    extra: int64
+
+export "C" def run(n: int64) -> int64:
+    mut holder = Holder(chain=Chain.End, extra=n)
+    holder.chain = Chain.Link(1, Chain.End)
+    return holder.extra
 "#;
     let found = refusals(source);
     assert!(
-        found
-            .iter()
-            .any(|message| message.contains("holds `chain` of type `Chain`")),
+        found.iter().any(|message| message
+            == "`run` changes a part of a value that owns heap memory, which a freestanding build cannot compile"),
         "{found:?}"
     );
+}
+
+#[test]
+fn a_union_of_values_that_own_heap_memory_is_refused() {
+    let source = r#"
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+def pick(n: int64) -> (Chain | int64, int64):
+    if n > 0:
+        return (Chain.Link(n, Chain.End), n)
+    return (n, n)
+
+export "C" def run(n: int64) -> int64:
+    both = pick(n)
+    return both[1]
+"#;
+    let found = refusals(source);
+    assert!(!found.is_empty(), "{found:?}");
 }
 
 #[test]

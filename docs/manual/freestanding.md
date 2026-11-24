@@ -62,8 +62,9 @@ else. An export in an imported module is also defined in the object.
 
 ## What A Freestanding Program May Hold
 
-Every value is one or more machine words. No value of the language lives
-on a heap. A program reaches heap memory through addresses: see
+Every value is one or more machine words. Only an enum that holds itself
+lives on a heap: see [Enums That Hold Themselves](#enums-that-hold-themselves).
+A program reaches other heap memory through addresses: see
 [The Heap](#the-heap).
 
 A tuple or an enum whose parts are all available types is available too.
@@ -85,10 +86,10 @@ def read(port: uint64) -> (Reading, uint64):
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
+| Classes whose fields are available types, with methods | Classes that hold a `str` or a collection |
 | `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
-| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types | Enums that hold a union, text, a collection, or an `indirect` payload, and `Lookup` |
+| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union, text, or a collection, and `Lookup` |
 | `T \| None` and other unions of available types | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
 | `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
@@ -108,6 +109,45 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+## Enums That Hold Themselves
+
+An enum may hold itself through an `indirect` payload, which is how a
+program writes a list or a tree:
+
+```aura
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+def sum_of(chain: Chain) -> int64:
+    match chain:
+        case Chain.End:
+            return 0
+        case Chain.Link(value, rest):
+            return value + sum_of(rest)
+
+export "C" def sum_to(n: int64) -> int64:
+    mut chain = Chain.End
+    for i in range(0, n):
+        chain = Chain.Link(i, chain)
+    return sum_of(chain)
+```
+
+Each `indirect` payload lives in a block from the allocation hooks: a
+reference count, then the payload's words. The enum value itself stays in
+machine words and holds the block's address. The compiler counts the
+references, and the program frees a block when its last reference goes, so
+`sum_to` returns with every block freed.
+
+A class, a tuple, or a `Result` may hold such an enum. `match own` moves
+its payloads out, and `try` passes one on in an error.
+
+The program needs a heap: name a region with `mem.heap_add_region` first,
+or define the hooks. See [The Heap](#the-heap). A request the heap turns
+down is a failed assertion, trap code 3.
+
+A program with no such enum allocates nothing and needs no hook.
 
 ## Failed Checks
 
@@ -336,9 +376,13 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- No heap values of the language: no `str`, no collection, and no enum
-  with an `indirect` payload. A program allocates through the
-  [`mem` module](/manual/mem).
+- The only heap values of the language are enums that hold themselves:
+  no `str` and no collection yet. A program allocates other memory
+  through the [`mem` module](/manual/mem).
+- A value that holds such an enum cannot be a member of a union, and a
+  field that holds one cannot be assigned. Build a new value instead.
+- Releasing a long list calls itself once for each link, so a very long
+  list needs stack to match.
 - No inline assembly and no port I/O instructions. Memory-mapped devices
   are reached with the [`mem` module](/manual/mem), and everything else
   through `extern "C"` functions.
