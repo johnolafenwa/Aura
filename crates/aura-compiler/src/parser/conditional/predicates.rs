@@ -5,7 +5,7 @@ pub(super) fn imports_name(import: &ImportDecl, name: &str) -> bool {
     match &import.kind {
         ImportKind::Module { path, alias } => alias
             .as_ref()
-            .or(path.last())
+            .or(path.first())
             .is_some_and(|bound| bound == name),
         ImportKind::From { names, .. } => names
             .iter()
@@ -22,6 +22,7 @@ pub(super) fn build_import(import: &ImportDecl) -> bool {
 }
 
 pub(super) fn evaluate(
+    resolver: &mut Resolver,
     module: &Module,
     tokens: &[Token],
     expression: &Expr,
@@ -36,21 +37,38 @@ pub(super) fn evaluate(
     if names.is_empty() && !declaration {
         return Ok(None);
     }
-    for name in &names {
-        if locals.contains(name) {
+    let mut roots = BTreeSet::new();
+    for reference in &names {
+        let path = reference.split('.').collect::<Vec<_>>();
+        let root = path[0];
+        if locals.contains(root) {
             return Ok(None);
         }
-        if !module.imports.iter().any(|import| {
-            build_import(import) && imports_name(import, name) && is_active(import.span, inactive)
-        }) && !module.constants.iter().any(|binding| {
-            binding.name == *name
+        roots.insert(root.to_owned());
+        if module.constants.iter().any(|binding| {
+            binding.name == root
                 && binding.required
                 && is_active(binding.span, inactive)
                 && (!declaration || binding.span.line < expression.span.line)
         }) {
+            continue;
+        }
+        let mut marked = false;
+        for import in module
+            .imports
+            .iter()
+            .filter(|import| is_active(import.span, inactive))
+        {
+            if resolver.marked(import, &path)? {
+                marked = true;
+                break;
+            }
+        }
+        if !marked {
             return Ok(None);
         }
     }
+    let mut names = roots;
     let mut probe = Module {
         inactive_lines: Vec::new(),
         doc: None,
@@ -127,8 +145,11 @@ pub(super) fn evaluate(
         value: expression.clone(),
         span: expression.span,
     });
-    let program = crate::check_module_with_builtin_imports(probe)?;
-    match program.frozen_constants.get(&format!("<main>::{RESULT}")) {
+    let program = resolver.compile(probe)?;
+    match program
+        .frozen_constants
+        .get(&format!("{}::{RESULT}", program.module_name))
+    {
         Some(FrozenValue::Bool(value)) => Ok(Some(*value)),
         _ => Err(Diagnostic::coded_at(
             "AU2071",
@@ -150,11 +171,26 @@ fn predicate_names(expr: &Expr, names: &mut BTreeSet<String>) -> bool {
         | ExprKind::String(_)
         | ExprKind::Bool(_)
         | ExprKind::DurationNanos(_) => true,
+        ExprKind::Member { object, field } => {
+            let mut parts = vec![field.as_str()];
+            let mut base = object.as_ref();
+            while let ExprKind::Member { object, field } = &base.kind {
+                parts.push(field);
+                base = object;
+            }
+            if let ExprKind::Name(name) = &base.kind {
+                parts.push(name);
+                parts.reverse();
+                names.insert(parts.join("."));
+                true
+            } else {
+                predicate_names(base, names)
+            }
+        }
         ExprKind::Group(value)
         | ExprKind::Unary { expr: value, .. }
         | ExprKind::Cast { expr: value, .. }
-        | ExprKind::IsNone { value, .. }
-        | ExprKind::Member { object: value, .. } => predicate_names(value, names),
+        | ExprKind::IsNone { value, .. } => predicate_names(value, names),
         ExprKind::Binary { left, right, .. }
         | ExprKind::Index {
             object: left,

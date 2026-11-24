@@ -1,17 +1,22 @@
 use super::*;
 
 pub(super) fn select(
+    resolver: &mut Resolver,
     module: &mut Module,
     tokens: &[Token],
     inactive: &mut Vec<Range<usize>>,
 ) -> Result<()> {
     if !module.constants.iter().any(|c| c.required)
-        && !module.imports.iter().any(predicates::build_import)
+        && !module
+            .imports
+            .iter()
+            .any(|import| resolver.potential(import))
     {
         return Ok(());
     }
     let declarations = module.clone();
     let mut selector = Statements {
+        resolver,
         module: &declarations,
         tokens,
         inactive,
@@ -32,13 +37,14 @@ pub(super) fn select(
     selector.block(&mut module.top_level_stmts, BTreeSet::new())
 }
 
-struct Statements<'a> {
+struct Statements<'a, 'loader> {
+    resolver: &'a mut Resolver<'loader>,
     module: &'a Module,
     tokens: &'a [Token],
     inactive: &'a mut Vec<Range<usize>>,
 }
 
-impl Statements<'_> {
+impl Statements<'_, '_> {
     fn block(&mut self, statements: &mut [Stmt], mut locals: BTreeSet<String>) -> Result<()> {
         for statement in statements.iter_mut() {
             match statement {
@@ -96,7 +102,15 @@ impl Statements<'_> {
             let condition = if selected {
                 Some(false)
             } else {
-                predicates::evaluate(self.module, self.tokens, &arm.condition, locals, &[], false)?
+                predicates::evaluate(
+                    self.resolver,
+                    self.module,
+                    self.tokens,
+                    &arm.condition,
+                    locals,
+                    &[],
+                    false,
+                )?
             };
             match condition {
                 Some(false) => {
@@ -167,13 +181,12 @@ impl Statements<'_> {
 
 fn bind_target(target: &BindingTarget, locals: &mut BTreeSet<String>) {
     match target {
-        BindingTarget::Name { name, .. } => {
+        BindingTarget::Name { name, .. } | BindingTarget::Rest { name, .. } => {
             locals.insert(name.clone());
         }
         BindingTarget::Tuple { elements, .. } => elements
             .iter()
             .for_each(|element| bind_target(element, locals)),
-        BindingTarget::Rest { name, .. } => locals.extend(name.iter().cloned()),
     }
 }
 

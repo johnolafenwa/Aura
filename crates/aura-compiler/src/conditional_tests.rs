@@ -30,7 +30,8 @@ fn compile_time_condition_requires_a_boolean() {
 
 #[test]
 fn imported_const_predicates_can_guard_imports() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/check-path-pass/conditional_imported.au");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/check-path-pass/conditional_imported.au");
     let program = crate::check_path(&path).unwrap();
     assert_eq!(program.module.inactive_lines, [5..6, 10..11]);
 }

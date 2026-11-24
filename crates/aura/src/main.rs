@@ -1042,7 +1042,7 @@ fn handle_test_command(args: Vec<String>) {
             }
         };
         let _package = build_options::package_scope(&path, DiagnosticFormat::Human);
-        let syntax = parse_source(&source)
+        let syntax = aura_compiler::parse_path_with_source(&path, &source)
             .expect("a source module that lowered successfully must still parse successfully");
         let checked = std::sync::Arc::new(checked);
 
@@ -6113,7 +6113,7 @@ fn usage_text() -> &'static str {
        or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
        or: aura build -o <output> [--cfg name[=value]] [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
        or: aura build -o <output> [--cfg name[=value]] --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
-       or: aura check --freestanding [--format human|json] <file.au>\n\
+       or: aura check [--freestanding|--all-targets] [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
