@@ -256,6 +256,11 @@ struct Values {
     text: bool,
     /// The element type of each list class, after the rewrite.
     lists: HashMap<String, Type>,
+    /// Each dictionary class.
+    dicts: HashMap<String, dicts::Dict>,
+    /// The lists of keys, values, and entries the program asks a
+    /// dictionary class for.
+    views: HashSet<(String, dicts::View)>,
     /// The functions whose shared parameters stay with the caller.
     borrowing: HashSet<String>,
     /// How each function takes its parameters, with their names.
@@ -272,6 +277,12 @@ impl Values {
             }
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
                 match self.list_class(&args[0]) {
+                    Some(class) => Type::named(&class),
+                    None => ty.clone(),
+                }
+            }
+            Type::Named(name, args) if name == "dict" && args.len() == 2 => {
+                match self.dict_class(&args[0], &args[1]) {
                     Some(class) => Type::named(&class),
                     None => ty.clone(),
                 }
@@ -324,6 +335,38 @@ impl Values {
     /// use: one field, the address of the list's header. Only a list of
     /// scalars has one.
     fn list_class(&mut self, element: &Type) -> Option<String> {
+        let (element, suffix) = self.element(element)?;
+        let element = &element;
+        let name = format!("{LIST_CLASS_PREFIX}{suffix}");
+        if !self.lists.contains_key(&name) {
+            self.lists.insert(name.clone(), element.clone());
+            let class = MirClass {
+                name: name.clone(),
+                type_params: Vec::new(),
+                fields: vec![MirClassField {
+                    name: TEXT_FIELD.to_string(),
+                    ty: Type::named("uint64"),
+                }],
+                methods: Vec::new(),
+                copy: false,
+            };
+            self.classes.insert(name.clone(), class.clone());
+            self.made.push(class);
+            self.boxes.insert(
+                name.clone(),
+                vec![BoxField {
+                    field: TEXT_FIELD.to_string(),
+                    content: Type::Named("list".to_string(), vec![element.clone()]),
+                }],
+            );
+        }
+        Some(name)
+    }
+
+    /// The type a list or a dictionary holds `element` as, and the part
+    /// of a class name that stands for it: a scalar, or a class of words
+    /// with no union in it.
+    fn element(&mut self, element: &Type) -> Option<(Type, String)> {
         let scalar = matches!(
             element,
             Type::Named(name, args) if args.is_empty() && matches!(
@@ -353,30 +396,7 @@ impl Values {
             }
             _ => return None,
         };
-        let name = format!("{LIST_CLASS_PREFIX}{suffix}");
-        if !self.lists.contains_key(&name) {
-            self.lists.insert(name.clone(), element.clone());
-            let class = MirClass {
-                name: name.clone(),
-                type_params: Vec::new(),
-                fields: vec![MirClassField {
-                    name: TEXT_FIELD.to_string(),
-                    ty: Type::named("uint64"),
-                }],
-                methods: Vec::new(),
-                copy: false,
-            };
-            self.classes.insert(name.clone(), class.clone());
-            self.made.push(class);
-            self.boxes.insert(
-                name.clone(),
-                vec![BoxField {
-                    field: TEXT_FIELD.to_string(),
-                    content: Type::Named("list".to_string(), vec![element.clone()]),
-                }],
-            );
-        }
-        Some(name)
+        Some((element.clone(), suffix))
     }
 
     /// Whether a field of a class the pass makes can hold `ty`: a scalar
@@ -653,6 +673,8 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
         next: 1,
         text: false,
         lists: HashMap::new(),
+        dicts: HashMap::new(),
+        views: HashSet::new(),
         borrowing: module.borrowing.iter().cloned().collect(),
         passing: module
             .functions
@@ -680,12 +702,25 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
     for function in &mut module.functions {
         lower_function(function, &mut values, &mut problems);
     }
-    if !values.boxed.is_empty() || values.text || !values.lists.is_empty() {
+    if !values.boxed.is_empty()
+        || values.text
+        || !values.lists.is_empty()
+        || !values.dicts.is_empty()
+    {
+        // The functions of the dictionaries first: one may make a list
+        // class.
+        let of_dicts = dicts::dict_functions(&mut values);
         let mut made = box_functions(&mut values);
+        made.extend(of_dicts);
         // The store and the load of an element. The emitter writes each
         // call, so the bodies only keep the module whole.
         let mut elements = values.lists.values().cloned().collect::<Vec<_>>();
+        for dict in values.dicts.values() {
+            elements.push(dict.key.clone());
+            elements.push(dict.value.clone());
+        }
         elements.sort_by_key(|element| element.to_string());
+        elements.dedup();
         for element in elements {
             let name = element.to_string();
             // A box of the same type has already made the two.
@@ -783,6 +818,16 @@ pub(super) fn lower_plain_values(module: &mut MirModule) -> Vec<Diagnostic> {
                     LIST_PATH,
                 ));
         }
+        if !values.dicts.is_empty() {
+            module
+                .functions
+                .extend(super::freestanding_heap::library_functions(
+                    dicts::DICT_SOURCE,
+                    dicts::DICT_LIBRARY_PREFIX,
+                    FUNCTION_PREFIX,
+                    dicts::DICT_SOURCE_PATH,
+                ));
+        }
         if values.text {
             module
                 .functions
@@ -806,6 +851,11 @@ struct Fresh {
 }
 
 impl Fresh {
+    /// Whether `name` is a temporary this pass made.
+    fn made(&self, name: &str) -> bool {
+        self.locals.iter().any(|local| local.name == name)
+    }
+
     fn local(&mut self, ty: Type) -> String {
         let name = format!("%t{}", self.count);
         self.count += 1;
@@ -1056,6 +1106,16 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
             if listed && whole && projection.is_empty() {
                 loans.insert(loan.clone());
             }
+            // A shared loan of a whole value of a dictionary.
+            let valued = matches!(
+                (place_type(source, &types, values), types.get(loan)),
+                (Some(Type::Named(class, _)), Some(ty))
+                    if values.dicts.get(&class).map(|dict| dict.value.clone())
+                        == Some(values.rewritten(ty))
+            );
+            if valued && projection.is_empty() {
+                loans.insert(loan.clone());
+            }
         }
         // A shared loan of the payload of a union the pass rewrote.
         if let Instruction::BeginLoan {
@@ -1123,6 +1183,12 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                     ..
                 } if loans.contains(&loan) => {
                     let element = types.get(&loan).map(|ty| values.rewritten(ty));
+                    let keyed = match place_type(&source, &types, values) {
+                        Some(Type::Named(class, _)) if values.dicts.contains_key(&class) => {
+                            Some(class)
+                        }
+                        _ => None,
+                    };
                     let address = fresh.local(Type::named("uint64"));
                     current.instructions.push(Instruction::Assign {
                         target: address.clone(),
@@ -1131,17 +1197,29 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                             field: TEXT_FIELD.to_string(),
                         },
                     });
-                    let slot = call(
-                        &mut fresh,
-                        &mut current.instructions,
-                        if checked {
-                            LIST_SLOT.to_string()
-                        } else {
-                            LIST_SLOT_UNCHECKED.to_string()
-                        },
-                        vec![Operand::Place(address), selector],
-                        Type::named("uint64"),
-                    );
+                    let mut after = Vec::new();
+                    let slot = match keyed {
+                        Some(class) => dicts::value_slot(
+                            &class,
+                            &address,
+                            selector,
+                            values,
+                            &mut fresh,
+                            &mut current.instructions,
+                            &mut after,
+                        ),
+                        None => call(
+                            &mut fresh,
+                            &mut current.instructions,
+                            if checked {
+                                LIST_SLOT.to_string()
+                            } else {
+                                LIST_SLOT_UNCHECKED.to_string()
+                            },
+                            vec![Operand::Place(address), selector],
+                            Type::named("uint64"),
+                        ),
+                    };
                     let name = element.map(|ty| ty.to_string()).unwrap_or_default();
                     current.instructions.push(Instruction::Assign {
                         target: loan.clone(),
@@ -1163,6 +1241,7 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                         &mut fresh,
                         &mut current.instructions,
                     );
+                    current.instructions.extend(after);
                 }
                 Instruction::BeginLoan { loan, source, .. } if loans.contains(&loan) => {
                     let (object, field) = source.rsplit_once('.').unwrap_or((&source, ""));
@@ -1248,7 +1327,16 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                     .get(&temp)
                     .is_some_and(|ty| values.rewritten(ty) != *ty) =>
                 {
-                    counted &= !mutable;
+                    // A list or a dictionary is the address of a header
+                    // that never moves, so a change through the copy is a
+                    // change of the part.
+                    let shared = matches!(
+                        types.get(&temp).map(|ty| values.rewritten(ty)),
+                        Some(Type::Named(class, _))
+                            if values.lists.contains_key(&class)
+                                || values.dicts.contains_key(&class)
+                    );
+                    counted &= !mutable || shared;
                     let value = match place.rsplit_once('.') {
                         Some((object, field)) if !field.contains('[') => Rvalue::Member {
                             object: Operand::Place(object.to_string()),
@@ -1323,7 +1411,8 @@ fn lower_function(function: &mut MirFunction, values: &mut Values, problems: &mu
                             | Rvalue::Member { .. }
                             | Rvalue::Call {
                                 callee: CallTarget::Runtime {
-                                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked)
+                                        | RuntimeOp::Dict(crate::runtime_ops::DictOp::Index),
                                     ..
                                 },
                                 ..
@@ -1705,6 +1794,7 @@ fn lower_text(
         value,
         writeback_place: None,
     };
+    let value = dicts::lower_dict(value, types, values, fresh, out, after);
     match value {
         Rvalue::VecLiteral {
             elements,
@@ -1987,6 +2077,41 @@ fn lower_text(
                         trap: Default::default(),
                     }
                 }
+            }
+        }
+        // A clone of a text is one more reference to its block, which
+        // nothing changes.
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::Value(crate::runtime_ops::ValueOp::Clone),
+                    receiver: Some(Operand::Place(receiver)),
+                    ..
+                },
+            ref args,
+            ..
+        } if args.is_empty() && is_text(&Operand::Place(receiver.clone()), types, values) => {
+            let address = fresh.local(word());
+            out.push(Instruction::Assign {
+                target: address.clone(),
+                value: Rvalue::Member {
+                    object: Operand::Place(receiver),
+                    field: TEXT_FIELD.to_string(),
+                },
+            });
+            call(
+                fresh,
+                out,
+                BOX_RETAIN.to_string(),
+                vec![Operand::Place(address.clone())],
+                Type::Unit,
+            );
+            Rvalue::Construct {
+                class_name: values.text_class().to_string(),
+                fields: vec![MirFieldInit {
+                    name: TEXT_FIELD.to_string(),
+                    value: Operand::Place(address),
+                }],
             }
         }
         Rvalue::Call {
@@ -3003,6 +3128,8 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
                             BOX_RETAIN.to_string()
                         } else if class == TEXT_CLASS {
                             TEXT_RELEASE.to_string()
+                        } else if values.dicts.contains_key(&class) {
+                            class_function(dicts::DROP_DICT, &class)
                         } else if let Some(element) = values.lists.get(&class).cloned() {
                             match &element {
                                 Type::Named(inner, _) if values.holds_a_box(inner) => {
@@ -3281,6 +3408,9 @@ impl FunctionCompiler<'_> {
         Ok(None)
     }
 }
+
+#[path = "native_codegen_freestanding_dicts.rs"]
+mod dicts;
 
 #[cfg(test)]
 #[path = "native_codegen_freestanding_values_tests.rs"]

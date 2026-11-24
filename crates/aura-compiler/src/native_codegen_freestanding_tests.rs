@@ -683,7 +683,7 @@ fn values_that_need_the_runtime_are_reported_by_construct() {
         ("    print(count)\n    return count\n", "calls `print`"),
         ("    return 2 ** count\n", "uses `**`"),
         (
-            "    pair = (count, {\"a\": count})\n    return pair[0]\n",
+            "    pair = (count, {1.5: count})\n    return pair[0]\n",
             "uses a tuple",
         ),
         (

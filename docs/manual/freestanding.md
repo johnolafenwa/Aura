@@ -63,8 +63,8 @@ else. An export in an imported module is also defined in the object.
 ## What A Freestanding Program May Hold
 
 Every value is one or more machine words. Three kinds of value also own
-blocks on a heap: text, lists, and an enum that holds itself.
-See [Text](#text), [Lists](#lists), and
+blocks on a heap: text, lists, dictionaries, and an enum that holds
+itself. See [Text](#text), [Lists](#lists), [Dictionaries](#dictionaries), and
 [Enums That Hold Themselves](#enums-that-hold-themselves).
 A program reaches other heap memory through addresses: see
 [The Heap](#the-heap).
@@ -88,10 +88,11 @@ def read(port: uint64) -> (Reading, uint64):
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a `dict` or a `set` |
+| Classes whose fields are available types, with methods | Classes that hold a `set` |
 | `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
 | `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
-| `extern "C"` classes | `dict`, `set`, `Array` |
+| `dict` with `int64`, `uint64`, or `str` keys and any value a list may hold, with literals, `d[key]`, `d[key] = value`, `key in d`, `len`, `is_empty`, `keys`, `values`, `items`, and `clear` | Other key types, `get`, `remove`, and the other `dict` methods |
+| `extern "C"` classes | `set`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
 | `T \| None` and other unions of available types, `str \| None` among them | Unions that hold any other type |
@@ -202,6 +203,42 @@ class, a tuple, or an enum.
 
 An index outside the list is a failed assertion in
 `aura/freestanding_list.au`, trap code 3.
+
+## Dictionaries
+
+A freestanding program holds dictionaries whose keys are `int64`,
+`uint64`, or `str`. A value is anything a list may hold.
+
+```aura
+def count_words(words: list[str]) -> dict[str, int64]:
+    mut counts: dict[str, int64] = {}
+    for word in words:
+        if word in counts:
+            seen = counts[word]
+            counts[word.clone()] = seen + 1
+        else:
+            counts[word.clone()] = 1
+    return counts
+
+export "C" def repeats() -> int64:
+    counts = count_words(["to", "be", "or", "not", "to", "be"])
+    return counts["to"] + counts.len()
+```
+
+A dictionary is a header block from the allocation hooks, a buffer of
+entries in the order they were added, and an index of the entries by
+hash. Both buffers double when they are full. The compiler frees all
+three with the dictionary's last reference, after it releases what each
+key and each value owns.
+
+Available: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+`is_empty`, `keys`, `values`, `items`, `clear`, and `view value =
+d[key]`. `keys`, `values`, and `items` return lists, so `for (key, value)
+in d.items()` runs in the order the keys were added. `get` and `remove`
+are not available yet, because they return a `Lookup`.
+
+`d[key]` for a key the dictionary does not hold is a failed assertion in
+`aura/freestanding_dict.au`, trap code 3.
 
 ## Enums That Hold Themselves
 
@@ -469,8 +506,9 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 
 ## Current Limits
 
-- The heap values of the language are `str`, lists, and enums that hold
-  themselves: no `dict` and no `set` yet. A program allocates other memory
+- The heap values of the language are `str`, lists, dictionaries, and
+  enums that hold themselves: no `set` yet, and a dictionary has no
+  `get` and no `remove`. A program allocates other memory
   through the [`mem` module](/manual/mem).
 - Text has no indexing or slices, an f-string takes no float and no
   format spec.

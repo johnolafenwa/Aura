@@ -138,6 +138,34 @@ count, and a way to drop what the block holds.
   reference, released where the loan ends. A read through a loan is one
   more reference.
 
+## Dictionaries
+
+- **A `dict[K, V]` is a class of one word, the address of a header
+  block.** The library `std/freestanding_dict.au` keeps the entries in
+  the order they were added, each a hash word, the key's words, and the
+  value's words, and an open-addressing index of entry numbers by hash.
+  A removed entry keeps its place with a hash word of 0 until the
+  entries next grow.
+- **A key is an `int64`, a `uint64`, or a `str`.** The header holds the
+  kind, and the library compares a key as one word or as the bytes of a
+  text. A value is whatever a list element may be.
+- **The library moves words. What depends on the types is made in MIR
+  for each dictionary class:** `dict_slot` finds the entry of a key,
+  `dict_set` writes over a value or adds an entry, `dict_keys`,
+  `dict_values`, and `dict_items` build lists, and `clear_dict` and
+  `drop_dict` release what the keys and the values own.
+- **A read is a new reference, as with a list.** `d[key]` and a shared
+  loan of a whole value load the value and retain what it owns.
+- **A mutable lend of a list or a dictionary in a field is a copy with
+  a reference.** The value is the address of a header that never moves,
+  so a change through the copy is a change of the field.
+- **`clone` of a text is one more reference to its block.**
+- The hash of an integer is a multiplication and a fold, and of a text
+  FNV-1a. A freestanding program has no multiplication that wraps, so
+  the library multiplies by halves.
+- `get` and `remove` return a `Lookup`, which the pass does not rewrite
+  yet. Other key types and the other methods are refused.
+
 ## Consequences
 
 - A freestanding program builds lists and trees from enums, holds them in

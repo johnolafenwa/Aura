@@ -228,6 +228,7 @@ fn a_program_without_text_gets_no_text_library() {
         assert!(!module.contains("value_text_"));
         assert!(!module.contains("aura::values::str"));
         assert!(!module.contains("value_list_"));
+        assert!(!module.contains("value_dict_"));
     }
 }
 
@@ -308,6 +309,48 @@ fn list_methods_become_calls_of_the_list_library_on_every_target() {
     assert!(!module.contains("\"List\""));
     for target in FreestandingTarget::ALL {
         object(source, target);
+    }
+}
+
+#[test]
+fn a_dictionary_becomes_calls_of_the_dictionary_library_on_every_target() {
+    let source = include_str!("../../aura/tests/freestanding_dict.au");
+    let module = prepared(source);
+    for made in [
+        "aura::values::dict::str::int64",
+        "aura::values::dict::int64::str",
+        "aura::values::dict::str::list::int64",
+        "aura::values::value_dict_find",
+        "aura::values::value_dict_add",
+        "aura::values::dict_slot::dict::str::int64",
+        "aura::values::dict_set::dict::int64::str",
+        "aura::values::dict_keys::dict::str::int64",
+        "aura::values::dict_values::dict::str::int64",
+        "aura::values::dict_items::dict::str::int64",
+        "aura::values::clear_dict::dict::uint64::int64",
+        "aura::values::drop_dict::dict::str::list::int64",
+    ] {
+        assert!(module.contains(made), "{made}");
+    }
+    // A dictionary gets only the lists the program asks it for.
+    assert!(!module.contains("aura::values::dict_keys::dict::int64::str"));
+    for gone in ["MapLiteral", "\"Dict\"", "BeginElementLoan"] {
+        assert!(!module.contains(gone), "{gone}");
+    }
+    for target in FreestandingTarget::ALL {
+        object(source, target);
+    }
+}
+
+#[test]
+fn a_dictionary_with_another_key_type_or_method_is_still_refused() {
+    for body in [
+        "    scores = {1.5: n}\n    return scores.len()\n",
+        "    mut ages = {\"a\": n}\n    ages.remove(\"a\")\n    return ages.len()\n",
+    ] {
+        let source = format!("export \"C\" def run(n: int64) -> int64:\n{body}");
+        let found = refusals(&source);
+        assert!(!found.is_empty(), "{body}");
     }
 }
 

@@ -614,6 +614,21 @@ fn list_methods_compute_what_the_hosted_program_prints_and_free_every_block() {
     );
 }
 
+/// A dictionary keeps its entries in a hash table written in Aura and
+/// releases what its keys and its values own.
+#[test]
+fn dictionaries_compute_what_the_hosted_program_prints_and_free_every_block() {
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    blocks_are_all_freed(
+        compiler,
+        include_str!("freestanding_dict.au"),
+        "entry",
+        "41207485\n",
+    );
+}
+
 /// An index outside a list stops the program through the trap hook.
 #[test]
 fn a_list_index_out_of_range_calls_the_trap_hook() {

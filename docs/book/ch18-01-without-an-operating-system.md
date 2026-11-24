@@ -48,8 +48,8 @@ a freestanding program is made of: fixed-width integers and floats, classes
 of them, tuples and enums of them, `T | None`, functions, generics,
 traits, loops, `match`, `assert`, and contracts.
 
-Most of the values Aura keeps on the heap for you are out:
-dictionaries, sets, closures, tasks. Three kinds are in. A list
+Some of the values Aura keeps on the heap for you are out:
+sets, closures, tasks. Four kinds are in. A dictionary works, with text or integer keys. A list
 works, of numbers, text, classes, enums, or other lists, with `append`, indexing, and `for`. A `str` works, with `+`, comparisons, and a few methods, so a kernel
 can build a message and hand it to its console. And an enum may hold
 itself through an `indirect` payload, so you can write a linked list or a
@@ -270,7 +270,7 @@ output is the same.
 
 This is the first step toward systems work in Aura, and it is honest to
 say where it stops. The heap holds blocks of bytes, text, lists, and the nodes of
-enums that hold themselves: there are no dictionaries or sets yet,
+enums that hold themselves, and dictionaries: there are no sets yet,
 and text cannot format a float. There is no inline assembly, so startup code and x86 port
 I/O stay in an assembly file. State that outlives a function call has to
 live at an address you manage through `mem`, where `aura verify` cannot

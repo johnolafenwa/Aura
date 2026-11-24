@@ -22,6 +22,11 @@ in this file.
   with `match` and `try` on them. The compiler keeps each in machine words with no
   heap. An enum that holds a collection or a union is still reported as
   `AU2052`.
+- Freestanding builds compile dictionaries with `int64`, `uint64`, or
+  `str` keys: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+  `is_empty`, `keys`, `values`, `items`, and `clear`. The hash table is
+  written in Aura and keeps the order the keys were added in. `clone` of
+  a text is available too.
 - Freestanding builds compile unions of values that own heap memory,
   such as `str | None` and `list[int64] | None`, as locals, parameters,
   results, fields, and list elements, with `is None` and `match` on them.
