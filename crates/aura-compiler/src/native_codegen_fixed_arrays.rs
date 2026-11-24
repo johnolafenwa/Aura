@@ -247,6 +247,11 @@ impl FunctionCompiler<'_> {
         let mut ty = self.variable_types.get(root)?.clone();
         let mut start = 0;
         for field in path {
+            // A tagged union stores consecutive payload words as distinct
+            // native variables. Its narrowed value must first be unpacked.
+            if matches!(ty, DirectType::Union(_)) {
+                return None;
+            }
             let (offset, _, member) = ty.field_slice(field)?;
             start += offset;
             ty = member;
@@ -552,4 +557,83 @@ impl FunctionCompiler<'_> {
             ty: DirectType::Fixed(layout),
         })
     }
+}
+
+/// The tagged union calling convention uses 64-bit words. Inline leaves
+/// occupy as many consecutive words as their complete payload requires.
+pub(super) fn union_member_words(ty: &DirectType) -> Option<usize> {
+    let abi = ty.abi_types();
+    abi.iter()
+        .any(|s| matches!(s, ScalarType::Inline { .. }))
+        .then(|| {
+            abi.iter()
+                .map(|s| match s {
+                    ScalarType::Inline { bytes, .. } => bytes.div_ceil(8) as usize,
+                    _ => 1,
+                })
+                .sum()
+        })
+}
+
+fn word_slot(builder: &mut dyn FunctionBackend, bytes: u32, align: u8) -> Val {
+    let slot = builder.create_sized_stack_slot(
+        bytes.next_multiple_of(8),
+        align.max(8).trailing_zeros() as u8,
+    );
+    builder.stack_addr(types::I64, slot, 0)
+}
+
+pub(super) fn pack_union_member(
+    builder: &mut dyn FunctionBackend,
+    union: &DirectUnionType,
+    index: usize,
+    member: &DirectType,
+    values: &[Val],
+) -> Option<Vec<Val>> {
+    union_member_words(member)?;
+    let mut words = vec![builder.iconst(types::I64, index as i64)];
+    let zero = builder.iconst(types::I64, 0);
+    for (&value, abi) in values.iter().zip(member.abi_types()) {
+        match abi {
+            ScalarType::Inline { bytes, align } => {
+                let base = word_slot(builder, bytes, align);
+                if !bytes.is_multiple_of(8) {
+                    builder.store(MemFlags::trusted(), zero, base, (bytes / 8 * 8) as i32);
+                }
+                builder.store(MemFlags::trusted(), value, base, 0);
+                for offset in (0..bytes).step_by(8) {
+                    words.push(builder.load(types::I64, MemFlags::trusted(), base, offset as i32));
+                }
+            }
+            ScalarType::F64 => words.push(builder.bitcast(types::I64, value)),
+            _ => words.push(value),
+        }
+    }
+    words.resize(union.payload_words + 1, zero);
+    Some(words)
+}
+
+pub(super) fn unpack_union_member(
+    builder: &mut dyn FunctionBackend,
+    member: &DirectType,
+    words: &[Val],
+) -> Option<Vec<Val>> {
+    union_member_words(member)?;
+    let mut words = words.iter().copied();
+    let mut values = Vec::new();
+    for abi in member.abi_types() {
+        let value = match abi {
+            ScalarType::Inline { bytes, align } => {
+                let base = word_slot(builder, bytes, align);
+                for offset in (0..bytes).step_by(8) {
+                    builder.store(MemFlags::trusted(), words.next()?, base, offset as i32);
+                }
+                builder.load(abi, MemFlags::trusted(), base, 0)
+            }
+            ScalarType::F64 => builder.bitcast(types::F64, words.next()?),
+            _ => words.next()?,
+        };
+        values.push(value);
+    }
+    Some(values)
 }

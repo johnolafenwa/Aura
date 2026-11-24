@@ -1048,7 +1048,9 @@ export "C" def reset(code: uint16) -> uint32:
         let (global, _, undefined) = symbols(&object(source, target));
         assert!(global.iter().any(|name| name == "reset"));
         assert!(undefined.iter().any(|name| name == "advance"));
-        assert!(undefined.iter().all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
+        assert!(undefined
+            .iter()
+            .all(|name| ["advance", TRAP_HOOK].contains(&name.as_str())));
     }
 }
 
@@ -1103,4 +1105,22 @@ fn fixed_array_updates_do_not_copy_the_entire_ring() {
     // The loop needs one indexed load and store. Copying every lane
     // into and out of scratch storage produced 814 bytes on x86-64.
     assert!(ring.size() < 400, "ring_mix grew to {} bytes", ring.size());
+}
+
+#[test]
+fn fixed_array_union_members_store_every_word_and_partial_tail() {
+    let source = r#"
+def last(row: fixed[uint16, 9] | None) -> uint16:
+    if row is not None:
+        return row[8]
+    return 0
+
+export "C" def sample(value: uint16) -> uint16:
+    row: fixed[uint16, 9] = [value] * 9
+    return last(row)
+"#;
+    for target in TARGETS {
+        let (_, _, undefined) = symbols(&object(source, target));
+        assert!(undefined.is_empty(), "{undefined:?}");
+    }
 }
