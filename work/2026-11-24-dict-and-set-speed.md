@@ -41,6 +41,14 @@ Nine operation probes were added (`benchmarks/operation_probes`, plan step
   the dict. The fixture `dict_entry_loops_walk_a_snapshot.au` writes to
   and removes from the dict inside each kind of loop.
 
+- `str` keys read from a list (second pull request): `keys[i] in table`,
+  `keys[i] in seen` and `table.get(keys[i])` copied the element into a new
+  box for the lookup and released it after. Native code now reads the
+  element's bytes where the list holds them and the runtime hashes and
+  compares those. A list that has no `str` view takes the copy as before.
+  The recognizer for membership tests is `native_codegen_str_keys.rs`, and
+  the fixture is `dict_str_keys_lent_from_a_list.au`.
+
 The loop recognizer is `native_codegen_entry_loops.rs`. It keeps the list
 when anything else uses it, or when a key or value could share storage
 with the dict (a list, a class, a tuple).
@@ -52,10 +60,11 @@ Instructions per operation, release `aura`, Linux x86-64:
 | operation | Rust | before | after |
 | --- | ---: | ---: | ---: |
 | `dict_remove` | 202.6 | 2,030.0 | 524.3 |
+| `dict_get_str` | 242.9 | 1,222.0 | 785.7 |
 | `dict_insert_int` | 455.4 | 686.0 | 513.5 |
-| `dict_count_str` | 254.9 | 1,976.0 | 1,829.8 |
-| `dict_contains_str` | 233.8 | 1,050.0 | 985.1 |
-| `set_contains_str` | 232.3 | 1,087.0 | 995.5 |
+| `dict_count_str` | 254.9 | 1,976.0 | 1,382.6 |
+| `dict_contains_str` | 233.8 | 1,050.0 | 334.0 |
+| `set_contains_str` | 232.3 | 1,087.0 | 334.7 |
 | `set_contains_int` | 193.9 | 284.0 | 255.0 |
 | `dict_items_loop` | 16.5 | 4,046.0 | 252.2 |
 
@@ -74,15 +83,15 @@ in 205 ms, Rust in 18 ms and Aura in 55 ms (64 ms before); for
 
 ## Verification
 
-Every run-pass fixture with expected output (914) was built with the
+Every run-pass fixture with expected output (915) was built with the
 native backend and printed what the interpreter prints. The remove fixture
 ran clean under valgrind.
 
 ## What is left
 
-- A `str` key read from a list, a view or a field is copied before the
-  lookup. This is most of what `dict_get_str`, `dict_count_str`,
-  `dict_contains_str` and `set_contains_str` still cost over Rust.
+- The counting idiom on a key viewed from a list (`view key = keys[i]`,
+  then `match mut table.lookup(key)`) still copies the key once and probes
+  twice. A `str` key read from a field or a slice is still copied.
 - A scalar value read from a dict comes back boxed (`dict_get_int`, 4.2x).
   The thread on boxes owns that.
 - Entry loops call the runtime twice per entry, and copy each `str` key.

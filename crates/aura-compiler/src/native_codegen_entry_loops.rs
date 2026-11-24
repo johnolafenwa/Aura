@@ -104,7 +104,7 @@ fn runtime_call(value: &Rvalue) -> Option<(RuntimeOp, &str, &[crate::mir::MirArg
 }
 
 /// The roots `instruction` names, as targets, operands, or places it reads.
-fn mentioned_roots(instruction: &Instruction) -> HashSet<&str> {
+pub(super) fn mentioned_roots(instruction: &Instruction) -> HashSet<&str> {
     let mut mentions = Vec::new();
     instruction_place_mentions(instruction, &mut mentions);
     let mut roots = mentions.into_iter().map(root).collect::<HashSet<_>>();

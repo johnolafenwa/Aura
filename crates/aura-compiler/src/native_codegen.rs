@@ -2408,6 +2408,31 @@ impl<'a> NativeCodegen<'a> {
             key_loops.insert(list, (key_loop, at, next));
         }
         let dropped_removes = lookups::dropped_removes(function, &lookup_slots);
+        let is_named = |place: &str, names: &[&str], args: Option<&str>| {
+            matches!(
+                variable_types.get(place),
+                Some(DirectType::Opaque(Type::Named(name, type_args)))
+                    if names.contains(&name.as_str())
+                        && args.is_none_or(|arg| {
+                            matches!(type_args.as_slice(), [Type::Named(element, inner)]
+                                if element == arg && inner.is_empty())
+                        })
+            )
+        };
+        let mut str_key_tests = str_keys::str_key_tests(function);
+        str_key_tests.retain(|_, test| {
+            let receiver = if test.set { "set" } else { "dict" };
+            let from_str_list = match &test.source {
+                str_keys::StrKeySource::Element { list, .. } => {
+                    is_named(list, &["list"], Some("str"))
+                }
+                str_keys::StrKeySource::Loan(_) => true,
+            };
+            from_str_list
+                && is_named(&test.receiver, &[receiver], None)
+                && !fused_entry_probes.contains_key(&test.test)
+                && !lookup_slots.contains(&test.test)
+        });
         let mut entry_loops = HashMap::new();
         let mut entry_loop_tuples = HashMap::new();
         let mut walked =
@@ -2639,6 +2664,8 @@ impl<'a> NativeCodegen<'a> {
             key_loops,
             key_loop_keys,
             entry_loops,
+            str_key_tests,
+            pending_str_key: None,
             entry_loop_tuples,
             entry_snapshot: false,
             dropped_removes,
@@ -4204,6 +4231,12 @@ struct FunctionCompiler<'a> {
     /// of its entries instead (see `entry_loops`), by the list they make no
     /// more, with the slot the walk is at and the slot it goes on from.
     entry_loops: HashMap<String, (entry_loops::EntryLoop, Var, Var)>,
+    /// The membership tests on a `str` key copied from a list for the test
+    /// alone (see `str_keys`), by the key's temporary.
+    str_key_tests: HashMap<String, str_keys::StrKeyTest>,
+    /// The key of the test of `str_key_tests` being compiled, read in
+    /// place, from its copy to its release.
+    pending_str_key: Option<(String, str_keys::LentStrKey)>,
     /// The tuple local of each `items` loop of `entry_loops`, with its
     /// list. The tuple is never made.
     entry_loop_tuples: HashMap<String, String>,
@@ -5879,6 +5912,19 @@ impl<'a> FunctionCompiler<'a> {
                 if self.compile_key_loop_assign(target, value)? => {}
             Instruction::Assign { target, value }
                 if self.compile_entry_loop_assign(target, value)? => {}
+            // A `str` key copied from a list for one membership test is
+            // looked up where the list holds it (see `str_keys`).
+            Instruction::Assign { target, .. } | Instruction::ReadLoan { target, .. }
+                if self.begin_str_key_test(target)? => {}
+            Instruction::Assign { target, .. } if self.compile_str_key_test(target)? => {}
+            Instruction::Release { place }
+                if self
+                    .pending_str_key
+                    .as_ref()
+                    .is_some_and(|(key, _)| key == place) =>
+            {
+                self.pending_str_key = None;
+            }
             // The tuple of a walk by entry is never made.
             Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
             Instruction::Assign { target, value }
@@ -18026,6 +18072,14 @@ impl<'a> FunctionCompiler<'a> {
             DictOp::IsEmpty | DictOp::ContainsKey => {
                 let mut words = vec![map];
                 if let Some(key) = args.first() {
+                    if let Some(lent) = self.lent_str_key(&key.value)? {
+                        let in_place = self.runtime[RuntimeFn::MapContainsStr];
+                        let found = self.call_with_lent_str_key(lent, map, in_place, function);
+                        return Ok(ValueRef {
+                            values: vec![found],
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        });
+                    }
                     let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                     words.push(key.values[0]);
                 }
@@ -18067,6 +18121,39 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(self.runtime[remove], &[map, key]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(self.owned_opaque_result(results, optional_type(value_ty)))
+            }
+            DictOp::Get if self.borrowed_list_element(&args[0].value).is_some() => {
+                let key = match self.lent_str_key(&args[0].value)? {
+                    Some(lent) => Err(lent),
+                    None => Ok(self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?),
+                };
+                let boxed = match (self.lookup_payload, self.lend_lookup && in_place) {
+                    (Some(false), true) => self.runtime[RuntimeFn::MapGetLent],
+                    (Some(false), false) => self.runtime[RuntimeFn::MapGetPayload],
+                    _ => function,
+                };
+                let found = match key {
+                    // A `str` key lent from a list is looked up where it lies.
+                    Err(lent) => {
+                        let in_place = self.lookup_function(
+                            self.runtime[RuntimeFn::MapGetStr],
+                            RuntimeFn::MapGetStrPayload,
+                            RuntimeFn::MapGetStrLent,
+                            in_place,
+                        );
+                        self.call_with_lent_str_key(lent, map, in_place, boxed)
+                    }
+                    Ok(key) => {
+                        let function = self.lookup_function(
+                            function,
+                            RuntimeFn::MapGetPayload,
+                            RuntimeFn::MapGetLent,
+                            in_place,
+                        );
+                        self.runtime_call_results(function, &[map, key.values[0]])[0]
+                    }
+                };
+                Ok(self.owned_opaque_result(vec![found], optional_type(value_ty)))
             }
             DictOp::Get | DictOp::Remove => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
@@ -18215,6 +18302,25 @@ impl<'a> FunctionCompiler<'a> {
                 values: self.runtime_call_results(function, &[set]),
                 ty: DirectType::Scalar(ScalarKind::Bool),
             }),
+            SetOp::Contains if self.borrowed_list_element(&args[0].value).is_some() => {
+                let found = match self.lent_str_key(&args[0].value)? {
+                    // A `str` needle lent from a list is looked up where it
+                    // lies.
+                    Some(lent) => {
+                        let in_place = self.runtime[RuntimeFn::SetContainsStr];
+                        self.call_with_lent_str_key(lent, set, in_place, function)
+                    }
+                    None => {
+                        let value =
+                            self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                        self.runtime_call_results(function, &[set, value.values[0]])[0]
+                    }
+                };
+                Ok(ValueRef {
+                    values: vec![found],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
             SetOp::Contains | SetOp::ContainsInt64 => {
                 let loaded = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(loaded, &element_direct_ty)?;
@@ -22631,6 +22737,8 @@ mod ordered;
 mod plain;
 #[path = "native_codegen_shapes.rs"]
 mod shapes;
+#[path = "native_codegen_str_keys.rs"]
+mod str_keys;
 #[path = "native_codegen_sync.rs"]
 mod sync;
 

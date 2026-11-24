@@ -223,20 +223,21 @@ second is after the dict work recorded in
 | operation | count | Rust instr/op | Aura at `6642a7c` | Aura | Aura/Rust |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `dict_remove` | 2,000 | 202.6 | 2,030.0 | 524.3 | 2.6x |
-| `dict_get_str` | 100,000 | 242.9 | 1,222.0 | 1,219.0 | 5.0x |
+| `dict_get_str` | 100,000 | 242.9 | 1,222.0 | 785.7 | 3.2x |
 | `dict_get_int` | 100,000 | 197.0 | 846.0 | 820.0 | 4.2x |
 | `dict_set_int` | 100,000 | 204.2 | 368.0 | 364.1 | 1.8x |
 | `dict_insert_int` | 100,000 | 455.4 | 686.0 | 513.5 | 1.1x |
-| `dict_count_str` | 100,000 | 254.9 | 1,976.0 | 1,829.8 | 7.2x |
-| `dict_contains_str` | 100,000 | 233.8 | 1,050.0 | 985.1 | 4.2x |
+| `dict_count_str` | 100,000 | 254.9 | 1,976.0 | 1,382.6 | 5.4x |
+| `dict_contains_str` | 100,000 | 233.8 | 1,050.0 | 334.0 | 1.4x |
 | `set_add_int` | 100,000 | 316.8 | 386.0 | 394.1 | 1.2x |
 | `set_contains_int` | 100,000 | 193.9 | 284.0 | 255.0 | 1.3x |
-| `set_contains_str` | 100,000 | 232.3 | 1,087.0 | 995.5 | 4.3x |
+| `set_contains_str` | 100,000 | 232.3 | 1,087.0 | 334.7 | 1.4x |
 | `dict_items_loop` | 100,000 | 16.5 | 4,046.0 | 252.2 | 15.3x |
 
 Hashing a key and finding its entry cost about what they cost in Rust:
 both use SipHash-1-3 and the same table. What is left is around the
-lookup. A `str` key read from a list is copied into a box before the
-lookup and released after it, which is most of the four `str` rows. The
-value `dict_get_int` reads comes back in a box. Each entry of
-`dict_items_loop` is two calls into the runtime.
+lookup. A `str` key read from a list is looked up where the list holds
+it, so a membership test costs 1.4 times Rust. The value `dict_get_str`
+and `dict_get_int` read comes back in a box, and `dict_count_str` still
+copies its key once and probes twice. Each entry of `dict_items_loop` is
+two calls into the runtime.

@@ -15968,6 +15968,45 @@ def main():
 }
 
 #[test]
+fn str_keys_read_from_a_list_are_looked_up_in_place() {
+    let source = r#"
+def main():
+    keys = ["a", "b"]
+    mut table: dict[str, int64] = {}
+    table["a"] = 1
+    mut seen = set[str]()
+    seen.add("b")
+    mut total = 0
+    for i in range(len(keys)):
+        if keys[i] in table:
+            total += 1
+        if keys[i] in seen:
+            total += 10
+        match table.get(keys[i]):
+            case Lookup.Found(count):
+                total += count
+            case Lookup.Missing:
+                pass
+    print(total)
+"#;
+    let mir = lower_source_to_mir(source).expect("the lookups should lower");
+    let object = emit_host_object(&mir).expect("the lookups should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_map_contains_str",
+        "aura_direct_set_contains_str",
+        "aura_direct_map_get_str_payload",
+        "aura_direct_vec_str_element",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    assert!(
+        !referenced.contains("aura_direct_string_from_view"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
 fn a_loop_over_entries_that_share_storage_makes_its_list() {
     let source = r#"
 def main():

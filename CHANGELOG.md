@@ -12,6 +12,9 @@ in this file.
   over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`
   keys and values walks the dict and makes no list: one entry of an
   `items()` loop went from about 4,000 instructions to about 250.
+- Speed: a `str` read from a list only to be looked up, as in
+  `words[i] in seen` or `table.get(words[i])`, is no longer copied first.
+  A membership test takes about a third of the instructions.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

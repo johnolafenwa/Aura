@@ -12902,6 +12902,21 @@ pub extern "C-unwind" fn aura_direct_map_contains_int64(map: *mut OpaqueValue, k
     })
 }
 
+/// `aura_direct_map_contains_key` for a `str` key generated code reads in
+/// place as `key_len` bytes at `key_ptr`, which is hashed and compared
+/// without a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_contains_str(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        i64::from(with_map(map, |map| map.entries.position_str(key).is_some()))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
@@ -14092,6 +14107,23 @@ pub extern "C-unwind" fn aura_direct_set_contains_int64(set: *mut OpaqueValue, v
     task_runtime_boundary(|| {
         i64::from(with_set(set, |set| {
             set.elements.position_i64(value).is_some()
+        }))
+    })
+}
+
+/// `aura_direct_set_contains` for a `str` needle generated code reads in
+/// place as `len` bytes at `ptr`, which is hashed and compared without a
+/// box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_contains_str(
+    set: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let needle = literal_str(ptr, len);
+        i64::from(with_set(set, |set| {
+            set.elements.position_str(needle).is_some()
         }))
     })
 }

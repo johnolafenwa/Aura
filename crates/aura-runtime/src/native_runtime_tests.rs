@@ -27845,6 +27845,36 @@ fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
 }
 
 #[test]
+fn direct_str_membership_agrees_with_boxed_membership() {
+    let map = string_map(&[("age", "41"), ("clé", "x"), ("", "empty")]);
+    let set = super::aura_direct_set_empty();
+    for element in ["age", "ключ", ""] {
+        super::aura_direct_set_insert_in_place(set, string_value(element));
+    }
+    for key in ["age", "clé", "", "ключ", "missing", "ag", "agee"] {
+        let boxed = string_value(key);
+        assert_eq!(
+            super::aura_direct_map_contains_str(map, key.as_ptr(), key.len()),
+            super::aura_direct_map_contains_key(map, boxed),
+            "dict has `{key}`"
+        );
+        assert_eq!(
+            super::aura_direct_set_contains_str(set, key.as_ptr(), key.len()),
+            super::aura_direct_set_contains(set, boxed),
+            "set has `{key}`"
+        );
+    }
+    assert_eq!(
+        super::aura_direct_map_contains_str(map, "age".as_ptr(), 3),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_set_contains_str(set, "clé".as_ptr(), 4),
+        0
+    );
+}
+
+#[test]
 fn direct_map_remove_payload_agrees_with_remove() {
     let entries = [("age", "41"), ("city", "Lagos"), ("name", "Ada")];
     let with_lookup = string_map(&entries);
