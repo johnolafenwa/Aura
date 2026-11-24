@@ -540,6 +540,22 @@ fn element_plain_mut_call(n: i64, run: bool) -> i64 {
     tallies[n as usize - 1].count
 }
 
+fn dict_index_str(n: i64, run: bool) -> i64 {
+    let mut keys: Vec<String> = Vec::new();
+    let mut table: HashMap<String, i64> = HashMap::new();
+    for i in 0..1000 {
+        keys.push(format!("key{i}"));
+        table.insert(format!("key{i}"), i);
+    }
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            total += table[&keys[(i % 1000) as usize]];
+        }
+    }
+    total
+}
+
 fn checked_scale(i: i64) -> Result<i64, i64> {
     if i % 16 == 15 {
         return Err(i);
@@ -598,6 +614,7 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "trait_object_call" => trait_object_call(n, run),
         "element_mut_call" => element_mut_call(n, run),
         "element_plain_mut_call" => element_plain_mut_call(n, run),
+        "dict_index_str" => dict_index_str(n, run),
         "result_call" => result_call(n, run),
         _ => -1,
     }
