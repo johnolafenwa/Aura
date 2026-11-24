@@ -21,6 +21,7 @@ pub mod c_layout;
 pub mod c_values;
 pub mod collection_index;
 pub mod ffi;
+pub mod frozen_value;
 pub mod gzip_codec;
 pub mod host_io;
 #[cfg(any(test, feature = "test-support"))]

@@ -12537,8 +12537,8 @@ pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64>
     }
 
     let result = match width {
-        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
-        FloatPowerWidth::Float64 => left.powf(right),
+        FloatPowerWidth::Float32 => libm::powf(left as f32, right as f32) as f64,
+        FloatPowerWidth::Float64 => libm::pow(left, right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "floating power overflow"));

@@ -167,6 +167,8 @@ impl Module {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ConstantDecl {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub required: bool,
     pub public: bool,
     pub name: String,
     pub annotation: Option<TypeRef>,

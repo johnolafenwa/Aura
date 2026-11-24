@@ -214,6 +214,7 @@ fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::se
     crate::sema::ConstantInfo {
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            required: false,
             public: true,
             name: name.to_string(),
             annotation: Some(type_ref("float64", Vec::new())),

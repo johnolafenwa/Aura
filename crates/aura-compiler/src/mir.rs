@@ -736,6 +736,8 @@ impl MirOwnership {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirConstant {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<crate::const_eval::FrozenValue>,
     pub key: String,
     pub initializer: String,
     pub ty: Type,
@@ -11003,6 +11005,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         let initializer = format!("__aura_const_init::{key}");
         functions.extend(lower_constant_initializer(program, &initializer, constant));
         constants.push(MirConstant {
+            frozen: program.frozen_constants.get(&key).cloned(),
             key,
             initializer,
             ty: constant.ty.clone(),
@@ -14030,6 +14033,14 @@ impl<'a> Lowerer<'a> {
 
     fn lower_constant_read(&mut self, constant: &crate::sema::ConstantInfo) -> Operand {
         let temp = self.new_typed_temp(constant.ty.clone());
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        if let Some(expr) = self.program.frozen_constants.get(&key)
+            .and_then(|value| crate::const_eval::scalar_expr(value, constant.decl.value.span))
+        {
+            let value = self.lower_expr_with_expected(&expr, Some(&constant.ty));
+            self.emit(Instruction::Assign { target: temp.clone(), value: Rvalue::Use(value) });
+            return Operand::Place(temp);
+        }
         if is_scalar_literal_constant(constant) {
             // The literal has no effects, so each read computes it where
             // it stands; the program still runs the initializer at startup.
@@ -14040,7 +14051,6 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
-        let key = format!("{}::{}", constant.module_name, constant.decl.name);
         self.emit(Instruction::Assign {
             target: temp.clone(),
             value: Rvalue::ModuleConstant {

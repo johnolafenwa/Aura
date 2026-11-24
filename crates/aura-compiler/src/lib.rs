@@ -228,6 +228,8 @@ pub mod native_runtime_coverage {
     };
 }
 
+pub mod const_eval;
+
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -368,7 +370,7 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
         &builtin_sources::imported_source_parts(&module),
         BTreeMap::new(),
     );
-    sema::check_with_context(
+    let mut program = sema::check_with_context(
         module,
         ModuleContext {
             module_name: "<main>".to_string(),
@@ -376,7 +378,9 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
             module_registry,
             is_entry_module: true,
         },
-    )
+    )?;
+    const_eval::evaluate(&mut program)?;
+    Ok(program)
 }
 
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
@@ -745,6 +749,7 @@ impl ModuleLoader {
                 program.foreign_link = graph.foreign_link_plan();
             }
             program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            const_eval::evaluate(&mut program)?;
             self.cache.insert(
                 path.clone(),
                 LoadedModule {

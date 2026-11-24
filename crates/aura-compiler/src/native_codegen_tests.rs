@@ -660,6 +660,7 @@ def main() -> int32:
         unions: Vec::new(),
         enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
+            frozen: None,
             key: "<test>::answer".to_string(),
             initializer: initializer.name.clone(),
             ty: Type::named("int64"),

@@ -84,13 +84,13 @@ pub(crate) fn math_unary(function: MathFunction, value: f64) -> Result<f64> {
         return Err(domain_error());
     }
     let result = match function {
-        Exp => value.exp(),
-        Log => value.ln(),
-        Log2 => value.log2(),
-        Log10 => value.log10(),
-        Sin => value.sin(),
-        Cos => value.cos(),
-        _ => value.tan(),
+        Exp => libm::exp(value),
+        Log => libm::log(value),
+        Log2 => libm::log2(value),
+        Log10 => libm::log10(value),
+        Sin => libm::sin(value),
+        Cos => libm::cos(value),
+        _ => libm::tan(value),
     };
     if function == Exp && value.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
@@ -228,18 +228,18 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
     }
     let result = match name {
         "math.sqrt" => value.sqrt(),
-        "math.cbrt" => value.cbrt(),
-        "math.asin" => value.asin(),
-        "math.acos" => value.acos(),
-        "math.atan" => value.atan(),
-        "math.sinh" => value.sinh(),
-        "math.cosh" => value.cosh(),
-        "math.tanh" => value.tanh(),
-        "math.asinh" => value.asinh(),
-        "math.acosh" => value.acosh(),
-        "math.atanh" => value.atanh(),
-        "math.expm1" => value.exp_m1(),
-        "math.log1p" => value.ln_1p(),
+        "math.cbrt" => libm::cbrt(value),
+        "math.asin" => libm::asin(value),
+        "math.acos" => libm::acos(value),
+        "math.atan" => libm::atan(value),
+        "math.sinh" => libm::sinh(value),
+        "math.cosh" => libm::cosh(value),
+        "math.tanh" => libm::tanh(value),
+        "math.asinh" => libm::asinh(value),
+        "math.acosh" => libm::acosh(value),
+        "math.atanh" => libm::atanh(value),
+        "math.expm1" => libm::expm1(value),
+        "math.log1p" => libm::log1p(value),
         "math.degrees" => value.to_degrees(),
         _ => value.to_radians(),
     };
@@ -252,8 +252,8 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
 /// A `math` function of two `float64` values.
 pub(crate) fn math_binary(name: &str, left: f64, right: f64) -> Result<f64> {
     let result = match name {
-        "math.atan2" => left.atan2(right),
-        "math.hypot" => left.hypot(right),
+        "math.atan2" => libm::atan2(left, right),
+        "math.hypot" => libm::hypot(left, right),
         _ => left.copysign(right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
