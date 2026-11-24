@@ -4588,3 +4588,24 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     .expect_err("the store definition is internal even in a type annotation");
     assert!(error.message.contains("collections.__Store"));
 }
+
+#[test]
+fn verification_names_assembly_in_an_import_and_in_editor_source() {
+    let temp = TempDir::new("aura-verify-machine-source");
+    let main = temp.path().join("main.au");
+    let driver = temp.path().join("driver.au");
+    fs::write(&main, "import driver\n").unwrap();
+    fs::write(&driver, "module_asm(\"nop\")\n").unwrap();
+    let options = crate::verify::Options::default();
+    let imported = crate::verify_path(&main, &options).expect_err("assembly is opaque to proof");
+    assert_eq!(imported.code, "AU4035");
+    assert_eq!(imported.render_path.as_deref(), driver.to_str());
+    assert_eq!(imported.span.unwrap().line, 1);
+    let direct = crate::verify_path_with_source(
+        &main,
+        "def f() -> None:\n    asm(\"nop\")\n",
+        &options,
+    ).unwrap_err();
+    assert_eq!(direct.code, "AU4035");
+    assert_eq!(direct.span.unwrap().line, 2);
+}

@@ -702,3 +702,28 @@ fn the_bare_metal_example_builds_for_its_boards() {
         "line {line}"
     );
 }
+
+#[test]
+fn assembly_stops_proofs_and_preserves_runtime_checks() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "Aura.toml",
+        "[package]\nname = \"proof\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    );
+    workspace.write(
+        "src/main.au",
+        "export \"C\" def entry(x: uint64) -> uint64:\n    mut copy = x\n    asm(\"movq $1, $0\", output(\"reg\", copy), input(\"reg\", x), options(\"pure\", \"preserves_flags\"))\n    assert copy == x\n    return copy\n",
+    );
+    let verify = workspace.aura(&["verify", "src/main.au"]);
+    assert!(!verify.status.success());
+    assert!(stderr(&verify).contains("AU4035"), "{}", stderr(&verify));
+    assert!(stderr(&verify).contains("assembly"), "{}", stderr(&verify));
+
+    let build = workspace.aura(&[
+        "build", "--freestanding", "--target", "x86_64-unknown-none",
+        "--remove-proved-checks", "-o", "proof.o", "src/main.au",
+    ]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    assert!(stderr(&build).contains("0 checks proved and removed"), "{}", stderr(&build));
+    assert!(workspace.path.join("proof.o").is_file());
+}
