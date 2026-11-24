@@ -2610,6 +2610,38 @@ fn mem_namespace() -> ModuleNamespace {
         ));
     }
     functions.push(function_info("mem", "fence", Vec::new(), none()));
+    // The allocation functions (ADR-0128).
+    let word = |name: &str| value_param(name, unsigned(64));
+    functions.push(function_info(
+        "mem",
+        "alloc",
+        vec![word("size"), word("align")],
+        unsigned(64),
+    ));
+    functions.push(function_info(
+        "mem",
+        "free",
+        vec![address(), word("size"), word("align")],
+        none(),
+    ));
+    functions.push(function_info(
+        "mem",
+        "realloc",
+        vec![address(), word("old_size"), word("align"), word("new_size")],
+        unsigned(64),
+    ));
+    functions.push(function_info(
+        "mem",
+        "heap_add_region",
+        vec![word("start"), word("size")],
+        none(),
+    ));
+    functions.push(function_info(
+        "mem",
+        "heap_free_bytes",
+        Vec::new(),
+        unsigned(64),
+    ));
     function_only_namespace("mem", functions)
 }
 

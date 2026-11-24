@@ -16810,6 +16810,11 @@ host_builtin_entries! {
     owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
     owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
     owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    owned "mem::alloc" => aura_host_mem_alloc(host_builtins::host_mem_alloc);
+    owned "mem::free" => aura_host_mem_free(host_builtins::host_mem_free);
+    owned "mem::realloc" => aura_host_mem_realloc(host_builtins::host_mem_realloc);
+    owned "mem::heap_add_region" => aura_host_mem_heap_add_region(host_builtins::host_mem_heap_add_region);
+    owned "mem::heap_free_bytes" => aura_host_mem_heap_free_bytes(host_builtins::host_mem_heap_free_bytes);
     owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
     owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
     owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);

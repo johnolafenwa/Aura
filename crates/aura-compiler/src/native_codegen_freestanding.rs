@@ -169,9 +169,11 @@ impl NativeCodegen<'_> {
             );
             exports.push((export, callback, signature, entry));
         }
+        let heap = self.declare_heap_symbols(&declared_symbols(self.module))?;
         for function in &self.module.functions {
             self.define_function(function)?;
         }
+        self.define_heap_symbols(heap)?;
         for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
             let signature = entry_signature(&callback, target);
             let function = self.functions[&name];
@@ -580,6 +582,11 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
         return Err(problems);
     }
     keep_reached_functions(&mut module);
+    let declared = declared_symbols(&module)
+        .into_iter()
+        .map(str::to_string)
+        .collect::<HashSet<_>>();
+    super::freestanding_heap::include_allocator(&mut module, &declared);
     for function in &mut module.functions {
         strip_assertion_text(function);
     }
@@ -1056,6 +1063,11 @@ fn check_call(
             op: RuntimeOp::Host(builtin),
             ..
         } if memory_operation(builtin.name()).is_some() => None,
+        // A heap function of `mem` is a call of its C symbol.
+        CallTarget::Runtime {
+            op: RuntimeOp::Host(builtin),
+            ..
+        } if super::freestanding_heap::heap_operation(builtin.name()).is_some() => None,
         CallTarget::Runtime { op, .. } => Some(match op.name() {
             name if name.starts_with("__") => ("reads or changes a collection".to_string(), ""),
             name => (format!("calls `{name}`"), ""),
@@ -1080,6 +1092,7 @@ pub(crate) fn check_object(bytes: &[u8], module: &MirModule) -> std::result::Res
             !name.is_empty()
                 && *name != TRAP_HOOK
                 && !MEMORY_ROUTINES.contains(name)
+                && !super::freestanding_heap::is_heap_symbol(name)
                 && !declared.contains(name)
         })
         .collect::<Vec<_>>();

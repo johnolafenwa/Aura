@@ -464,13 +464,18 @@ export "C" def bump(cell: uint64) -> uint64:
 fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
     let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
         .expect("`mem` is a builtin module");
-    assert_eq!(namespace.all_functions.len(), 27);
+    assert_eq!(namespace.all_functions.len(), 32);
     for name in namespace.all_functions.keys() {
         let qualified = format!("mem::{name}");
         assert!(
             crate::runtime_ops::HostBuiltin::from_name(&qualified).is_some(),
             "`{qualified}` has a runtime entry"
         );
+        // A heap function is a call of a C symbol (ADR-0128).
+        if super::freestanding_heap::heap_operation(&qualified).is_some() {
+            assert_eq!(super::freestanding::memory_operation(&qualified), None);
+            continue;
+        }
         let (access, _) = super::freestanding::memory_operation(&qualified)
             .unwrap_or_else(|| panic!("`{qualified}` is a memory operation"));
         let returns_none = !access.has_result();
