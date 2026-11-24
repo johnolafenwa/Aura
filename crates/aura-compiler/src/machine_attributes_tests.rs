@@ -371,6 +371,7 @@ fn data_initializers_encode_the_checked_scalar_width() {
 #[test]
 fn machine_special_entries_reject_unrepresentable_contracts() {
     for source in [
+        "class Entry:\n    @machine.noinline\n    def run(self) -> None:\n        pass",
         "@machine.noinline\n@wrapper\ndef f() -> None:\n    pass",
         "@machine.interrupt(\"arm\")\ndef f() -> None:\n    pass",
         "@machine.naked\ndef f() -> None:\n    asm(\"nop\", input(\"reg\", 0))",

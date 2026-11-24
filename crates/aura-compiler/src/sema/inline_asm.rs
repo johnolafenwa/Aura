@@ -40,6 +40,7 @@ impl FunctionChecker<'_> {
                 &AssignStmt {
                     mutable: false,
                     target: AssignTarget::Name(name.clone()),
+                    member_span: None,
                     annotation: None,
                     op: None,
                     value: (*value).clone(),
