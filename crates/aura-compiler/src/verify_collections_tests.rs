@@ -378,3 +378,238 @@ def main():
         assert!(crate::run_source(&source).is_err(), "{slice}");
     }
 }
+
+#[test]
+fn a_sorted_list_is_ordered_and_holds_the_same_elements() {
+    assert_proved(
+        r#"
+def smallest(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures forall(x in xs, result <= x)
+    ensures len(xs) == len(old(xs))
+    ensures forall(x in old(xs), result <= x)
+    ensures result in old(xs)
+    xs.sort()
+    return xs[0]
+
+def largest(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures forall(x in xs, result >= x)
+    ensures exists(x in xs, x == result)
+    ys = sorted(xs, reverse=true)
+    return ys[0]
+
+def ordered(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    ensures forall(i in range(len(result)), forall(j in range(i, len(result)), result[i] <= result[j]))
+    ensures forall(x in xs, x in result)
+    ensures forall(x in result, x in xs)
+    return sorted(xs)
+
+def either(xs: mut list[int64], down: bool):
+    requires len(xs) > 1
+    ensures down or xs[0] <= xs[1]
+    ensures not down or xs[0] >= xs[1]
+    xs.sort(reverse=down)
+
+def middle(xs: list[int64]) -> int64:
+    requires len(xs) == 3
+    ensures exists(x in xs, x == result)
+    ys = sorted(xs)
+    assert ys[0] <= ys[1] and ys[1] <= ys[2]
+    return ys[1]
+
+def caller() -> int64:
+    ensures result <= 4
+    mut xs = [4, 9, 6]
+    low = smallest(xs)
+    return low
+
+def main():
+    mut xs = [3, 1, 2]
+    print(smallest(xs))
+    print(largest([3, 1, 2]))
+    print(len(ordered([3, 1, 2])))
+    either(xs, true)
+    print(middle([3, 1, 2]))
+    print(caller())
+"#,
+    );
+}
+
+#[test]
+fn a_wrong_claim_about_a_sorted_list_still_fails() {
+    assert_open(
+        r#"
+def descending(xs: mut list[int64]) -> bool:
+    requires len(xs) > 1
+    ensures result
+    xs.sort()
+    return xs[0] > xs[1]
+
+def same_place(xs: mut list[int64]) -> bool:
+    requires len(xs) > 1
+    ensures result
+    first = xs[0]
+    xs.sort()
+    return xs[0] == first
+
+def shrinks(xs: list[int64]) -> int64:
+    ensures result == len(xs) - 1
+    return len(sorted(xs))
+
+def new_element(xs: list[int64]) -> bool:
+    requires len(xs) > 0
+    ensures result
+    ys = sorted(xs)
+    return ys[0] == 7
+
+def past_the_end(xs: list[int64]) -> int64:
+    ys = sorted(xs)
+    return ys[len(xs)]
+
+def main():
+    mut xs = [3, 1, 2]
+    print(descending(xs))
+    mut ys = [3, 1, 2]
+    print(same_place(ys))
+    print(shrinks([3, 1]))
+    print(new_element([3, 1]))
+"#,
+        &[
+            "4 ensures failed",
+            "10 ensures failed",
+            "16 ensures failed",
+            "21 ensures failed",
+            "27 index in range failed",
+        ],
+    );
+}
+
+#[test]
+fn a_sort_the_encoding_cannot_order_keeps_the_elements_and_no_order() {
+    // The elements are still those of the list, in an order the encoding
+    // does not state.
+    assert_proved(
+        r#"
+def by_key(xs: list[int64]) -> list[int64]:
+    ensures len(result) == len(xs)
+    ensures forall(x in result, x in xs)
+    return sorted(xs, key=lambda x: x // 2)
+
+def names(xs: mut list[str]):
+    requires len(xs) > 0
+    ensures len(xs) == len(old(xs))
+    ensures xs[0] in old(xs)
+    xs.sort()
+
+def main():
+    print(len(by_key([3, 1, 2])))
+    mut xs = ["b", "a"]
+    names(xs)
+"#,
+    );
+    assert_open(
+        r#"
+def by_key(xs: list[int64]) -> bool:
+    requires len(xs) > 1
+    ensures result
+    ys = sorted(xs, key=lambda x: x // 2)
+    return ys[0] >= ys[1]
+
+def main():
+    print(by_key([3, 1, 2]))
+"#,
+        &["4 ensures unsupported"],
+    );
+}
+
+#[test]
+fn a_reversed_list_holds_the_elements_from_the_end() {
+    assert_proved(
+        r#"
+def backwards(xs: mut list[int64]):
+    ensures len(xs) == len(old(xs))
+    ensures forall(i in range(len(xs)), xs[i] == old(xs)[len(xs) - 1 - i])
+    xs.reverse()
+
+def last(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures result == xs[len(xs) - 1]
+    mut ys = xs[:]
+    ys.reverse()
+    return ys[0]
+
+def twice(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    ensures result == xs[2]
+    mut ys = xs[:]
+    ys.reverse()
+    ys.reverse()
+    return ys[2]
+
+def main():
+    mut xs = [3, 1, 2]
+    backwards(xs)
+    print(last(xs))
+    print(twice(xs))
+"#,
+    );
+    assert_open(
+        r#"
+def first(xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    ensures result == xs[0]
+    mut ys = xs[:]
+    ys.reverse()
+    return ys[0]
+
+def past_the_end(xs: list[int64]) -> int64:
+    mut ys = xs[:]
+    ys.reverse()
+    return ys[len(xs)]
+
+def main():
+    print(first([3, 1, 2]))
+"#,
+        &["4 ensures failed", "12 index in range failed"],
+    );
+}
+
+#[test]
+fn sort_and_reverse_agree_with_their_models_at_run_time() {
+    assert_runs(
+        r#"
+def check(xs: list[int64]):
+    n = len(xs)
+    up = sorted(xs)
+    down = sorted(xs, reverse=true)
+    assert len(up) == n and len(down) == n
+    for i in range(n):
+        assert xs[i] in up and up[i] in xs
+        assert xs[i] in down and down[i] in xs
+        for j in range(i, n):
+            assert up[i] <= up[j]
+            assert down[i] >= down[j]
+    mut back = xs[:]
+    back.reverse()
+    assert len(back) == n
+    for i in range(n):
+        assert back[i] == xs[n - 1 - i]
+    keyed = sorted(xs, key=lambda x: x // 2)
+    assert len(keyed) == n
+    for i in range(n):
+        assert xs[i] in keyed and keyed[i] in xs
+
+def main():
+    check([])
+    check([5])
+    check([2, 1])
+    check([3, 3, 1, 2, 3])
+    check([-4, 9, 0, -4, 7, 7, 1])
+    mut names = ["b", "c", "a"]
+    names.sort()
+    assert len(names) == 3 and "a" in names and "b" in names and "c" in names
+"#,
+    );
+}

@@ -4157,7 +4157,7 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
-                    ListOp::Reverse | ListOp::Sort | ListOp::Swap => {
+                    ListOp::Swap => {
                         let what = format!(
                             "the order of the elements after `{}`",
                             op.name().trim_start_matches("__")
@@ -4170,7 +4170,7 @@ impl<'a> Exec<'a> {
                     }
                     _ => {
                         let list = Val::List { len, data, elem };
-                        self.list_op(state, list_op, list, args)
+                        self.list_op(state, list_op, list, receiver_place, args)
                     }
                 }
             }

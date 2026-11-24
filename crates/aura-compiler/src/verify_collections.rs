@@ -19,6 +19,7 @@ impl Exec<'_> {
         state: &mut State,
         op: ListOp,
         list: Val,
+        receiver_place: Option<&str>,
         args: &[MirArg],
     ) -> Option<Val> {
         match op {
@@ -31,6 +32,35 @@ impl Exec<'_> {
                 self.list_contains(&list, &item)
             }
             ListOp::Slice => self.list_slice(state, list, args),
+            ListOp::Reverse | ListOp::Sort | ListOp::SortByKeys => {
+                let Val::List { len, data, elem } = list else {
+                    return None;
+                };
+                let data = match (op, data) {
+                    (_, None) => None,
+                    (ListOp::Reverse, Some(store)) => {
+                        Some(self.reindexed(&store, &|i| format!("(- (- {len} 1) {i})")))
+                    }
+                    (_, Some(store)) => {
+                        // `sort(reverse)` orders by the elements' own
+                        // order, and a sort by keys by an order of its own.
+                        let descending = match args.first() {
+                            Some(arg) if op == ListOp::Sort => {
+                                match self.operand(state, &arg.value, None) {
+                                    Val::Bool(descending) => Some(descending),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        };
+                        Some(self.sorted(&store, &len, descending))
+                    }
+                };
+                if let Some(place) = receiver_place {
+                    self.write_place(state, place, Val::List { len, data, elem });
+                }
+                Some(Val::Unit)
+            }
             _ => None,
         }
     }
@@ -65,12 +95,15 @@ impl Exec<'_> {
             Goal::Holds(in_range.clone()),
         );
         self.assume(&pc, in_range);
-        let data = match (data, low.as_str()) {
-            // A slice from the start holds the list's own first elements.
-            (Some(store), "0") => Some(store),
-            (Some(store), _) => self.reindexed(&store, &|i| format!("(+ {i} {low})")),
-            (None, _) => None,
-        };
+        // A slice from the start holds the list's own first elements.
+        if low == "0" {
+            return Some(Val::List {
+                len: high,
+                data,
+                elem,
+            });
+        }
+        let data = data.map(|store| self.reindexed(&store, &|i| format!("(+ {i} {low})")));
         let len = self.define("Int", "len", format!("(- {high} {low})"));
         Some(Val::List { len, data, elem })
     }
@@ -100,25 +133,98 @@ impl Exec<'_> {
     }
 
     /// A store whose position `i` holds what `store` holds at `at(i)`.
-    fn reindexed(&mut self, store: &Store, at: &dyn Fn(&str) -> String) -> Option<Store> {
+    fn reindexed(&mut self, store: &Store, at: &dyn Fn(&str) -> String) -> Store {
+        let mut leaves = Vec::new();
+        let copy = self.fresh_like(store, "copy", &mut leaves);
+        let i = self.bound_name();
+        let from = at(&i);
+        for (old, new) in leaves {
+            self.fact(format!(
+                "(forall (({i} Int)) (= (select {new} {i}) (select {old} {from})))"
+            ));
+        }
+        copy
+    }
+
+    /// A store of the shape of `store` with a fresh array for each of its
+    /// arrays. Each pair of the two is added to `leaves`.
+    fn fresh_like(
+        &mut self,
+        store: &Store,
+        hint: &str,
+        leaves: &mut Vec<(String, String)>,
+    ) -> Store {
         match store {
             Store::Leaf(array, sort) => {
-                let copy = self.fresh_const(&format!("(Array Int {sort})"), "copy");
-                let i = self.bound_name();
-                let from = at(&i);
-                self.fact(format!(
-                    "(forall (({i} Int)) (= (select {copy} {i}) (select {array} {from})))"
-                ));
-                Some(Store::Leaf(copy, sort))
+                let fresh = self.fresh_const(&format!("(Array Int {sort})"), hint);
+                leaves.push((array.clone(), fresh.clone()));
+                Store::Leaf(fresh, sort)
             }
-            Store::Items(items) => items
-                .iter()
-                .map(|item| self.reindexed(item, at))
-                .collect::<Option<Vec<_>>>()
-                .map(Store::Items),
-            // A span's store exists only while a contract is read.
-            Store::Shifted(..) => None,
+            Store::Items(items) => Store::Items(
+                items
+                    .iter()
+                    .map(|item| self.fresh_like(item, hint, leaves))
+                    .collect(),
+            ),
+            // A span's store exists only while a contract is read: the
+            // function's own steps run on its base list.
+            Store::Shifted(base, _) => self.fresh_like(base, hint, leaves),
         }
+    }
+
+    /// The store of a list of `len` elements after a sort: the elements of
+    /// `store` in another order. For integer elements sorted by their own
+    /// order, descending when `descending` holds, that leaves one result.
+    /// Any other order is the sort's own, which the encoding does not
+    /// model, so the result stays a made-up one that holds the same
+    /// elements.
+    fn sorted(&mut self, store: &Store, len: &str, descending: Option<String>) -> Store {
+        let ordered = match (store, descending) {
+            (Store::Leaf(_, "Int"), Some(descending)) => Some(descending),
+            _ => None,
+        };
+        let mut leaves = Vec::new();
+        let result = match &ordered {
+            Some(_) => self.fresh_like(store, "sorted", &mut leaves),
+            None => self.unmodeled("the order of the elements after a sort", |exec| {
+                exec.fresh_like(store, "sorted", &mut leaves)
+            }),
+        };
+        // Position `i` of the result holds the element that was at
+        // `from(i)`, and the element that was at `j` is now at `to(j)`.
+        // The two are functions and not arrays: the solver finds a
+        // counterexample to a wrong claim far sooner that way.
+        let (i, j) = (self.bound_name(), self.bound_name());
+        let (from, to) = (i.replace("k!q", "from!"), j.replace("k!q", "to!"));
+        for function in [&from, &to] {
+            self.decls
+                .push(format!("(declare-fun {function} (Int) Int)"));
+        }
+        let inside = |k: &str| format!("(and (<= 0 {k}) (< {k} {len}))");
+        let (source, target) = (format!("({from} {i})"), format!("({to} {j})"));
+        let mut moved = vec![inside(&source), format!("(= ({to} {source}) {i})")];
+        let mut kept = vec![inside(&target), format!("(= ({from} {target}) {j})")];
+        for (old, new) in &leaves {
+            moved.push(format!("(= (select {new} {i}) (select {old} {source}))"));
+            kept.push(format!("(= (select {new} {target}) (select {old} {j}))"));
+        }
+        self.fact(format!(
+            "(forall (({i} Int)) (=> {} (and {})))",
+            inside(&i),
+            moved.join(" ")
+        ));
+        self.fact(format!(
+            "(forall (({j} Int)) (=> {} (and {})))",
+            inside(&j),
+            kept.join(" ")
+        ));
+        if let (Some(descending), Some((_, new))) = (ordered, leaves.first()) {
+            let (first, second) = (format!("(select {new} {i})"), format!("(select {new} {j})"));
+            self.fact(format!(
+                "(forall (({i} Int) ({j} Int)) (=> (and (<= 0 {i}) (<= {i} {j}) (< {j} {len})) (ite {descending} (>= {first} {second}) (<= {first} {second}))))"
+            ));
+        }
+        result
     }
 
     /// `item in list`: some position of the list holds `item`. A contract
