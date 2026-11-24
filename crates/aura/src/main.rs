@@ -4573,6 +4573,14 @@ fn handle_verify_command(args: Vec<String>) {
                 report.functions,
                 report.solver
             ));
+            if !report.is_proved() {
+                write_stdout(&format!(
+                    "not proved: {} failed, {} not modeled, {} undecided\n",
+                    report.failed(),
+                    report.not_modeled(),
+                    report.undecided()
+                ));
+            }
         }
         DiagnosticFormat::Json => {
             let obligations = report
@@ -4610,6 +4618,9 @@ fn handle_verify_command(args: Vec<String>) {
                 "functions": report.functions,
                 "cached": report.cached,
                 "proved": report.proved(),
+                "failed": report.failed(),
+                "not_modeled": report.not_modeled(),
+                "undecided": report.undecided(),
                 "obligations": obligations,
                 "diagnostics": diagnostics
                     .iter()
