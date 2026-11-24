@@ -30,6 +30,16 @@ class Tally:
         self.count += by * self.step
 
 
+copy class Keyed:
+    key: int64
+    value: int64
+
+
+class Ledger:
+    ids: list[int64]
+    rows: list[list[int64]]
+
+
 enum Shape:
     Circle(float64)
     Rect(float64, float64)
@@ -429,6 +439,27 @@ def element_plain_mut_call(n: int64, run: bool) -> int64:
     return tallies[n - 1].count
 
 
+def record_swap(n: int64, run: bool) -> int64:
+    mut records = list[Keyed]()
+    for i in range(n):
+        records.append(Keyed(key=i, value=i * 2))
+    if run:
+        mut i = 0
+        while i + 1 < records.len():
+            records.swap(i, i + 1)
+            i += 1
+    return records[n - 1].key + records[0].value
+
+
+def field_list_push(n: int64, run: bool) -> int64:
+    mut ledger = Ledger(ids=[], rows=[list[int64](), list[int64]()])
+    if run:
+        for i in range(n):
+            ledger.ids.append(i)
+            ledger.rows[i % 2].append(i)
+    return ledger.ids.len() + ledger.rows[1].len()
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -484,6 +515,10 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return element_mut_call(n, run)
     elif operation == "element_plain_mut_call":
         return element_plain_mut_call(n, run)
+    elif operation == "record_swap":
+        return record_swap(n, run)
+    elif operation == "field_list_push":
+        return field_list_push(n, run)
     return -1
 
 

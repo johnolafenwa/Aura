@@ -540,6 +540,53 @@ fn element_plain_mut_call(n: i64, run: bool) -> i64 {
     tallies[n as usize - 1].count
 }
 
+#[derive(Clone, Copy)]
+struct Keyed {
+    key: i64,
+    value: i64,
+}
+
+struct Ledger {
+    ids: Vec<i64>,
+    rows: Vec<Vec<i64>>,
+}
+
+fn record_swap(n: i64, run: bool) -> i64 {
+    let mut records: Vec<Keyed> = Vec::new();
+    for i in 0..n {
+        records.push(Keyed {
+            key: i,
+            value: i * 2,
+        });
+    }
+    black_box(&records);
+    if run {
+        let mut i = 0;
+        while i + 1 < records.len() {
+            records.swap(i, i + 1);
+            i += 1;
+        }
+    }
+    black_box(&records);
+    records[n as usize - 1].key + records[0].value
+}
+
+fn field_list_push(n: i64, run: bool) -> i64 {
+    let mut ledger = Ledger {
+        ids: Vec::new(),
+        rows: vec![Vec::new(), Vec::new()],
+    };
+    if run {
+        for i in 0..n {
+            ledger.ids.push(i);
+            ledger.rows[(i % 2) as usize].push(i);
+        }
+    }
+    black_box(&ledger.ids);
+    black_box(&ledger.rows);
+    (ledger.ids.len() + ledger.rows[1].len()) as i64
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -569,6 +616,8 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "trait_object_call" => trait_object_call(n, run),
         "element_mut_call" => element_mut_call(n, run),
         "element_plain_mut_call" => element_plain_mut_call(n, run),
+        "record_swap" => record_swap(n, run),
+        "field_list_push" => field_list_push(n, run),
         _ => -1,
     }
 }
