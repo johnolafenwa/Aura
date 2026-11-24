@@ -434,6 +434,9 @@ fn validate_placeholders(
             rest = &tail[end..];
             (&tail[..end], None)
         };
+        if !digits.bytes().all(|n| n.is_ascii_digit()) {
+            return Err(invalid());
+        }
         let index = digits.parse::<usize>().map_err(|_| invalid())?;
         let (reg, _) = if index < asm.outputs.len() {
             asm.outputs.get(index)

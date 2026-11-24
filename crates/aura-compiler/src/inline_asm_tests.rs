@@ -33,22 +33,28 @@ fn inline_asm_emits_instruction_and_module_definition() {
 #[test]
 fn refuses_invalid_assembly_before_llvm() {
     let _mode = enter_freestanding_target(FreestandingTarget::X86_64);
-    for (source, code) in [
+    for (name, source, expected) in [
         (
+            "bad-register.au",
             include_str!("../tests/fixtures/machine-asm/bad-register.au"),
-            "AU2092",
+            include_str!("../tests/fixtures/machine-asm/bad-register.diag"),
         ),
         (
+            "bad-type.au",
             include_str!("../tests/fixtures/machine-asm/bad-type.au"),
-            "AU2091",
+            include_str!("../tests/fixtures/machine-asm/bad-type.diag"),
         ),
         (
+            "bad-option.au",
             include_str!("../tests/fixtures/machine-asm/bad-option.au"),
-            "AU2093",
+            include_str!("../tests/fixtures/machine-asm/bad-option.diag"),
         ),
     ] {
         let error = check_module_with_builtin_imports(parse_source(source).unwrap()).unwrap_err();
-        assert_eq!(error.code, code, "{error:?}");
+        assert_eq!(
+            error.render_with_source(name, source).trim_end(),
+            expected.trim_end()
+        );
     }
 }
 
@@ -354,4 +360,39 @@ fn rejects_mismatched_float_register_classes_aliases_and_modifiers() {
         let source = format!("export \"C\" def entry(i: int64, f: float64) -> None:\n    asm('{template}', {clause})\n");
         assert_eq!(checked(&source, target).unwrap_err().code, code, "{source}");
     }
+}
+
+#[test]
+fn hosted_entry_points_reject_module_assembly_and_module_scope_requires_a_declaration() {
+    let error = parse_source("asm('nop')\n").unwrap_err();
+    assert_eq!(error.code, "AU2093");
+    assert!(error.message.contains("module_asm"));
+    let source = "module_asm('.text')\nexport \"C\" def entry() -> None:\n    pass\n";
+    let mir =
+        mir::lower_with_source_locations(&checked(source, FreestandingTarget::X86_64).unwrap());
+    assert!(native_codegen::emit_host_object(&mir)
+        .unwrap_err()
+        .contains("freestanding"));
+    assert_eq!(run_mir(&mir).unwrap_err().code, "AU2090");
+}
+
+#[test]
+fn assembly_output_writes_through_mut_parameters_and_views() {
+    let source = r#"
+export "C" def entry(output_word: mut uint64) -> None:
+    asm("movq $$7, $0", output("reg", output_word))
+    view mut alias = output_word
+    asm("movq $$9, $0", output("reg", alias))
+"#;
+    let mir =
+        mir::lower_with_source_locations(&checked(source, FreestandingTarget::X86_64).unwrap());
+    assert!(mir
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|b| &b.instructions)
+        .any(|i| matches!(i, mir::Instruction::WriteLoan { .. })));
+    let bytes =
+        emit_freestanding_object(&mir, "output.au", source, FreestandingTarget::X86_64).unwrap();
+    assert!(crate::tests::disassemble_asm_entry(&bytes).contains("movq"));
 }

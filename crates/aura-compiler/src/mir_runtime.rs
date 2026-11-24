@@ -266,6 +266,12 @@ fn load_foreign_libraries(plan: &crate::package::ForeignLinkPlan) -> Result<()> 
 }
 
 fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
+    if module.foreign_link.asm_arch.is_some() {
+        return Err(Diagnostic::coded(
+            "AU2090",
+            "machine assembly requires freestanding native code",
+        ));
+    }
     // Loading a library runs its initializers, so only MIR lowered from a
     // package whose manifest opted in may name one.
     if !module.foreign_link.is_empty() {

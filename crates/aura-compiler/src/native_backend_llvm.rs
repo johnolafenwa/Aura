@@ -2577,9 +2577,6 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
 }
 
 /// The LLVM values of one function body while it is lowered.
-#[path = "native_backend_llvm_asm.rs"]
-mod inline_asm;
-
 struct FunctionLowerer<'ctx, 'm, 'o> {
     object: &'o ObjectLowerer<'ctx, 'm>,
     context: &'ctx Context,
@@ -3760,6 +3757,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         Ok(built(value)?.into())
     }
 }
+
+#[path = "native_backend_llvm_asm.rs"]
+mod inline_asm;
 
 #[path = "native_backend_x86_kernel.rs"]
 mod x86_kernel;

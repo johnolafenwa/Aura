@@ -564,6 +564,15 @@ impl Parser {
                 items.push(self.parse_item()?);
             } else {
                 let statement = self.parse_stmt()?;
+                if let Stmt::Expr(stmt) = &statement {
+                    if crate::inline_asm::is_asm(&stmt.expr) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2093",
+                            stmt.span,
+                            "use module_asm at module scope",
+                        ));
+                    }
+                }
                 seen_statement = true;
                 top_level_stmts.push(statement);
             }
