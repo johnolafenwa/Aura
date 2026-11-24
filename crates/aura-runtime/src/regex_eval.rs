@@ -112,3 +112,7 @@ pub(super) fn bound_search(
     };
     crate::builtin_limit::check(bytes)
 }
+
+#[cfg(test)]
+#[path = "regex_eval_tests.rs"]
+mod tests;
