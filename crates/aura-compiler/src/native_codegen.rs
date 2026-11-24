@@ -2244,6 +2244,32 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
+        // `str` locals that hold a list element as words (see
+        // `str_slots::element_slots`), each with its `ptr` and `len`.
+        let str_elements = match self.freestanding.is_some()
+            || self.module.ownership != crate::mir::MirOwnership::Explicit
+        {
+            true => str_slots::ElementSlots::default(),
+            false => str_slots::element_slots(
+                function,
+                |place| explicit_locals.tracked.contains(place),
+                |instruction| {
+                    if let Some(receiver) = self.shared_method_receiver(instruction) {
+                        return vec![receiver];
+                    }
+                    crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                        self.borrowing.get(name)
+                    })
+                },
+                &self.result_slot_plan.views,
+            ),
+        };
+        let mut str_slots = str_slots;
+        str_slots.extend(str_slots::declare_element_slots(
+            builder,
+            &str_elements,
+            &mut variable_index,
+        ));
         let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(
             function,
             |instruction| {
@@ -2653,6 +2679,7 @@ impl<'a> NativeCodegen<'a> {
             result_twin_words: None,
             view_twin_refs,
             str_slots,
+            str_element_lists: str_elements.lists,
             appended_copies: str_slots::appended_copies(function),
             deferred_str_copies: HashMap::new(),
             checked_scalar_body: checked_entry.then_some(func_id),
@@ -2789,6 +2816,17 @@ impl<'a> NativeCodegen<'a> {
             runtime: runtime_refs,
         };
 
+        compiler.retain_str_element_slots(|compiler, local, list| {
+            compiler.result_slots.contains_key(local)
+                || compiler.lent_places.contains(local)
+                || compiler.lookup_slots.contains(local)
+                || compiler.recovery_slots.contains_key(local)
+                || compiler.text_byte_slices.contains(local)
+                || compiler.lent_elements.contains_key(local)
+                || compiler.element_lend_temps.contains(local)
+                || compiler.field_lend_temps.contains(local)
+                || compiler.key_loops.contains_key(list)
+        });
         let return_ty = ensure_direct_type(
             &function.return_type,
             &self.classes,
@@ -4086,8 +4124,10 @@ struct FunctionCompiler<'a> {
     /// The view twin of each function that has one (see `str_slots`).
     view_twin_refs: HashMap<String, str_slots::ViewTwin>,
     /// The `str` parameters this body takes as words, when it is a view
-    /// twin.
+    /// twin, and the `str` locals that hold a list element as words.
     str_slots: HashMap<String, str_slots::StrSlot>,
+    /// Each `str` local that holds a list element as words, with the list.
+    str_element_lists: HashMap<String, String>,
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
     appended_copies: HashSet<String>,
@@ -6357,6 +6397,7 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_text_byte_slice(target, value)?;
                 } else if self.lent_elements.contains_key(target.as_str()) {
                     self.compile_lent_element_assign(target, value)?;
+                } else if self.compile_str_element_assign(target, value)? {
                 } else if let Some(scalar) = self.compile_scalar_variant_payload(target, value)? {
                     self.store_place(target, scalar)?;
                 } else if let Some(found) = self.compile_fused_entry_probe(target, value)? {

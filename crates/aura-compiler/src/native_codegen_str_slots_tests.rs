@@ -4,7 +4,10 @@ use crate::runtime_abi::RuntimeFn;
 use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
-use super::{appended_copies, literal_chunks, plan_views, receiver_view_read, ViewParam, ViewRead};
+use super::{
+    appended_copies, element_slots, literal_chunks, plan_views, receiver_view_read, ViewParam,
+    ViewRead,
+};
 
 const SOURCE: &str = r#"
 def kind(text: str) -> int64:
@@ -206,9 +209,57 @@ fn a_method_that_reads_the_bytes_of_a_str_parameter_gets_a_view_twin() {
     let views = plan_views(&module);
     let mut twins = views.keys().map(String::as_str).collect::<Vec<_>>();
     twins.sort_unstable();
-    // `is_word` compares its text with a copy of an element, and `keeps`
-    // only boxes its text.
-    assert_eq!(twins, ["Tokens.code", "Tokens.relay"]);
+    // `keeps` only boxes its text.
+    assert_eq!(twins, ["Tokens.code", "Tokens.is_word", "Tokens.relay"]);
+    assert_eq!(views["Tokens.is_word"], [view(0, true)]);
     assert_eq!(views["Tokens.code"], [view(0, true)]);
     assert_eq!(views["Tokens.relay"], [view(0, true)]);
+}
+
+const LOOPS: &str = r#"
+def kind(text: str) -> int64:
+    if text == "a":
+        return 1
+    return 2
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+def main():
+    words = ["a", "b"]
+    mut total = 0
+    for word in words:
+        total += kind(word)
+    for word in words:
+        print(shout(word))
+    for word in words:
+        if word == "b":
+            total += 1
+    print(total)
+"#;
+
+#[test]
+fn a_loop_variable_read_through_its_bytes_is_an_element_slot() {
+    let mir = lower_source_to_mir(LOOPS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let views = plan_views(&module);
+    assert_eq!(views["kind"], [view(0, true)]);
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("the module has `main`");
+    let kept = crate::mir::ownership::kept_arguments(&module);
+    let borrowed = |instruction| {
+        crate::mir::ownership::callee_borrowed_operands(instruction, |name| kept.get(name))
+    };
+    let slots = element_slots(main, |_| true, borrowed, &views);
+    // The variable passed to `kind` is a slot, the one only passed to
+    // `shout`, which boxes it, is not, and the one compared with a literal
+    // is a loan of the element already.
+    assert_eq!(slots.lists.len(), 1, "{slots:?}");
+    assert!(slots.lists.values().all(|list| list == "words"));
+    assert!(element_slots(main, |_| false, borrowed, &views)
+        .lists
+        .is_empty());
 }

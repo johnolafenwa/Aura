@@ -103,8 +103,10 @@ fn param_uses(
         Operand::Place(place) => candidates.get(place.as_str()).copied(),
         _ => None,
     };
-    // A loaned element compares from its bytes.
-    let loans = read_str_loans(function);
+    // A loaned element, and an element read that may be held as words
+    // (see `element_slots`), compare from their bytes.
+    let mut loans = read_str_loans(function);
+    loans.extend(str_element_reads(function));
     let views = |operand: &Operand| match operand {
         Operand::String(_) => true,
         Operand::Place(place) => {
@@ -238,6 +240,36 @@ pub(super) fn direct_callee(value: &Rvalue) -> Option<(&str, &[MirArg])> {
     }
 }
 
+/// The `str` locals of `function` that an element read of a list assigns.
+fn str_element_reads(function: &MirFunction) -> HashSet<&str> {
+    let strs = function
+        .local_types
+        .iter()
+        .filter(|local| is_str(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                                ..
+                            },
+                        ..
+                    },
+            } if strs.contains(target.as_str()) => Some(target.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 /// The loans of `function` that select a `str` to read.
 fn read_str_loans(function: &MirFunction) -> HashSet<&str> {
     let strs = function
@@ -327,10 +359,31 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
         }
     }
     // A twin is made for a function some call can enter with words.
+    let useful_views = {
+        let mut views = HashMap::<String, Vec<ViewParam>>::new();
+        for (name, position) in &useful {
+            views.entry(name.to_string()).or_default().push(ViewParam {
+                position: *position,
+                pure: false,
+            });
+        }
+        views
+    };
+    let kept = crate::mir::ownership::kept_arguments(module);
+    let explicit = crate::mir::ownership::explicit_locals(module);
     let mut entered = HashSet::<&str>::new();
     for caller in module.functions.iter().chain(module.top_level.iter()) {
         let loans = read_str_loans(caller);
         let own = positions.get(caller.name.as_str());
+        let tracked = explicit.get(&caller.name).map(|locals| &locals.tracked);
+        let elements = element_slots(
+            caller,
+            |place| tracked.is_some_and(|tracked| tracked.contains(place)),
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| kept.get(name))
+            },
+            &useful_views,
+        );
         for instruction in caller.blocks.iter().flat_map(|block| &block.instructions) {
             let Some((callee, args)) = (match instruction {
                 Instruction::Assign { value, .. } => direct_callee(value),
@@ -353,6 +406,7 @@ pub(super) fn plan_views(module: &MirModule) -> HashMap<String, Vec<ViewParam>> 
                     Operand::String(_) => true,
                     Operand::Place(place) => {
                         loans.contains(place.as_str())
+                            || elements.lists.contains_key(place.as_str())
                             || own.is_some_and(|own| {
                                 own.get(place.as_str()).is_some_and(|position| {
                                     useful.contains(&(caller.name.as_str(), *position))
@@ -488,6 +542,121 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashSet<String> {
         .collect()
 }
 
+/// The `str` locals of a function that hold an element of a `list[str]`
+/// as words borrowed from the list, as a `for` loop's variable does.
+#[derive(Debug, Default)]
+pub(super) struct ElementSlots {
+    /// Each such local, with the list it reads.
+    pub(super) lists: HashMap<String, String>,
+}
+
+/// Whether `instruction` reads the `str` local `local` through its bytes,
+/// so that holding it as words saves a box. `views` gives the view
+/// parameters of the functions that have a twin.
+fn reads_words(
+    instruction: &Instruction,
+    local: &str,
+    views: &HashMap<String, Vec<ViewParam>>,
+) -> bool {
+    let is_local = |operand: &Operand| matches!(operand, Operand::Place(place) if place == local);
+    let Instruction::Assign { value, .. } = instruction else {
+        return false;
+    };
+    match value {
+        Rvalue::Binary {
+            op: BinaryOp::Eq | BinaryOp::NotEq,
+            left,
+            right,
+            ..
+        } => is_local(left) || is_local(right),
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op,
+                    receiver: Some(receiver),
+                    ..
+                },
+            args,
+            ..
+        } => match (op, args.as_slice()) {
+            (RuntimeOp::Dict(DictOp::Get), [key]) => is_local(&key.value),
+            (op, []) => is_local(receiver) && receiver_view_read(*op).is_some(),
+            _ => false,
+        },
+        Rvalue::FormatString { parts } => parts
+            .iter()
+            .any(|part| matches!(part, MirFormatPart::Value(value) if is_local(value))),
+        _ => direct_callee(value).is_some_and(|(callee, args)| {
+            views.get(callee).is_some_and(|params| {
+                params.iter().any(|param| {
+                    args.get(param.position)
+                        .is_some_and(|arg| is_local(&arg.value))
+                })
+            })
+        }),
+    }
+}
+
+/// The element slots of `function`: the locals `lendable` allows that one
+/// element read of a local `list[str]` assigns, that only instructions
+/// that read them name, that no terminator names, and that some
+/// instruction reads through their bytes. `borrowed` gives the operands an
+/// instruction's callee borrows where they lie. The list must stay as it
+/// is while such a local is still to be read: a local the list may change
+/// under (see `elements::lent_element_reads`) keeps its box.
+pub(super) fn element_slots<'f>(
+    function: &'f MirFunction,
+    lendable: impl Fn(&str) -> bool,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+    views: &HashMap<String, Vec<ViewParam>>,
+) -> ElementSlots {
+    let strs = function
+        .local_types
+        .iter()
+        .filter(|local| is_str(&local.ty))
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    if strs.is_empty() {
+        return ElementSlots::default();
+    }
+    let lent = super::elements::lent_element_reads(
+        function,
+        |place| strs.contains(place) && lendable(place),
+        borrowed,
+    );
+    let mut lists = lent.lists;
+    let mut named = lent
+        .promotions
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    for block in &function.blocks {
+        named.extend(
+            terminator_place_mentions(&block.terminator)
+                .into_iter()
+                .map(|place| place.split('.').next().unwrap_or(place)),
+        );
+    }
+    lists.retain(|local, list| {
+        !named.contains(local.as_str())
+            && function
+                .local_types
+                .iter()
+                .map(|typed| (&typed.name, &typed.ty))
+                .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+                .any(|(name, ty)| {
+                    name == list && *ty == Type::Named("list".to_string(), vec![Type::named("str")])
+                })
+            && function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .any(|instruction| reads_words(instruction, local, views))
+    });
+    ElementSlots { lists }
+}
+
 /// The signature of a view twin: `signature`, the function's own, then
 /// `ptr` and `len` for each of its `count` view parameters.
 pub(super) fn view_twin_signature(mut signature: Signature, count: usize) -> Signature {
@@ -506,14 +675,47 @@ pub(super) struct ViewTwin {
     pub(super) params: Vec<ViewParam>,
 }
 
-/// The words of a `str` parameter in a view twin besides its owner, which
-/// the parameter's own variable holds.
+/// The words of a `str` held as words besides its owner, which the
+/// parameter's or local's own variable holds.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StrSlot {
     ptr: Var,
     len: Var,
-    /// The box this body made for the owner, or 0.
-    made: Var,
+    /// For a parameter of a view twin, the box this body made for the
+    /// owner, or 0. A local releases its owner itself.
+    made: Option<Var>,
+}
+
+/// Declares the `ptr` and `len` of each local `elements` holds as words.
+pub(super) fn declare_element_slots(
+    builder: &mut dyn FunctionBackend,
+    elements: &ElementSlots,
+    variable_index: &mut usize,
+) -> HashMap<String, StrSlot> {
+    let mut locals = elements.lists.keys().collect::<Vec<_>>();
+    locals.sort();
+    let mut slots = HashMap::new();
+    for local in locals {
+        let mut declare = || {
+            let variable = Var(*variable_index as u32);
+            *variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            variable
+        };
+        let ptr = declare();
+        let len = declare();
+        slots.insert(
+            local.clone(),
+            StrSlot {
+                ptr,
+                len,
+                made: None,
+            },
+        );
+    }
+    slots
 }
 
 /// Binds the `ptr` and `len` words a view twin of `function` takes, which
@@ -540,7 +742,11 @@ pub(super) fn bind_view_params(
         let made = declare(builder, zero);
         slots.insert(
             function.params[param.position].name.clone(),
-            StrSlot { ptr, len, made },
+            StrSlot {
+                ptr,
+                len,
+                made: Some(made),
+            },
         );
     }
     slots
@@ -615,7 +821,10 @@ impl FunctionCompiler<'_> {
             .call(self.runtime[RuntimeFn::StringFromView], &[ptr, len])
             .results[0];
         self.builder.def_var(variable, made);
-        self.builder.def_var(slot.made, made);
+        // A local releases the box it made with its own release.
+        if let Some(variable) = slot.made {
+            self.builder.def_var(variable, made);
+        }
         self.builder.jump(done_block, &[]);
         self.builder.switch_to_block(done_block);
         self.builder.seal_block(done_block);
@@ -642,7 +851,7 @@ impl FunctionCompiler<'_> {
         let mut made = self
             .str_slots
             .iter()
-            .map(|(name, slot)| (name.clone(), slot.made))
+            .filter_map(|(name, slot)| Some((name.clone(), slot.made?)))
             .collect::<Vec<_>>();
         made.sort();
         for (_, variable) in made {
@@ -1151,6 +1360,91 @@ impl FunctionCompiler<'_> {
         );
         self.release_view_arguments(words.released.into_iter().collect());
         true
+    }
+
+    /// Drops the element slots another way of holding the local or of
+    /// walking the list already claims.
+    pub(super) fn retain_str_element_slots(&mut self, claimed: impl Fn(&Self, &str, &str) -> bool) {
+        let dropped = self
+            .str_element_lists
+            .iter()
+            .filter(|(local, list)| claimed(self, local, list))
+            .map(|(local, _)| local.clone())
+            .collect::<Vec<_>>();
+        for local in dropped {
+            self.str_element_lists.remove(&local);
+            self.str_slots.remove(&local);
+        }
+    }
+
+    /// Assigns the element read `value` to `target` as words, when
+    /// `target` is an element slot: borrowed from the list where its view
+    /// keeps the element, and otherwise the words of the copy the runtime
+    /// makes, which the local owns.
+    pub(super) fn compile_str_element_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        let Some(list) = self.str_element_lists.get(target).cloned() else {
+            return Ok(false);
+        };
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::Index | ListOp::IndexUnchecked),
+                    receiver: Some(Operand::Place(receiver)),
+                    ..
+                },
+            args,
+            ..
+        } = value
+        else {
+            return Err(format!(
+                "direct backend expected `{target}` to read an element of `{list}`"
+            ));
+        };
+        let [index, line, column] = args.as_slice() else {
+            return Err(format!(
+                "direct backend expected an index and a span for `{target}`"
+            ));
+        };
+        debug_assert_eq!(*receiver, list);
+        // The local was released or never held a value, unless the MIR
+        // says otherwise.
+        if self.emptied_store_root.take().as_deref() != Some(target) {
+            self.release_root_words(target)?;
+        }
+        let list = self.load_root(&list)?.values[0];
+        let index = self.load_word(index, ScalarKind::Int64, false)?;
+        let line = self.load_word(line, ScalarKind::Int32, false)?;
+        let column = self.load_word(column, ScalarKind::Int32, false)?;
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        for _ in 0..3 {
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        self.emit_str_view_entry(list, index, slow_block, join_block);
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        // The runtime reports an index out of range as a read of it does.
+        let copy = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::VecStrElement],
+                &[list, index, line, column],
+            )
+            .results[0];
+        self.jump_with_owned_str(copy, join_block);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let words = self.builder.block_params(join_block).to_vec();
+        let slot = self.str_slots[target];
+        self.builder.def_var(slot.ptr, words[0]);
+        self.builder.def_var(slot.len, words[1]);
+        let variable = self.local_vars(target)?[0];
+        self.builder.def_var(variable, words[2]);
+        Ok(true)
     }
 
     /// Releases the copies a call of a view twin made for its arguments.
