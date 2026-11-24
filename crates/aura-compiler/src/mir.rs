@@ -8273,9 +8273,7 @@ fn validate_loan_terminator(
     match terminator {
         Terminator::Return(value) => {
             validate_loan_operand(function, value, context, state)?;
-            // Lowering leaves a synthetic `Return(Unit)` in the dead
-            // fallthrough block after an exhaustive match; only a value that
-            // could carry a callable is checked against the return contract.
+            // Only a value that could carry a callable needs the return-contract check.
             if matches!(
                 value,
                 Operand::Place(_) | Operand::MovePlace(_) | Operand::Function { .. }
@@ -14170,7 +14168,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
-        if self.blocks[self.current_block].terminator.is_none() {
+        // The checker requires every live path of a value-returning function
+        // to return. A join with no value (e.g. after an exhaustive match)
+        // stays unterminated here and becomes Unreachable below.
+        if self.blocks[self.current_block].terminator.is_none()
+            && (spec.return_type == Type::Unit || spec.default_return != Operand::Unit)
+        {
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
         }
@@ -15053,12 +15056,16 @@ impl<'a> Lowerer<'a> {
         self.lower_stmts(&function.body);
         self.return_redirects.pop();
         if !self.current_terminated() {
-            // Falling off the end returns `None`.
-            self.emit(Instruction::Assign {
-                target: return_place.clone(),
-                value: Rvalue::Use(default_return_operand(&return_type)),
-            });
-            self.terminate(Terminator::Goto(self.label(exit)));
+            if return_type == Type::Unit {
+                self.emit(Instruction::Assign {
+                    target: return_place.clone(),
+                    value: Rvalue::Use(Operand::Unit),
+                });
+                self.terminate(Terminator::Goto(self.label(exit)));
+            } else {
+                // All live paths already sent their result to the postcondition.
+                self.terminate(Terminator::Unreachable);
+            }
         }
         self.switch_to(exit);
         self.scoped_names.push(std::collections::HashMap::from([(
