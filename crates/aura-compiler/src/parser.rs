@@ -556,7 +556,7 @@ impl Parser {
         let doc = if nested { None } else { self.take_docstring()? };
         self.skip_newlines();
 
-        while !self.at_eof() && !(nested && self.at_simple(&TokenKind::Dedent)) {
+        while !(self.at_eof() || nested && self.at_simple(&TokenKind::Dedent)) {
             let suite = (self.at_simple(&TokenKind::KwIf) && !self.projected)
                 .then(|| self.declaration_kind(&imports, &constants, seen_statement))
                 .flatten();

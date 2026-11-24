@@ -4605,7 +4605,9 @@ fn platform_examples_select_the_targets_process_abi_and_command() {
         crate::with_build_config(config, || {
             let program = check_path(&root.join("packages/ffi_getpid/src/main.au")).unwrap();
             let declaration = &program.extern_functions["getpid"].decl;
-            assert_eq!(declaration.return_type.name, "int32");
+            assert!(
+                matches!(&declaration.return_type.kind, crate::ast::TypeRefKind::Named { name, args } if name == "int32" && args.is_empty())
+            );
             assert_eq!(
                 declaration.symbol.as_ref().unwrap_or(&declaration.name),
                 symbol

@@ -80,14 +80,11 @@ pub(super) fn evaluate(
     // Find the declaration closure. A dependency can name another function
     // defined later, and signatures can depend on classes, enums or aliases.
     let mut inspected = BTreeSet::new();
-    loop {
-        let Some(name) = names
-            .iter()
-            .find(|name| !inspected.contains(*name))
-            .cloned()
-        else {
-            break;
-        };
+    while let Some(name) = names
+        .iter()
+        .find(|name| !inspected.contains(*name))
+        .cloned()
+    {
         inspected.insert(name.clone());
         for constant in module
             .constants
