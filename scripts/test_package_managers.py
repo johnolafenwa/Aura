@@ -279,6 +279,155 @@ class DebianPackageTests(unittest.TestCase):
             self.assertIn("::notice::APT_SIGNING_KEY is not configured", result.stdout)
             self.assertFalse(output.exists())
 
+    @unittest.skipUnless(
+        all(shutil.which(tool) for tool in ("apt-ftparchive", "dpkg-scanpackages", "gpg", "gpgv")),
+        "needs apt-ftparchive, dpkg-scanpackages and gpg",
+    )
+    def test_publish_apt_repository_rejects_unlisted_and_duplicate_debs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-apt-publish-") as temp:
+            root = Path(temp)
+            assets = root / "assets"
+            assets.mkdir()
+            work = root / "work"
+            work.mkdir()
+            archive = write_linux_archive(work, "x86_64")
+            built = run(["bash", SCRIPTS / "package-deb.sh", archive], cwd=assets)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            deb = assets / f"aura-{TAG}-amd64.deb"
+            digest = hashlib.sha256(deb.read_bytes()).hexdigest()
+
+            gnupg = root / "gnupg"
+            gnupg.mkdir(mode=0o700)
+            gpg_env = dict(os.environ, GNUPGHOME=str(gnupg))
+            self.assertEqual(
+                run(
+                    ["gpg", "--batch", "--quiet", "--passphrase", "", "--quick-generate-key",
+                     "Aura test <test@example.invalid>", "ed25519", "sign", "never"],
+                    env=gpg_env,
+                ).returncode,
+                0,
+            )
+            key = run(["gpg", "--batch", "--armor", "--export-secret-keys"], env=gpg_env).stdout
+            run(["gpgconf", "--kill", "all"], env=gpg_env)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_gh = fake_bin / "gh"
+            fake_gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                "if [[ \"$1\" == \"api\" ]]; then\n"
+                f"  echo '{TAG}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "dir=''\n"
+                "while [[ $# -gt 0 ]]; do\n"
+                "  if [[ \"$1\" == \"--dir\" ]]; then dir=\"$2\"; shift 2; continue; fi\n"
+                "  shift\n"
+                "done\n"
+                "cp \"$FAKE_ASSETS\"/* \"$dir/\"\n",
+                encoding="utf-8",
+            )
+            fake_gh.chmod(0o755)
+            env = dict(
+                os.environ,
+                PATH=f"{fake_bin}:{os.environ['PATH']}",
+                FAKE_ASSETS=str(assets),
+                APT_SIGNING_KEY=key,
+            )
+
+            # Case 1: an extra downloaded .deb not listed in SHA256SUMS must fail.
+            extra = assets / f"aura-{TAG}-extra.deb"
+            shutil.copy(deb, extra)
+            (assets / "SHA256SUMS").write_text(f"{digest}  {deb.name}\n", encoding="utf-8")
+            out_unlisted = root / "out-unlisted"
+            res_unlisted = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_unlisted], env=env)
+            self.assertNotEqual(res_unlisted.returncode, 0, res_unlisted.stdout + res_unlisted.stderr)
+            self.assertFalse(out_unlisted.exists())
+            extra.unlink()
+
+            # Case 2: duplicate SHA256SUMS entries for the same .deb must fail.
+            (assets / "SHA256SUMS").write_text(
+                f"{digest}  {deb.name}\n{digest}  {deb.name}\n", encoding="utf-8"
+            )
+            out_dup = root / "out-dup"
+            res_dup = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_dup], env=env)
+            self.assertNotEqual(res_dup.returncode, 0, res_dup.stdout + res_dup.stderr)
+            self.assertFalse(out_dup.exists())
+
+            # Case 3: exact unique match succeeds.
+            (assets / "SHA256SUMS").write_text(f"{digest}  {deb.name}\n", encoding="utf-8")
+            out_ok = root / "out-ok"
+            res_ok = run(["bash", SCRIPTS / "publish-apt-repository.sh", out_ok], env=env)
+            self.assertEqual(res_ok.returncode, 0, res_ok.stderr)
+            self.assertTrue((out_ok / "dists/stable/InRelease").is_file())
+
+    @unittest.skipUnless(
+        all(shutil.which(tool) for tool in ("apt-ftparchive", "dpkg-scanpackages", "gpg", "gpgv")),
+        "needs apt-ftparchive, dpkg-scanpackages and gpg",
+    )
+    def test_build_apt_repository_rejects_invalid_control_metadata(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-apt-meta-") as temp:
+            root = Path(temp)
+            debs = root / "debs"
+            debs.mkdir()
+            (debs / "aura-test.deb").write_bytes(b"placeholder")
+
+            gnupg = root / "gnupg"
+            gnupg.mkdir(mode=0o700)
+            gpg_env = dict(os.environ, GNUPGHOME=str(gnupg))
+            self.assertEqual(
+                run(
+                    ["gpg", "--batch", "--quiet", "--passphrase", "", "--quick-generate-key",
+                     "Aura test <test@example.invalid>", "ed25519", "sign", "never"],
+                    env=gpg_env,
+                ).returncode,
+                0,
+            )
+            key = run(["gpg", "--batch", "--armor", "--export-secret-keys"], env=gpg_env).stdout
+            run(["gpgconf", "--kill", "all"], env=gpg_env)
+
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            fake_dpkg_deb = fake_bin / "dpkg-deb"
+            fake_dpkg_deb.write_text(
+                "#!/usr/bin/env bash\n"
+                "field=\"${@: -1}\"\n"
+                "case \"$field\" in\n"
+                "  Package) echo aura ;;\n"
+                "  Architecture) echo \"$FAKE_ARCH\" ;;\n"
+                "  Version) echo \"$FAKE_VER\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_dpkg_deb.chmod(0o755)
+
+            for arch, ver in (
+                ("i386", "0.17.0"),
+                ("amd64 -o", "0.17.0"),
+                ("../amd64", "0.17.0"),
+                ("amd64", "../escape"),
+                ("amd64", "1.0..2"),
+                ("amd64", "-0.17.0"),
+                ("amd64", "0.17.0/extra"),
+            ):
+                with self.subTest(arch=arch, ver=ver):
+                    output = root / f"out-{hash((arch, ver)) & 0xffff}"
+                    res = run(
+                        ["bash", SCRIPTS / "build-apt-repository.sh", debs, output],
+                        env=dict(
+                            os.environ,
+                            PATH=f"{fake_bin}:{os.environ['PATH']}",
+                            APT_SIGNING_KEY=key,
+                            FAKE_ARCH=arch,
+                            FAKE_VER=ver,
+                        ),
+                    )
+                    self.assertNotEqual(res.returncode, 0, res.stdout + res.stderr)
+                    self.assertIn("invalid Debian", res.stderr)
+                    self.assertFalse((output / "pool").exists())
+                    self.assertFalse((output / "dists/stable/InRelease").exists())
+
 
 class ChocolateyPackageTests(unittest.TestCase):
     def stage(self, temp: str, name: str):
