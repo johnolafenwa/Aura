@@ -455,8 +455,5 @@ fn a_start_is_followed_through_a_few_counters_only() {
 fn an_inner_start_nothing_bounds_is_not_a_counter() {
     let found = proofs("pairs_from");
     assert!(!found.is_empty());
-    assert!(
-        found.iter().all(|(_, proof)| proof.is_none()),
-        "{found:?}"
-    );
+    assert!(found.iter().all(|(_, proof)| proof.is_none()), "{found:?}");
 }

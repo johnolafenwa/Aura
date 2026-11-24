@@ -18167,7 +18167,13 @@ fn a_function_that_only_calls_total_leaves_keeps_no_frame() {
     for name in ["Vec2.dot", "Vec2.scale", "twice"] {
         assert!(total.contains(name), "{name}: {total:?}");
     }
-    for name in ["next", "ratio", "Vec2.normalized", "Scene.brightness", "main"] {
+    for name in [
+        "next",
+        "ratio",
+        "Vec2.normalized",
+        "Scene.brightness",
+        "main",
+    ] {
         assert!(!total.contains(name), "{name}: {total:?}");
     }
     // A caller of total leaves is no leaf, and keeps no frame either. Its

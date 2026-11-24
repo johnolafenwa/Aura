@@ -473,8 +473,8 @@ fn counters(
                             .enumerate()
                             .filter(|(_, instruction)| changes(instruction, bound))
                             .map(move |(position, instruction)| {
-                                let (_, value) = assigned(instruction)
-                                    .filter(|(target, _)| *target == bound)?;
+                                let (_, value) =
+                                    assigned(instruction).filter(|(target, _)| *target == bound)?;
                                 match affine_value(block, position, value, MAX_CHAIN) {
                                     Some((None, constant)) => Some(constant),
                                     _ => None,

@@ -14308,8 +14308,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(wrap);
         let from_end = self.builder.iadd(len, index);
         let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
-        self.builder
-            .brif(counted, in_range, &[from_end], slow, &[]);
+        self.builder.brif(counted, in_range, &[from_end], slow, &[]);
         self.builder.switch_to_block(in_range);
         self.builder.seal_block(in_range);
         self.builder.block_params(in_range)[0]
@@ -20142,8 +20141,7 @@ fn leaf_body_calling(
                         callee.is_some_and(|name| total.is_some_and(|total| total.contains(name)))
                             && type_args.is_empty()
                             && args.iter().all(|argument| {
-                                argument.writeback_place.is_none()
-                                    && plain_operand(&argument.value)
+                                argument.writeback_place.is_none() && plain_operand(&argument.value)
                             })
                     }
                     Rvalue::Unary { value, .. } => plain_operand(value),
