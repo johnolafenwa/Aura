@@ -44,6 +44,7 @@ fn evaluate_on_stack(
         Default::default(),
     );
     runtime.safepoints_enabled = false;
+    runtime.raw_memory_allowed = false;
     let mut result = BTreeMap::new();
     let module = Arc::clone(&runtime.module);
     let mut unavailable = HashSet::new();
@@ -146,7 +147,12 @@ impl MirRuntime {
                     _ => continue,
                 };
                 match value {
-                    Rvalue::StartTask { .. } => return false,
+                    Rvalue::StartTask { .. }
+                    | Rvalue::ModuleLoad { .. }
+                    | Rvalue::ModuleStore { .. }
+                    | Rvalue::ModuleAddress { .. }
+                    | Rvalue::CPointerAccess { .. }
+                    | Rvalue::CFieldAddress { .. } => return false,
                     Rvalue::Closure { function, .. } => {
                         self.queue_callee(&mut pending, function, None)
                     }
@@ -182,6 +188,13 @@ impl MirRuntime {
                         }
                     }
                     Rvalue::Call { callee, args, .. } => match callee {
+                        CallTarget::Name(name) if crate::mir::fixed_arrays::is_operation(name) => {
+                            if crate::mir::fixed_arrays::checked_form(name)
+                                == crate::mir::fixed_arrays::ADDRESS
+                            {
+                                return false;
+                            }
+                        }
                         CallTarget::Name(name) => {
                             if let Some(op) = builtin_function_for_name(name, |name| {
                                 self.declares_user_function(name)
@@ -537,6 +550,27 @@ impl Budget {
                 || matches!(left, Operand::Place(p) | Operand::MovePlace(p) if env.place_ref(p).is_ok_and(|v|matches!(&*v, Value::String(_)))) =>
             {
                 payload(left).saturating_add(payload(right))
+            }
+            Rvalue::Call {
+                callee: CallTarget::Name(name),
+                args,
+                type_args,
+            } if crate::mir::fixed_arrays::is_operation(name) => {
+                let count = type_args
+                    .get("array")
+                    .and_then(Type::as_fixed_array)
+                    .map_or(0, |(_, count)| count);
+                // Fixed literals and repetitions use a temporary Vec<Value>
+                // before packing. Charge one host-independent upper bound per slot.
+                let scratch = count.saturating_mul(96);
+                let elements = if name == crate::mir::fixed_arrays::REPEAT {
+                    args.first()
+                        .map_or(0, |arg| count.saturating_mul(payload(&arg.value)))
+                } else {
+                    args.iter()
+                        .fold(0usize, |n, arg| n.saturating_add(payload(&arg.value)))
+                };
+                scratch.saturating_add(elements)
             }
             Rvalue::Call { callee, args, .. } => {
                 let (op, receiver) = match callee {

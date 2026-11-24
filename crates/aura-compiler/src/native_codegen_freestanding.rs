@@ -583,6 +583,7 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
         return Err(problems);
     }
     frozen_tables::detach_initializers(&mut module);
+    super::wide_numbers::install_layouts(&mut module);
     keep_reached_functions(&mut module);
     frozen_tables::lower_reads(&mut module, &mut problems);
     for function in &mut module.functions {
@@ -663,6 +664,13 @@ fn keep_reached_functions(module: &mut MirModule) {
         .flat_map(|block| &block.instructions)
         .filter_map(|instruction| match instruction {
             Instruction::Assign {
+                value:
+                    Rvalue::ModuleLoad { key }
+                    | Rvalue::ModuleAddress { key }
+                    | Rvalue::ModuleStore { key, .. },
+                ..
+            } => Some(key.clone()),
+            Instruction::Assign {
                 value: Rvalue::ModuleConstant { key, .. },
                 ..
             } => Some(key.clone()),
@@ -678,6 +686,9 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
     match value {
         serde_json::Value::String(text) => out.push(text.clone()),
         serde_json::Value::Array(items) => items.iter().for_each(|item| collect_strings(item, out)),
+        // A resolved host operation names a runtime entry directly. Its
+        // callable-value wrapper is reachable only through a function operand.
+        serde_json::Value::Object(fields) if fields.len() == 1 && fields.contains_key("Host") => {}
         serde_json::Value::Object(fields) => {
             fields.values().for_each(|item| collect_strings(item, out))
         }
@@ -724,6 +735,7 @@ fn strip_assertion_text(function: &mut MirFunction) {
 fn words_only(ty: &Type, classes: &HashMap<String, MirClass>) -> bool {
     fn words(ty: &DirectType) -> bool {
         match ty {
+            DirectType::Fixed(_) => true,
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
             DirectType::Union(union) => {
                 union.owning.is_empty() && union.members.iter().all(|member| words(&member.ty))
@@ -850,6 +862,18 @@ fn check_function(
                     report(span, "uses a `with` block".to_string(), "");
                     continue;
                 }
+                Instruction::IndexInRange { list, .. }
+                    if function
+                        .local_types
+                        .iter()
+                        .any(|v| v.name == *list && v.ty.as_fixed_array().is_some())
+                        || function
+                            .params
+                            .iter()
+                            .any(|v| v.name == *list && v.ty.as_fixed_array().is_some()) =>
+                {
+                    continue
+                }
                 Instruction::IndexInRange { .. }
                 | Instruction::BeginElementLoan { .. }
                 | Instruction::ReborrowElement { .. } => {
@@ -887,6 +911,9 @@ fn check_function(
                     check_call(callee, args, classes, functions)
                 }
                 Rvalue::ModuleConstant { initializer, .. } if initializer.is_empty() => None,
+                Rvalue::CPointerAccess { .. } => None,
+                Rvalue::CFieldAddress { .. } => None,
+                Rvalue::ModuleLoad {..} | Rvalue::ModuleAddress {..} | Rvalue::ModuleStore {..} => None,
                 Rvalue::ModuleConstant { key, .. } => Some((
                     format!("reads the module constant `{key}`"),
                     "a freestanding program has no startup code to compute a constant: write the value where it is used, or return it from a function",
@@ -945,6 +972,9 @@ pub(super) fn memory_operation(name: &str) -> Option<(MemoryAccess, ScalarKind)>
     if operation == "fence" {
         return Some((MemoryAccess::Fence, ScalarKind::Unit));
     }
+    if let Some(access) = super::typed_memory::operation(operation) {
+        return Some(access);
+    }
     let (operation, width) = operation.rsplit_once("_uint")?;
     let kind = match width {
         "8" => ScalarKind::Uint8,
@@ -979,9 +1009,35 @@ impl FunctionCompiler<'_> {
         let Some((access, kind)) = memory_operation(name) else {
             return Ok(None);
         };
+        let (access, args) = if let Some(op) = aura_core::atomic_order::AtomicOperation::of(name) {
+            // A function operand in saved MIR, or even a string naming this
+            // wrapper, can keep it alive. It receives its order as a parameter.
+            if self.freestanding.is_none() && self.current_function_name == name {
+                return Ok(None);
+            }
+            let arity = op.arity();
+            let order = |index: usize| match args.get(index).map(|arg| &arg.value) {
+                None => Ok(None),
+                Some(Operand::String(text)) => Ok(Some(text.as_str())),
+                other => Err(format!("expected a constant atomic order, found {other:?}")),
+            };
+            let (success, failure) = op.orders(
+                order(arity)?,
+                order(arity + 1)?.filter(|text| !text.is_empty()),
+            )?;
+            (MemoryAccess::Ordered(op, success, failure), &args[..arity])
+        } else {
+            (access, args)
+        };
         let mut words = Vec::with_capacity(args.len());
         for argument in args {
             words.push(self.load_operand(&argument.value)?.values[0]);
+        }
+        if kind == ScalarKind::Bool {
+            return self.compile_memory_bool(access, &words).map(Some);
+        }
+        if let Some(value) = self.compile_typed_memory(access, kind, &words) {
+            return Ok(Some(value));
         }
         let width = match kind {
             ScalarKind::Uint8 => types::I8,
@@ -1010,6 +1066,7 @@ fn check_call(
 ) -> Option<(String, &'static str)> {
     match callee {
         CallTarget::Name(name) if frozen_tables::is_projection(name) => None,
+        CallTarget::Name(name) if crate::mir::fixed_arrays::is_operation(name) => None,
         CallTarget::Name(name) if functions.contains(name.as_str()) => None,
         CallTarget::Name(name) => {
             Some((format!("calls `{}`", public_direct_function_name(name)), ""))
@@ -1060,6 +1117,14 @@ fn check_call(
                     FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max | FunctionOp::Sqrt,
                 ),
             receiver: None,
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::Bits(_)),
+            ..
+        } => None,
+        CallTarget::Runtime {
+            op: RuntimeOp::Scalar(ScalarOp::ToFloat),
             ..
         } => None,
         // A `mem` function is one instruction.

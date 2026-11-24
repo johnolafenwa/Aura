@@ -7,6 +7,8 @@ use std::ops::Range;
 mod predicates;
 mod resolver;
 mod statements;
+#[cfg(test)]
+mod systems_tests;
 pub(super) use resolver::Resolver;
 
 /// Root discovery can use already selected imports. If a guard itself needs a
@@ -47,6 +49,36 @@ struct Arm {
 }
 
 impl Parser {
+    /// A leading `mut` can be script-local or module storage. When only a
+    /// guarded entry can make later declarations legal, parse them provisionally.
+    /// Projection validates their scope again using the selected entry point.
+    pub(super) fn parse_with_possible_entry(&mut self) -> Result<Module> {
+        let error = match self.parse_module() {
+            Ok(module) => return Ok(module),
+            Err(error) => error,
+        };
+        if self.module_storage
+            || !self.tokens.windows(2).any(|pair| {
+                matches!((&pair[0].kind, &pair[1].kind),
+                (TokenKind::KwDef, TokenKind::Identifier(name)) if name == "main")
+                    || matches!((&pair[0].kind, &pair[1].kind),
+                    (TokenKind::Identifier(name), TokenKind::StringLiteral(_)) if name == "export")
+            })
+        {
+            return Err(error);
+        }
+        let mut provisional = Parser::new(std::mem::take(&mut self.tokens));
+        provisional.source_lines = std::mem::take(&mut self.source_lines);
+        provisional.module_storage = true;
+        match provisional.parse_module() {
+            Ok(module) if !provisional.declaration_ifs.is_empty() => {
+                *self = provisional;
+                Ok(module)
+            }
+            _ => Err(error),
+        }
+    }
+
     pub(super) fn declaration_kind(
         &self,
         imports: &[ImportDecl],
@@ -96,7 +128,16 @@ impl Parser {
                     | TokenKind::KwTrait
                     | TokenKind::KwImpl
                     | TokenKind::KwPublic => return Some(true),
-                    TokenKind::KwDef if depth == 1 && !seen_statement => return Some(true),
+                    TokenKind::KwDef if depth == 1 => {
+                        let entry = matches!(self.peek_kind_at(cursor), Some(TokenKind::Identifier(name)) if name == "main");
+                        if !seen_statement {
+                            return Some(true);
+                        }
+                        if marker && entry {
+                            // A runtime guard can still introduce a script-local function.
+                            return Some(false);
+                        }
+                    }
                     TokenKind::Identifier(name)
                         if name == "const"
                             && matches!(
@@ -169,6 +210,7 @@ impl Parser {
         &mut self,
         module: &mut Module,
         resolver: &mut Resolver,
+        declaration_module: bool,
     ) -> Result<()> {
         if self.declaration_ifs.is_empty()
             && !module.constants.iter().any(|binding| binding.required)
@@ -249,6 +291,7 @@ impl Parser {
             }
             tokens.extend_from_slice(&self.tokens[kept..]);
             let mut parser = Parser::new(tokens);
+            parser.module_storage = declaration_module || parser.has_explicit_entry();
             parser.projected = true;
             parser.source_lines.clone_from(&self.source_lines);
             *module = parser.parse_module()?;

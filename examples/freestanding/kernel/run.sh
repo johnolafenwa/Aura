@@ -29,4 +29,4 @@ esac
 "$aura" build --freestanding --target "$target" -o "$out/kernel.o" "$here/src/main.au"
 clang "${clang_target[@]}" -c "$here/boards/$board.S" -o "$out/start.o"
 ld.lld -T "$here/boards/$board.ld" --gc-sections "$out/start.o" "$out/kernel.o" -o "$out/kernel.elf"
-timeout 20 "${qemu[@]}" -nographic -kernel "$out/kernel.elf"
+timeout 20 "${qemu[@]}" -nic none -nographic -kernel "$out/kernel.elf"

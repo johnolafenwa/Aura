@@ -12,6 +12,7 @@ pub(super) fn namespace() -> ModuleNamespace {
                 module_name: "build".into(),
                 decl: ConstantDecl {
                     required: true,
+                    mutable: false,
                     public: true,
                     name: name.into(),
                     annotation: Some(annotation),
@@ -19,6 +20,7 @@ pub(super) fn namespace() -> ModuleNamespace {
                     span: builtin_span(),
                 },
                 ty,
+                state: None,
             },
         );
     };

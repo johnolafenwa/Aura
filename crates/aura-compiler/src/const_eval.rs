@@ -40,6 +40,9 @@ fn required_binding_error(constant: &ConstantInfo) -> Diagnostic {
 fn evaluation_mir(program: &mut Program) -> Result<Option<mir::MirModule>> {
     let mut needs_interpreter = false;
     for constant in &program.constant_init_plan {
+        if constant.decl.mutable {
+            continue;
+        }
         if let Some(value) = literal(constant) {
             program.frozen_constants.insert(key(constant), value);
         } else if can_freeze_result(&constant.ty) {
@@ -54,7 +57,7 @@ fn evaluation_mir(program: &mut Program) -> Result<Option<mir::MirModule>> {
     let candidates = program
         .constant_init_plan
         .iter()
-        .filter(|constant| can_freeze_result(&constant.ty));
+        .filter(|constant| !constant.decl.mutable && can_freeze_result(&constant.ty));
     let mut module = mir::lower_implicit_with_constants(program, candidates);
     mir::methods::resolve_methods(&mut module);
     Ok(Some(module))
@@ -71,6 +74,9 @@ fn can_freeze_result(ty: &Type) -> bool {
         | Type::Module(_) => false,
         Type::Tuple(items) => items.iter().all(can_freeze_result),
         Type::Union(union) => union.members.iter().any(can_freeze_result),
+        Type::Named(_, _) if ty.as_raw_pointer().is_some() || ty.as_fixed_array().is_some() => {
+            false
+        }
         Type::Named(name, args) => {
             !matches!(
                 name.as_str(),

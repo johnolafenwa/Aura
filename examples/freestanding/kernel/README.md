@@ -24,13 +24,15 @@ p=168
 c=111
 r=1000
 n=100
-trap 1 main.au:179:13
+s=42
+trap 1 main.au:185:13
 ```
 
 - `p` is the number of primes below 1000 and `c` the Collatz steps from 27.
 - `r` is a float result: a point turned 1000 times stays on the unit circle.
 - `n` is a counter raised 100 times under a lock made of
   `mem.atomic_compare_exchange_uint32`.
+- `s` reads back the second sample after a typed pointer writes it in module storage.
 - The last line is the `aura_trap` hook reporting a `uint8` overflow the
   program makes on purpose: code 1, then the file, line, and column.
 

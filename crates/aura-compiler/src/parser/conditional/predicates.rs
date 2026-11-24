@@ -135,6 +135,7 @@ pub(super) fn evaluate(
     // A space makes the compiler's private spelling inaccessible in source.
     let span = crate::analysis::expression_start_span(expression);
     probe.constants.push(ConstantDecl {
+        mutable: false,
         public: false,
         required: true,
         name: CONDITION_RESULT.to_string(),

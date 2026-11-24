@@ -71,37 +71,43 @@ function indentation(line) {
 }
 
 function declarationForLine(line, lineNumber) {
-  const ffiPatterns = [
+  const declarationPatterns = [
+    // At column zero, mut introduces script storage or a freestanding module cell.
+    {
+      pattern: /^((?:public\s+)?mut\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\s*[:=])/,
+      kind: "variable",
+      detail: "mut"
+    },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+opaque\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+opaque\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" opaque class'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+(?:(?:packed|align\s*\(\s*[0-9][\w]*\s*\))\s+){0,2}class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" class'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+union\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+union\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" union'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "function",
       detail: 'extern "C" function'
     }
   ];
-  for (const { pattern, kind, detail } of ffiPatterns) {
-    const ffiMatch = line.match(pattern);
-    if (ffiMatch) {
-      const [, indentation, declarationPrefix, name] = ffiMatch;
-      const startCharacter = indentation.length + declarationPrefix.length;
+  for (const { pattern, kind, detail } of declarationPatterns) {
+    const match = line.match(pattern);
+    if (match) {
+      const [, declarationPrefix, name] = match;
+      const startCharacter = declarationPrefix.length;
       return {
         name,
         kind,
@@ -109,7 +115,7 @@ function declarationForLine(line, lineNumber) {
         line: lineNumber,
         startCharacter,
         endCharacter: startCharacter + name.length,
-        indent: indentation.length,
+        indent: indentation(line),
         children: []
       };
     }
@@ -137,11 +143,13 @@ function declarationForLine(line, lineNumber) {
 }
 
 function recoverSymbols(text) {
+  const moduleStorage = process.env.AURA_LSP_FREESTANDING === "1" ||
+    /^(?:public[ \t]+)?(?:export[ \t]+"C"[ \t]+def\b|def[ \t]+main\b)/m.test(text);
   const roots = [];
   const containers = [];
   for (const [lineNumber, line] of text.split(/\r?\n/).entries()) {
     const symbol = declarationForLine(line, lineNumber);
-    if (!symbol) {
+    if (!symbol || (symbol.kind === "variable" && !moduleStorage && !line.startsWith("public"))) {
       continue;
     }
     while (
@@ -216,6 +224,7 @@ function completionsForDocument(text, line, character, triggerCharacter) {
   const items = [
     ...KEYWORDS.map((name) => ({ name, kind: "keyword", detail: "keyword" })),
     ...BUILTINS.map((name) => ({ name, kind: "function", detail: "builtin" })),
+    ...["fixed", "ptr"].map((name) => ({ name, kind: "type", detail: "builtin type" })),
     ...flattenSymbols(documentSymbols(text)).map((symbol) => ({
       name: symbol.name,
       kind: symbol.kind,

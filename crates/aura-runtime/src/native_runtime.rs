@@ -16794,6 +16794,34 @@ host_builtin_entries! {
     borrowed "bytes::starts_with" => aura_host_bytes_starts_with(|args| direct_bytes_search("bytes::starts_with", args));
     borrowed "bytes::ends_with" => aura_host_bytes_ends_with(|args| direct_bytes_search("bytes::ends_with", args));
     borrowed "bytes::find" => aura_host_bytes_find(|args| direct_bytes_search("bytes::find", args));
+    owned "mem::read_bool" => aura_host_mem_read_bool(host_builtins::host_mem_read_bool);
+    owned "mem::write_bool" => aura_host_mem_write_bool(host_builtins::host_mem_write_bool);
+    owned "mem::volatile_read_bool" => aura_host_mem_volatile_read_bool(host_builtins::host_mem_volatile_read_bool);
+    owned "mem::volatile_write_bool" => aura_host_mem_volatile_write_bool(host_builtins::host_mem_volatile_write_bool);
+    owned "mem::read_int8" => aura_host_mem_read_int8(host_builtins::host_mem_read_int8);
+    owned "mem::write_int8" => aura_host_mem_write_int8(host_builtins::host_mem_write_int8);
+    owned "mem::volatile_read_int8" => aura_host_mem_volatile_read_int8(host_builtins::host_mem_volatile_read_int8);
+    owned "mem::volatile_write_int8" => aura_host_mem_volatile_write_int8(host_builtins::host_mem_volatile_write_int8);
+    owned "mem::read_int16" => aura_host_mem_read_int16(host_builtins::host_mem_read_int16);
+    owned "mem::write_int16" => aura_host_mem_write_int16(host_builtins::host_mem_write_int16);
+    owned "mem::volatile_read_int16" => aura_host_mem_volatile_read_int16(host_builtins::host_mem_volatile_read_int16);
+    owned "mem::volatile_write_int16" => aura_host_mem_volatile_write_int16(host_builtins::host_mem_volatile_write_int16);
+    owned "mem::read_int32" => aura_host_mem_read_int32(host_builtins::host_mem_read_int32);
+    owned "mem::write_int32" => aura_host_mem_write_int32(host_builtins::host_mem_write_int32);
+    owned "mem::volatile_read_int32" => aura_host_mem_volatile_read_int32(host_builtins::host_mem_volatile_read_int32);
+    owned "mem::volatile_write_int32" => aura_host_mem_volatile_write_int32(host_builtins::host_mem_volatile_write_int32);
+    owned "mem::read_int64" => aura_host_mem_read_int64(host_builtins::host_mem_read_int64);
+    owned "mem::write_int64" => aura_host_mem_write_int64(host_builtins::host_mem_write_int64);
+    owned "mem::volatile_read_int64" => aura_host_mem_volatile_read_int64(host_builtins::host_mem_volatile_read_int64);
+    owned "mem::volatile_write_int64" => aura_host_mem_volatile_write_int64(host_builtins::host_mem_volatile_write_int64);
+    owned "mem::read_float32" => aura_host_mem_read_float32(host_builtins::host_mem_read_float32);
+    owned "mem::write_float32" => aura_host_mem_write_float32(host_builtins::host_mem_write_float32);
+    owned "mem::volatile_read_float32" => aura_host_mem_volatile_read_float32(host_builtins::host_mem_volatile_read_float32);
+    owned "mem::volatile_write_float32" => aura_host_mem_volatile_write_float32(host_builtins::host_mem_volatile_write_float32);
+    owned "mem::read_float64" => aura_host_mem_read_float64(host_builtins::host_mem_read_float64);
+    owned "mem::write_float64" => aura_host_mem_write_float64(host_builtins::host_mem_write_float64);
+    owned "mem::volatile_read_float64" => aura_host_mem_volatile_read_float64(host_builtins::host_mem_volatile_read_float64);
+    owned "mem::volatile_write_float64" => aura_host_mem_volatile_write_float64(host_builtins::host_mem_volatile_write_float64);
     owned "mem::read_uint8" => aura_host_mem_read_uint8(host_builtins::host_mem_read_uint8);
     owned "mem::read_uint16" => aura_host_mem_read_uint16(host_builtins::host_mem_read_uint16);
     owned "mem::read_uint32" => aura_host_mem_read_uint32(host_builtins::host_mem_read_uint32);
@@ -16810,16 +16838,27 @@ host_builtin_entries! {
     owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
     owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
     owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
+    owned "mem::atomic_load_uint8" => aura_host_mem_atomic_load_uint8(host_builtins::host_mem_atomic_load_uint8);
+    owned "mem::atomic_load_uint16" => aura_host_mem_atomic_load_uint16(host_builtins::host_mem_atomic_load_uint16);
     owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
     owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
+    owned "mem::atomic_store_uint8" => aura_host_mem_atomic_store_uint8(host_builtins::host_mem_atomic_store_uint8);
+    owned "mem::atomic_store_uint16" => aura_host_mem_atomic_store_uint16(host_builtins::host_mem_atomic_store_uint16);
     owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
     owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
+    owned "mem::atomic_swap_uint8" => aura_host_mem_atomic_swap_uint8(host_builtins::host_mem_atomic_swap_uint8);
+    owned "mem::atomic_swap_uint16" => aura_host_mem_atomic_swap_uint16(host_builtins::host_mem_atomic_swap_uint16);
     owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
     owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
+    owned "mem::atomic_add_uint8" => aura_host_mem_atomic_add_uint8(host_builtins::host_mem_atomic_add_uint8);
+    owned "mem::atomic_add_uint16" => aura_host_mem_atomic_add_uint16(host_builtins::host_mem_atomic_add_uint16);
     owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
     owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
+    owned "mem::atomic_compare_exchange_uint8" => aura_host_mem_atomic_compare_exchange_uint8(host_builtins::host_mem_atomic_compare_exchange_uint8);
+    owned "mem::atomic_compare_exchange_uint16" => aura_host_mem_atomic_compare_exchange_uint16(host_builtins::host_mem_atomic_compare_exchange_uint16);
     owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
     owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
+    owned "mem::__pointer_offset" => aura_host_mem_pointer_offset(host_builtins::host_mem_pointer_offset);
     owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
     owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
     owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
@@ -23067,7 +23106,11 @@ fn direct_assert_string(value: i64, field: &str) -> String {
 /// The code a failed check reports: `AU4001` for an `assert` (kind 0) and
 /// `AU4009` for a contract clause (kinds 1 and 2).
 fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) -> Diagnostic {
-    let code = if kind == 0 { "AU4001" } else { "AU4009" };
+    let code = match kind {
+        0 => "AU4001",
+        5 => "AU4033",
+        _ => "AU4009",
+    };
     match runtime_span(line, column) {
         Some(span) => Diagnostic::coded_at(code, span, message),
         None => Diagnostic::coded(code, message),
@@ -23312,3 +23355,31 @@ mod union_injection_security_tests;
 
 #[path = "native_frozen.rs"]
 mod frozen;
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_integer_bits(
+    value: *mut OpaqueValue,
+    count: i64,
+    opcode: i64,
+) -> *mut OpaqueValue {
+    use aura_core::integer_bits::BitMethod;
+    task_runtime_boundary(|| {
+        if count < 0 {
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4034",
+                "rotation count must be nonnegative",
+            ));
+        }
+        let Some(method) = BitMethod::ALL.get(opcode as usize) else {
+            runtime_error("unknown integer bit method");
+        };
+        let Value::Int(integer) = (unsafe { value_ref(value) }) else {
+            runtime_error("integer bit method requires an integer");
+        };
+        let kind = integer.runtime_kind().unwrap_or(IntegerKind::Int64);
+        let result = method
+            .apply(integer, kind, count)
+            .unwrap_or_else(|msg| runtime_error(msg));
+        boxed_value(Value::Int(result))
+    })
+}

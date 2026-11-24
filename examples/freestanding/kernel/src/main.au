@@ -9,6 +9,8 @@ Build it with `aura build --freestanding`. See `README.md`.
 import build
 import mem
 
+mut samples: fixed[uint16, 2] = [40, 0]
+
 
 # The startup code defines this. It never returns.
 extern "C" def power_off() -> None
@@ -173,6 +175,10 @@ export "C" def kernel_main(scratch: uint64) -> None:
         mem.atomic_add_uint64(counter, 1)
         release(lock)
     put_line(uart, 110, mem.atomic_load_uint64(counter))
+
+    sample = mem.address_of(samples[1])
+    sample.write(samples[0] + 2)
+    put_line(uart, 115, samples[1] as uint64)
 
     # A failed check reaches `aura_trap`: 255 + 1 does not fit a uint8.
     mut small: uint8 = (mem.atomic_load_uint64(counter) + 155) as uint8

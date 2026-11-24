@@ -353,6 +353,7 @@ fn desugar(
     }
     let constant = ConstantDecl {
         required: false,
+        mutable: false,
         public: class.is_none() && function.public,
         name: if class.is_some() {
             format!("{DECORATED_PREFIX}slot_{key}")

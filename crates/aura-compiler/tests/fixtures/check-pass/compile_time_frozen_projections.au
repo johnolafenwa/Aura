@@ -73,3 +73,19 @@ export "C" def title_len() -> int64:
     if title is None:
         return 0
     return title.len()
+
+const WIDE: list[uint128] = [
+    ((7 as uint128) << 64) | (11 as uint128),
+    ((13 as uint128) << 64) | (17 as uint128),
+]
+export "C" def wide_words(i: int64) -> uint64:
+    pair = WIDE[i]
+    return ((pair >> 64) as uint64) + ((pair & (255 as uint128)) as uint64)
+
+const SLOTS: dict[uint128, int64] = {((5 as uint128) << 64) | (9 as uint128): 3, (9 as uint128): 7}
+const SIGNED_KEYS: set[int128] = {(-7 as int128), (7 as int128)}
+export "C" def wide_keys(i: int64) -> int64:
+    key = ((i as uint128) << 64) | (9 as uint128)
+    if key in SLOTS and (-7 as int128) in SIGNED_KEYS:
+        return SLOTS[key]
+    return -1

@@ -2905,3 +2905,28 @@ fn build_cfg_cache_material_is_order_independent_and_separates_delimiters() {
     b.hosted = !b.hosted;
     assert_ne!(a.cache_key_material(), b.cache_key_material());
 }
+
+#[test]
+fn fixed_array_size_uses_the_imported_c_records_declared_alignment() {
+    let temp = TempDir::new("aura-imported-fixed-array-layout");
+    write_package(&temp, "app", "consumer", "allow_ffi = true");
+    temp.write(
+        "app/src/wire.au",
+        "public extern \"C\" align(128) class Header:\n    public tag: uint8\n",
+    );
+    // Each row occupies 128 KiB. One more row crosses the object-size limit.
+    for row_count in [16_383, 16_384] {
+        let source = format!(
+            "from wire import Header\n\ndef consume(rows: fixed[fixed[Header, 1024], {row_count}]):\n    pass\n"
+        );
+        let path = temp.write("app/src/main.au", &source);
+        let result = crate::check_path(&path);
+        if row_count == 16_383 {
+            result.expect("the imported layout fits below two GiB");
+        } else {
+            let error = result.expect_err("two GiB exceeds the maximum fixed object size");
+            assert_eq!(error.code, "AU2081");
+            assert_eq!(error.span.unwrap().line, 3);
+        }
+    }
+}

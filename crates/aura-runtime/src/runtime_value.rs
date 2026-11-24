@@ -7363,13 +7363,15 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                     ));
                 }
                 let truncated = value.trunc();
+                // The first excluded integer is a power of two, exactly representable
+                // as a float even when the inclusive maximum rounds up to it.
                 let coerced = match bounds {
                     IntegerBounds::Signed { min, max } => {
-                        if truncated < min as f64 || truncated > max as f64 {
+                        if truncated < min as f64 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));
@@ -7377,11 +7379,11 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
                         IntegerValue::from_signed(truncated as i128)
                     }
                     IntegerBounds::Unsigned { max } => {
-                        if truncated < 0.0 || truncated > max as f64 {
+                        if truncated < 0.0 || truncated >= max as f64 + 1.0 {
                             return Err(render_target_error(
                                 span,
                                 format!(
-                                    "integer value `{}` does not fit in `{}`",
+                                    "integer value `{:.0}` does not fit in `{}`",
                                     truncated, target
                                 ),
                             ));

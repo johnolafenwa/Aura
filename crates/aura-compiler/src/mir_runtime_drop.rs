@@ -19,7 +19,12 @@ impl MirRuntime {
         let owns = self.has_owner_hooks && holds_owner(value);
         if owns {
             if let Some(place) = place {
-                env.write_place(place, Value::Unit)?;
+                // Clearing this interpreter slot lends the owner to the call.
+                // Its addressed fields still contain live values until writeback.
+                let cells = std::mem::take(&mut env.raw_cells);
+                let suspended = env.write_place(place, Value::Unit);
+                env.raw_cells = cells;
+                suspended?;
             }
         }
         Ok(owns)

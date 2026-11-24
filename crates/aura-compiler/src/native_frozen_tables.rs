@@ -11,7 +11,7 @@ use crate::const_eval::FrozenValue;
 use crate::integer::IntegerRepresentation;
 
 /// A frozen sequence index is out of range or a dictionary key is absent.
-const TRAP_LOOKUP: i64 = 9;
+const TRAP_LOOKUP: i64 = 10;
 
 const INDEX: &str = "$frozen.index";
 const INDEX_REF: &str = "$frozen.index.ref";
@@ -24,8 +24,15 @@ const MAP_REF: &str = "$frozen.map.ref";
 const MAP_HAS: &str = "$frozen.map.has";
 const SET_HAS: &str = "$frozen.set.has";
 
+fn projection_key(name: &str) -> (&str, Option<&str>) {
+    match name.rsplit_once('.') {
+        Some((operation, kind @ ("text" | "int128" | "uint128"))) => (operation, Some(kind)),
+        _ => (name, None),
+    }
+}
+
 pub(in crate::native_codegen) fn is_projection(name: &str) -> bool {
-    let name = name.strip_suffix(".text").unwrap_or(name);
+    let (name, _) = projection_key(name);
     matches!(
         name,
         INDEX
@@ -327,7 +334,7 @@ fn projection(
     classes: &HashMap<&str, &MirClass>,
     returns_address: bool,
 ) -> Option<Rvalue> {
-    let mut text_key = false;
+    let mut key_suffix = None;
     let index_op = if returns_address { INDEX_REF } else { INDEX };
     // Unions use the same trailing discriminant as enums.
     if let Rvalue::UnionTagTest {
@@ -415,9 +422,15 @@ fn projection(
                         {
                             return None;
                         }
-                        text_key = true;
+                        key_suffix = Some("text");
                     } else if !is_word(key) {
-                        return None;
+                        let Type::Named(name, _) = key else {
+                            return None;
+                        };
+                        if !matches!(name.as_str(), "int128" | "uint128") {
+                            return None;
+                        }
+                        key_suffix = Some(name.as_str());
                     }
                     match op {
                         RuntimeOp::Dict(DictOp::Index) if returns_address => MAP_REF,
@@ -442,11 +455,9 @@ fn projection(
         .map(argument)
         .collect();
     Some(Rvalue::Call {
-        callee: CallTarget::Name(if text_key {
-            format!("{op}.text")
-        } else {
-            op.into()
-        }),
+        callee: CallTarget::Name(
+            key_suffix.map_or_else(|| op.into(), |kind| format!("{op}.{kind}")),
+        ),
         args,
         type_args: Default::default(),
     })
@@ -573,6 +584,7 @@ fn append_node(
 
 enum Key {
     Text(Val),
+    Wide([Val; 2]),
     Scalar(ValueRef),
 }
 
@@ -623,8 +635,7 @@ impl FunctionCompiler<'_> {
         args: &[MirArg],
         target: &DirectType,
     ) -> Result<ValueRef, String> {
-        let text = name.strip_suffix(".text");
-        let name = text.unwrap_or(name);
+        let (name, key_kind) = projection_key(name);
         let base = self.load_operand(&args[0].value)?.values[0];
         let flags = MemFlags::new();
         let len = self.builder.load(types::I64, flags, base, 0);
@@ -664,9 +675,14 @@ impl FunctionCompiler<'_> {
                     );
                     let (ptr, _) = self.string_constant(&bytes)?;
                     Key::Text(ptr)
+                } else if let Some(kind @ ("int128" | "uint128")) = key_kind {
+                    let ty = direct_type(&Type::named(kind), &self.classes)
+                        .expect("the freestanding target installs both wide integer layouts");
+                    let loaded = self.load_operand_for_target(&args[1].value, &ty)?;
+                    Key::Wide([loaded.values[0], loaded.values[1]])
                 } else {
                     let loaded = self.load_operand(&args[1].value)?;
-                    if text.is_some() {
+                    if key_kind == Some("text") {
                         Key::Text(loaded.values[0])
                     } else {
                         Key::Scalar(loaded)
@@ -688,6 +704,17 @@ impl FunctionCompiler<'_> {
     /// A register-layout aggregate keeps its ordinary MIR type. In particular,
     /// its tag tests still prove projected reads in the narrowed branch.
     fn frozen_inline_value(&mut self, base: Val, ty: &DirectType) -> Result<ValueRef, String> {
+        if wide_numbers::signed(ty).is_some() {
+            // Wide integer children contain the low and high words directly.
+            let flags = MemFlags::new();
+            return Ok(ValueRef {
+                ty: ty.clone(),
+                values: vec![
+                    self.builder.load(types::I64, flags, base, 0),
+                    self.builder.load(types::I64, flags, base, 8),
+                ],
+            });
+        }
         let mut values = Vec::new();
         match ty {
             DirectType::PlainClass(record) => {
@@ -850,6 +877,14 @@ impl FunctionCompiler<'_> {
             Key::Text(key) => {
                 let candidate = self.frozen_slot(base, i, 1, true, target);
                 self.frozen_text_equal(key, candidate)
+            }
+            Key::Wide([low, high]) => {
+                let candidate = self.frozen_slot(base, i, 1, true, target);
+                let left = self.builder.load(types::I64, MemFlags::new(), candidate, 0);
+                let right = self.builder.load(types::I64, MemFlags::new(), candidate, 8);
+                let low_matches = self.builder.icmp(IntCC::Equal, low, left);
+                let high_matches = self.builder.icmp(IntCC::Equal, high, right);
+                self.builder.band(low_matches, high_matches)
             }
             Key::Scalar(key) => {
                 let candidate = self.frozen_slot(base, i, 1, false, &key.ty);

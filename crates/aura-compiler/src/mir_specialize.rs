@@ -684,6 +684,15 @@ impl Substitution<'_> {
                 self.union(union_type, member_index)?;
                 self.types([member_type]);
             }
+            Rvalue::CPointerAccess { address, store, .. } => {
+                self.operand(address);
+                if let Some(value) = store {
+                    self.operand(value);
+                }
+            }
+            Rvalue::CFieldAddress { .. } => {}
+            Rvalue::ModuleStore { value, .. } => self.operand(value),
+            Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => {}
             Rvalue::ModuleConstant { .. } => {}
             Rvalue::Closure {
                 function,

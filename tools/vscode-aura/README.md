@@ -41,6 +41,10 @@ files. It provides:
   `lldb-dap`, with breakpoints, stepping, the call stack, and local
   variables shown as Aura values
 
+Enable **Aura: Freestanding** (`aura.freestanding`) in the workspace settings
+to check and navigate kernel or firmware code in the freestanding profile.
+The editor uses hosted checking by default.
+
 ## Debugging
 
 The debugger needs `lldb-dap`. On macOS it comes with Xcode's command line

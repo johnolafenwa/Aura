@@ -177,8 +177,7 @@ error[AU2002]: an extern function cannot return a str view because no foreign li
 The message says exactly what is missing. A returned pointer and length
 could describe static memory, a buffer the caller must free, or something
 that will change on the next call, and the declaration has no way to say
-which. Raw pointers are refused for the same reason, with a parser error
-that suggests the alternatives:
+which. Write a typed pointer as `ptr[T]`. Using C’s `*T` spelling produces a parser diagnostic.
 
 ```aura fragment
 extern "C" def strlen(text: *uint8) -> uint64
@@ -186,7 +185,7 @@ extern "C" def strlen(text: *uint8) -> uint64
 
 ```console
 $ aura check src/bad.au
-error[AU1101]: FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle
+error[AU1101]: use `ptr[T]` for a typed pointer in an extern declaration
  --> src/bad.au:1:29
   |
 1 | extern "C" def strlen(text: *uint8) -> uint64
@@ -530,14 +529,12 @@ as `mut` too, and pass a `mut` variable.
 
 Our `Timespec` has only scalar fields, so assignment copies it. We can
 build one with keyword arguments, read its fields, and keep it in a list.
-C lays out nested structs inline. If a field contains a fixed-size array or
-a union, even inside a nested struct, assignment moves the value. An
+C lays out nested structs inline. A `fixed[T, N]` field copies when `T` copies. A hosted C union or a list-backed `array[T, N]` field moves with its containing struct. An
 `extern "C"` class has no methods, field defaults, or type parameters.
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C
-bit-fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. Declare an unsigned C bit-field with its width, as in `code: uint16 bits(3)`.
 
 ### Arrays of structs
 
@@ -620,6 +617,30 @@ boundary. A `Material` that comes back from C always has four elements in
 `AU4005` before C sees anything. One more thing changes: a class that
 holds a list cannot be a `copy class`, so a `Material` moves when we assign
 it, like any other class with a list inside.
+
+### Matching a packed C header
+
+A packet header often puts a four-byte field immediately after a byte. In
+this declaration the serial number starts at byte 1. The fields `urgent`
+and `channel` share the next byte.
+
+```aura fragment
+import mem
+
+extern "C" packed class Header:
+    kind: uint8
+    serial: uint32
+    urgent: uint8 bits(1)
+    channel: uint8 bits(7)
+
+def serial_offset() -> uint64:
+    return mem.offset_of(Header, serial)
+```
+
+Assigning `header.urgent = 1` sets a single bit and preserves all seven
+channel bits. A C declaration on the other side must specify the same
+packing and bit widths. Use `mem.size_of(Header)` and `mem.align_of(Header)`
+to compare with the C compiler's `sizeof` and `_Alignof` for the target.
 
 ### Unions
 
@@ -707,11 +728,10 @@ member to read, and checking it first is our job.
 
 Reading a member gives us a copy. `event.key` builds a new `KeyboardEvent`
 each time, which is why the loop binds it to `pressed` and reads two
-fields from that. For the same reason Aura rejects `event.kind = 1` and
-`event.key.state = 0` with `AU2045`: a member is read-only. To change a
-union, build a new one with a `from_` function. The
-bytes themselves are also there, as the list `event.bytes`, for the rare
-case where nothing else will do.
+fields from that. Assign the whole member to change a mutable union.
+For example, `event.kind = 1` writes the tag and preserves the rest of
+the bytes. To update the key state, read `event.key` into a mutable
+local, update its `state`, then assign the local back to `event.key`.
 
 ## Callbacks
 
@@ -1064,7 +1084,7 @@ The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
 variadic functions such as `printf`, no
-raw pointers or pointer arithmetic, no returned views, no freeing of
+returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
 signature, built as a library the package links, or a separate helper program driven

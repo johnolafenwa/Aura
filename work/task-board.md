@@ -6,6 +6,10 @@ Last updated: 2026-11-24
 
 Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)
 
+## Release 0.18 systems data
+
+The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)
+
 ## Class items for 0.18
 
 Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).

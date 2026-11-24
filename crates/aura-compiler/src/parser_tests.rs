@@ -255,10 +255,10 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
     );
 
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
-        .expect_err("FFI v0 reserves raw pointer syntax");
+        .expect_err("C-style pointer syntax is rejected");
     assert_eq!(
         raw_pointer.message,
-        "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle"
+        "use `ptr[T]` for a typed pointer in an extern declaration"
     );
 }
 
@@ -1722,18 +1722,15 @@ fn parse_module_accepts_a_public_copy_class_beside_a_public_constant() {
 }
 
 #[test]
-fn parse_preserves_top_level_mutable_bindings_for_contextual_entry_checking() {
+fn parse_preserves_module_mutability_beside_an_explicit_entry() {
     let module = parse("mut counter = 0\ndef main():\n    pass\n")
-        .expect("parsing must preserve the script statement until the entry style is known");
-    assert!(module.constants.is_empty());
-    assert!(matches!(
-        module.top_level_stmts.as_slice(),
-        [Stmt::Assign(AssignStmt {
-            mutable: true,
-            target: AssignTarget::Name(name),
-            ..
-        })] if name == "counter"
-    ));
+        .expect("the explicit entry permits a module binding");
+    let [counter] = module.constants.as_slice() else {
+        panic!("expected one module binding");
+    };
+    assert_eq!(counter.name, "counter");
+    assert!(counter.mutable);
+    assert!(module.top_level_stmts.is_empty());
 }
 
 #[test]
@@ -5926,10 +5923,13 @@ fn an_extern_c_union_is_a_class_of_bytes_with_a_property_for_each_member() {
         [
             ("kind", true, true),
             ("from_kind", false, true),
+            ("__write_kind", false, true),
             ("key", true, true),
             ("from_key", false, true),
+            ("__write_key", false, true),
             ("text", true, true),
             ("from_text", false, true),
+            ("__write_text", false, true),
         ]
     );
     assert_eq!(
@@ -5941,9 +5941,9 @@ fn an_extern_c_union_is_a_class_of_bytes_with_a_property_for_each_member() {
         _ => panic!("a member has a named type"),
     };
     assert_eq!(named(&event.methods[0].return_type), "uint32");
-    assert_eq!(named(&event.methods[2].return_type), "Key");
-    assert_eq!(named(&event.methods[3].params[0].ty), "Key");
-    assert_eq!(named(&event.methods[4].return_type), "list");
+    assert_eq!(named(&event.methods[3].return_type), "Key");
+    assert_eq!(named(&event.methods[4].params[0].ty), "Key");
+    assert_eq!(named(&event.methods[6].return_type), "list");
 
     // The members are the fields of a class of their own.
     let members = class("__Event_members");
@@ -6197,6 +6197,25 @@ fn byte_strings_parse_to_a_byte_list_expression() {
     // A byte string starts an expression statement and an argument.
     parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
     parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
+}
+
+#[test]
+fn parses_extern_layout_controls_and_diagnoses_invalid_sizes() {
+    let source = include_str!("../tests/fixtures/parse-pass/extern_layout_controls.au");
+    crate::parse_source(source).unwrap();
+    for source in [
+        source.replace("align(16)", "align(3)"),
+        source.replace("bits(3)", "bits(17)"),
+        source.replace("uint16", "float32"),
+        source.replace("packed", "packed packed"),
+        source.replace("align(16)", "align(8) align(16)"),
+        source.replace("align(16)", "align(n)"),
+        source.replace("align(16)", "align(18446744073709551616)"),
+        source.replace("packed align(16) class", "union"),
+        include_str!("../tests/fixtures/parse-fail/c_bit_field_width.au").to_owned(),
+    ] {
+        assert_eq!(crate::parse_source(&source).unwrap_err().code, "AU2085");
+    }
 }
 
 #[test]

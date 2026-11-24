@@ -104,11 +104,18 @@ impl<'a> FunctionChecker<'a> {
         for (name, constant) in constants {
             locals.entry(name.clone()).or_insert_with(|| LocalBinding {
                 ty: constant.ty.clone(),
-                assignable: false,
-                mutable_place: false,
+                assignable: constant.decl.mutable,
+                mutable_place: constant.decl.mutable,
                 managed_resource: false,
                 passing: ReceiverKind::Borrow,
-                borrow_origin: Some(format!("module constant `{name}`")),
+                borrow_origin: Some(format!(
+                    "module {} `{name}`",
+                    if constant.decl.mutable {
+                        "state"
+                    } else {
+                        "constant"
+                    }
+                )),
                 borrowed_at: Some(constant.decl.span),
                 match_borrow_place: None,
                 stale_match_borrow_place: None,

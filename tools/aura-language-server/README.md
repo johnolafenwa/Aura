@@ -81,6 +81,16 @@ The compiler's `dependencies` list names every source file an analysis read,
 including the files read before a failed check. The server keys dependents by
 that canonical path, so a linked path to the same file still refreshes them.
 
+## Freestanding Workspaces
+
+Set `aura.freestanding` to `true` in VS Code to check, navigate and verify
+freestanding code. Other clients can start the server with
+`AURA_LSP_FREESTANDING=1`. Hosted checking is the default.
+
+The server sends `"freestanding": true` on compiler service requests in this
+profile. The compiler resolves imports and unsaved buffers with the same
+package permissions as a build.
+
 ## Positions
 
 Compiler analysis and completion use UTF-8 byte offsets within a line. LSP

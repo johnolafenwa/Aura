@@ -842,11 +842,17 @@ impl<'a> FunctionChecker<'a> {
             }
             ExprKind::Group(inner) => self.is_mutable_place(inner, locals),
             ExprKind::Member { object, field } => {
+                if self.imported_state(object, field).is_some() {
+                    return Ok(true);
+                }
                 self.resolve_member_target_type(object, field, expr.span, locals)?;
                 self.is_mutable_place(object, locals)
             }
             ExprKind::Index { object, index } => {
                 let object_ty = self.type_of_member_object_expr(object, locals)?;
+                if object_ty.as_fixed_array().is_some() {
+                    return self.is_mutable_place(object, locals);
+                }
                 // A list element or dictionary entry is a mutable place when
                 // its collection is (ADR-0061, 2026-09-21 section, A1).
                 if matches!(&object_ty, Type::Named(name, args)
@@ -924,6 +930,7 @@ impl<'a> FunctionChecker<'a> {
         span: crate::diag::Span,
         locals: &mut HashMap<String, LocalBinding>,
     ) -> Result<()> {
+        self.reject_state_loan(object, locals)?;
         self.reject_property_place(object, "mutated", locals)?;
         if let Some(place) = self.borrow_call_place(object) {
             self.ensure_place_mutation_allowed(&place, span, locals)?;

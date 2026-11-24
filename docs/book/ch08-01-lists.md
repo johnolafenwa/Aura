@@ -612,6 +612,38 @@ Each pattern matches lists of one exact length, except the last, where
 are tried in order, so the specific lengths go first. The
 [Manual](/manual/enums-and-match) has the full rules for sequence patterns.
 
+## Recording a fixed number of scores
+
+Suppose a competition has exactly three rounds. We can give each round a
+slot when we create the scorecard and update a slot when its round ends.
+
+```aura
+def adjust(scores: mut fixed[uint8, 3], index: int64, score: uint8):
+    scores[index] = score
+
+def main():
+    mut scores: fixed[uint8, 3] = [0] * 3
+    adjust(scores, 1, 85)
+    print(len(scores))
+    for score in scores:
+        print(score)
+```
+
+```console
+$ aura run examples/collections/fixed_scores.au
+3
+0
+85
+0
+```
+
+The type `fixed[uint8, 3]` sets aside three consecutive bytes. The repeat
+initializer fills each byte with zero. Passing `scores` to `adjust` lets
+the function borrow those bytes for the duration of the call. The `mut`
+in its parameter gives it permission to update the scorecard. The index
+must be 0, 1, or 2, and Aura checks a round selected at run time before
+writing to its slot.
+
 ## Making new lists from old ones
 
 Two list methods build a fresh list and leave the original alone. `filter`

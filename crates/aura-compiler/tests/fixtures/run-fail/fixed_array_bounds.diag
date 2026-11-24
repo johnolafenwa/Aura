@@ -1,0 +1,6 @@
+error[AU4031]: fixed array index `-1` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/fixed_array_bounds.au:3:16
+  |
+3 |     return row[index]
+  |                ^
+  = note: Aura call chain (innermost first): pick at 1:1 -> main at 5:1

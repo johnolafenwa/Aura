@@ -237,7 +237,14 @@ pub fn parse_source(source: &str) -> Result<ast::Module> {
 pub fn check_source(source: &str) -> Result<Program> {
     let module = parse_source(source)?;
     reject_source_only_ffi(&module)?;
-    check_module_with_builtin_imports(module)
+    let program = check_module_with_builtin_imports(module)?;
+    if program.type_definitions.uses_raw_pointer.get() {
+        return Err(Diagnostic::coded(
+            "AU2084",
+            "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+        ));
+    }
+    Ok(program)
 }
 
 fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
@@ -420,16 +427,24 @@ pub fn lower_path_to_mir_with_proved_checks(
         Some(source) => check_path_with_source(path, source)?,
         None => check_path(path)?,
     };
+    lower_program_to_mir_with_proved_checks(&program, debug, options)
+}
+
+pub fn lower_program_to_mir_with_proved_checks(
+    program: &Program,
+    debug: bool,
+    options: &verify::Options,
+) -> Result<(MirModule, mir::ProvedChecks)> {
     let options = verify::Options {
         prove_sites: true,
         ..options.clone()
     };
-    mir::lower_with_proved_checks(&program, debug, |module| {
-        verify::verify_module(&program, module, &options).map(|report| report.proved_sites)
+    mir::lower_with_proved_checks(program, debug, |module| {
+        verify::verify_module(program, module, &options).map(|report| report.proved_sites)
     })
 }
 
-fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
+pub fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
     let module = mir::lower_for_verification(program);
     verify::verify_module(program, &module, options)
 }
@@ -440,7 +455,8 @@ pub fn parse_path_with_source(path: &Path, source: &str) -> Result<ast::Module> 
     let _config = loader.package_config();
     let path = absolutize(path);
     loader.stack.push(path.clone());
-    parser::parse_for_path(source, &mut loader, &path)
+    let declaration_module = loader.freestanding;
+    parser::parse_for_path(source, &mut loader, &path, declaration_module)
 }
 
 pub fn check_path(path: &Path) -> Result<Program> {
@@ -455,7 +471,52 @@ pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
 }
 
 fn check_path_with_source_without_lockfile(path: &Path, source: &str) -> Result<Program> {
-    check_path_with_source_inner(path, source, false)
+    check_path_with_source_without_lockfile_profile(
+        path,
+        source,
+        current_build_config().freestanding,
+    )
+}
+
+pub(crate) fn check_path_with_source_without_lockfile_profile(
+    path: &Path,
+    source: &str,
+    freestanding: bool,
+) -> Result<Program> {
+    let _target = if freestanding {
+        enter_freestanding_build_config()
+    } else {
+        None
+    };
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    loader.freestanding = freestanding;
+    loader.load_program_with_source(path, source)
+}
+
+/// Select the bare target for this architecture when a caller requests the
+/// freestanding profile without already selecting an explicit bare triple.
+pub(crate) fn enter_freestanding_build_config() -> Option<build_config::BuildConfigGuard> {
+    let current = current_build_config();
+    if current.freestanding {
+        return None;
+    }
+    let target = FreestandingTarget::ALL
+        .into_iter()
+        .find(|target| target.arch() == current.arch)?;
+    let mut bare = BuildConfig::for_target(target.name(), current.debug)?;
+    bare.cfg = current.cfg;
+    Some(bare.enter())
+}
+
+/// Loads a freestanding program with the same package and FFI checks as a hosted build.
+pub fn check_freestanding_path(path: &Path, source: Option<&str>) -> Result<Program> {
+    let _target = enter_freestanding_build_config();
+    let mut loader = ModuleLoader::new_with_source(path, source)?;
+    loader.freestanding = true;
+    let _config = loader.package_config();
+    let program = loader.load_program_internal(path, source)?;
+    loader.write_lockfile()?;
+    Ok(program)
 }
 
 thread_local! {
@@ -638,6 +699,7 @@ struct LoadedModule {
 }
 
 struct ModuleLoader {
+    freestanding: bool,
     package_root: PathBuf,
     package_graph: Option<PackageGraph>,
     cache: HashMap<PathBuf, LoadedModule>,
@@ -661,6 +723,7 @@ impl ModuleLoader {
             infer_package_root(&absolute_entry, source_override)?
         };
         Ok(Self {
+            freestanding: current_build_config().freestanding,
             package_root,
             package_graph,
             cache: HashMap::new(),
@@ -714,13 +777,15 @@ impl ModuleLoader {
             })?
         };
         let display_path = path.display().to_string();
-        let module = parser::parse_for_path(&source, self, &path).map_err(|error| {
-            if error.render_path.is_some() {
-                error
-            } else {
-                error.with_render_context(display_path.clone(), source.clone())
-            }
-        })?;
+        let declaration_module = self.freestanding || !is_entry_module;
+        let module =
+            parser::parse_for_path(&source, self, &path, declaration_module).map_err(|error| {
+                if error.render_path.is_some() {
+                    error
+                } else {
+                    error.with_render_context(display_path.clone(), source.clone())
+                }
+            })?;
         if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
@@ -738,7 +803,7 @@ impl ModuleLoader {
         let module_name = self.module_name_for_path(&path);
         let imported_bindings = self.resolve_imports(&module, &path)?;
         let module_registry = self.build_module_registry();
-        let program = sema::check_with_context(
+        let program = sema::check_with_profile(
             module,
             ModuleContext {
                 module_name,
@@ -746,9 +811,19 @@ impl ModuleLoader {
                 module_registry,
                 is_entry_module,
             },
+            self.freestanding,
         )
         .map_err(|error| error.with_render_context(display_path, source.clone()))?;
         let mut program = program;
+        if program.type_definitions.uses_raw_pointer.get() {
+            match &self.package_graph {
+                Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
+                None => return Err(Diagnostic::coded(
+                    "AU2084",
+                    "typed raw pointers require a manifest-rooted package with allow_ffi = true",
+                )),
+            }
+        }
         self.qualify_program_imported_modules(&path, &mut program);
         program.source_path = Some(path.display().to_string());
 

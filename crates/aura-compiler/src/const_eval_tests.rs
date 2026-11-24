@@ -474,3 +474,6 @@ values = [Holder(Guard(42))]
     let required = source.replace("values =", "const values =");
     assert_eq!(check_source(&required).unwrap_err().code, "AU3025");
 }
+
+#[path = "const_eval_systems_tests.rs"]
+mod systems_data;

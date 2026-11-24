@@ -26,7 +26,7 @@ One `.au` file defines one module scope. These kinds of name share its top-level
 - functions
 - extern functions and extern opaque handle types
 - traits
-- module constants
+- module constants and freestanding mutable bindings
 - imported names
 - imported module aliases
 
@@ -59,7 +59,23 @@ Write `const` before the name to require build-time evaluation. A marked binding
 
 **Reads.** Reading a Copy-typed constant produces an ordinary copy. Reading a non-Copy constant gives shared access to the one value stored by its defining module. That read cannot move the value into owned storage, pass it to an `own` parameter, or request mutable access. When you need independent owned data, use an explicit supported `.clone()` or a constructor.
 
-**Immutability.** Module storage is immutable. Module-level `mut`, reassignment, compound assignment, and mutable access are `AU3003` errors. Keep stateful application data in a local value owned by `main` or another explicit owner.
+**Immutability.** Reassigning an immutable module binding is `AU3003`. A hosted module can share a `sync.AtomicInt` or `sync.Mutex` through an immutable binding. A hosted `mut` module declaration is `AU3030`.
+
+## Freestanding Module State
+
+Declare a mutable binding at module scope to preserve a value across exported calls.
+
+```aura fragment
+mut ticks: uint64 = 0
+
+export "C" def tick() -> uint64:
+    ticks += 1
+    return ticks
+```
+
+A `public mut` binding exposes the same storage to importers. Each read snapshots the value. Take a local copy before forming a view. Freestanding callers coordinate access across cores and interrupts. A hosted script can still declare a `mut` local in its entry statements.
+
+Scalar literals, fixed array literals, repeated elements and structural class constructors can initialize storage without startup code. An initialized C record in module storage has the target C field offsets and alignment. A literal address such as `0 as ptr[uint8]` can initialize a pointer in a package with FFI permission. A call to a user-defined initializer requires a computed value and produces `AU2080`.
 
 **Script locals.** An entry script's top-level locals live apart from module storage. [Top-Level Statement Scope](#top-level-statement-scope) covers them.
 
@@ -265,7 +281,7 @@ Builtin enum types such as `Result`, `Lookup`, `Poll`, `QueueReceive`, and `proc
 
 An entry module may contain executable top-level statements instead of a local `main`. Those statements share one top-level local environment, separate from module storage. They run in source order after the reachable module constants finish initializing.
 
-A `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
+In a hosted entry script without an export or an explicit `main`, a `mut` simple-name assignment declares a mutable top-level local. For example, `mut count = 0` creates one. Later plain and compound assignments to that name, such as `count = count + 1` and `count += 1`, stay in the statement stream and update the same local.
 
 A bare assignment to a new name depends on where it appears:
 
@@ -284,7 +300,7 @@ total = scores.len()              # immutable top-level local
 print(f"{total} of {limit}")
 ```
 
-A `public` binding must be a module constant, so `public name = value` after the first statement is a syntax error (`AU1101`). Functions see module constants but not top-level locals.
+A `public` binding belongs to module scope. A declaration such as `public name = value` after the first executable statement produces `AU1101`. Functions can see module bindings. Top-level script locals belong to the entry statements.
 
 An imported module contributes items and eagerly initialized constants. Its top-level executable statements are checked as source, but they do not run as import side effects. Put reusable executable work inside public functions.
 
@@ -333,7 +349,8 @@ Comprehension clause scopes enter one at a time. A target is established only af
 | `AU2999` | A duplicate, reserved, private, ambiguous, or otherwise invalid name or scope declaration that has no narrower code. |
 | `AU3001` | A read of a moved place, or an attempted move out of non-Copy module storage. |
 | `AU3002` | A borrow conflict. |
-| `AU3003` | An immutable place, or a request for mutable module storage. |
+| `AU3003` | An immutable place. |
+| `AU3030` | A hosted mutable module binding or a safe view of freestanding module state. |
 | `AU3004` | An invalid ownership mode. |
 | `AU4001` | Runtime re-entry into module initialization. |
 

@@ -2329,8 +2329,8 @@ fn top_level_script_plain_and_compound_reassignment_share_the_mutable_local() {
 #[test]
 fn mutable_top_level_binding_cannot_be_module_storage_beside_main() {
     let error = check_source("mut counter: int32 = 0\ndef main():\n    print(counter)\n")
-        .expect_err("mutable module storage must remain rejected");
-    assert_eq!(error.code, "AU3003");
+        .expect_err("hosted mutable module bindings require a sharing diagnostic");
+    assert_eq!(error.code, "AU3030");
     assert_eq!(error.span, Some(crate::diag::Span::new(1, 5)));
     assert!(error.message.contains("module bindings are immutable"));
 }
@@ -4657,4 +4657,78 @@ fn bare_board_examples_freeze_their_uart_address_and_decimal_divisors() {
             },
         );
     }
+}
+
+#[test]
+fn imported_c_layout_queries_use_public_types_and_respect_shadowing() {
+    let temp = TempDir::new("aura-layout-query-imports");
+    fs::create_dir(temp.path().join("src")).unwrap();
+    fs::write(
+        temp.path().join("Aura.toml"),
+        "[package]\nname = \"layouts\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    fs::write(
+        temp.path().join("src/records.au"),
+        "public extern \"C\" packed class Header:\n    tag: uint8\n    word: uint32\n\nextern \"C\" class Hidden:\n    word: uint32\n",
+    )
+    .unwrap();
+    let imports = "import mem as m\nimport records as r\n";
+    let main = temp.path().join("src/main.au");
+    let source = format!(
+        "{imports}\nrecord_bytes = m.size_of(fixed[r.Header, 3])\ndef main():\n    print(record_bytes)\n    print(m.align_of(r.Header))\n    print(m.offset_of(r.Header, word))\n"
+    );
+    fs::write(&main, &source).unwrap();
+    assert_eq!(run_path(&main).unwrap().stdout, "15\n1\n1\n");
+    for (param, query) in [
+        ("", "m.size_of(r.Hidden)"),
+        ("", "m.size_of(r.Header.word)"),
+        ("", "m.size_of(r.Header[uint8])"),
+        ("", "m.size_of(fixed[uint32, 2, 1])"),
+        ("r: int32", "m.size_of(r.Header)"),
+    ] {
+        let probe = format!("{imports}\ndef probe({param}) -> uint64:\n    return {query}\n");
+        assert_eq!(
+            check_path_with_source(&main, &probe).unwrap_err().code,
+            "AU2086",
+            "{probe}"
+        );
+    }
+}
+
+#[test]
+fn freestanding_state_selection_uses_the_target_and_the_entry_packages_flags() {
+    use crate::{
+        check_freestanding_path, const_eval::FrozenValue, current_build_config, with_build_config,
+        BuildConfig,
+    };
+
+    let temp = TempDir::new("aura-conditional-module-state");
+    fs::create_dir(temp.path().join("src")).unwrap();
+    fs::write(temp.path().join("Aura.toml"),
+        "[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[build.cfg]\nboard_state = true\n").unwrap();
+    let path = temp.path().join("src/main.au");
+    fs::write(&path, "import build\nif build.freestanding and \"board_state\" in build.cfg:\n    public mut ticks: uint64 = 0\nelse:\n    public const ticks: uint64 = 9\nconst arch = build.arch.clone()\n").unwrap();
+
+    let hosted = BuildConfig::for_target("aarch64-unknown-linux-gnu", false).unwrap();
+    with_build_config(hosted.clone(), || {
+        let program = check_path(&path).unwrap();
+        assert!(!program.constants["ticks"].decl.mutable);
+        let bare = check_freestanding_path(&path, None).unwrap();
+        assert!(bare.constants["ticks"].state.is_some());
+        assert_eq!(current_build_config(), hosted);
+    });
+    let riscv = BuildConfig::for_target("riscv64gc-unknown-none-elf", false).unwrap();
+    with_build_config(riscv, || {
+        for program in [
+            check_path(&path).unwrap(),
+            check_freestanding_path(&path, None).unwrap(),
+        ] {
+            assert!(program.constants["ticks"].state.is_some());
+            assert_eq!(
+                program.frozen_constants[&format!("{}::arch", program.module_name)],
+                FrozenValue::Str("riscv64".into())
+            );
+        }
+    });
 }

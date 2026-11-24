@@ -1,0 +1,6 @@
+def main() -> None:
+    status: uint16 = 0x8100
+    print(status.count_ones())
+    print(status.trailing_zeros())
+    print(status.rotate_left(1))
+    print(status.swap_bytes())

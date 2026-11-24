@@ -80,3 +80,18 @@ square root accept 1 to 1,000,000 significant digits. A normalized decimal
 exponent must lie between −2⁶² and 2⁶² inclusive. An exponent outside that
 range traps with `AU4002`. A requested power, shift, factorial or decimal
 scale which exceeds the runtime's construction limit traps with `AU4005`.
+
+## Fixed-Width Integer Methods
+
+Every fixed-width integer has these methods, including `int128`, `uint128`, `intsize` and `uintsize`. Signed values use their two's-complement representation. The methods need no import.
+
+| Method | Result |
+| --- | --- |
+| `x.rotate_left(count)`, `x.rotate_right(count)` | Rotate by a nonnegative `int64`, reduced modulo the receiver's width. Bits leaving one end enter the other end. |
+| `x.count_ones()` | The number of set bits, as an `int64`. |
+| `x.leading_zeros()`, `x.trailing_zeros()` | The number of zero bits before the highest or after the lowest set bit, as an `int64`. Both return the receiver's width for zero. |
+| `x.swap_bytes()` | The bytes of the receiver in reverse order. An eight-bit receiver keeps its value. |
+
+Rotations and byte swaps preserve the integer type. A rotation of a negative count fails with `AU4034`. A count with a type other than `int64` is `AU2088`. Convert an integer count with `as int64`.
+
+<<< ../../examples/numbers/register_bits.au{aura}
