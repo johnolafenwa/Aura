@@ -1629,6 +1629,8 @@ pub enum Terminator {
 /// The source check an `AssertFail` reports.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AssertKind {
+    /// A value exceeds the declared bit width of a C field.
+    CBitField,
     /// An `assert` statement or a compiler-inserted check: `AU4001`.
     #[default]
     Assert,
@@ -1652,6 +1654,7 @@ impl AssertKind {
     pub const fn code(self) -> &'static str {
         match self {
             AssertKind::Assert => "AU4001",
+            AssertKind::CBitField => "AU4033",
             AssertKind::Requires
             | AssertKind::Ensures
             | AssertKind::Invariant
@@ -1663,6 +1666,7 @@ impl AssertKind {
     pub const fn word(self) -> i64 {
         match self {
             AssertKind::Assert => 0,
+            AssertKind::CBitField => 5,
             AssertKind::Requires => 1,
             AssertKind::Ensures => 2,
             AssertKind::Invariant => 3,
@@ -16134,6 +16138,7 @@ impl<'a> Lowerer<'a> {
                 span: assign.span,
             };
             let value = self.lower_expr_for_owned_value(&compound, target_ty.as_ref());
+            self.check_member_bit_store(assign, &value);
             self.emit(Instruction::Assign {
                 target,
                 value: Rvalue::Use(value),
@@ -16149,6 +16154,7 @@ impl<'a> Lowerer<'a> {
         }
 
         let value = self.lower_expr_for_owned_value(&assign.value, target_ty.as_ref());
+        self.check_member_bit_store(assign, &value);
         if let Some(target_ty) = target_ty {
             self.retarget_operand_place(&value, &target_ty);
         }
@@ -26066,6 +26072,14 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some(Ok(value)) = self.c_layout_query(callee, args) {
+            let place = self.new_typed_temp(Type::named("uint64"));
+            self.emit(Instruction::Assign {
+                target: place.clone(),
+                value: Rvalue::Use(Operand::Int(value as u128)),
+            });
+            return Operand::Place(place);
+        }
         if let Some(info) = self.recursive_local_call(callee).cloned() {
             let mut forwarded = info
                 .captures
@@ -26413,6 +26427,16 @@ impl<'a> Lowerer<'a> {
                         );
                         self.retarget_operand_place(&value, &field_type);
                     }
+                    self.check_bit_store(
+                        class
+                            .decl
+                            .layout_controls
+                            .bit_widths
+                            .get(&field_name)
+                            .copied(),
+                        &value,
+                        argument.span,
+                    );
                     provided.insert(field_name, value);
                 }
                 let fields = class
@@ -26934,6 +26958,16 @@ impl<'a> Lowerer<'a> {
                                     );
                                     self.retarget_operand_place(&value, &field_type);
                                 }
+                                self.check_bit_store(
+                                    class
+                                        .decl
+                                        .layout_controls
+                                        .bit_widths
+                                        .get(&field_name)
+                                        .copied(),
+                                    &value,
+                                    argument.span,
+                                );
                                 provided.insert(field_name, value);
                             }
                             let fields = class
@@ -29408,6 +29442,11 @@ impl<'a> Lowerer<'a> {
             return Some(read.member_type);
         }
         if let ExprKind::Call { callee, args } = &expr.kind {
+            if self.c_layout_query(callee, args)
+            .is_some()
+            {
+                return Some(Type::named("uint64"));
+            }
             if let Some(info) = self.recursive_local_call(callee) {
                 return Some(info.return_type.clone());
             }
@@ -32133,6 +32172,9 @@ fn mir_class_type_name(
 pub(crate) mod fixed_arrays;
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_c_bit_fields.rs"]
+mod c_bit_fields;
 
 #[path = "mir_simd.rs"]
 mod simd;

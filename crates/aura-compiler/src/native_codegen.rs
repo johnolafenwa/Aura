@@ -6437,6 +6437,7 @@ impl<'a> FunctionCompiler<'a> {
                 let _ = (message, captures);
                 let (line, column) = self.span_values(Some(*span));
                 let code = match kind {
+                    AssertKind::CBitField => freestanding::TRAP_CAST,
                     AssertKind::Assert => freestanding::TRAP_ASSERT,
                     _ => freestanding::TRAP_CONTRACT,
                 };

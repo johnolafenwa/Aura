@@ -1171,6 +1171,7 @@ fn flagged_layout() -> String {
                 kind: CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), 3),
             },
         ],
+        layout_controls: Default::default(),
         union: false,
     };
     serde_json::to_string(&layout).expect("a layout serializes")

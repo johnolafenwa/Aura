@@ -583,6 +583,9 @@ pub(crate) fn check_with_profile(
         }
     }
     let mut module = module;
+    if freestanding {
+        module.use_freestanding_c_layout();
+    }
     let mut context = context;
     // A prelude name is imported only into a module that needs it: a check
     // that fails for want of one (an unknown `Ord`, `Add`, or `From`, or a
@@ -1417,6 +1420,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
 
     // A union's class holds as many bytes as the C union has. The parser
     // wrote the default of that field for a length it could not know.
+    super::c_union_writes::complete_lengths(&mut classes);
     let union_sizes = classes
         .iter()
         .filter(|(_, class)| class.decl.c_union.is_some())
@@ -2311,7 +2315,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     })
                     .transpose()?
                     .map(std::sync::Arc::new),
-                decl: constant.clone(),
+                decl: super::c_layout_queries::folded_binding(constant, &imported_modules, &classes),
                 ty: expected.unwrap_or(inferred),
             },
         );
