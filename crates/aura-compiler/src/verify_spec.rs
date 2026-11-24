@@ -421,27 +421,62 @@ impl Exec<'_> {
             .collect();
         let same = own.len() == inherited.len()
             && own.iter().zip(&inherited).all(|(a, b)| a.text == b.text);
-        if same {
+        if same || own.is_empty() {
             return;
         }
-        let env: Env = state.env.clone();
-        for clause in inherited {
-            self.assume_clause_in(state, clause, &env, trait_module);
+        let mut env: Env = state.env.clone();
+        bind_span_views(&mut env);
+        let prev_proving = self.proving;
+        let prev_module = self.spec_module.clone();
+        self.proving = false;
+        if let Some(m) = trait_module {
+            self.spec_module = m.to_string();
         }
+        let mut assumptions = Vec::new();
+        for clause in inherited {
+            let mut wd = Vec::new();
+            if let Ok(Val::Bool(term)) = self.spec(&clause.condition, &env, &mut wd, 0) {
+                wd.push(term);
+                assumptions.push(conjoin(&wd));
+            }
+        }
+        self.spec_module = prev_module;
+        self.proving = prev_proving;
+        let assumed = conjoin(&assumptions);
         let display = public_name(&name);
         for clause in own {
             let message = format!(
                 "`requires` of `{display}` follows from the trait method's: `{}`",
                 clause.text
             );
-            self.prove_clause_in(
-                state,
+            let prev_proving = self.proving;
+            let prev_module = self.spec_module.clone();
+            self.proving = true;
+            if let Some(m) = decl_module {
+                self.spec_module = m.to_string();
+            }
+            let mut wd = Vec::new();
+            let goal = match self.spec(&clause.condition, &env, &mut wd, 0) {
+                Ok(Val::Bool(term)) => {
+                    wd.push(term);
+                    let consequent = conjoin(&wd);
+                    Goal::Holds(if assumed == "true" {
+                        consequent
+                    } else {
+                        format!("(=> {assumed} {consequent})")
+                    })
+                }
+                Ok(_) => Goal::Unsupported("the clause is not a modeled `bool`".into()),
+                Err(reason) => Goal::Unsupported(reason),
+            };
+            self.spec_module = prev_module;
+            self.proving = prev_proving;
+            self.oblige(
                 ObligationKind::Requires,
                 clause.span,
                 message,
-                clause,
-                &env,
-                decl_module,
+                &state.pc,
+                goal,
             );
         }
     }

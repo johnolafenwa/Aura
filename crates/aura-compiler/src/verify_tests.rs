@@ -4134,3 +4134,113 @@ def main():
         );
     }
 }
+
+#[test]
+fn trait_weakened_requires_does_not_leak_into_impl_body() {
+    let source = r#"
+trait Reader:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x > 0
+        requires len(xs) > x
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x >= -10
+        requires len(xs) > 0
+        ensures x > 0
+        return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else { return };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::IndexInRange
+                && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body bounds check must fail under weakened requires: {report:#?}",
+    );
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::Ensures && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body ensures must fail under weakened requires: {report:#?}",
+    );
+    let program = crate::check_source(source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unproved bounds check must not be removed"
+    );
+    assert_eq!(
+        removed.assertions, 0,
+        "unproved ensures check must not be removed"
+    );
+
+    // Weakening all the way to `requires true` must keep the trait's
+    // `requires` out of the body's assumptions.
+    let trivial_requires = r#"
+trait Reader:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x >= 0 and x < len(xs)
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires true
+        return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(trivial_requires) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::IndexInRange
+                && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body with `requires true` must not inherit trait requires: {report:#?}",
+    );
+
+    // Strengthening `requires` in an impl must still fail the weakening obligation.
+    let strengthened = r#"
+trait Reader:
+    def pick(self, x: int64) -> int64:
+        requires x >= 0
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64) -> int64:
+        requires x > 10
+        return x
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(strengthened) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::Requires && matches!(check.status, Status::Failed { .. })
+        }),
+        "strengthened impl requires must fail weakening check: {report:#?}",
+    );
+}
