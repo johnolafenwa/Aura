@@ -38,6 +38,9 @@ use crate::sema::{lookup_type, optional_type, poll_type};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisOutput {
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    /// Half-open ranges of zero-based source lines discarded by build-time selection.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inactive_lines: Vec<std::ops::Range<usize>>,
     pub symbols: Vec<AnalysisSymbol>,
     pub occurrences: Vec<AnalysisOccurrence>,
     /// Source files read for the modules the analyzed file imports, directly
@@ -176,6 +179,11 @@ pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
             .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
     };
     let (mut output, reads) = crate::with_source_reads(|| {
+        // The outline parse must select the same branches as the loader. Let the
+        // normal path checker report a malformed manifest as a compiler diagnostic.
+        let _config = crate::BuildConfig::for_path(path)
+            .ok()
+            .map(crate::BuildConfig::enter);
         analyze_with_checker(source, is_local, |candidate| {
             crate::check_path_with_source_without_lockfile(path, candidate)
         })
@@ -195,6 +203,7 @@ pub fn complete_path_source(
     character: usize,
     trigger_character: Option<char>,
 ) -> Result<Vec<AnalysisCompletion>> {
+    let _config = crate::BuildConfig::for_path(path)?.enter();
     let analyzed = crate::absolutize(path);
     let is_local = |error: &Diagnostic| {
         error
@@ -264,6 +273,7 @@ where
             } else {
                 AnalysisOutput {
                     diagnostics: vec![analysis_diagnostic(&error)],
+                    inactive_lines: Vec::new(),
                     symbols: Vec::new(),
                     occurrences: Vec::new(),
                     dependencies: Vec::new(),
@@ -288,6 +298,7 @@ where
                     }
                     AnalysisOutput {
                         diagnostics: vec![analysis_diagnostic(&error)],
+                        inactive_lines: module.inactive_lines,
                         symbols,
                         occurrences: Vec::new(),
                         dependencies: Vec::new(),
@@ -448,6 +459,7 @@ impl<'a> AnalysisBuilder<'a> {
             module_sources: Default::default(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
+                inactive_lines: program.module.inactive_lines.clone(),
                 symbols,
                 occurrences: Vec::new(),
                 dependencies: Vec::new(),
@@ -7708,7 +7720,7 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
     "with", "return", "assert", "try", "lambda", "public", "mut", "own", "indirect", "copy",
-    "break", "continue", "pass", "yield",
+    "break", "continue", "pass", "yield", "const",
 ];
 
 struct CompletionMeta {

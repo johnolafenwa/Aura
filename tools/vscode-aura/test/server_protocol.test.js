@@ -1296,3 +1296,75 @@ test(
     assert.equal(fs.existsSync(verifyMarker), false, "untitled buffer triggered aura verify");
   }
 );
+
+test("bundled language server dims discarded suites and resolves declarations in them", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const uri = pathToFileURL(path.join(workspaceRoot, "build-branches.au")).href;
+  const text = [
+    "import build",
+    "public const limit = 4",
+    "if build.hosted:",
+    "    def answer() -> int64:",
+    "        return limit",
+    "else:",
+    "    def answer() -> int64:",
+    "        return missing_target_function()",
+    "    def fallback() -> int64:",
+    "        return answer()",
+    "",
+    "def main():",
+    "    print(answer())",
+    ""
+  ].join("\n");
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((entry) => entry.severity === 1), []);
+  assert.ok(diagnostics.some((entry) =>
+    entry.tags?.includes(1) && entry.range.start.line <= 6 && entry.range.end.line >= 9));
+  const params = { textDocument: { uri }, position: { line: 9, character: 16 } };
+  const hover = await client.request("textDocument/hover", params);
+  assert.match(hover.result?.contents?.value, /answer/);
+  const definition = await client.request("textDocument/definition", params);
+  assert.deepEqual(definition.result?.range, {
+    start: { line: 6, character: 8 }, end: { line: 6, character: 14 }
+  });
+});
+
+test("saving package cfg updates the dimmed branch of an open document", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-editor-cfg-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifest = path.join(dir, "Aura.toml");
+  const base = '[package]\nname = "branch_demo"\nversion = "0.1.0"\nedition = "2026"\n';
+  fs.writeFileSync(manifest, base);
+  fs.mkdirSync(path.join(dir, "src"));
+  const file = path.join(dir, "src", "main.au");
+  const text = [
+    "import build",
+    "def main():",
+    '    if "trace" in build.cfg:',
+    '        print("on")',
+    "    else:",
+    '        print("off")'
+  ].join("\n");
+  fs.writeFileSync(file, text);
+  const uri = pathToFileURL(file).href;
+  const client = await startWorkspaceServer(t, [workspaceRoot, dir]);
+  const faded = (line) => (items) =>
+    items.some((item) =>
+      item.tags?.includes(1) && item.range.start.line <= line && line <= item.range.end.line);
+  let update = publishedDiagnostics(client, uri, faded(3));
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  assert.ok(!faded(5)(await update));
+
+  fs.writeFileSync(manifest, base + '\n[build.cfg]\ntrace = true\n');
+  update = publishedDiagnostics(client, uri, faded(5));
+  client.notify("workspace/didChangeWatchedFiles", {
+    changes: [{ uri: pathToFileURL(manifest).href, type: 2 }]
+  });
+  assert.ok(!faded(3)(await update));
+});

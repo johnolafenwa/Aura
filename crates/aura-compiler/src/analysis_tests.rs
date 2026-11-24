@@ -11659,3 +11659,46 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
     assert!(read.hover.contains("index: int64"));
     assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
 }
+
+#[test]
+fn editor_analysis_reports_only_discarded_suites() {
+    let program = "import build\nif build.hosted:\n    def answer() -> int64:\n        return 3\nelse:\n    def answer() -> int64:\n        return unavailable()\ndef main():\n    print(answer())\n";
+    let analysis = analyze_source(program);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    let suggestions = complete_source(program, 0, 0, None).expect("top-level completions");
+    assert!(suggestions.iter().any(|item| item.name == "const"));
+}
+
+#[test]
+fn editor_sees_package_cfg_when_parsing_unsaved_source() {
+    let package = TempDir::new("editor-build-config");
+    let main = package.path().join("src/main.au");
+    fs::create_dir_all(main.parent().unwrap()).unwrap();
+    fs::write(&main, "def main():\n    pass\n").unwrap();
+    fs::write(
+        package.path().join("Aura.toml"),
+        "[package]\nname = \"editor_cfg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[build.cfg]\nmode = \"fixed\"\n",
+    )
+    .unwrap();
+    let source = "import build\nif build.cfg[\"mode\"] == \"fixed\":\n    def fixed() -> int64:\n        return 1\nelse:\n    def other() -> int64:\n        return absent()\n";
+    let analysis = analyze_path_source(&main, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    assert!(analysis.symbols.iter().any(|symbol| symbol.name == "fixed"));
+    assert!(!analysis.symbols.iter().any(|symbol| symbol.name == "other"));
+    assert!(complete_path_source(&main, source, 0, 0, None)
+        .unwrap()
+        .iter()
+        .any(|item| item.name == "fixed"));
+}
