@@ -559,9 +559,11 @@ pub(super) struct Exec<'a> {
     pub(super) text: super::text::TextState,
     /// What is known about the closures the function makes and calls.
     pub(super) closures: super::closures::Closures<'a>,
+    /// What the models of shaped values remember.
+    pub(super) shapes: super::shapes::ShapeState,
 }
 
-const MAX_DEPTH: usize = 3;
+pub(super) const MAX_DEPTH: usize = 3;
 
 impl<'a> Exec<'a> {
     pub(super) fn new(cx: &'a VerifyContext<'a>, function: &'a MirFunction) -> Self {
@@ -617,6 +619,7 @@ impl<'a> Exec<'a> {
             branch_guards: BTreeMap::new(),
             text: Default::default(),
             closures: Default::default(),
+            shapes: Default::default(),
         }
     }
 
@@ -1065,7 +1068,15 @@ impl<'a> Exec<'a> {
             }
         }
         if !state.env.contains_key(&root) {
-            let value = self.fresh_local(&root);
+            let lent = match state.loans.get(&root).cloned() {
+                Some(Loan::Element {
+                    list,
+                    index,
+                    projection,
+                }) => self.lent_element(state, &list, &index, &projection),
+                _ => None,
+            };
+            let value = lent.unwrap_or_else(|| self.fresh_local(&root));
             state.env.insert(root.clone(), value);
         }
         if rest.is_empty() {
@@ -1105,6 +1116,11 @@ impl<'a> Exec<'a> {
                 let source = join_path(&source, &rest.join("."));
                 return self.write_place(state, &source, value);
             }
+            Some(Loan::Element {
+                list,
+                index,
+                projection,
+            }) if self.write_element(state, path, (&list, &index, &projection), &value) => {}
             Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
                 self.havoc_inside(state, &list)
             }
@@ -1438,16 +1454,8 @@ impl<'a> Exec<'a> {
             Val::Enum(name, tag, payloads) => {
                 self.inputs
                     .push((format!("variant of {label}"), tag.clone()));
-                let names = self
-                    .cx
-                    .enum_variants(name, &[])
-                    .map(|variants| {
-                        variants
-                            .into_iter()
-                            .map(|(name, _)| name)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let names = self.cx.variant_names(name);
+                self.note_variants(&format!("variant of {label}"), &names);
                 for (variant, items) in payloads.iter().enumerate() {
                     let variant = names
                         .get(variant)
@@ -1911,6 +1919,9 @@ impl<'a> Exec<'a> {
             let values: Vec<Option<&Val>> =
                 states.iter().map(|state| state.env.get(&key)).collect();
             if values.iter().any(Option::is_none) {
+                if let Some(merged) = self.merge_assigned(&pcs, &values, &key) {
+                    env.insert(key, merged);
+                }
                 continue;
             }
             let values: Vec<&Val> = values.into_iter().flatten().collect();
@@ -1947,7 +1958,7 @@ impl<'a> Exec<'a> {
         self.define(sort, hint, merged)
     }
 
-    fn merge_vals(&mut self, pcs: &[String], values: &[&Val], hint: &str) -> Val {
+    pub(super) fn merge_vals(&mut self, pcs: &[String], values: &[&Val], hint: &str) -> Val {
         let first = values[0];
         if values.iter().all(|value| *value == first) {
             return first.clone();
@@ -1960,7 +1971,7 @@ impl<'a> Exec<'a> {
         // Values of different shapes, such as a havocked `Opaque` and a
         // modeled value, merge to a value the encoding knows nothing about.
         if !values.iter().all(|value| same_shape(first, value)) {
-            return Val::Opaque;
+            return self.merge_live(pcs, values, hint);
         }
         let scalars: Vec<&str> = values
             .iter()
@@ -2189,6 +2200,7 @@ impl<'a> Exec<'a> {
                 otherwise,
             } => {
                 let value = self.operand(&mut state, scrutinee, None);
+                let value = self.match_scrutinee(&mut state, scrutinee, value);
                 let mut out = Vec::new();
                 let mut remaining = state.pc.clone();
                 for arm in arms {
@@ -2213,6 +2225,7 @@ impl<'a> Exec<'a> {
                     remaining = and(&remaining, &not(&condition));
                     out.push((target(self, &arm.label), arm_state));
                 }
+                self.note_match_end(&value, &remaining);
                 state.pc = remaining;
                 out.push((target(self, otherwise), state));
                 out
@@ -2322,6 +2335,8 @@ impl<'a> Exec<'a> {
                     (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
                     _ => Loan::Unknown(root_of(source).to_string()),
                 };
+                // What an earlier loan under this name read is gone.
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::BeginReturnedLoan { loan, origin, .. } => {
@@ -2535,7 +2550,7 @@ impl<'a> Exec<'a> {
     }
 
     /// The items of a tuple or the fields of a class, in order.
-    fn element_items(&self, elem: &Type) -> Option<Vec<(Option<String>, Type)>> {
+    pub(super) fn element_items(&self, elem: &Type) -> Option<Vec<(Option<String>, Type)>> {
         match elem {
             Type::Tuple(items) => Some(items.iter().map(|item| (None, item.clone())).collect()),
             Type::Named(name, args) => self.cx.class_fields(name, args).map(|fields| {
@@ -2585,7 +2600,7 @@ impl<'a> Exec<'a> {
 
     /// The store with `value` at `index`, when the store models each of
     /// its scalars.
-    fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
+    pub(super) fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
         match (store, value) {
             (Store::Leaf(array, sort), Val::Float(term, float)) => {
                 let term = FloatTy::of_sort(sort)?.convert(term, *float);
@@ -3760,6 +3775,9 @@ impl<'a> Exec<'a> {
             }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
+                if let Some(result) = self.union_call(state, callee, args, target) {
+                    return result;
+                }
                 self.unmodeled(call_name(callee), |exec| {
                     if let Some(place) = receiver_place {
                         exec.havoc_place(state, place);
@@ -3997,7 +4015,7 @@ impl<'a> Exec<'a> {
     /// `ensures` of a fresh result and fresh values for what it may
     /// change. A part of a `mut` argument the callee cannot write keeps
     /// its value.
-    fn user_call(
+    pub(super) fn user_call(
         &mut self,
         state: &mut State,
         name: &str,
@@ -5119,7 +5137,7 @@ pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
                 .collect();
             Some(conjoin(&parts?))
         }
-        _ => None,
+        _ => super::shapes::shaped_eq(left, right),
     }
 }
 
@@ -5147,7 +5165,7 @@ pub(super) fn union_payload_index(segment: &str) -> Option<usize> {
         .ok()
 }
 
-fn project(value: &Val, segment: &str) -> Option<Val> {
+pub(super) fn project(value: &Val, segment: &str) -> Option<Val> {
     match value {
         Val::Union(_, members) => members.get(union_payload_index(segment)?).cloned(),
         Val::Record(_, fields) => fields
@@ -5162,7 +5180,7 @@ fn project(value: &Val, segment: &str) -> Option<Val> {
     }
 }
 
-fn set_in(value: &mut Val, segments: &[&str], new: Val) -> bool {
+pub(super) fn set_in(value: &mut Val, segments: &[&str], new: Val) -> bool {
     let Some((first, rest)) = segments.split_first() else {
         *value = new;
         return true;
@@ -5656,7 +5674,7 @@ fn same_shape(a: &Val, b: &Val) -> bool {
     }
 }
 
-fn scalar_term(value: &Val) -> Option<&str> {
+pub(super) fn scalar_term(value: &Val) -> Option<&str> {
     match value {
         Val::Int(term, _) | Val::Bool(term) | Val::Str(term) | Val::Float(term, _) => Some(term),
         _ => None,

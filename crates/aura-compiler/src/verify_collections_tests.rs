@@ -1042,10 +1042,9 @@ def main():
 }
 
 #[test]
-fn a_write_inside_a_row_keeps_the_rows_and_loses_their_elements() {
-    // A write through a borrow of a row is not followed: the outer list
-    // keeps its length, and what its rows hold is unknown after it.
-    assert_open(
+fn a_write_inside_a_row_reaches_the_row() {
+    // A write through a borrow of a row puts the changed row back.
+    assert_proved(
         r#"
 def set_cell(grid: mut list[list[int64]], r: int64, c: int64):
     requires 0 <= r and r < len(grid)
@@ -1058,11 +1057,20 @@ def main():
     mut cells = [[1, 2], [3, 4]]
     set_cell(cells, 1, 1)
 "#,
-        &[
-            "6 ensures unsupported",
-            "6 index in range unsupported",
-            "7 index in range failed",
-        ],
+    );
+    assert_open(
+        r#"
+def set_cell(grid: mut list[list[int64]], r: int64, c: int64):
+    requires 0 <= r and r < len(grid)
+    requires 0 <= c and c < len(grid[r])
+    ensures grid[r][c] == 8
+    grid[r][c] = 7
+
+def main():
+    mut cells = [[1, 2], [3, 4]]
+    set_cell(cells, 1, 1)
+"#,
+        &["5 ensures failed"],
     );
 }
 

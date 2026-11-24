@@ -46,6 +46,21 @@ takes an `Account`, starts from an object that keeps its invariants. No run
 checks these places, so while one of them is unproved
 `aura build --remove-proved-checks` removes nothing.
 
+The same holds for each such object inside a value that crosses a boundary:
+
+- a field of another object, a tuple item, a member of a union such as
+  `Account | None`, an enum payload such as the `Ok` of a `Result`, and an
+  element of a list whose elements are modeled
+- a function that takes `xs: list[Account]` starts from elements that keep
+  their invariants, and a caller proves it of the list it passes
+- a field write that breaks an object inside a value is reported where the
+  value leaves the function: at the call it is passed to, or on return
+- a list built in a loop needs a loop invariant about its elements before
+  it is passed on, such as `invariant forall(a in ys, a.balance >= 0)`
+- a part the verifier does not model is reported as `AU5104` at the
+  boundary: the values of a `dict`, the elements a comprehension builds,
+  rows of a list of lists, and an object deeper than the encoding follows
+
 A method of an `impl Trait for Class:` block cannot be `public`, so no run
 checks the class invariants around it. The verifier treats it like a public
 method anyway. Its proof assumes the invariants on entry, and a `mut self`
@@ -254,7 +269,7 @@ outcome: failed, not modeled, and undecided.
 
 | Code | Meaning |
 | --- | --- |
-| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
+| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. An enum parameter shows as the name of its variant, as in `variant of light = Off`. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
 | `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
@@ -394,7 +409,10 @@ booleans, with each integer type's range as a check:
   other list
 - a list of lists: the length of each row, and the elements of each row
   when those are integers, `bool`, or `str`. A write through a borrow of a
-  row, such as `grid[r][c] = v`, leaves the rows unknown
+  row, such as `grid[r][c] = v`, changes that element of that row
+- a borrowed element of a list of classes or tuples, such as `xs[i]`
+  passed to a function or `xs[0].add(1)`: it reads the element, and a
+  write through it changes that element of the list
 - list slices `xs[a:b]`, `xs[a:]`, and `xs[:b]`: the length, each element,
   and a check that the bounds are in order and inside the list. `reverse`,
   and `sort` and `sorted`: the result holds the same elements, and for
@@ -426,6 +444,19 @@ booleans, with each integer type's range as a check:
   `Array` of any other rank. The elements themselves, slices, and slice
   assignment are not modeled
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
+- `match` statements and `match` expressions: each arm is taken where its
+  pattern and guard hold, and a `match` over every variant of an enum takes
+  one of its arms
+- a method call on a union value: the `requires` of each member's method
+  is proved where the value holds that member, and its `ensures` is assumed
+  there
+- in contracts, a union with one member besides `None` where that member
+  is expected, as in `ensures result is None or result > 0`; `==` of
+  unions; and an enum variant without a payload, as in
+  `ensures result == Light.Green`. A contract cannot name a payload of a
+  `Result` or of another enum, because a contract may not contain `match`
+- `min(xs)` and `max(xs)` also when the list is a field, as in
+  `max(self.items)`
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - integer bit operations and shifts. `<<` and `>>` are exact, with the
@@ -443,7 +474,9 @@ booleans, with each integer type's range as a check:
   check of its argument; `gcd`, `lcm`, `comb`, and `perm` by their bounds;
   `sin` and `cos` between -1 and 1, and `exp` not below 0. The overflow of
   `lcm`, `comb`, `perm`, and `exp` is not checked
-- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals.
+  A recursive `spec def` is unfolded 8 levels deep for arguments that are
+  not literals; a check that needs more is reported as `AU5104`
 - parameters, class fields, and function results of a callable alias with
   a contract ([Callable Contracts](/manual/contracts#callable-contracts)):
   calls through them prove its `requires` and assume its `ensures`, and a
