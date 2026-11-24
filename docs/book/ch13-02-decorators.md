@@ -204,8 +204,9 @@ The help line gives the reason. What replaces a decorated function is a
 closure, and closures have no default values for their parameters, so a
 caller who left out `sep` would have nothing to fall back on. The same check,
 `AU2047`, rejects decorating `main`, a generic function, or a function that
-returns a view. Decorators also apply only to module-level functions, not to
-methods, classes, or functions inside other functions.
+returns a view. We can decorate a class method with the same syntax. For an instance method, the first parameter of the callable is the receiver. This example wraps a shared read and prints `42`:
+
+<<< ../../examples/classes/method_decorators.au{aura}
 
 Python programmers sometimes use a decorator to register a function in a
 global table as a side effect. That doesn't carry over, because Aura modules

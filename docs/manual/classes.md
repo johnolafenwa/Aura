@@ -274,11 +274,15 @@ A getter must have this exact shape:
 - It returns an owned value other than `None`. A view result is rejected.
 - Its name does not collide with a field of the class.
 
-`@property` is the only marker a class body accepts. It stands alone on the line before `def`, and it takes no arguments. Any other `@` line in a class body is `AU2005`. Decorators on module-level functions are described in [Decorators](/manual/functions#decorators).
+Give a property a setter with `@name.setter` on a method of the same name. The setter takes `mut self` and one positional value parameter of the getter's result type. It returns `None`. Both accessors belong to the same class and can appear in either order.
 
-A property is read-only. The checker rejects each of these with `AU2045`:
+<<< ../../examples/classes/property_setter.au{aura}
 
-- assignment and compound assignment, such as `reply.total_tokens = 3`
+Assignment calls the setter on a mutable place. Compound assignment evaluates the receiver and its indices once, reads the getter, evaluates the right operand, applies the operator, and calls the setter. Getter and setter visibility follow the declarations.
+
+The checker reports `AU2045` for these uses:
+
+- assignment or compound assignment to a getter without a setter
 - assignment through the result, such as `shape.origin.x = 4`
 - a `mut` argument, a `mut self` method call, or a `match mut` scrutinee
 - a `view` or `view mut` of the property
@@ -297,7 +301,7 @@ def main():
     reply.doubled = 4
 ```
 
-To change the value, bind it to a local first. The local is an independent copy.
+To change a getter result independently of the receiver, bind the result to a mutable local.
 
 A getter's docstring documents the property. Hover on a read shows the property's type and then the docstring. See [Docstrings And API Docs](/manual/docstrings).
 
@@ -414,9 +418,19 @@ with session = Session(name="db"):
 
 `with` consumes the item expression into a fresh mutable managed binding. The binding cannot be moved out while its exit is registered. The exit runs exactly once per registration, on normal exits and on maintained abnormal exits, in reverse nesting order. [Statements](/manual/statements#with-and-context-managers) defines entry views, multi-item headers, and exits that return `Result`.
 
+## Destructor Hooks
+
+A non-Copy class can define `def __drop__(mut self):`. Aura calls the hook while the fields are still available, then releases them. It runs when an owner leaves scope, when assignment replaces the value, or when an enclosing class or collection releases it. Removing and returning a collection element transfers ownership to the result. Ignoring that result releases it.
+
+<<< ../../examples/classes/drop_hook.au{aura}
+
+A whole-value move transfers the hook to the new owner. A method cannot move an owned field out of an instance with a hook because the hook must see initialized fields. The hook takes no ordinary parameters, type parameters, or preconditions. Its result is `None`. Programs cannot call the hook explicitly.
+
+Locals in one scope are released in reverse declaration order. If a hook traps, the remaining owners still run their cleanup. The first trap is the one that reaches `control.recover`, including when the original failure happened in the body. A class with a hook crosses task boundaries under the ordinary `Transfer` rules. Values a task still owns at exit run their hooks there. A value returned or sent to another task carries its cleanup obligation with it.
+
 ## Grammar
 
-[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, `@property` methods, and `pass`. An initializer is a method named `__init__`. Aura has no separate grammar for constructors, inheritance, or destructors.
+[Grammar](/manual/grammar#classes) holds the normative productions for `class`, `copy class`, visibility, type parameters, fields, field defaults, `indirect`, methods, receivers, and associated methods. A class suite contains fields, methods, decorator lines, and `pass`. Initializers and destructor hooks use the method grammar. See [Method Decorators](/manual/functions#method-decorators).
 
 ## Typing Rules
 
@@ -453,12 +467,16 @@ An instance call invokes the statically selected inherent or trait method. An as
 | `AU2001` | Unresolved class, field type, method, or member. |
 | `AU2002` | Field, default, or constructor type mismatch. Generic arity or bound failure. A non-copy field in a `copy class`. |
 | `AU2004` | Constructor or method argument-binding failure. |
-| `AU2005` | `__init__` called as a method or used as a value, or a class-body `@` line other than a bare `@property`. |
+| `AU2005` | `__init__` called as a method or used as a value. |
 | `AU2016` | Invalid `__init__` declaration: a receiver other than bare `self`, its own type parameters, a result other than `None`, `return value`, or a trait member named `__init__`. |
 | `AU2017` | A `with` item whose class has no valid `__exit__` or `close`, or whose `__enter__` has the wrong shape. |
 | `AU2043` | An invalid `Display` implementation. See [Generics And Traits](/manual/generics-and-traits#the-display-trait). |
 | `AU2044` | An invalid property declaration. |
-| `AU2045` | Assignment, mutable use, a view, or call syntax on a property. |
+| `AU2045` | Writing a getter without a setter, or using a property as a mutable argument, view, or callable. |
+| `AU2064` | Invalid setter name, declaration, or pairing with a getter. |
+| `AU2065` | Invalid destructor hook declaration. |
+| `AU2066` | Explicit reference to a destructor hook. |
+| `AU3020` | A partial move from an owner with a destructor hook. |
 | `AU2999` | Duplicate declaration, invalid visibility, invalid recursive layout, unsupported member use, and other class rejections without a narrower code. |
 | `AU3001` | Use of a moved class or field. |
 | `AU3002` | Overlapping receiver and argument borrows, or moving a field through shared access. |
@@ -482,7 +500,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.17 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
+- Aura classes have no inheritance or overloads. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -503,12 +521,13 @@ Implemented:
 - context manager classes, including generic ones
 - local shared or mutable views of fixed class fields
 - returned-view contracts tied to one receiver or parameter
-- read-only `@property` getters
+- computed property getters and setters
+- destructor hooks, method decorators, and field delegation
 - custom rendering through the prelude `Display` trait
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, property setters, and destructor hooks. Do not infer them from accepted class syntax.
+For behavior shared by several classes, see [Delegating To A Field](/manual/generics-and-traits#delegating-to-a-field).
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 

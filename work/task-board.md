@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-24
 
+## Class items for 0.18 (in verification)
+
+The combined branch contains field delegation, property setters, destructor hooks and method decorators. Focused interpreter, native, verification and editor tests passed in their feature worktrees. Track the combined checks and instruction counts in [the class items work note](2026-11-24-class-items.md).
+
 ## Release 0.17.0-preview (in progress)
 
 - Target: John's 2026-11-23 choice to land the work that Codex left and

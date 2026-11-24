@@ -347,6 +347,14 @@ well. Implementing `Priced` doesn't implement `Named` for you, though. If we
 delete the `impl Named for Book` block, the compiler reports `impl of `Priced`
 for `Book` requires supertrait `Named``.
 
+### Using a field's implementation
+
+Suppose a car gets its displayed name from its engine. If both types should satisfy `Named`, a forwarding declaration lets us write the naming logic once.
+
+<<< ../../examples/traits/delegation.au{aura}
+
+The last line prints `electric`. A function taking a `T: Named` can call `name()` on the car without knowing which field supplies it. If the car needs its own spelling later, we can add a colon and implement `name` in the delegation suite.
+
 ## Traits the language knows about
 
 A few traits have names the compiler recognizes, and implementing them changes
