@@ -58,6 +58,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "toml",
+ "typed-path",
 ]
 
 [[package]]
@@ -1261,6 +1262,12 @@ dependencies = [
  "thiserror",
  "utf-8",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
 
 [[package]]
 name = "typenum"

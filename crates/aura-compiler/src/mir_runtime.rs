@@ -5798,6 +5798,11 @@ impl MirRuntime {
                 .collect::<Vec<_>>();
             let values = evaluate_named_args(args, env)?;
             let bound = bind_builtin_args(&arg_names, values)?;
+            if let Some(budget) = &self.eval_budget {
+                if name.starts_with("path::") {
+                    return budget.path_builtin(name, &bound);
+                }
+            }
             return evaluate_host_builtin_with_program_args(
                 &metadata.qualified_name,
                 bound.into_iter().map(|argument| argument.value).collect(),

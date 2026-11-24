@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
 sha2 = "0.10"
 toml = "0.8"
+typed-path = "0.12"
 
 [dev-dependencies]
 aura-core = { path = "../aura-core", features = ["test-support"] }
