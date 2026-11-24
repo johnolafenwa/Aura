@@ -733,30 +733,12 @@ impl ModuleLoader {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
             }
-            let mut imported: Vec<_> = self
-                .cache
-                .iter()
-                .filter(|(file, _)| **file != path)
-                .collect();
-            imported.sort_by_key(|(file, _)| *file);
-            for (_, loaded) in imported {
-                let module = &loaded.program;
-                program
-                    .foreign_link
-                    .module_asm
-                    .extend_from_slice(&module.module.module_asm);
-                if module.module.asm_span.is_some() {
-                    program.foreign_link.asm_arch =
-                        module.machine_target.map(|target| target.arch().to_owned());
-                    program.foreign_link.asm_externs.extend(
-                        module
-                            .extern_functions
-                            .values()
-                            .map(|f| f.decl.link_name().to_owned()),
-                    );
-                }
-            }
-            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            program.constant_init_plan =
+                self.build_constant_init_plan(&path, &mut |import, dependency| {
+                    if import != path {
+                        inline_asm::append_module(dependency, &mut program.foreign_link);
+                    }
+                })?;
             self.cache.insert(
                 path.clone(),
                 LoadedModule {
@@ -768,12 +750,17 @@ impl ModuleLoader {
         Ok(program)
     }
 
-    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+    fn build_constant_init_plan(
+        &self,
+        entry_path: &Path,
+        visit_module: &mut dyn FnMut(&Path, &Program),
+    ) -> Result<Vec<sema::ConstantInfo>> {
         fn visit(
             loader: &ModuleLoader,
             path: &Path,
             visited: &mut BTreeSet<PathBuf>,
             plan: &mut Vec<sema::ConstantInfo>,
+            visit_module: &mut dyn FnMut(&Path, &Program),
         ) -> Result<()> {
             let path = absolutize(path);
             if !visited.insert(path.clone()) {
@@ -801,8 +788,9 @@ impl ModuleLoader {
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
-                visit(loader, &dependency, visited, plan)?;
+                visit(loader, &dependency, visited, plan, visit_module)?;
             }
+            visit_module(&path, &loaded.program);
             let mut local = loaded
                 .program
                 .constants
@@ -817,7 +805,7 @@ impl ModuleLoader {
 
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
-        visit(self, entry_path, &mut visited, &mut plan)?;
+        visit(self, entry_path, &mut visited, &mut plan, visit_module)?;
         let mut seen = BTreeSet::new();
         plan.retain(|constant| {
             seen.insert((constant.module_name.clone(), constant.decl.name.clone()))

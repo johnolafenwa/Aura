@@ -127,11 +127,6 @@ impl<'a> AsmStatement<'a> {
         {
             return Err(Diagnostic::coded_at("AU2093", expr.span, "pure assembly needs an output and cannot touch memory; noreturn assembly cannot be pure or return an output"));
         }
-        validate_placeholders(
-            asm.template,
-            asm.inputs.len() + asm.outputs.len(),
-            expr.span,
-        )?;
         Ok(Some(asm))
     }
 }
@@ -149,7 +144,7 @@ pub struct MachineAsm {
     pub output_widths: Vec<u8>,
 }
 
-pub(crate) fn integer_width(ty: &crate::sema::Type) -> Option<u8> {
+pub(crate) fn scalar_width(ty: &crate::sema::Type) -> Option<u8> {
     let crate::sema::Type::Named(name, args) = ty else {
         return None;
     };
@@ -157,22 +152,74 @@ pub(crate) fn integer_width(ty: &crate::sema::Type) -> Option<u8> {
         return None;
     }
     match name.as_str() {
-        "int8" | "uint8" => Some(8),
+        "int8" | "uint8" | "bool" => Some(8),
         "int16" | "uint16" => Some(16),
-        "int32" | "uint32" => Some(32),
-        "int64" | "uint64" => Some(64),
+        "int32" | "uint32" | "float32" => Some(32),
+        "int64" | "uint64" | "float64" => Some(64),
         _ => None,
     }
+}
+
+pub(crate) fn profile(target: FreestandingTarget) -> &'static str {
+    if target == FreestandingTarget::X86_64Kernel {
+        "x86_64-kernel"
+    } else {
+        target.arch()
+    }
+}
+
+pub(crate) fn operand_width(
+    target: FreestandingTarget,
+    name: &str,
+    ty: &crate::sema::Type,
+    span: Span,
+) -> Result<u8> {
+    let fp = match name {
+        "fpreg" => true,
+        "reg" => false,
+        _ => {
+            register(target.arch(), name)
+                .ok_or_else(|| {
+                    Diagnostic::coded_at(
+                        "AU2092",
+                        span,
+                        format!(
+                            "unknown or reserved {} assembly register `{name}`",
+                            target.arch()
+                        ),
+                    )
+                })?
+                .number
+                >= 32
+        }
+    };
+    let float = matches!(ty,crate::sema::Type::Named(name,_) if matches!(name.as_str(),"float32"|"float64"));
+    if fp && target == FreestandingTarget::X86_64Kernel {
+        return Err(Diagnostic::coded_at(
+            "AU2091",
+            span,
+            "floating-point register operands are unavailable with --kernel",
+        ));
+    }
+    scalar_width(ty).filter(|_| fp == float).ok_or_else(|| {
+        Diagnostic::coded_at(
+            "AU2091",
+            span,
+            format!("assembly register `{name}` cannot hold a `{ty}` operand"),
+        )
+    })
 }
 
 impl AsmStatement<'_> {
     pub fn machine(
         &self,
-        arch: &str,
+        target: FreestandingTarget,
         input_widths: Vec<u8>,
         output_widths: Vec<u8>,
         span: Span,
     ) -> Result<MachineAsm> {
+        let arch = target.arch();
+        validate_placeholders(self.template, self, arch, span)?;
         let mut occupied = BTreeSet::new();
         let mut constraints = Vec::new();
         let mut fixed = |name: &str, width: Option<u8>| {
@@ -183,6 +230,13 @@ impl AsmStatement<'_> {
                     format!("unknown or reserved {arch} assembly register `{name}`"),
                 )
             })?;
+            if target == FreestandingTarget::X86_64Kernel && reg.number >= 32 {
+                return Err(Diagnostic::coded_at(
+                    "AU2092",
+                    span,
+                    "floating-point registers are unavailable with --kernel",
+                ));
+            }
             if width.is_some_and(|width| reg.width.is_some_and(|bits| width != bits)) {
                 return Err(Diagnostic::coded_at(
                     "AU2091",
@@ -209,6 +263,13 @@ impl AsmStatement<'_> {
                         "q"
                     } else {
                         "r"
+                    }
+                    .to_owned()
+                } else if *name == "fpreg" {
+                    match arch {
+                        "x86_64" => "x",
+                        "aarch64" => "w",
+                        _ => "f",
                     }
                     .to_owned()
                 } else {
@@ -259,6 +320,35 @@ struct Register {
 }
 
 fn register(arch: &str, name: &str) -> Option<Register> {
+    fn indexed(name: &str, prefix: &str, limit: usize) -> Option<usize> {
+        let digits = name.strip_prefix(prefix)?;
+        let n = digits.parse::<usize>().ok()?;
+        (n < limit && digits == n.to_string()).then_some(n)
+    }
+    let fp = match arch {
+        "x86_64" => indexed(name, "xmm", 16).map(|n| (n, None)),
+        "aarch64" => indexed(name, "s", 32)
+            .map(|n| (n, Some(32)))
+            .or_else(|| indexed(name, "d", 32).map(|n| (n, Some(64))))
+            .or_else(|| indexed(name, "v", 32).map(|n| (n, None))),
+        "riscv64" => {
+            const FP: [&str; 32] = [
+                "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7", "fs0", "fs1", "fa0", "fa1",
+                "fa2", "fa3", "fa4", "fa5", "fa6", "fa7", "fs2", "fs3", "fs4", "fs5", "fs6", "fs7",
+                "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11",
+            ];
+            indexed(name, "f", 32)
+                .or_else(|| FP.iter().position(|reg| *reg == name))
+                .map(|n| (n, None))
+        }
+        _ => None,
+    };
+    if let Some((n, width)) = fp {
+        return Some(Register {
+            number: n + 32,
+            width,
+        });
+    }
     match arch {
         "x86_64" => {
             const GPRS: [[&str; 4]; 14] = [
@@ -316,22 +406,68 @@ fn register(arch: &str, name: &str) -> Option<Register> {
     }
 }
 
-fn validate_placeholders(template: &str, count: usize, span: Span) -> Result<()> {
+fn validate_placeholders(
+    template: &str,
+    asm: &AsmStatement<'_>,
+    arch: &str,
+    span: Span,
+) -> Result<()> {
+    let invalid = || {
+        syntax(
+            span,
+            "invalid assembly placeholder: use $N, ${N:modifier} or $$ for a literal dollar",
+        )
+    };
     let mut rest = template;
     while let Some((_, tail)) = rest.split_once('$') {
         if let Some(tail) = tail.strip_prefix('$') {
             rest = tail;
             continue;
         }
-        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
-        let index = tail[..digits].parse::<usize>().ok();
-        if !index.is_some_and(|i| i < count) {
-            return Err(syntax(
-                span,
-                "invalid assembly placeholder: use $N for an operand or $$ for a literal dollar",
-            ));
+        let (digits, modifier) = if let Some(braced) = tail.strip_prefix('{') {
+            let (field, next) = braced.split_once('}').ok_or_else(invalid)?;
+            rest = next;
+            let (digits, modifier) = field.split_once(':').ok_or_else(invalid)?;
+            (digits, Some(modifier))
+        } else {
+            let end = tail.bytes().take_while(u8::is_ascii_digit).count();
+            rest = &tail[end..];
+            (&tail[..end], None)
+        };
+        let index = digits.parse::<usize>().map_err(|_| invalid())?;
+        let (reg, _) = if index < asm.outputs.len() {
+            asm.outputs.get(index)
+        } else {
+            asm.inputs.get(index - asm.outputs.len())
         }
-        rest = &tail[digits..];
+        .ok_or_else(invalid)?;
+        if let Some(modifier) = modifier {
+            let fp = *reg == "fpreg" || register(arch, reg).is_some_and(|r| r.number >= 32);
+            if !matches!(
+                (arch, fp, modifier),
+                ("x86_64", false, "b" | "w" | "k" | "q")
+                    | ("aarch64", false, "w" | "x")
+                    | ("aarch64", true, "s" | "d")
+            ) {
+                return Err(invalid());
+            }
+        }
     }
     Ok(())
+}
+
+pub(crate) fn append_module(program: &crate::Program, plan: &mut crate::ForeignLinkPlan) {
+    if program.module.asm_span.is_some() {
+        plan.module_asm
+            .extend_from_slice(&program.module.module_asm);
+        plan.asm_arch = program
+            .machine_target
+            .map(|target| profile(target).to_owned());
+        plan.asm_externs.extend(
+            program
+                .extern_functions
+                .values()
+                .map(|f| f.decl.link_name().to_owned()),
+        );
+    }
 }

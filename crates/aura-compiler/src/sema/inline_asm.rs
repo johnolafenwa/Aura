@@ -1,5 +1,5 @@
 use super::*;
-use crate::inline_asm::{integer_width, target_at, AsmStatement};
+use crate::inline_asm::{operand_width, target_at, AsmStatement};
 
 impl FunctionChecker<'_> {
     pub(super) fn check_inline_asm(
@@ -11,37 +11,31 @@ impl FunctionChecker<'_> {
         let asm = AsmStatement::parse(expr)?.expect("asm statement");
         let mut widths = Vec::new();
         let mut names = BTreeSet::new();
-        for (_, value) in &asm.inputs {
+        for (reg, value) in &asm.inputs {
             let ty = self.type_of_expr(value, locals)?;
-            widths.push(integer_width(&ty).ok_or_else(|| {
-                Diagnostic::coded_at(
-                    "AU2091",
-                    value.span,
-                    format!("asm register inputs need a fixed-width integer, found `{ty}`"),
-                )
-            })?);
+            widths.push(operand_width(target, reg, &ty, value.span)?);
             self.consume_direct_read_expr(value, locals)?;
         }
         let mut outputs = Vec::new();
-        for (_, value) in &asm.outputs {
+        for (reg, value) in &asm.outputs {
             let ExprKind::Name(name) = &value.kind else {
                 return Err(Diagnostic::coded_at(
                     "AU3035",
                     value.span,
-                    "asm output needs a mutable integer binding",
+                    "asm output needs a mutable scalar binding",
                 ));
             };
-            let width = locals
+            let Some(binding) = locals
                 .get(name)
-                .filter(|b| b.assignable && b.view.is_none())
-                .and_then(|b| integer_width(&b.ty));
-            let Some(width) = width.filter(|_| names.insert(name)) else {
+                .filter(|b| b.assignable && b.view.is_none() && names.insert(name))
+            else {
                 return Err(Diagnostic::coded_at(
                     "AU3035",
                     value.span,
-                    "asm output needs a distinct mutable integer binding",
+                    "asm output needs a distinct mutable scalar binding",
                 ));
             };
+            let width = operand_width(target, reg, &binding.ty, value.span)?;
             self.check_assign(
                 &AssignStmt {
                     mutable: false,
@@ -55,7 +49,7 @@ impl FunctionChecker<'_> {
             )?;
             outputs.push(width);
         }
-        asm.machine(target.arch(), widths, outputs, expr.span)?;
+        asm.machine(target, widths, outputs, expr.span)?;
         Ok(asm.noreturn)
     }
 }

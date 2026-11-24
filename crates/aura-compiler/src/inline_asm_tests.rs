@@ -179,3 +179,179 @@ fn module_assembly_can_supply_the_only_entry_and_assembler_errors_are_recoverabl
         assert!(wrong[0].message.contains("target"), "{wrong:?}");
     }
 }
+
+#[test]
+fn float_and_boolean_registers_keep_their_aura_types() {
+    for (target, ty, op, input, output) in [
+        (
+            FreestandingTarget::X86_64,
+            "float32",
+            "movss $1, $0",
+            "xmm1",
+            "fpreg",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "float64",
+            "movsd $1, $0",
+            "fpreg",
+            "xmm2",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "bool",
+            "movb ${1:b}, ${0:b}",
+            "reg",
+            "al",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "float32",
+            "fmov ${0:s}, ${1:s}",
+            "s1",
+            "fpreg",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "float64",
+            "fmov ${0:d}, ${1:d}",
+            "fpreg",
+            "d2",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "uint32",
+            "mov ${0:w}, ${1:w}",
+            "w1",
+            "reg",
+        ),
+        (
+            FreestandingTarget::Riscv64,
+            "float32",
+            "fmv.s $0, $1",
+            "ft1",
+            "fpreg",
+        ),
+        (
+            FreestandingTarget::Riscv64,
+            "float64",
+            "fmv.d $0, $1",
+            "fpreg",
+            "f2",
+        ),
+    ] {
+        let source = format!("export \"C\" def entry(value: {ty}) -> {ty}:\n    mut out = value\n    asm(\"{op}\", input(\"{input}\", value), output(\"{output}\", out))\n    return out\n");
+        let bytes = object_for(&source, target);
+        let listing = crate::tests::disassemble_asm_entry(&bytes);
+        assert!(listing.contains(op.split_once(' ').unwrap().0), "{listing}");
+        if target == FreestandingTarget::X86_64 && ty.starts_with("float") {
+            assert!(checked(&source, FreestandingTarget::X86_64Kernel).is_err());
+        }
+    }
+}
+
+#[test]
+fn assembly_options_distinguish_effects_and_terminate_control_flow() {
+    let source = r#"
+export "C" def entry(value: int8) -> int8:
+    mut out: int8 = 0
+    asm("movb $1, $0", input("reg", value), output("reg", out), options("pure"))
+    asm("pause", options("preserves_flags"))
+    asm("ud2", options("noreturn"))
+"#;
+    let bytes = object_for(source, FreestandingTarget::X86_64);
+    let listing = crate::tests::disassemble_asm_entry(&bytes);
+    assert!(
+        listing.contains("pause") && listing.contains("ud2"),
+        "{listing}"
+    );
+    assert!(
+        !listing.contains("movb") && !listing.contains("retq"),
+        "{listing}"
+    );
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    assert!(file.symbol_by_name("aura_trap").is_none());
+}
+
+#[test]
+fn module_assembly_accepts_declared_external_relocations() {
+    let source = "extern \"C\" def finish() -> None\nmodule_asm(\".text\\n.globl entry\\nentry: jmp finish\")\n";
+    let bytes = object_for(source, FreestandingTarget::X86_64);
+    let file = object::File::parse(bytes.as_slice()).unwrap();
+    assert!(file.symbol_by_name("finish").unwrap().is_undefined());
+}
+
+#[test]
+fn rejects_mismatched_float_register_classes_aliases_and_modifiers() {
+    for (target, clause, template, code) in [
+        (
+            FreestandingTarget::X86_64,
+            "input('fpreg', i)",
+            "nop",
+            "AU2091",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "input('xmm16', f)",
+            "nop",
+            "AU2092",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "input('w2', i)",
+            "nop",
+            "AU2091",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "input('d2', f), clobber('s2')",
+            "nop",
+            "AU2092",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "input('d2', f)",
+            "${0:w}",
+            "AU2093",
+        ),
+        (
+            FreestandingTarget::Aarch64,
+            "input('reg', i)",
+            "${0:d}",
+            "AU2093",
+        ),
+        (
+            FreestandingTarget::Riscv64,
+            "input('reg', i)",
+            "${0:w}",
+            "AU2093",
+        ),
+        (
+            FreestandingTarget::X86_64Kernel,
+            "clobber('xmm1')",
+            "nop",
+            "AU2092",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "input('reg', i)",
+            "${n:w}",
+            "AU2093",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "input('reg', i)",
+            "${0:",
+            "AU2093",
+        ),
+        (
+            FreestandingTarget::X86_64,
+            "input('reg', i)",
+            "${0}",
+            "AU2093",
+        ),
+    ] {
+        let source = format!("export \"C\" def entry(i: int64, f: float64) -> None:\n    asm('{template}', {clause})\n");
+        assert_eq!(checked(&source, target).unwrap_err().code, code, "{source}");
+    }
+}

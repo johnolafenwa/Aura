@@ -143,7 +143,7 @@ impl NativeCodegen<'_> {
             .foreign_link
             .asm_arch
             .as_deref()
-            .is_some_and(|arch| arch != target.arch())
+            .is_some_and(|arch| arch != crate::inline_asm::profile(target))
         {
             return Err("assembly requires the freestanding target it was checked for".into());
         }

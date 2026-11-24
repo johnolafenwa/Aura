@@ -1370,7 +1370,7 @@ fn module_constant_plan_reports_an_entry_missing_from_the_loader_cache() {
     let loader = ModuleLoader::new(&main_path).expect("package loader should initialize");
 
     let error = loader
-        .build_constant_init_plan(&main_path)
+        .build_constant_init_plan(&main_path, &mut |_, _| {})
         .expect_err("an unloaded entry must not produce a partial constant plan");
     assert!(
         error
@@ -4619,8 +4619,7 @@ fn diamond_import_adds_module_assembly_once_and_checks_its_package_grant() {
     assert!(error.message.contains("allow_ffi"), "{error:?}");
 }
 
-#[test]
-fn disassembles_inline_assembly_in_the_export_on_each_target() {
+pub(super) fn disassemble_asm_entry(bytes: &[u8]) -> String {
     use std::process::Command;
     let temp = TempDir::new("aura-asm-disassembly");
     let obj = temp.path().join("entry.o");
@@ -4636,6 +4635,18 @@ fn disassembles_inline_assembly_in_the_export_on_each_target() {
         .unwrap()
         .join("bin")
         .join(format!("llvm-objdump{}", std::env::consts::EXE_SUFFIX));
+    fs::write(&obj, bytes).unwrap();
+    let output = Command::new(&objdump)
+        .args(["-d", "--disassemble-symbols=entry"])
+        .arg(&obj)
+        .output()
+        .expect("rustup llvm-tools-preview supplies llvm-objdump");
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn disassembles_inline_assembly_in_the_export_on_each_target() {
     for (target, instruction) in [
         (crate::FreestandingTarget::X86_64, "pause"),
         (crate::FreestandingTarget::Aarch64, "yield"),
@@ -4648,14 +4659,7 @@ fn disassembles_inline_assembly_in_the_export_on_each_target() {
         .unwrap();
         let module = crate::mir::lower_with_source_locations(&program);
         let bytes = crate::emit_freestanding_object(&module, "entry.au", &source, target).unwrap();
-        fs::write(&obj, bytes).unwrap();
-        let output = Command::new(&objdump)
-            .args(["-d", "--disassemble-symbols=entry"])
-            .arg(&obj)
-            .output()
-            .expect("rustup llvm-tools-preview supplies llvm-objdump");
-        assert!(output.status.success(), "{output:?}");
-        let listing = String::from_utf8(output.stdout).unwrap();
+        let listing = disassemble_asm_entry(&bytes);
         assert!(
             listing
                 .lines()

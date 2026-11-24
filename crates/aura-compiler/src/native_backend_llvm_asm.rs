@@ -26,6 +26,13 @@ impl FunctionLowerer<'_, '_, '_> {
             .map(|v| self.value(*v).map(BasicMetadataValueEnum::from))
             .collect::<Result<Vec<_>, _>>()?;
         let call = built(self.builder.build_indirect_call(ty, instruction, &args, ""))?;
+        if asm.pure {
+            call.add_attribute(
+                AttributeLoc::Function,
+                self.context
+                    .create_enum_attribute(Attribute::get_named_enum_kind_id("memory"), 0),
+            );
+        }
         if asm.noreturn {
             call.add_attribute(
                 AttributeLoc::Function,

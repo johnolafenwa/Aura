@@ -11054,7 +11054,9 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     }
 
     let mut foreign_link = program.foreign_link.clone();
-    inline_asm::add_link_metadata(program, &mut foreign_link);
+    crate::inline_asm::append_module(program, &mut foreign_link);
+    foreign_link.asm_externs.sort();
+    foreign_link.asm_externs.dedup();
     foreign_link.exports = exported_functions(program);
 
     MirModule {
