@@ -35,7 +35,9 @@ use aura_core::layout::{LayoutId, LayoutKind, LayoutTable, ScalarLayout};
 use aura_core::types::Type;
 
 use super::typed_layout::{self, FieldOps, TypedLayout};
-use super::{canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, RuntimeTypeTag};
+use super::{
+    canonical_runtime_type_name, shared_runtime_type_tag, ElementBox, OpaqueValue, RuntimeTypeTag,
+};
 use crate::runtime_value::{RuntimeName, Value};
 
 /// The access code of the first enum layout a program registers. Class
@@ -73,6 +75,11 @@ pub struct EnumLayout {
 struct VariantPlan {
     name: RuntimeName,
     payloads: Vec<Place>,
+    /// The offset of each payload kept in a box of its own, in order.
+    box_offsets: Vec<usize>,
+    /// Whether every payload that needs a drop is one of those boxes, so
+    /// releasing the boxes and freeing the block drops the variant.
+    drops_boxes_only: bool,
     /// The block of a variant with payloads.
     block: Option<AllocLayout>,
     /// Whether every payload is held in place and needs no drop, so the
@@ -159,6 +166,12 @@ impl EnumLayout {
         }
     }
 
+    /// The offset in the block of each payload of variant `index` that is
+    /// kept in a box of its own, in payload order.
+    pub(crate) fn box_offsets(&self, index: usize) -> &[usize] {
+        &self.variants[index].box_offsets
+    }
+
     fn table(&self) -> &LayoutTable {
         self.layout.table()
     }
@@ -227,12 +240,23 @@ impl EnumLayout {
                         .expect("layouts keep sizes and alignments an allocation accepts")
                         .pad_to_align()
                 });
+                let box_offsets = payloads
+                    .iter()
+                    .filter(|place| matches!(table.get(place.layout).kind, LayoutKind::Handle))
+                    .map(|place| place.offset)
+                    .collect();
                 let bytes_only = payloads.iter().all(|place| !table.needs_drop(place.layout));
+                let drops_boxes_only = payloads.iter().all(|place| {
+                    matches!(table.get(place.layout).kind, LayoutKind::Handle)
+                        || !table.needs_drop(place.layout)
+                });
                 let inline = bytes_only
                     && block.is_some_and(|block| block.size() <= 8 && block.align() <= 8);
                 VariantPlan {
                     name: layout_name(variant.name.as_str()),
                     payloads,
+                    box_offsets,
+                    drops_boxes_only,
                     block,
                     bytes_only,
                     inline,
@@ -750,6 +774,32 @@ impl TypedPayloads {
             unsafe { super::free_layout_block(data, block) };
         }
         payloads
+    }
+
+    /// Hands each payload box to `release`, which takes over its
+    /// reference, and frees the block, when every payload that needs a drop
+    /// is kept in a box, so the variant drops nothing more. Otherwise does
+    /// nothing and gives false.
+    pub(crate) fn release_boxes(&mut self, mut release: impl FnMut(*mut OpaqueValue)) -> bool {
+        let plan = &self.layout.variants[self.variant()];
+        let (Some(data), Some(block)) = (self.data, plan.block) else {
+            return false;
+        };
+        if !plan.drops_boxes_only {
+            return false;
+        }
+        for &offset in &plan.box_offsets {
+            // SAFETY: the offset is a box slot of the block, and `&mut self`
+            // keeps it.
+            if let Some(boxed) = unsafe { payload_box(data.as_ptr().add(offset)) }.take() {
+                release(std::mem::ManuallyDrop::new(boxed).as_ptr());
+            }
+        }
+        self.data = None;
+        // SAFETY: the block holds nothing to drop now and came from the pool
+        // with this layout.
+        unsafe { super::free_layout_block(data, block) };
+        true
     }
 
     /// Brings the list view of every payload box up to date after the

@@ -1,0 +1,86 @@
+# Variants whose payloads are boxes of their own are freed with those
+# boxes: a tree dropped whole, trees a list holds and gives up, a variant
+# that also holds a string, a tree a task returns, and a trap while a tree
+# is built.
+import control
+
+enum Tree:
+    Leaf
+    Node(left: indirect Tree, right: indirect Tree)
+
+enum Labelled:
+    Empty
+    Tagged(label: str, rest: indirect Labelled)
+
+def make(depth: int64) -> Tree:
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make(depth - 1), right=make(depth - 1))
+
+def count(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 1
+        case Tree.Node(left, right):
+            return 1 + count(left) + count(right)
+
+def regrown(depth: int64) -> int64:
+    mut trees = [make(depth), make(depth + 1)]
+    inner = trees.pop(1)
+    pair = Tree.Node(left=inner, right=Tree.Leaf)
+    trees.append(pair)
+    mut total = 0
+    for tree in trees:
+        total += count(tree)
+    return total
+
+
+def width(labels: Labelled) -> int64:
+    match labels:
+        case Labelled.Empty:
+            return 0
+        case Labelled.Tagged(label, rest):
+            return label.len() + width(rest)
+
+
+def chain(depth: int64) -> int64:
+    mut labels = Labelled.Empty
+    for index in range(depth):
+        labels = Labelled.Tagged(label=f"l{index}", rest=labels)
+    return width(labels)
+
+def guarded(depth: int64) -> int64:
+    return count(make_limited(depth, 4))
+
+def make_limited(depth: int64, limit: int64) -> Tree:
+    assert depth < limit, "too deep"
+    if depth == 0:
+        return Tree.Leaf
+    return Tree.Node(left=make_limited(depth - 1, limit), right=make_limited(depth - 1, limit))
+
+def main():
+    print(count(make(5)))
+    print(regrown(3))
+    mut forest: list[Tree] = []
+    for depth in range(4):
+        forest.append(make(depth))
+    first = forest.pop(0)
+    print(count(first))
+    mut total = 0
+    for tree in forest:
+        total += count(tree)
+    print(total)
+    print(chain(12))
+    with TaskGroup() as group:
+        task = group.start(make, 4)
+        print(count(task.result_or(Tree.Leaf, timeout=5s)))
+    match control.recover(guarded, 3):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print("trapped")
+    match control.recover(guarded, 6):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print("trapped")

@@ -53,6 +53,12 @@ def iterates(ps: list[Point]) -> float64:
         i += 1
     return total
 
+def counts(cs: list[Counter]) -> int64:
+    mut total = 0
+    for c in cs:
+        total += c.count
+    return total
+
 def scalars(xs: list[int64], ys: mut list[float64], n: int64) -> int64:
     mut total: int64 = 0
     mut i = 0
@@ -70,6 +76,7 @@ def main():
     print(loans(3))
     print(grows(3))
     print(iterates(ps))
+    print(counts([Counter(name="c", count=1)]))
 "#;
 
 fn function(name: &str) -> MirFunction {
@@ -81,27 +88,33 @@ fn function(name: &str) -> MirFunction {
         .expect("the function should exist")
 }
 
-fn regions(name: &str, pure: bool) -> Vec<ListSnapshotRegion> {
+fn regions(name: &str) -> Vec<ListSnapshotRegion> {
     let function = function(name);
-    list_snapshot_regions(&function, |_| true, |_| pure)
+    list_snapshot_regions(&function, |_| true)
 }
 
 #[test]
 fn a_loop_that_measures_and_reads_a_list_reads_its_view_once() {
-    let found = regions("reads", true);
+    let found = regions("reads");
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].list, "ps");
     assert!(!found[0].writes);
     assert_eq!(found[0].entries.len(), 1, "{found:?}");
     let (from, to) = &found[0].entries[0];
     assert!(!found[0].blocks.contains(from) && found[0].blocks.contains(to));
-    // Index reads that may write the list need room.
-    assert!(regions("reads", false)[0].writes);
+}
+
+#[test]
+fn a_loop_that_reads_boxes_by_index_only_reads_the_list() {
+    let found = regions("counts");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].list, "cs");
+    assert!(!found[0].writes);
 }
 
 #[test]
 fn a_loop_that_loans_elements_may_write_the_list() {
-    let found = regions("loans", true);
+    let found = regions("loans");
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].list, "counters");
     assert!(found[0].writes);
@@ -109,7 +122,7 @@ fn a_loop_that_loans_elements_may_write_the_list() {
 
 #[test]
 fn only_the_inner_loop_of_a_list_that_grows_reads_its_view_once() {
-    let found = regions("grows", true);
+    let found = regions("grows");
     assert_eq!(found.len(), 1, "{found:?}");
     let function = function("grows");
     let blocks = function.blocks.len();
@@ -121,24 +134,21 @@ fn only_the_inner_loop_of_a_list_that_grows_reads_its_view_once() {
 #[test]
 fn a_for_loop_over_a_list_reads_its_view_once_too() {
     // A `for` loop reads each element by index after its bound check.
-    let found = regions("iterates", true);
+    let found = regions("iterates");
     assert_eq!(found.len(), 2, "{found:?}");
     assert!(found
         .iter()
         .all(|region| region.list == "ps" && !region.writes));
     // A list the caller does not let native code read this way has none.
     let function = function("reads");
-    assert_eq!(
-        list_snapshot_regions(&function, |_| false, |_| true),
-        Vec::new()
-    );
+    assert_eq!(list_snapshot_regions(&function, |_| false), Vec::new());
 }
 
 #[test]
 fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
     use crate::runtime_ops::ScalarElement;
     let scalars = function("scalars");
-    let found = regions("scalars", true);
+    let found = regions("scalars");
     let kind = |list: &str| {
         let region = found
             .iter()
@@ -149,7 +159,7 @@ fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
     assert_eq!(kind("xs"), Some(ScalarElement::Int64));
     assert_eq!(kind("ys"), Some(ScalarElement::Float64));
     // A loop that reads plain records names no scalar kind.
-    let reads = regions("reads", true);
+    let reads = regions("reads");
     assert_eq!(
         super::region_scalar_element(&function("reads"), &reads[0]),
         None
@@ -216,7 +226,7 @@ fn array_function(name: &str) -> MirFunction {
 #[test]
 fn a_loop_of_array_element_accesses_reads_the_layout_once() {
     let smooth = array_function("smooth");
-    let found = list_snapshot_regions(&smooth, |_| true, |_| true);
+    let found = list_snapshot_regions(&smooth, |_| true);
     let source = found
         .iter()
         .find(|region| region.list == "source")
@@ -231,7 +241,7 @@ fn a_loop_of_array_element_accesses_reads_the_layout_once() {
     assert_eq!(super::array_region_rank(&smooth, target, |_| true), Some(2));
 
     let total = array_function("total");
-    let found = list_snapshot_regions(&total, |_| true, |_| true);
+    let found = list_snapshot_regions(&total, |_| true);
     let [region] = found.as_slice() else {
         panic!("one loop reads `values`: {found:?}");
     };
@@ -243,7 +253,7 @@ fn a_loop_of_array_element_accesses_reads_the_layout_once() {
 #[test]
 fn a_loop_with_two_ranks_or_another_member_keeps_reading_the_view() {
     let mixed = array_function("mixed");
-    let found = list_snapshot_regions(&mixed, |_| true, |_| true);
+    let found = list_snapshot_regions(&mixed, |_| true);
     for region in &found {
         assert_eq!(
             super::array_region_rank(&mixed, region, |_| true),
@@ -253,7 +263,7 @@ fn a_loop_with_two_ranks_or_another_member_keeps_reading_the_view() {
     }
     // The element count may be read in the loop.
     let measured = array_function("measured");
-    let found = list_snapshot_regions(&measured, |_| true, |_| true);
+    let found = list_snapshot_regions(&measured, |_| true);
     let [region] = found.as_slice() else {
         panic!("one loop reads `values`: {found:?}");
     };
@@ -262,10 +272,7 @@ fn a_loop_with_two_ranks_or_another_member_keeps_reading_the_view() {
         Some(1)
     );
     let summed = array_function("summed");
-    assert_eq!(
-        list_snapshot_regions(&summed, |_| true, |_| true),
-        Vec::new()
-    );
+    assert_eq!(list_snapshot_regions(&summed, |_| true), Vec::new());
 }
 
 #[test]
@@ -364,14 +371,13 @@ fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRe
         .into_iter()
         .find(|function| function.name == name)
         .expect("the function should exist");
-    let lend_temps = super::super::classes::field_lend_temps(&function);
+    let lend_temps = super::super::classes::field_lend_temps(&function, |_| false);
     super::field_list_snapshot_regions(
         &function,
         |_| exclusive,
         &super::FieldListRules {
             lend_temps: &lend_temps,
             candidate: &|_, _| true,
-            pure_index: &|_| true,
             scalar_field: &|place| place.ends_with(".seen") || place.ends_with(".best"),
             keeps_instances: &|_| keeps,
         },

@@ -186,6 +186,11 @@ runtime_functions! {
     RangeAdvance => ("aura_direct_range_advance", [I64], Some(I64)),
     VecEmpty => ("aura_direct_vec_empty", [], Some(I64)),
     VecEmptyTagged => ("aura_direct_vec_empty_tagged", [I64, I64, I64], Some(I64)),
+    VecEmptyTaggedWithRoom => (
+        "aura_direct_vec_empty_tagged_with_room",
+        [I64, I64, I64, I64],
+        Some(I64)
+    ),
     VecPushStrLiteral => ("aura_direct_vec_push_str_literal", [I64, I64, I64], None),
     VecLen => ("aura_direct_vec_len", [I64], Some(I64)),
     VecIsEmpty => ("aura_direct_vec_is_empty", [I64], Some(I64)),
@@ -369,6 +374,7 @@ runtime_functions! {
     RetainValue => ("aura_direct_retain_value", [I64], Some(I64)),
     ReleaseValue => ("aura_direct_release_value", [I64], None),
     ReleaseLastOwnedValue => ("aura_direct_release_last_owned_value", [I64], None),
+    ReleaseLastOwnedVariant => ("aura_direct_release_last_owned_variant", [I64], None),
     CloneValue => ("aura_direct_clone_value", [I64], Some(I64)),
     UnboxI64 => ("aura_direct_unbox_i64", [I64], Some(I64)),
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),
@@ -424,6 +430,8 @@ runtime_functions! {
     InstanceEmpty => ("aura_direct_instance_empty", [I64, I64], Some(I64)),
     InstanceNewTyped => ("aura_direct_instance_new_typed", [I64], Some(I64)),
     EnumNewTyped => ("aura_direct_enum_new_typed", [I64, I64], Some(I64)),
+    EnumUnitCell => ("aura_direct_enum_unit_cell", [I64, I64, I64], Some(I64)),
+    EnumNewTypedBoxes => ("aura_direct_enum_new_typed_boxes", [I64, I64, I64, I64], Some(I64)),
     InstancePutField => ("aura_direct_instance_put_field", [I64, I64], None),
     InstanceRestoreField => ("aura_direct_instance_restore_field", [I64, I64], None),
     InstanceCopyField => ("aura_direct_instance_copy_field", [I64], Some(I64)),

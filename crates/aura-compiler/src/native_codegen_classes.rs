@@ -187,7 +187,15 @@ impl ClassRecord {
 /// operation, which may lend the field's box as it is. Between the lend
 /// and its end, only that operation, with the temporary as its receiver,
 /// and facts about the temporary may name the temporary or the instance.
-pub(super) fn field_lend_temps(function: &MirFunction) -> HashSet<String> {
+///
+/// The operation may also be a call that passes the temporary to a
+/// parameter its callee borrows, when `borrows` says the call only borrows
+/// its arguments: the callee reads the field's box where it lies, and can
+/// reach the instance through nothing it is passed.
+pub(super) fn field_lend_temps(
+    function: &MirFunction,
+    borrows: impl Fn(&Instruction) -> bool,
+) -> HashSet<String> {
     let mut temps = HashSet::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
@@ -204,12 +212,16 @@ pub(super) fn field_lend_temps(function: &MirFunction) -> HashSet<String> {
                 continue;
             };
             let body = &block.instructions[index + 1..index + 1 + end];
+            let receives = |instruction: &Instruction| {
+                receives_lent_field(instruction, temp, root)
+                    || (borrows(instruction) && passes_lent_field(instruction, temp, root))
+            };
             let calls = body
                 .iter()
-                .filter(|instruction| receives_lent_field(instruction, temp, root))
+                .filter(|instruction| receives(instruction))
                 .count();
             let rest_stays_away = body.iter().all(|instruction| {
-                receives_lent_field(instruction, temp, root)
+                receives(instruction)
                     || matches!(
                         instruction,
                         Instruction::IndexInRange { list, index }
@@ -231,6 +243,43 @@ fn place_root(place: &str) -> &str {
 fn names_root(place: &str, temp: &str, root: &str) -> bool {
     let named = place_root(place);
     named == temp || named == root
+}
+
+/// Whether `instruction` is a call of a function by name that passes the
+/// lent temporary `temp` as one argument and names neither it elsewhere
+/// nor the instance `root`.
+fn passes_lent_field(instruction: &Instruction, temp: &str, root: &str) -> bool {
+    let Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee: CallTarget::Name(_),
+                args,
+                ..
+            },
+    } = instruction
+    else {
+        return false;
+    };
+    let passed = args
+        .iter()
+        .filter(|arg| matches!(&arg.value, Operand::Place(place) if place == temp))
+        .count();
+    passed == 1
+        && !names_root(target, temp, root)
+        && args
+            .iter()
+            .all(|arg| arg.writeback_place.is_none() && !reaches_lent_field(&arg.value, temp, root))
+}
+
+/// Whether the argument `value` moves the lent temporary `temp` or names
+/// it, or the instance `root`, as any place other than `temp` itself.
+fn reaches_lent_field(value: &Operand, temp: &str, root: &str) -> bool {
+    match value {
+        Operand::Place(place) => place != temp && names_root(place, temp, root),
+        Operand::MovePlace(place) => names_root(place, temp, root),
+        _ => false,
+    }
 }
 
 /// Whether `instruction` is a runtime operation on the lent temporary

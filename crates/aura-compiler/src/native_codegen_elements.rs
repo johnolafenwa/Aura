@@ -269,6 +269,88 @@ fn reads_lent(instruction: &Instruction, temp: &str, borrowed: &[&Operand]) -> b
     }
 }
 
+/// Whether `instruction`, which names `local`, leaves the box `local`
+/// holds with its keeper. `local` holds a boxed value of a Copy type, which
+/// the MIR copies freely and never retains or releases, so only these uses
+/// are known to take no reference to the box: a callee that borrows it, a
+/// match on it or a read of a variant's payload, a comparison or other
+/// binary operation, and a read of one of its parts.
+fn reads_kept_copy(instruction: &Instruction, local: &str, borrowed: &[&Operand]) -> bool {
+    if matches!(
+        instruction,
+        Instruction::Lend { .. } | Instruction::EndLend { .. }
+    ) {
+        return false;
+    }
+    let reads_whole = matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::VariantPayload { .. } | Rvalue::Binary { .. },
+            ..
+        }
+    );
+    reads_lent(instruction, local, borrowed)
+        && crate::mir::ownership::operand_roles(instruction)
+            .into_iter()
+            .all(|(operand, _)| match operand {
+                Operand::Place(place) | Operand::MovePlace(place) if place == local => {
+                    reads_whole || borrowed.iter().any(|kept| std::ptr::eq(*kept, operand))
+                }
+                _ => true,
+            })
+}
+
+/// Which of `function`'s parameters, followed by `self` for a method,
+/// that `candidates` marks, each a boxed value of a Copy type, the
+/// function only reads where the caller keeps it (see
+/// [`reads_kept_copy`]). `borrowed` are the operands the callee of an
+/// instruction borrows.
+pub(super) fn kept_copy_params<'f>(
+    function: &'f MirFunction,
+    candidates: &[bool],
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> Vec<bool> {
+    let assigned = assignments(function);
+    let names = function
+        .params
+        .iter()
+        .map(|param| param.name.as_str())
+        .chain(function.receiver.map(|_| "self"))
+        .collect::<Vec<_>>();
+    let mut kept = names
+        .iter()
+        .zip(candidates)
+        .map(|(name, candidate)| *candidate && !assigned.contains_key(name))
+        .collect::<Vec<_>>();
+    kept.resize(names.len(), false);
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let roots = mentioned_roots(instruction);
+            let borrowed = borrowed(instruction);
+            for (name, kept) in names.iter().zip(&mut kept) {
+                if *kept && roots.contains(name) && !reads_kept_copy(instruction, name, &borrowed) {
+                    *kept = false;
+                }
+            }
+        }
+        let match_scrutinee = match &block.terminator {
+            Terminator::Match {
+                scrutinee: Operand::Place(place),
+                ..
+            } => Some(place.as_str()),
+            _ => None,
+        };
+        for place in terminator_place_mentions(&block.terminator) {
+            for (name, kept) in names.iter().zip(&mut kept) {
+                if root(place) == *name && Some(place) != match_scrutinee {
+                    *kept = false;
+                }
+            }
+        }
+    }
+    kept
+}
+
 /// The receiver place of a method call whose callee borrows its receiver,
 /// one of `borrowed`: a method that only reads `self`, which the MIR names
 /// as a writeback all the same.
@@ -317,7 +399,8 @@ fn read_receiver(instruction: &Instruction) -> Option<&str> {
         return None;
     };
     let reads = match op {
-        RuntimeOp::Str(_) => true,
+        // `clone()`, `copy()` and `to_string()` make a new value.
+        RuntimeOp::Str(_) | RuntimeOp::Value(_) => true,
         RuntimeOp::List(op) => reads_list(*op),
         RuntimeOp::Dict(op) => matches!(
             op,
@@ -415,6 +498,7 @@ fn shares_list(instruction: &Instruction, list: &str) -> bool {
 pub(super) fn lent_element_reads<'f>(
     function: &'f MirFunction,
     lendable: impl Fn(&str) -> bool,
+    copies: impl Fn(&str) -> bool,
     borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
 ) -> LentElements {
     let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
@@ -437,6 +521,29 @@ pub(super) fn lent_element_reads<'f>(
             lists.insert(target, list);
         }
     }
+    // The temporaries a `Lend` fills that are only read as lists until
+    // its `EndLend`. A lend of a part of a lent element copies the part's
+    // handle and puts nothing back, so such a lend only reads the element
+    // even when the MIR calls it mutable.
+    let mut read_lends = HashMap::<&str, bool>::new();
+    for instruction in instructions() {
+        let lends = matches!(
+            instruction,
+            Instruction::Lend { .. } | Instruction::EndLend { .. }
+        );
+        for root in mentioned_roots(instruction) {
+            let read = lends || only_reads_list(instruction, root);
+            *read_lends.entry(root).or_insert(true) &= read;
+        }
+    }
+    let reads_part = |instruction: &Instruction, temp: &str| {
+        matches!(
+            instruction,
+            Instruction::Lend { place, temp: lent, mutable: true }
+                | Instruction::EndLend { place, temp: lent, mutable: true }
+                if place != temp && read_lends.get(lent.as_str()) == Some(&true)
+        )
+    };
     let mut rejected = HashSet::<&str>::new();
     for block in &function.blocks {
         for instruction in &block.instructions {
@@ -455,7 +562,12 @@ pub(super) fn lent_element_reads<'f>(
                 if captures(instruction, list)
                     || (roots.contains(temp)
                         && !defines
-                        && !reads_lent(instruction, temp, &borrowed))
+                        && !reads_part(instruction, temp)
+                        && !(if copies(temp) {
+                            reads_kept_copy(instruction, temp, &borrowed)
+                        } else {
+                            reads_lent(instruction, temp, &borrowed)
+                        }))
                 {
                     rejected.insert(temp);
                 }
@@ -597,6 +709,72 @@ fn assignments(function: &MirFunction) -> HashMap<&str, usize> {
         }
     }
     assigned
+}
+
+/// The temporaries of `function` whose box an append may take: each is
+/// assigned once, and its one other mention is as the element a later
+/// `List(Push)` in the same block adds, so nothing reads it after the
+/// append. `owns` says which locals hold a box of their own that the MIR
+/// never releases, as a boxed Copy value does.
+pub(super) fn appended_temps(function: &MirFunction, owns: impl Fn(&str) -> bool) -> HashSet<&str> {
+    let assigned = assignments(function);
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let mut named = Vec::new();
+            instruction_place_mentions(instruction, &mut named);
+            for place in named {
+                *mentions.entry(root(place)).or_default() += 1;
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *mentions.entry(root(place)).or_default() += 1;
+        }
+    }
+    let mut temps = HashSet::new();
+    for block in &function.blocks {
+        let mut defined = HashSet::new();
+        for instruction in &block.instructions {
+            if let Instruction::Assign { target, .. } = instruction {
+                defined.insert(target.as_str());
+            }
+            let Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::List(ListOp::Push),
+                                receiver: Some(Operand::Place(receiver)),
+                                ..
+                            },
+                        args,
+                        ..
+                    },
+            } = instruction
+            else {
+                continue;
+            };
+            let [arg] = args.as_slice() else {
+                continue;
+            };
+            let Operand::Place(temp) = &arg.value else {
+                continue;
+            };
+            if temp.starts_with("%t")
+                && arg.writeback_place.is_none()
+                && defined.contains(temp.as_str())
+                && root(receiver) != temp
+                && root(target) != temp
+                && assigned.get(temp.as_str()) == Some(&1)
+                && mentions.get(temp.as_str()) == Some(&1)
+                && owns(temp)
+            {
+                temps.insert(temp.as_str());
+            }
+        }
+    }
+    temps
 }
 
 /// The loans of `function` that hold a union member's payload of a root

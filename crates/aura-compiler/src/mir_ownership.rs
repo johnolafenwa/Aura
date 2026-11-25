@@ -485,6 +485,51 @@ pub(super) fn recorded_borrowing(
         .collect()
 }
 
+/// The shared parameters of each recorded function (see
+/// [`recorded_borrowing`]) that the module passes by the owning convention
+/// only because their type needs no drop, by position, followed by its
+/// shared receiver for a method. A backend that boxes such a value may
+/// keep the box with the caller when the callee only reads it. A function
+/// a runtime type picks owns its parameters.
+pub(crate) fn undropped_shared_params(module: &MirModule) -> BTreeMap<String, Vec<bool>> {
+    if module.ownership != MirOwnership::Explicit || module.borrowing.is_empty() {
+        return BTreeMap::new();
+    }
+    let dispatched = candidate_dispatched(module);
+    MirLoanValidationContext::new(module)
+        .map(|context| {
+            module
+                .functions
+                .iter()
+                .filter(|function| {
+                    module.borrowing.contains(&function.name)
+                        && !dispatched.contains(function.name.as_str())
+                })
+                .map(|function| {
+                    let receiver = function.receiver.map(|passing| {
+                        passing == MirReceiverKind::Borrow
+                            && function
+                                .local_types
+                                .iter()
+                                .find(|local| local.name == "self")
+                                .is_some_and(|local| !type_needs_drop(&context, &local.ty))
+                    });
+                    let params = function
+                        .params
+                        .iter()
+                        .map(|param| {
+                            param.passing == MirReceiverKind::Borrow
+                                && !type_needs_drop(&context, &param.ty)
+                        })
+                        .chain(receiver)
+                        .collect();
+                    (function.name.clone(), params)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// [`recorded_borrowing`] for a backend: how each function that keeps its
 /// callers' shared arguments takes them, or nothing for a module without
 /// explicit ownership.

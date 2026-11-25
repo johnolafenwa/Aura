@@ -10,12 +10,15 @@
 //! not change while the loop runs, as long as the view is one of the
 //! forms below when the loop is entered:
 //!
-//! - A read (`len`, an index read of a scalar or plain record element)
-//!   only reads the list. Its runtime call may take in elements generated
-//!   code appended, which sets the list's room, but leaves the view's
-//!   access code, element address, and length as they were.
-//! - Any other operation here (an element loan, an index read of a box)
-//!   may write the list through the runtime, which refreshes the view. A
+//! - A read (`len`, an index read of an element) only reads the list. Its
+//!   runtime call may take in elements generated code appended, which sets
+//!   the list's room, but leaves the view's access code, element address,
+//!   and length as they were. An index read of a box lends the box where
+//!   the list keeps it, or copies the element. Only the runtime lend moves
+//!   elements into boxes of their own, and a list already in boxes reaches
+//!   it only when the bound check fails, which stops the program.
+//! - Any other operation here (an element loan, a store of a scalar) may
+//!   write the list through the runtime, which refreshes the view. A
 //!   list whose storage nothing else shares keeps its storage, form, and
 //!   length through such a write, because none of these operations adds or
 //!   removes elements. Room tells generated code the storage is unshared,
@@ -99,9 +102,8 @@ enum ViewUse {
 }
 
 /// The use `instruction` makes of `list` when it is one of the operations
-/// a loop may hold, or `None`. `pure_index` says whether an index read of
-/// `list` only reads it.
-fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<ViewUse> {
+/// a loop may hold, or `None`.
+fn view_use(instruction: &Instruction, list: &str) -> Option<ViewUse> {
     match instruction {
         Instruction::IndexInRange { list: named, index } if named == list && root(index) != list => {
             Some(ViewUse::Reads)
@@ -138,14 +140,14 @@ fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<V
             }) =>
         {
             match op {
-                ListOp::Len | ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_) => {
-                    Some(ViewUse::Reads)
-                }
+                ListOp::Len
+                | ListOp::IndexScalar(_)
+                | ListOp::IndexScalarUnchecked(_)
+                | ListOp::Index
+                | ListOp::IndexUnchecked => Some(ViewUse::Reads),
                 // A store into unshared storage of the element's own kind
                 // keeps the storage, its form, and its length.
                 ListOp::SetIndexScalar(_) => Some(ViewUse::Writes),
-                ListOp::Index | ListOp::IndexUnchecked if pure_index => Some(ViewUse::Reads),
-                ListOp::Index | ListOp::IndexUnchecked => Some(ViewUse::Writes),
                 _ => None,
             }
         }
@@ -296,12 +298,10 @@ fn reaches_list(instruction: &Instruction, list: &str) -> bool {
 }
 
 /// The loops of `function` that read the view of a list once. `candidate`
-/// says which locals hold a list native code may read this way, and
-/// `pure_index` whether an index read of one only reads it.
+/// says which locals hold a list native code may read this way.
 pub(super) fn list_snapshot_regions(
     function: &MirFunction,
     candidate: impl Fn(&str) -> bool,
-    pure_index: impl Fn(&str) -> bool,
 ) -> Vec<ListSnapshotRegion> {
     let mut lists = Vec::new();
     let mut seen = HashSet::new();
@@ -343,7 +343,6 @@ pub(super) fn list_snapshot_regions(
         .collect::<HashMap<_, _>>();
     let mut regions = Vec::new();
     for list in lists {
-        let pure = pure_index(&list);
         let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
         if instructions().any(|instruction| reaches_list(instruction, &list)) {
             continue;
@@ -363,7 +362,7 @@ pub(super) fn list_snapshot_regions(
                 if !mentioned_roots(instruction).contains(list.as_str()) {
                     continue;
                 }
-                match view_use(instruction, &list, pure) {
+                match view_use(instruction, &list) {
                     Some(use_) => {
                         uses = true;
                         writes |= use_ == ViewUse::Writes;
@@ -430,8 +429,6 @@ pub(super) struct FieldListRules<'a> {
     /// Whether the field place holds a list native code may read this way
     /// through the temporary a lend names.
     pub(super) candidate: &'a dyn Fn(&str, &str) -> bool,
-    /// Whether an index read through the temporary only reads the list.
-    pub(super) pure_index: &'a dyn Fn(&str) -> bool,
     /// Whether the field place holds a scalar, which lies in the
     /// instance's block.
     pub(super) scalar_field: &'a dyn Fn(&str) -> bool,
@@ -582,9 +579,7 @@ pub(super) fn field_list_snapshot_regions(
                     // about its index.
                     _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
                         let temp = lent.expect("checked above");
-                        if view_use(instruction, temp, (rules.pure_index)(temp))
-                            != Some(ViewUse::Reads)
-                        {
+                        if view_use(instruction, temp) != Some(ViewUse::Reads) {
                             continue 'blocks;
                         }
                     }

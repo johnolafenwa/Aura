@@ -804,6 +804,11 @@ struct OwnershipFastPaths {
     runtime_retain: FuncHandle,
     runtime_release: FuncHandle,
     release_last: FuncHandle,
+    /// The release of a box that holds a variant of an enum the program
+    /// defines, which frees a variant kept in its layout with its payload
+    /// boxes in one walk.
+    release_variant: FuncHandle,
+    release_last_variant: FuncHandle,
 }
 
 macro_rules! try_or_string_error {
@@ -1307,7 +1312,7 @@ impl<'a> NativeCodegen<'a> {
                 .collect(),
             receiver_keepers: element_loans::receiver_keepers(module, &method_receivers),
             method_receivers,
-            borrowing: crate::mir::ownership::kept_arguments(module),
+            borrowing: keep_boxed_copy_params(module, &function_param_types),
             function_return_types,
             function_param_types,
             function_writeback_types,
@@ -1386,7 +1391,16 @@ impl<'a> NativeCodegen<'a> {
             &ownership_fast_path_signature(false),
             "the release fast path",
             |_, builder| {
-                emit_release_fast_path(builder, frame_stack, paths);
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last);
+                Ok(())
+            },
+        )?;
+        self.define_body(
+            paths.release_variant,
+            &ownership_fast_path_signature(false),
+            "the variant release fast path",
+            |_, builder| {
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last_variant);
                 Ok(())
             },
         )
@@ -2055,6 +2069,18 @@ impl<'a> NativeCodegen<'a> {
             .get(&function.name)
             .cloned()
             .unwrap_or_default();
+        // A boxed Copy parameter or receiver the caller keeps is the
+        // caller's to release (see `keep_boxed_copy_params`).
+        if let Some(callee) = self.borrowing.get(&function.name) {
+            for (param, kept) in function.params.iter().zip(&callee.params) {
+                if *kept == MirReceiverKind::Borrow {
+                    explicit_locals.tracked.insert(param.name.clone());
+                }
+            }
+            if callee.receiver == Some(MirReceiverKind::Borrow) {
+                explicit_locals.tracked.insert("self".to_string());
+            }
+        }
         let current_function_name = public_direct_function_name(&function.name);
         let current_function_path = function
             .source_path
@@ -2176,12 +2202,14 @@ impl<'a> NativeCodegen<'a> {
         let mut lent_element_reads = elements::lent_element_reads(
             function,
             |place| {
-                explicit_locals.tracked.contains(place)
+                (explicit_locals.tracked.contains(place) || !explicit_locals.loans.contains(place))
                     && matches!(
                         variable_types.get(place),
                         Some(DirectType::Opaque(ty)) if !matches!(ty, Type::Named(name, _) if name == "str")
                     )
             },
+            // A local the MIR does not release holds a boxed Copy value.
+            |place| !explicit_locals.tracked.contains(place),
             |instruction| {
                 if let Some(receiver) = self.shared_method_receiver(instruction) {
                     return vec![receiver];
@@ -2207,7 +2235,30 @@ impl<'a> NativeCodegen<'a> {
                 _ => false,
             },
         );
-        let field_lend_temps = classes::field_lend_temps(function);
+        let field_lend_temps = classes::field_lend_temps(function, |instruction| {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                return false;
+            };
+            match (
+                self.borrowing.get(name),
+                self.function_param_types.get(name),
+            ) {
+                (Some(callee), Some(expected)) => {
+                    args.len() == expected.len()
+                        && reads_arguments_only(args, &callee.params, expected)
+                }
+                _ => false,
+            }
+        });
         // A local of a Copy type the MIR never releases holds a box all the
         // same, which `release_boxed_copy_roots` releases by its flag.
         let owns_its_word = |place: &str| {
@@ -2562,31 +2613,17 @@ impl<'a> NativeCodegen<'a> {
             }
             entry_loops.insert(list, (entry_loop, at, next));
         }
-        let list_snapshots = list_snapshots::list_snapshot_regions(
-            function,
-            |list| {
-                list != "self"
-                    && !explicit_locals.loans.contains(list)
-                    && (matches!(
-                        variable_types.get(list),
-                        Some(DirectType::Opaque(Type::Named(name, args)))
-                            if name == "list"
-                                && matches!(args.as_slice(), [element]
-                                    if !matches!(element, Type::Named(element, _) if element == "str"))
-                    ) || array_view_code(variable_types.get(list)).is_some())
-            },
-            |list| {
-                matches!(
+        let list_snapshots = list_snapshots::list_snapshot_regions(function, |list| {
+            list != "self"
+                && !explicit_locals.loans.contains(list)
+                && (matches!(
                     variable_types.get(list),
-                    Some(DirectType::Opaque(Type::Named(_, args)))
-                        if matches!(args.as_slice(), [element]
-                            if matches!(
-                                direct_type(element, &self.classes),
-                                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
-                            ))
-                )
-            },
-        )
+                    Some(DirectType::Opaque(Type::Named(name, args)))
+                        if name == "list"
+                            && matches!(args.as_slice(), [element]
+                                if !matches!(element, Type::Named(element, _) if element == "str"))
+                ) || array_view_code(variable_types.get(list)).is_some())
+        })
         .into_iter()
         .filter_map(|region| {
             // An Array's loop reads its layout once when every element
@@ -2698,7 +2735,6 @@ impl<'a> NativeCodegen<'a> {
                         .is_some_and(|ty| matches!(ty, Type::Named(name, _) if name == "list"))
                         && scalar_list(variable_types.get(temp))
                 },
-                pure_index: &|temp| scalar_list(variable_types.get(temp)),
                 scalar_field: &|place| {
                     field_type(place).is_some_and(|ty| {
                         matches!(
@@ -2783,6 +2819,12 @@ impl<'a> NativeCodegen<'a> {
             borrowing: &self.borrowing,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
+            appended_temps: elements::appended_temps(function, |temp| {
+                !explicit_locals.tracked.contains(temp) && !explicit_locals.loans.contains(temp)
+            })
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
             tracked_roots: explicit_locals.tracked,
             moved_operands: explicit_locals.moved,
             loan_locals: explicit_locals.loans,
@@ -2803,6 +2845,7 @@ impl<'a> NativeCodegen<'a> {
             lend_lookup: false,
             lent_elements,
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
+            shaped_lent_payloads: HashSet::new(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
             json_views,
@@ -2854,6 +2897,7 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
+            variant_handles: HashSet::new(),
             consumed_retains: HashSet::new(),
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
@@ -4229,6 +4273,10 @@ struct FunctionCompiler<'a> {
     /// whose layout owns a handle holds a boxed Copy value, which the
     /// backend drops itself: see `release_boxed_copy_roots`.
     tracked_roots: HashSet<String>,
+    /// The untracked temporaries whose one use is as the element an
+    /// append adds, whose box the list takes (see
+    /// `elements::appended_temps`).
+    appended_temps: HashSet<String>,
     /// Class locals whose fields need no layout check (see
     /// `classes::confined_instances`).
     confined_instances: HashSet<String>,
@@ -4311,6 +4359,11 @@ struct FunctionCompiler<'a> {
     /// a reference to the box where a lent element copies it. See
     /// `elements::lent_payload_reads`.
     lent_payloads: HashSet<String>,
+    /// The locals of `lent_payloads` whose one read found a box that carries
+    /// the local's type's tag: the variant's own box read as the type its
+    /// variant declares, or a box the read tagged. A promotion only takes a
+    /// reference to the box, so it keeps the tag.
+    shaped_lent_payloads: HashSet<String>,
     /// The lent locals that take their own reference before the
     /// instruction at each block label and index.
     element_promotions: HashMap<(String, usize), Vec<String>>,
@@ -4459,6 +4512,9 @@ struct FunctionCompiler<'a> {
     /// took. A handle no consumer took was only read: its retain and its
     /// releases cancel at the end of the instruction.
     retain_releases: HashMap<Val, Vec<Inst>>,
+    /// The boxes this function holds that are variants of an enum the
+    /// program defines (see `note_variant_handle`).
+    variant_handles: HashSet<Val>,
     consumed_retains: HashSet<Val>,
     /// The retain adapter call of each callable a `Retain` made, by its
     /// first word, with the drop calls that release it. A consumer that
@@ -4587,6 +4643,17 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
             self.layout_scratch.insert(value.values[0]);
+            self.note_variant_handle(&value.ty, value.values[0]);
+        }
+    }
+
+    /// Records that `word`, of direct type `ty`, is a box that holds a
+    /// variant of an enum the program defines when it is one, so its
+    /// release frees it as a variant (see
+    /// `aura_direct_release_last_owned_variant`).
+    fn note_variant_handle(&mut self, ty: &DirectType, word: Val) {
+        if matches!(ty, DirectType::Opaque(Type::Named(name, _)) if self.enums.contains_key(name)) {
+            self.variant_handles.insert(word);
         }
     }
 
@@ -4607,9 +4674,12 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_opaque_handle(&mut self, value: Val) {
-        let call = self
-            .builder
-            .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
+        let release = if self.variant_handles.contains(&value) {
+            RuntimeFn::ReleaseLastOwnedVariant
+        } else {
+            RuntimeFn::ReleaseValue
+        };
+        let call = self.builder.call(self.runtime[release], &[value]);
         if self.retain_calls.contains_key(&value) {
             self.retain_releases
                 .entry(value)
@@ -4932,7 +5002,10 @@ impl<'a> FunctionCompiler<'a> {
                 let owned = self.builder.select(lent, null, words[0]);
                 self.release_opaque_handle(owned);
             }
-            _ => self.release_opaque_handle(words[0]),
+            _ => {
+                self.note_variant_handle(&ty, words[0]);
+                self.release_opaque_handle(words[0]);
+            }
         }
         Ok(())
     }
@@ -4984,6 +5057,12 @@ impl<'a> FunctionCompiler<'a> {
         let flag = self.lent_element_flag.take();
         let compiled = compiled?;
         let flag_var = self.lent_elements[target];
+        if self.lent_payloads.contains(target)
+            && !self.json_views.contains(target)
+            && matches!(compiled.values.as_slice(), [word] if self.shaped_boxes.contains(word))
+        {
+            self.shaped_lent_payloads.insert(target.to_string());
+        }
         let Some(flag) = flag else {
             let coerced = self.coerce_value(compiled, &target_ty)?;
             self.store_place(target, coerced)?;
@@ -7073,12 +7152,19 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     /// Loads the scrutinee of a match or a payload read: the box of a
-    /// followed read-only loan where its list keeps it, and any other
-    /// operand as usual.
+    /// followed read-only loan where its list keeps it, the box of a field
+    /// where its instance keeps it, and any other operand as usual.
     fn load_scrutinee(&mut self, operand: &Operand) -> std::result::Result<ValueRef, String> {
         if let Operand::Place(place) = operand {
             if let Some(value) = self.pass_native_element(place)? {
                 return Ok(value);
+            }
+            // A box field of an instance kept in place is read where it
+            // lies: the match or the payload read is done with the box
+            // before anything can change the field.
+            if self.boxed_class_place(place)?.is_some() {
+                let ty = self.type_of_place(place)?;
+                return self.load_borrowed_field_argument(operand, &ty);
             }
         }
         self.load_operand(operand)
@@ -7762,6 +7848,14 @@ impl<'a> FunctionCompiler<'a> {
         let resolved_is_str = resolved_element_type == Type::named("str");
         let list_type = Type::Named("list".to_string(), vec![resolved_element_type]);
         let wildcard = runtime_type_is_wildcard(&list_type);
+        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
+        // A short literal of scalars starts with room for every element,
+        // which all go in place. The room is what appends growing the list
+        // from empty would have left, so later appends grow it as before.
+        let room = (scalar.is_some() && !wildcard && elements.len() <= LITERAL_ELEMENTS_IN_PLACE)
+            .then_some(elements.len())
+            .filter(|len| *len > 0)
+            .map(|len| len.next_power_of_two().max(4));
         let init = if wildcard {
             self.builder.call(self.runtime[RuntimeFn::VecEmpty], &[])
         } else {
@@ -7770,10 +7864,19 @@ impl<'a> FunctionCompiler<'a> {
             let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
             let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
             let cell = self.tag_cell(&encoded)?;
-            let call = self.builder.call(
-                self.runtime[RuntimeFn::VecEmptyTagged],
-                &[cell, type_ptr, type_len],
-            );
+            let call = match room {
+                Some(room) => {
+                    let room = self.builder.iconst(types::I64, room as i64);
+                    self.builder.call(
+                        self.runtime[RuntimeFn::VecEmptyTaggedWithRoom],
+                        &[cell, type_ptr, type_len, room],
+                    )
+                }
+                None => self.builder.call(
+                    self.runtime[RuntimeFn::VecEmptyTagged],
+                    &[cell, type_ptr, type_len],
+                ),
+            };
             if elements.is_empty() {
                 self.last_runtime_type_tag = Some((call.inst, call.results[0], encoded));
             }
@@ -7782,14 +7885,13 @@ impl<'a> FunctionCompiler<'a> {
         let vector = self.owned_opaque_result(init.results, list_type);
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
-        let scalar = scalar_element.filter(|_| matches!(element_direct_ty, DirectType::Scalar(_)));
         let record = self.plain_record(&element_direct_ty)?;
         for (position, element) in elements.iter().enumerate() {
             // The first element's call gives the list its storage, which
             // has room for the next few, so those go in place as an
             // `append` does. A long literal keeps the calls, which take
             // less code.
-            let in_place = (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
+            let in_place = room.is_some() || (1..LITERAL_ELEMENTS_IN_PLACE).contains(&position);
             if let Some(kind) = scalar {
                 let loaded =
                     self.load_operand_with_integer_hint(element, element_direct_ty.scalar_kind())?;
@@ -12167,7 +12269,7 @@ impl<'a> FunctionCompiler<'a> {
     /// Records that `loaded`, read out of `place`, carries its type's tag
     /// when `place` is a shaped local.
     fn mark_shaped_place(&mut self, place: &str, loaded: &ValueRef) {
-        if self.shaped_locals.contains(place) {
+        if self.shaped_locals.contains(place) || self.shaped_lent_payloads.contains(place) {
             if let (DirectType::Opaque(_), [word]) = (&loaded.ty, loaded.values.as_slice()) {
                 self.shaped_boxes.insert(*word);
             }
@@ -12285,6 +12387,21 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let hint = target.scalar_kind().filter(|kind| kind.is_integer());
         self.load_operand_with_integer_hint(operand, hint)
+    }
+
+    /// Whether `temp`, an argument of an append to a list of `element`,
+    /// is one of [`Self::appended_temps`] that holds a box of its own of
+    /// the element's type, which the append may take as it is.
+    fn hands_appended_temp(
+        &mut self,
+        temp: &str,
+        element: &DirectType,
+    ) -> std::result::Result<bool, String> {
+        Ok(self.appended_temps.contains(temp)
+            && !self.lent_places.contains(temp)
+            && !self.lent_elements.contains_key(temp)
+            && matches!(self.local_type(temp)?, DirectType::Opaque(_))
+            && self.local_type(temp)? == *element)
     }
 
     fn load_operand_as_opaque_direct(
@@ -13672,6 +13789,7 @@ impl<'a> FunctionCompiler<'a> {
             &[
                 self.runtime[RuntimeFn::RetainValue],
                 self.runtime[RuntimeFn::ReleaseValue],
+                self.runtime[RuntimeFn::ReleaseLastOwnedVariant],
                 self.runtime[RuntimeFn::FormatBegin],
                 self.runtime[RuntimeFn::StringLiteral],
                 self.runtime[RuntimeFn::StringLiteralCell],
@@ -15768,7 +15886,11 @@ impl<'a> FunctionCompiler<'a> {
             (DirectType::Scalar(_), false) => None,
             _ => return Ok(None),
         };
-        let scrutinee = self.load_operand(scrutinee)?;
+        let scrutinee = if lent {
+            self.load_operand(scrutinee)?
+        } else {
+            self.load_scrutinee(scrutinee)?
+        };
         let scrutinee = self.ensure_opaque(scrutinee)?;
         let index = *index;
         // Without a scalar read of its own, the runtime copies the payload
@@ -17274,7 +17396,18 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         for (index, argument) in args.iter().enumerate() {
+            let borrowed = kept
+                .as_ref()
+                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
+                && argument.writeback_place.is_none();
+            // A followed loan passed to a borrowed parameter lends the box
+            // where its list keeps it, as a call by name does.
+            let passed = match &argument.value {
+                Operand::Place(place) if borrowed => self.pass_native_element(place)?,
+                _ => None,
+            };
             let loaded = match &argument.value {
+                _ if passed.is_some() => passed.expect("checked above"),
                 Operand::Place(place)
                     if self
                         .moved_operands
@@ -17298,11 +17431,7 @@ impl<'a> FunctionCompiler<'a> {
                     *slot = Some(place.clone());
                 }
             }
-            if kept
-                .as_ref()
-                .is_some_and(|callee| callee.params.get(index) == Some(&MirReceiverKind::Borrow))
-                && argument.writeback_place.is_none()
-            {
+            if borrowed {
                 lowered_args.extend(coerced.values.iter().copied());
                 continue;
             }
@@ -18048,8 +18177,16 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Push => {
-                let value =
-                    self.load_operand_as_opaque_direct(&args[0].value, &element_direct_ty)?;
+                let value = match &args[0].value {
+                    // A boxed Copy temporary nothing reads after the append
+                    // hands its box over instead of a copy.
+                    Operand::Place(temp)
+                        if self.hands_appended_temp(temp, &element_direct_ty)? =>
+                    {
+                        self.take_place(temp)?
+                    }
+                    operand => self.load_operand_as_opaque_direct(operand, &element_direct_ty)?,
+                };
                 let value = self.transfer_owned_opaque_value(&value);
                 self.builder.call(function, &[list, value]);
                 self.store_receiver_back(receiver_place, &object)?;
@@ -20713,14 +20850,25 @@ fn declare_ownership_fast_paths(
         ),
         "failed to declare the release fast path: {}"
     );
+    let release_variant = try_or_string_error!(
+        module.declare_function(
+            "aura_owned_release_variant",
+            Linkage::Local,
+            &ownership_fast_path_signature(false),
+        ),
+        "failed to declare the variant release fast path: {}"
+    );
     module.mark_inline(retain);
     module.mark_inline(release);
+    module.mark_inline(release_variant);
     Ok(OwnershipFastPaths {
         retain,
         release,
         runtime_retain: runtime.replace(RuntimeFn::RetainValue, retain),
         runtime_release: runtime.replace(RuntimeFn::ReleaseValue, release),
         release_last: runtime[RuntimeFn::ReleaseLastOwnedValue],
+        release_variant,
+        release_last_variant: runtime.replace(RuntimeFn::ReleaseLastOwnedVariant, release_variant),
     })
 }
 
@@ -20841,6 +20989,91 @@ fn adds_to_receiver(op: RuntimeOp) -> bool {
     )
 }
 
+/// How each function that keeps its callers' shared arguments takes them
+/// (see `mir::ownership::kept_arguments`), with one addition. The MIR
+/// passes a shared parameter or receiver of a Copy type by the owning
+/// convention, since it copies such a value freely. This backend keeps
+/// some of those values in boxes: a Copy enum with a payload, a tuple, a
+/// Copy class. The caller of a function that only reads such a parameter
+/// or receiver where it lies (see `elements::kept_copy_params`) keeps the
+/// box, as it keeps any other shared argument, so the call copies and
+/// releases nothing.
+fn keep_boxed_copy_params(
+    module: &MirModule,
+    param_types: &HashMap<String, Vec<DirectType>>,
+) -> BTreeMap<String, crate::mir::ownership::BorrowingCallee> {
+    // A callee's parameters, then its receiver for a method.
+    fn slots(
+        callee: &mut crate::mir::ownership::BorrowingCallee,
+    ) -> impl Iterator<Item = &mut MirReceiverKind> + '_ {
+        callee.params.iter_mut().chain(callee.receiver.as_mut())
+    }
+    let mut borrowing = crate::mir::ownership::kept_arguments(module);
+    let undropped = crate::mir::ownership::undropped_shared_params(module);
+    // Every candidate starts as kept, and loses that when its function
+    // does more than read it. A function may pass a parameter on to
+    // another candidate, so the passes repeat until none changes.
+    let mut candidates = Vec::new();
+    for function in &module.functions {
+        let (Some(undropped), Some(types), Some(callee)) = (
+            undropped.get(&function.name),
+            param_types.get(&function.name),
+            borrowing.get_mut(&function.name),
+        ) else {
+            continue;
+        };
+        // The receiver's type comes first, the parameters' after it.
+        let first = types.len().saturating_sub(function.params.len());
+        let slot_types = types[first..].iter().chain(types[..first].iter());
+        let mut started = Vec::new();
+        for ((kept, ty), undropped) in slots(callee).zip(slot_types).zip(undropped) {
+            let boxed = matches!(
+                ty,
+                DirectType::Opaque(Type::Named(name, _)) if name != "str"
+            ) || matches!(ty, DirectType::Opaque(Type::Tuple(_)));
+            let candidate = boxed && *undropped && *kept == MirReceiverKind::Value;
+            if candidate {
+                *kept = MirReceiverKind::Borrow;
+            }
+            started.push(candidate);
+        }
+        if started.contains(&true) {
+            candidates.push((function, started));
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (function, started) in &candidates {
+            let callee = borrowing
+                .get_mut(&function.name)
+                .expect("a candidate is a borrowing function");
+            let current = slots(callee)
+                .zip(started)
+                .map(|(kept, started)| *started && *kept == MirReceiverKind::Borrow)
+                .collect::<Vec<_>>();
+            let kept = elements::kept_copy_params(function, &current, |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    borrowing.get(name)
+                })
+            });
+            if kept != current {
+                let callee = borrowing
+                    .get_mut(&function.name)
+                    .expect("a candidate is a borrowing function");
+                for ((slot, was), kept) in slots(callee).zip(&current).zip(&kept) {
+                    if *was && !*kept {
+                        *slot = MirReceiverKind::Value;
+                    }
+                }
+                changed = true;
+            }
+        }
+        if !changed {
+            return borrowing;
+        }
+    }
+}
+
 /// Whether a call to a function whose parameters `kept` names only borrows
 /// its arguments: each is a scalar or goes to a borrowed parameter, none
 /// is written back, and none can be a callable, whose captures could reach
@@ -20907,6 +21140,7 @@ fn emit_release_fast_path(
     builder: &mut dyn FunctionBackend,
     frame_stack: FuncHandle,
     paths: OwnershipFastPaths,
+    release_last: FuncHandle,
 ) {
     let layout = ownership_layout();
     let trusted = MemFlags::trusted();
@@ -20932,7 +21166,7 @@ fn emit_release_fast_path(
     builder.jump(blocks.done, &[]);
 
     builder.switch_to_block(last_block);
-    let last_ref = builder.import_function(paths.release_last);
+    let last_ref = builder.import_function(release_last);
     builder.call(last_ref, &[blocks.value]);
     builder.jump(blocks.done, &[]);
 

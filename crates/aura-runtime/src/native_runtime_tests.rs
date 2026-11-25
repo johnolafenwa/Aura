@@ -27856,6 +27856,52 @@ fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
 }
 
 #[test]
+fn a_list_made_with_room_takes_its_literal_in_place() {
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("int64")],
+    ));
+    let list = super::aura_direct_vec_empty_tagged_with_room(
+        &cell,
+        descriptor.as_ptr(),
+        descriptor.len(),
+        5,
+    );
+    assert!(list_view_capacity(list) >= 5);
+    for bits in 0..5 {
+        assert!(append_like_generated_code(
+            list,
+            bits,
+            super::DirectListAccess::Int64
+        ));
+    }
+    assert_eq!(super::aura_direct_vec_len(list), 5);
+    let tag = cell.load(std::sync::atomic::Ordering::Acquire);
+    assert_eq!(
+        unsafe { &*list }
+            .shape_tag
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .cast::<std::ffi::c_void>(),
+        tag
+    );
+    unsafe { release_value(list) };
+    // A list of values has room for its elements too.
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("str")],
+    ));
+    let names = super::aura_direct_vec_empty_tagged_with_room(
+        &cell,
+        descriptor.as_ptr(),
+        descriptor.len(),
+        3,
+    );
+    assert_eq!(super::aura_direct_vec_len(names), 0);
+    unsafe { release_value(names) };
+}
+
+#[test]
 fn opaque_values_keep_their_box_size() {
     // Every boxed value pays for these bytes: the 64-byte value, the
     // list view (24, with the room for in-place appends sharing a word

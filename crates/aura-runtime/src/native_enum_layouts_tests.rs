@@ -3,7 +3,7 @@
 //! the rest of the runtime reach them through.
 
 use std::borrow::Cow;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aura_core::layout::{
     encode_descriptor, encode_layouts, EnumDefinition, LayoutBuilder, LayoutEnv,
@@ -17,9 +17,12 @@ use super::{
 use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
-    aura_direct_enum_new_typed, aura_direct_instance_put_field, aura_direct_register_enum_layouts,
-    aura_direct_release_value, aura_direct_variant_matches, aura_direct_variant_payload,
-    aura_direct_variant_payload_int64, aura_direct_variant_take_payload, boxed_value, list_view_of,
+    aura_direct_enum_new_typed, aura_direct_enum_new_typed_boxes, aura_direct_enum_unit_cell,
+    aura_direct_instance_put_field, aura_direct_register_enum_layouts,
+    aura_direct_release_last_owned_variant, aura_direct_release_value, aura_direct_retain_value,
+    aura_direct_variant_matches, aura_direct_variant_payload, aura_direct_variant_payload_int64,
+    aura_direct_variant_take_payload, aura_direct_vec_push_in_place, boxed_value,
+    empty_unit_variant_cells, list_view_of, release_untracked_value, retain_untracked_value,
     share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
     with_task_runtime_error_capture, DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
 };
@@ -1576,4 +1579,227 @@ fn a_literal_documents_string_must_be_a_str() {
         unsafe { aura_direct_json_tape_string(std::ptr::null(), -1, number) };
     });
     assert!(message.contains("expected `str`"), "{message}");
+}
+
+#[test]
+fn appended_typed_variants_keep_their_own_boxes() {
+    in_task(|| {
+        let prefix = "Appended";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 80);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let list = boxed_value(Value::Vec(crate::runtime_value::VecValue {
+            element_type: crate::runtime_value::SharedType::from(Type::named(format!(
+                "{prefix}Shape"
+            ))),
+            elements: crate::list_elements::ListElements::new(),
+            str_view: Default::default(),
+        }));
+        let boxes = || match unsafe { value_ref(list) } {
+            Value::Vec(crate::runtime_value::VecValue {
+                elements: crate::list_elements::ListElements::Boxes(boxes),
+                ..
+            }) => boxes.iter().map(ElementBox::as_ptr).collect::<Vec<_>>(),
+            other => panic!("the list keeps boxes, found {other:?}"),
+        };
+        // A variant with one reference joins the list in its own box.
+        let first = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        aura_direct_vec_push_in_place(list, first);
+        assert_eq!(boxes(), vec![first]);
+        // A variant whose payloads are values is taken out of its box.
+        aura_direct_vec_push_in_place(list, boxed_value(variant(prefix, "Circle", vec![])));
+        assert_eq!(boxes().len(), 2);
+        assert_ne!(boxes()[1], first);
+        unsafe { aura_direct_release_value(list) };
+    });
+}
+
+#[test]
+fn a_unit_variant_cell_keeps_the_shared_box_until_the_program_ends() {
+    in_task(|| {
+        let prefix = "Celled";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 81);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let slot: &'static AtomicUsize = Box::leak(Box::default());
+        // The first build fills the word with the variant's one box, and a
+        // later one leaves it as it is.
+        let point = unsafe { aura_direct_enum_unit_cell(cell, 0, slot) };
+        assert!(unsafe { &*point }.is_frozen());
+        assert_eq!(slot.load(Ordering::Acquire), point as usize);
+        assert_eq!(unsafe { aura_direct_enum_unit_cell(cell, 0, slot) }, point);
+        assert_eq!(unsafe { aura_direct_enum_new_typed(cell, 0) }, point);
+        // Without a word, or for a variant with payloads, nothing is kept.
+        assert_eq!(
+            unsafe { aura_direct_enum_unit_cell(cell, 0, std::ptr::null()) },
+            point
+        );
+        let other: &'static AtomicUsize = Box::leak(Box::default());
+        let circle = unsafe { aura_direct_enum_unit_cell(cell, 1, other) };
+        assert!(!unsafe { &*circle }.is_frozen());
+        assert_eq!(other.load(Ordering::Acquire), 0);
+        unsafe { aura_direct_release_value(circle) };
+        // The program's end empties the word and leaves the box to its
+        // layout.
+        empty_unit_variant_cells();
+        assert_eq!(slot.load(Ordering::Acquire), 0);
+        assert!(unsafe { &*point }.is_frozen());
+    });
+}
+
+#[test]
+fn a_variant_takes_its_payload_boxes_as_it_is_built() {
+    in_task(|| {
+        let prefix = "Boxed";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 82);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        // A pair of a shared variant and a new one of its own.
+        let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        let circle = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        let boxes = [point, circle];
+        let pair = unsafe { aura_direct_enum_new_typed_boxes(cell, 3, boxes.as_ptr(), 2) };
+        let header = unsafe { &*pair };
+        assert_eq!(header.list_access.load(Ordering::Relaxed), layout.access());
+        assert_eq!(header.list_len.get(), 3);
+        assert_eq!(aura_direct_variant_take_payload(pair, 0), point);
+        let taken = aura_direct_variant_take_payload(pair, 1);
+        assert_eq!(taken, circle);
+        unsafe { aura_direct_release_value(taken) };
+        unsafe { aura_direct_release_value(pair) };
+    });
+    let failure = runtime_failure(|| {
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, std::ptr::null(), 0) };
+    });
+    assert!(failure.contains("before it was registered"), "{failure}");
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxIndex", FIRST_TEST_ACCESS + 85);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxIndex").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 9, std::ptr::null(), 0) };
+    });
+    assert!(failure.contains("invalid enum variant index"), "{failure}");
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxUnit", FIRST_TEST_ACCESS + 86);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxUnit").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 0, std::ptr::null(), 0) };
+    });
+    assert!(
+        failure.contains("wrong number of payload boxes"),
+        "{failure}"
+    );
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxCount", FIRST_TEST_ACCESS + 83);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxCount").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, std::ptr::null(), 1) };
+    });
+    assert!(
+        failure.contains("wrong number of payload boxes"),
+        "{failure}"
+    );
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxNull", FIRST_TEST_ACCESS + 84);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxNull").as_bytes(), layout.access()) }
+            .expect("registered");
+        let boxes = [std::ptr::null_mut(), std::ptr::null_mut()];
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, boxes.as_ptr(), 2) };
+    });
+    assert!(failure.contains("null field value"), "{failure}");
+}
+
+#[test]
+fn a_released_variant_frees_its_payload_boxes_with_it() {
+    in_task(|| {
+        let prefix = "Freed";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 87);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        let circle = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        let inner =
+            unsafe { aura_direct_enum_new_typed_boxes(cell, 3, [point, circle].as_ptr(), 2) };
+        let named = boxed_value(typed(
+            prefix,
+            FIRST_TEST_ACCESS + 87,
+            "Named",
+            vec![text("kept"), int32(4)],
+        ));
+        // Another reference keeps one payload alive after its tree goes.
+        unsafe { retain_untracked_value(named) };
+        let outer =
+            unsafe { aura_direct_enum_new_typed_boxes(cell, 3, [inner, named].as_ptr(), 2) };
+        unsafe { aura_direct_release_last_owned_variant(outer) };
+        assert_eq!(unsafe { &*named }.ref_count.load(Ordering::Relaxed), 1);
+        assert!(unsafe { &*point }.is_frozen());
+        unsafe { release_untracked_value(named) };
+        // A box the ledger owns twice only loses a reference, and a shared
+        // one takes the whole release.
+        let twice = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        unsafe { aura_direct_retain_value(twice) };
+        unsafe { aura_direct_release_last_owned_variant(twice) };
+        assert_eq!(unsafe { &*twice }.ref_count.load(Ordering::Relaxed), 1);
+        unsafe { aura_direct_release_last_owned_variant(twice) };
+        let shared = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        unsafe { share_direct_value(shared) };
+        unsafe { aura_direct_release_last_owned_variant(shared) };
+        // A box that holds something else is freed as any box is.
+        unsafe { aura_direct_release_last_owned_variant(boxed_value(int64(3))) };
+    });
+    let failure = runtime_failure(|| {
+        let released = boxed_value(int64(5));
+        unsafe { &*released }.ref_count.store(0, Ordering::Relaxed);
+        unsafe { aura_direct_release_last_owned_variant(released) };
+    });
+    assert!(failure.contains("already-released"), "{failure}");
+}
+
+#[test]
+fn a_variant_that_drops_a_payload_in_place_keeps_its_boxes_to_its_drop() {
+    // `Outer.Wrap` keeps an `Inner`, which holds a string, in its block.
+    let inner = EnumDefinition {
+        type_params: Vec::new(),
+        variants: vec![
+            ("Nothing".to_string(), Vec::new()),
+            ("Some".to_string(), vec![Type::named("str")]),
+        ],
+    };
+    let outer = EnumDefinition {
+        type_params: Vec::new(),
+        variants: vec![(
+            "Wrap".to_string(),
+            vec![Type::named("DropInner"), Type::named("str")],
+        )],
+    };
+    let env = LayoutEnv {
+        classes: Default::default(),
+        enums: [
+            ("DropInner".to_string(), inner),
+            ("DropOuter".to_string(), outer),
+        ]
+        .into(),
+    };
+    let mut builder = LayoutBuilder::new(&env);
+    let root = builder
+        .boxed_enum_layout(
+            &Type::named("DropOuter"),
+            |ty| matches!(ty, Type::Named(name, _) if name == "DropInner"),
+        )
+        .expect("a layout")
+        .expect("an enum");
+    let descriptor = encode_layouts(builder.table(), root);
+    let layout =
+        register_enum_layout(&descriptor, FIRST_TEST_ACCESS + 88).expect("the enum is laid out");
+    let mut payloads = TypedPayloads::new(layout, 0);
+    assert!(!payloads.release_boxes(|_| panic!("the variant keeps its boxes")));
 }

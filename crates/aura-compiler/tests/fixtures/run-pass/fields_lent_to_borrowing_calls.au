@@ -1,0 +1,50 @@
+enum Tree:
+    Leaf(int64)
+    Branch(list[int64])
+
+
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+
+def weight(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf(n):
+            return n
+        case Tree.Branch(items):
+            return total(items)
+
+
+class Doc:
+    tags: list[int64]
+    tree: Tree
+
+    def score(self) -> int64:
+        return total(self.tags) + weight(self.tree)
+
+    def grow(mut self, by: int64) -> int64:
+        before = total(self.tags)
+        self.tags.append(by)
+        self.tree = Tree.Branch(self.tags.copy())
+        return before + total(self.tags) + weight(self.tree)
+
+    def saved(mut self) -> list[int64]:
+        saved = self.tags.copy()
+        self.tags.append(100)
+        return saved
+
+
+def main():
+    mut doc = Doc(tags=[1, 2], tree=Tree.Leaf(5))
+    mut sum = 0
+    for i in range(3):
+        sum += doc.score()
+        sum += doc.grow(i)
+    print(sum)
+    saved = doc.saved()
+    print(total(saved))
+    print(total(doc.tags))
+    print(doc.score())

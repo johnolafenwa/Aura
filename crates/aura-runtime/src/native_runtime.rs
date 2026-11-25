@@ -7174,7 +7174,27 @@ fn frozen_program_value_slots() -> &'static Mutex<Vec<&'static std::sync::atomic
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// The words of the program's data that keep a shared variant box for
+/// generated code (see [`aura_direct_enum_unit_cell`]). The box belongs to
+/// its layout's slot, so the program's end only empties them.
+fn unit_variant_cells() -> &'static Mutex<Vec<&'static AtomicUsize>> {
+    static CELLS: OnceLock<Mutex<Vec<&'static AtomicUsize>>> = OnceLock::new();
+    CELLS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Empties every word [`aura_direct_enum_unit_cell`] filled.
+fn empty_unit_variant_cells() {
+    for cell in unit_variant_cells()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        cell.store(0, Ordering::Release);
+    }
+}
+
 fn clear_direct_module_constants() {
+    empty_unit_variant_cells();
     for slot in frozen_program_value_slots()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -9145,6 +9165,31 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
     })
 }
 
+/// [`aura_direct_vec_empty_tagged`] with storage for `room` elements, which
+/// its view offers to generated code, so a list literal's elements go in
+/// place with no further allocation, as appends do once one has grown the
+/// storage.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_empty_tagged_with_room(
+    cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+    room: usize,
+) -> *mut OpaqueValue {
+    let boxed = aura_direct_vec_empty_tagged(cell, type_ptr, type_len);
+    // SAFETY: the box is new and live.
+    let header = unsafe { &*boxed };
+    let shape = header.shape_tag.load(Ordering::Relaxed);
+    // Storage that cannot be had is left for the first append to ask for,
+    // which reports it. The write refreshes the view, which then offers
+    // the room, and forgets the shape, which the room keeps.
+    with_vector_mut(boxed, |vector| {
+        let _ = vector.elements.try_reserve(room);
+    });
+    header.shape_tag.store(shape, Ordering::Relaxed);
+    boxed
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_len(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
@@ -9273,10 +9318,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        // An instance kept in its class's layout, or a collection, joins
-        // the list in its own box, which then needs no copy for generated
-        // code to lend it or change it in place (see
-        // `aura_direct_element_path_probe`).
+        // An instance kept in its class's layout, a variant kept in its
+        // enum's layout, or a collection, joins the list in its own box,
+        // which then needs no copy for generated code to lend it or change
+        // it in place (see `aura_direct_element_path_probe`).
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
@@ -16478,6 +16523,179 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
     })
 }
 
+/// As [`aura_direct_enum_new_typed`], for a variant that takes payloads,
+/// with each payload kept in a box of its own already in its slot: `boxes`
+/// holds `count` boxes the running task owns, one for each such payload in
+/// order, and the variant takes each the way
+/// [`aura_direct_instance_put_field`] puts it. Generated code then stores
+/// each payload it keeps in place at its offset.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `boxes` the address of
+/// `count` live boxes the caller hands over a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed_boxes(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    boxes: *const *mut OpaqueValue,
+    count: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_enum_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let Some(variant_name) = usize::try_from(variant)
+            .ok()
+            .and_then(|variant| layout.variant_name(variant))
+        else {
+            runtime_error("direct runtime received an invalid enum variant index");
+        };
+        let index = variant as usize;
+        let offsets = layout.box_offsets(index);
+        if offsets.is_empty() || offsets.len() != count {
+            runtime_error("direct runtime received the wrong number of payload boxes");
+        }
+        let boxed = boxed_value_with_type(
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: layout.enum_name().clone(),
+                variant_name: variant_name.clone(),
+                payloads: VariantPayloads::Typed(TypedPayloads::new(layout, index)),
+            }),
+            Some(layout.runtime_type().clone()),
+        );
+        // SAFETY: `boxed_value_with_type` returns a live box, which is new
+        // and confined, so its view shows its block.
+        let header = unsafe { &*boxed };
+        header
+            .shape_tag
+            .store(layout.shape_tag(), Ordering::Relaxed);
+        let block = header.list_elements.get() as *mut u8;
+        for (position, &offset) in offsets.iter().enumerate() {
+            // SAFETY: the caller's contract.
+            let field = unsafe { *boxes.add(position) };
+            if field.is_null() {
+                runtime_error("direct runtime received a null field value");
+            }
+            // SAFETY: the caller hands over the reference, and the offset is
+            // a box slot of the new variant's block, which is null.
+            unsafe {
+                block
+                    .add(offset)
+                    .cast::<Option<ElementBox>>()
+                    .write(Some(adopt_field_box(field)));
+            }
+        }
+        boxed
+    })
+}
+
+/// As [`aura_direct_release_last_owned_value`], for a box generated code
+/// knows holds a variant of an enum the program defines: a variant that
+/// keeps its payloads in its layout is freed with [`free_typed_variant`].
+///
+/// # Safety
+///
+/// As for [`aura_direct_release_last_owned_value`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_variant(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        let removed = current_direct_frame_stack().is_some_and(|stack| {
+            // SAFETY: the stack belongs to the running task, and the caller
+            // passes a live box.
+            unsafe {
+                (*stack.as_ptr())
+                    .owned_values
+                    .remove_last(stack.as_ptr(), value)
+            }
+        });
+        if !removed {
+            // SAFETY: the caller's contract.
+            unsafe { release_direct_value(value) };
+            return;
+        }
+        // SAFETY: a value the ledger linked is live and confined to this
+        // thread, so no other thread changes its count.
+        let header = unsafe { &*value };
+        match header.ref_count.load(Ordering::Relaxed) {
+            0 => runtime_error("attempted to release an already-released direct runtime value"),
+            1 => {
+                header.ref_count.store(0, Ordering::Relaxed);
+                // SAFETY: the ledger held the last reference.
+                unsafe { free_typed_variant(value) };
+            }
+            count => header.ref_count.store(count - 1, Ordering::Relaxed),
+        }
+    })
+}
+
+/// Frees a value whose count reached zero, as [`free_direct_value`] does.
+/// A variant that keeps its payloads in its layout first releases each
+/// payload box itself, freeing in the same way a payload whose count
+/// reaches zero, so a tree of variants is freed without dropping each
+/// variant's payloads through its value.
+///
+/// # Safety
+///
+/// As for [`free_direct_value`].
+unsafe fn free_typed_variant(value: *mut OpaqueValue) {
+    // SAFETY: the caller dropped the last reference, so nothing else reads
+    // the value.
+    if let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(payloads),
+        ..
+    }) = unsafe { &mut *(*value).value.get() }
+    {
+        payloads.release_boxes(|boxed| {
+            // SAFETY: the variant's block held a reference to the box.
+            let header = unsafe { &*boxed };
+            if release_ref_count(&header.ref_count).unwrap_or_else(|message| runtime_error(message))
+            {
+                // SAFETY: the count reached zero.
+                unsafe { free_typed_variant(boxed) };
+            }
+        });
+    }
+    // SAFETY: the caller's contract.
+    unsafe { free_direct_value(value) };
+}
+
+/// The frozen box of variant `variant`, which takes no payloads, of the
+/// enum whose layout `cell` holds, as [`aura_direct_enum_new_typed`]
+/// builds it, kept in `slot`, a word of the program's data for that
+/// variant. Generated code reads the word and calls this only while it is
+/// zero, so building a variant with no payloads costs no call. The program's
+/// end empties the word before it frees the box.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `slot` null or a word of the
+/// program's data that only this function writes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_unit_cell(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    slot: *const AtomicUsize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let boxed = unsafe { aura_direct_enum_new_typed(cell, variant) };
+    // SAFETY: the caller's contract: the word lives as long as the program.
+    let slot: Option<&'static AtomicUsize> = unsafe { slot.as_ref() };
+    if let Some(slot) = slot {
+        if direct_value_is_frozen(boxed)
+            && slot
+                .compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            unit_variant_cells()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(slot);
+        }
+    }
+    boxed
+}
+
 /// Whether `boxed` holds an instance kept in its class's layout. Its view
 /// carries the class's access code while the box is confined.
 ///
@@ -16498,9 +16716,32 @@ unsafe fn holds_typed_instance(boxed: *mut OpaqueValue) -> bool {
         )
 }
 
+/// Whether `boxed` holds a variant generated code built in its enum's
+/// layout, whose box carries the layout's access code.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the running task owns a reference to.
+unsafe fn holds_typed_variant(boxed: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { boxed.as_ref() }) else {
+        return false;
+    };
+    let access = header.list_access.load(Ordering::Relaxed);
+    // SAFETY: a box with an enum's access code is confined to this thread,
+    // and the running task owns a reference, so nothing changes it now.
+    access >= FIRST_ENUM_ACCESS
+        && access != UNREGISTERED_PLAIN_ACCESS
+        && matches!(
+            unsafe { &*header.value.get() },
+            Value::EnumVariant(variant) if variant.payloads.typed().is_some()
+        )
+}
+
 /// Whether `boxed` holds a value a list keeps in a box of its own when it
-/// is appended: an instance kept in its class's layout, or a list, dict or
-/// set, which generated code reads or changes in place through the box.
+/// is appended: an instance kept in its class's layout, a variant kept in
+/// its enum's layout, or a list, dict or set, which generated code reads,
+/// lends, or changes in place through the box.
 ///
 /// # Safety
 ///
@@ -16509,6 +16750,7 @@ unsafe fn holds_element_box_value(boxed: *mut OpaqueValue) -> bool {
     // SAFETY: the caller's contract.
     unsafe {
         holds_typed_instance(boxed)
+            || holds_typed_variant(boxed)
             || boxed.as_ref().is_some_and(|header| {
                 header.shared_lock().is_none()
                     && matches!(
