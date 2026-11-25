@@ -649,6 +649,180 @@ fn kernel_cache_file(source: &str, compiler: (c_int, c_int)) -> Option<std::path
     Some(root.join("cuda-kernels").join(format!("{name}.ptx")))
 }
 
+/// Maximum size of a cached PTX text image loaded into CUDA.
+const MAX_KERNEL_IMAGE_BYTES: usize = 64 << 20;
+
+/// Checks that `image` is a size-bounded, printable-ASCII PTX text buffer
+/// ending in a single NUL byte and beginning with a `.version` directive
+/// (after optional whitespace and PTX comments).
+fn is_valid_ptx_image(image: &[u8]) -> bool {
+    if image.len() < 2 || image.len() > MAX_KERNEL_IMAGE_BYTES || image.last() != Some(&0) {
+        return false;
+    }
+    let body = &image[..image.len() - 1];
+    if !body
+        .iter()
+        .all(|&byte| matches!(byte, b'\t' | b'\n' | b'\r' | 0x20..=0x7E))
+    {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start_matches([' ', '\t', '\r', '\n']);
+        if let Some(after) = rest.strip_prefix("//") {
+            match after.find('\n') {
+                Some(end) => rest = &after[end + 1..],
+                None => return false,
+            }
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            match after.find("*/") {
+                Some(end) => rest = &after[end + 2..],
+                None => return false,
+            }
+        } else {
+            break;
+        }
+    }
+    rest.strip_prefix(".version")
+        .is_some_and(|after| after.starts_with([' ', '\t']))
+}
+
+/// Opens `directory` without following symlinks and verifies that it is a
+/// private (`0700`) directory owned by the current effective user.
+fn open_verified_cache_dir(directory: &std::path::Path) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(directory.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `path` is NUL-terminated; flags require a real directory and do
+    // not follow symlinks.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `dir` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(dir.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o077) != 0
+    {
+        return None;
+    }
+    Some(dir)
+}
+
+/// Ensures `directory` exists with `0700` permissions and is owned by the
+/// current effective user without following symlinks.
+fn ensure_private_cache_dir(directory: &std::path::Path) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(directory).ok()?;
+    let path = CString::new(directory.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `path` is NUL-terminated; flags require a real directory and do
+    // not follow symlinks.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `dir` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(dir.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o022) != 0
+    {
+        return None;
+    }
+    if (stat.st_mode & 0o077) != 0 {
+        // SAFETY: `dir` is an owned, non-group/world-writable directory fd.
+        if unsafe { libc::fchmod(dir.as_raw_fd(), 0o700) } != 0 {
+            return None;
+        }
+    }
+    Some(dir)
+}
+
+/// Reads a cached PTX file only if its parent directory and file pass
+/// ownership, permission, symlink, size, and PTX-text checks.
+fn read_cached_kernel_image(file: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = file.parent()?;
+    let file_name = file.file_name()?;
+    let dir = open_verified_cache_dir(directory)?;
+    let name = CString::new(file_name.as_bytes()).ok()?;
+    // SAFETY: `dir` is an open directory fd and `name` is a NUL-terminated
+    // filename; `O_NOFOLLOW | O_NONBLOCK` avoids symlink and FIFO hazards.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o022) != 0
+        || stat.st_size < 2
+        || stat.st_size as u64 > MAX_KERNEL_IMAGE_BYTES as u64
+    {
+        return None;
+    }
+    let expected = stat.st_size as usize;
+    let mut image = Vec::new();
+    image.try_reserve_exact(expected).ok()?;
+    let limit = (MAX_KERNEL_IMAGE_BYTES as u64) + 1;
+    file.take(limit).read_to_end(&mut image).ok()?;
+    if image.len() > MAX_KERNEL_IMAGE_BYTES || !is_valid_ptx_image(&image) {
+        return None;
+    }
+    Some(image)
+}
+
 /// Keeps `image` in `file`. The cache only saves time, so a failure to
 /// write it is not an error. The image is written beside the file and
 /// renamed, so another process never reads half of it.
@@ -656,7 +830,7 @@ fn keep_kernel_image(file: &std::path::Path, image: &[u8]) {
     let Some(directory) = file.parent() else {
         return;
     };
-    if std::fs::create_dir_all(directory).is_err() {
+    if ensure_private_cache_dir(directory).is_none() {
         return;
     }
     let partial = file.with_extension(format!("{}.partial", std::process::id()));
@@ -725,12 +899,12 @@ impl Compiled {
     /// The loaded module of a PTX `image`, or `None` when the driver does
     /// not take it.
     fn load(runtime: &Runtime, image: &[u8]) -> Option<*mut c_void> {
-        // The driver reads the image as a NUL-terminated string.
-        if image.last() != Some(&0) {
+        if !is_valid_ptx_image(image) {
             return None;
         }
         let mut module = std::ptr::null_mut();
-        // SAFETY: `image` is NUL-terminated.
+        // SAFETY: `image` is verified printable ASCII PTX ending in a single
+        // NUL byte.
         let status = unsafe { (runtime.api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
         (status == 0).then_some(module)
     }
@@ -743,7 +917,7 @@ impl Compiled {
         let file = kernel_cache_file(&program.source, runtime.compiler);
         let kept = file
             .as_deref()
-            .and_then(|file| std::fs::read(file).ok())
+            .and_then(read_cached_kernel_image)
             .and_then(|image| Self::load(runtime, &image));
         let module = match kept {
             Some(module) => module,
@@ -1419,5 +1593,123 @@ mod tests {
             "no partial file is left"
         );
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn kernel_cache_directory_uses_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("aura-kernels-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let cache_dir = directory.join("cuda-kernels");
+        let file = cache_dir.join("sample.ptx");
+        keep_kernel_image(&file, b".version 8.0\n\0");
+        let mode = std::fs::metadata(&cache_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+
+        // A group- or world-writable cache directory is not written to.
+        let writable = directory.join("writable-kernels");
+        std::fs::create_dir_all(&writable).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let skipped = writable.join("skipped.ptx");
+        keep_kernel_image(&skipped, b".version 8.0\n\0");
+        assert!(!skipped.exists());
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn cached_kernel_loading_validates_files_and_ptx_contents() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let sample_ptx = b"// header\n/* block */\n.version 8.0\n.target sm_80\n\0";
+        assert!(is_valid_ptx_image(sample_ptx));
+        assert!(!is_valid_ptx_image(b""));
+        assert!(!is_valid_ptx_image(b"\0"));
+        assert!(!is_valid_ptx_image(b".version 8.0\n"));
+        assert!(!is_valid_ptx_image(b".version 8.0\0extra\0"));
+        assert!(!is_valid_ptx_image(b"\x7fELF\x02\x01\x01\0"));
+        assert!(!is_valid_ptx_image(b"\x50\xed\x55\xba\x01\0"));
+        assert!(!is_valid_ptx_image(b"\xba\x55\xed\x50\x01\0"));
+        assert!(!is_valid_ptx_image(b"plain text without directive\0"));
+        assert!(!is_valid_ptx_image(b"// comment only\0"));
+        assert!(!is_valid_ptx_image(b"/* unclosed\0"));
+
+        let root =
+            std::env::temp_dir().join(format!("aura-kernels-validate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache_dir = root.join("cuda-kernels");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // Valid private PTX loads cleanly.
+        let good = cache_dir.join("good.ptx");
+        std::fs::write(&good, sample_ptx).unwrap();
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_cached_kernel_image(&good).as_deref(),
+            Some(&sample_ptx[..])
+        );
+
+        // Symlinked file is skipped.
+        let link = cache_dir.join("link.ptx");
+        symlink(&good, &link).unwrap();
+        assert!(read_cached_kernel_image(&link).is_none());
+
+        // Symlinked cache directory is skipped.
+        let dir_link = root.join("dir-link");
+        symlink(&cache_dir, &dir_link).unwrap();
+        assert!(read_cached_kernel_image(&dir_link.join("good.ptx")).is_none());
+
+        // Group-writable and world-writable files are skipped.
+        let group_writable = cache_dir.join("group.ptx");
+        std::fs::write(&group_writable, sample_ptx).unwrap();
+        std::fs::set_permissions(&group_writable, std::fs::Permissions::from_mode(0o620)).unwrap();
+        assert!(read_cached_kernel_image(&group_writable).is_none());
+
+        let world_writable = cache_dir.join("world.ptx");
+        std::fs::write(&world_writable, sample_ptx).unwrap();
+        std::fs::set_permissions(&world_writable, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(read_cached_kernel_image(&world_writable).is_none());
+
+        // Non-regular file (FIFO) is skipped without blocking.
+        let fifo = cache_dir.join("fifo.ptx");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+        assert!(read_cached_kernel_image(&fifo).is_none());
+
+        // Oversized file is skipped.
+        let huge = cache_dir.join("huge.ptx");
+        let huge_file = std::fs::File::create(&huge).unwrap();
+        huge_file
+            .set_len(MAX_KERNEL_IMAGE_BYTES as u64 + 1)
+            .unwrap();
+        std::fs::set_permissions(&huge, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&huge).is_none());
+
+        // Binary ELF and interior NUL cached files are skipped.
+        let elf = cache_dir.join("elf.ptx");
+        std::fs::write(&elf, b"\x7fELF\x02\x01\x01\0").unwrap();
+        std::fs::set_permissions(&elf, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&elf).is_none());
+
+        let nul = cache_dir.join("nul.ptx");
+        std::fs::write(&nul, b".version 8.0\n\0.target sm_80\0").unwrap();
+        std::fs::set_permissions(&nul, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&nul).is_none());
+
+        // Non-0700 parent directories are skipped.
+        for bad_mode in [0o755, 0o770, 0o777] {
+            std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(bad_mode))
+                .unwrap();
+            assert!(
+                read_cached_kernel_image(&good).is_none(),
+                "mode {bad_mode:o} should be skipped"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
