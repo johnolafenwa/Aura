@@ -312,6 +312,15 @@ test("verifier completes without deadlocking when subprocess writes over 128 KiB
   assert.deepEqual(result, { schema_version: 1, obligations: [] });
 });
 
+function isZombie(pid) {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z");
+  } catch {
+    return false;
+  }
+}
+
 test("aborting a verifier terminates its child process group cleanly on POSIX", async () => {
   if (process.platform === "win32") {
     return;
@@ -346,6 +355,11 @@ test("aborting a verifier terminates its child process group cleanly on POSIX", 
     for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
         process.kill(grandchildPid, 0);
+        // A killed process that nobody has reaped yet still answers signal 0.
+        if (isZombie(grandchildPid)) {
+          alive = false;
+          break;
+        }
         alive = true;
         await new Promise((resolve) => setTimeout(resolve, 25));
       } catch {

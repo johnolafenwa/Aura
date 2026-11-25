@@ -575,7 +575,10 @@ class LandingAndInstallerTests(unittest.TestCase):
             self.assertFalse((prefix / "lib" / "aura" / "libaura_runtime.a").is_symlink())
             self.assertFalse((prefix / "share" / "aura" / "README.md").is_symlink())
 
-        # Case 5: wildcard --target must not expand against working directory files.
+        # Case 5: wildcard --target must not expand against working directory
+        # files. The installer accepts --target on Linux only.
+        if platform.system() != "Linux":
+            return
         with tempfile.TemporaryDirectory(prefix="aura-install-glob-") as temp:
             root = Path(temp)
             release = root / "release"
@@ -1464,6 +1467,8 @@ class InstalledArchiveSmokeTests(unittest.TestCase):
                 self.fail(f"archive smoke left descendant process {stubborn_pid} running")
 
     def test_cross_target_env_uses_private_directory_and_quotes_exports(self) -> None:
+        if platform.system() != "Linux" or os.uname().machine not in {"x86_64", "aarch64"}:
+            self.skipTest("cross-target-env.sh sets up Linux cross targets only")
         script = REPO_ROOT / "scripts/cross-target-env.sh"
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

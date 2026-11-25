@@ -684,10 +684,8 @@ test("compiler bridge uri and command helpers handle direct utility cases", asyn
   const encodedPath = path.join(repoRoot, "examples/modules/simple_import.au").replace(/ /g, "%20");
   assert.equal(uriToPath(`file://${encodedPath}`), path.join(repoRoot, "examples/modules/simple_import.au"));
   assert.equal(uriToPath("file:///C:/aura/examples/main.au", "win32"), "C:\\aura\\examples\\main.au");
-  assert.equal(
-    uriToPath("file://server/share/project/main.au", "win32"),
-    "\\\\server\\share\\project\\main.au"
-  );
+  // A URI with a host names a remote share, which the server never opens.
+  assert.equal(uriToPath("file://server/share/project/main.au", "win32"), null);
   assert.equal(uriToPath("not-a-file-uri"), null);
   assert.equal(binaryName("win32"), "aura.exe");
   assert.equal(binaryName("linux"), "aura");
