@@ -5997,14 +5997,16 @@ impl<'a> FunctionCompiler<'a> {
                         Rvalue::Call {
                             callee:
                                 CallTarget::Runtime {
+                                    op: RuntimeOp::Resource(op),
                                     receiver: Some(file),
                                     ..
                                 },
+                            args,
                             ..
                         },
                 } = instruction
                 {
-                    self.compile_try_read(target, file)?;
+                    self.compile_try_read(target, *op, file, args)?;
                     continue;
                 }
             }
@@ -17400,7 +17402,7 @@ impl<'a> FunctionCompiler<'a> {
                 Rvalue::Call {
                     callee:
                         CallTarget::Runtime {
-                            op: RuntimeOp::Resource(crate::runtime_ops::ResourceOp::FileReadLine),
+                            op: RuntimeOp::Resource(op),
                             receiver: Some(Operand::Place(_)),
                             ..
                         },
@@ -17418,9 +17420,16 @@ impl<'a> FunctionCompiler<'a> {
         else {
             return false;
         };
+        // A stream's read takes its timeout, which the helper takes too.
+        let arity = match op {
+            crate::runtime_ops::ResourceOp::FileReadLine => 0,
+            crate::runtime_ops::ResourceOp::TcpStreamReadLine => 1,
+            _ => return false,
+        };
         result == moved
             && result.starts_with('%')
-            && args.is_empty()
+            && args.len() == arity
+            && args.iter().all(|arg| arg.writeback_place.is_none())
             && !self.lent_places.contains(result.as_str())
             && !self.lookup_slots.contains(result.as_str())
             && self
@@ -17436,18 +17445,35 @@ impl<'a> FunctionCompiler<'a> {
     fn compile_try_read(
         &mut self,
         result: &str,
+        op: crate::runtime_ops::ResourceOp,
         file: &Operand,
+        args: &[MirArg],
     ) -> std::result::Result<(), String> {
         let loaded = self.load_operand(file)?;
         let file = self.ensure_opaque(loaded)?;
+        let mut words = vec![file.values[0]];
+        for argument in args {
+            let word = match &argument.value {
+                Operand::Default(ArgDefault::Omitted) => self.builder.iconst(types::I64, 0),
+                operand => {
+                    let loaded = self.load_operand(operand)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+            };
+            words.push(word);
+        }
         let slot = self.builder.create_sized_stack_slot(8, 3);
         let failure = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.store(MemFlags::new(), zero, failure, 0);
-        let call = self.builder.call(
-            self.runtime[RuntimeFn::FileReadLineTry],
-            &[file.values[0], failure],
-        );
+        words.push(failure);
+        let helper = if op == crate::runtime_ops::ResourceOp::TcpStreamReadLine {
+            RuntimeFn::TcpStreamReadLineTry
+        } else {
+            RuntimeFn::FileReadLineTry
+        };
+        let call = self.builder.call(self.runtime[helper], &words);
+        self.release_all_temporary_owned();
         self.pending_try_read = Some((result.to_string(), call.results[0], failure));
         Ok(())
     }

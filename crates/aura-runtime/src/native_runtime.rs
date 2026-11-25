@@ -22240,22 +22240,46 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_line(
     stream: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let timeout = io_timeout_or_return!(timeout, "read_line(timeout=...)");
-        match unsafe { value_ref(stream) } {
-            Value::TcpStream(stream) => {
-                match stream.read_line(timeout, Some(&current_cancellation())) {
-                    Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
-                    Ok(None) => boxed_value(result_ok(optional_str_value(None))),
-                    Err(error) => boxed_value(result_err(io_error(error))),
-                }
-            }
-            other => runtime_error(format!(
-                "expected `net.TcpStream`, found `{}`",
-                value_type_name(other)
-            )),
+    task_runtime_boundary(|| match direct_tcp_stream_read_line(stream, timeout) {
+        Ok(Some(line)) => boxed_value(result_ok(optional_str_value(Some(line)))),
+        Ok(None) => boxed_value(result_ok(optional_str_value(None))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    })
+}
+
+/// `try stream.read_line()` in one call, as
+/// [`aura_direct_file_read_line_try`] reads a file's line: the line's
+/// `str`, or null at the end of the stream while `failure` stays null, or
+/// null with the `Result.Err` the `try` returns left in `failure`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_tcp_stream_read_line_try(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+    failure: *mut *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_tcp_stream_read_line(stream, timeout) {
+        Ok(Some(line)) => boxed_value(Value::string(line)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(error) => {
+            // SAFETY: the caller passes one writable word.
+            unsafe { failure.write(boxed_value(result_err(io_error(error)))) };
+            std::ptr::null_mut()
         }
     })
+}
+
+fn direct_tcp_stream_read_line(
+    stream: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> io::Result<Option<String>> {
+    let timeout = optional_timeout_result_from_ptr(timeout, "read_line(timeout=...)")?;
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => stream.read_line(timeout, Some(&current_cancellation())),
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
