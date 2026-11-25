@@ -135,6 +135,33 @@ impl DirectOwnedValues {
         }
     }
 
+    /// [`DirectOwnedValues::add`] for a box that was just made: no ledger
+    /// links it yet and no other thread reaches it, so it links here
+    /// without a look at its header.
+    ///
+    /// # Safety
+    ///
+    /// As for [`DirectOwnedValues::add`], and `value` is new.
+    #[inline]
+    pub(super) unsafe fn add_new(
+        &mut self,
+        owner: *mut DirectFrameStack,
+        value: *mut OpaqueValue,
+    ) -> bool {
+        let slot = self.linked.len();
+        if representation_stats::ownership_counting() || slot >= u32::MAX as usize {
+            // SAFETY: the caller's contract.
+            return unsafe { self.add(owner, value) };
+        }
+        // SAFETY: the caller passes a live box.
+        let header = unsafe { &*value };
+        header.owner.set(owner);
+        header.owned.set(1);
+        header.slot.set(slot as u32);
+        self.linked.push(value);
+        true
+    }
+
     /// Removes one reference to `value` the task of `owner` owns. Returns
     /// whether it owned one.
     ///
