@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- A long chain of `indirect` enum variants, such as a linked list of
+  hundreds of thousands of `Cons` cells, is dropped, compared with `==`,
+  and copied without running out of stack, in a task, in a generator, and
+  on the main task, under `aura run` and in native builds.
 - The compiler reports a diagnostic instead of stopping or stalling on
   several inputs. An `extern "C"` union whose name or member name is
   reserved where its generated declarations use it, such as `view`, `dyn`

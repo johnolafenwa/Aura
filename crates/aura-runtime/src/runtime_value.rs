@@ -1372,11 +1372,88 @@ impl InstanceFields {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EnumVariantValue {
     pub enum_name: RuntimeName,
     pub variant_name: RuntimeName,
     pub payloads: VariantPayloads,
+}
+
+/// A variant whose payloads are kept as values and include another such
+/// variant: copying, comparing, and dropping it walk a chain that can be as
+/// long as the program made it, so they walk it with a list of their own
+/// instead of the call stack.
+fn nested_value_variant(value: &Value) -> Option<&EnumVariantValue> {
+    match value {
+        Value::EnumVariant(variant) if matches!(variant.payloads, VariantPayloads::Values(_)) => {
+            Some(variant)
+        }
+        _ => None,
+    }
+}
+
+impl Clone for EnumVariantValue {
+    fn clone(&self) -> Self {
+        let VariantPayloads::Values(payloads) = &self.payloads else {
+            return Self {
+                enum_name: self.enum_name.clone(),
+                variant_name: self.variant_name.clone(),
+                payloads: self.payloads.clone(),
+            };
+        };
+        if !payloads
+            .iter()
+            .any(|payload| nested_value_variant(payload).is_some())
+        {
+            return Self {
+                enum_name: self.enum_name.clone(),
+                variant_name: self.variant_name.clone(),
+                payloads: VariantPayloads::Values(payloads.clone()),
+            };
+        }
+        // Each frame is a variant being copied: its source payloads, and
+        // the copies made of the ones before `copied.len()`.
+        struct Frame<'a> {
+            source: &'a EnumVariantValue,
+            payloads: &'a [Value],
+            copied: Vec<Value>,
+        }
+        fn frame(source: &EnumVariantValue) -> Frame<'_> {
+            let payloads = match &source.payloads {
+                VariantPayloads::Values(payloads) => payloads.as_slice(),
+                _ => unreachable!("only value payloads are walked"),
+            };
+            Frame {
+                source,
+                payloads,
+                copied: Vec::with_capacity(payloads.len()),
+            }
+        }
+        let mut frames = vec![frame(self)];
+        loop {
+            let top = frames.last_mut().expect("a frame is being copied");
+            if let Some(next) = top.payloads.get(top.copied.len()) {
+                match nested_value_variant(next) {
+                    Some(variant) => frames.push(frame(variant)),
+                    None => {
+                        let copy = next.clone();
+                        top.copied.push(copy);
+                    }
+                }
+                continue;
+            }
+            let done = frames.pop().expect("a frame is being copied");
+            let copy = Self {
+                enum_name: done.source.enum_name.clone(),
+                variant_name: done.source.variant_name.clone(),
+                payloads: VariantPayloads::Values(done.copied),
+            };
+            match frames.last_mut() {
+                Some(parent) => parent.copied.push(Value::EnumVariant(copy)),
+                None => return copy,
+            }
+        }
+    }
 }
 
 pub use crate::native_runtime::TypedPayloads;
@@ -1400,6 +1477,88 @@ pub enum VariantPayloads {
 impl Default for VariantPayloads {
     fn default() -> Self {
         Self::Values(Vec::new())
+    }
+}
+
+/// What [`VariantPayloads::into_parts`] moves out: the payloads where the
+/// variant kept them.
+pub enum PayloadParts {
+    Values(Vec<Value>),
+    Typed(TypedPayloads),
+    Json(crate::json_tape::JsonNode),
+}
+
+/// Dropping a variant drops the variants nested in its payloads one after
+/// another, from a list, so a long chain such as a linked list built of
+/// `indirect` variants does not drop by recursion.
+impl Drop for VariantPayloads {
+    fn drop(&mut self) {
+        if !self.holds_nested_variant() {
+            return;
+        }
+        let mut pending = Vec::new();
+        self.move_nested_variants(&mut pending);
+        while let Some(mut value) = pending.pop() {
+            if let Value::EnumVariant(variant) = &mut value {
+                variant.payloads.move_nested_variants(&mut pending);
+            }
+            // `value` now holds no variant of its own to walk.
+            drop(value);
+        }
+    }
+}
+
+impl VariantPayloads {
+    /// Whether a payload is a variant that holds a variant in turn. A
+    /// shallower variant drops by recursion of a single step.
+    fn holds_nested_variant(&self) -> bool {
+        self.any_variant_payload(|variant| {
+            variant
+                .payloads
+                .any_variant_payload(|inner| !inner.payloads.is_empty())
+        })
+    }
+
+    /// Whether `test` holds for a payload that is a variant, kept as a value
+    /// or in a box.
+    fn any_variant_payload(&self, test: impl Fn(&EnumVariantValue) -> bool) -> bool {
+        let check = |value: &Value| matches!(value, Value::EnumVariant(variant) if test(variant));
+        match self {
+            Self::Values(payloads) => payloads.iter().any(check),
+            Self::Typed(typed) => (0..typed.len()).any(|index| {
+                typed
+                    .payload_box(index)
+                    .is_some_and(|boxed| check(boxed.value()))
+            }),
+            Self::Json(_) => false,
+        }
+    }
+
+    /// Moves each payload that is a variant into `pending`, leaving the
+    /// unit value or an empty box in its place.
+    fn move_nested_variants(&mut self, pending: &mut Vec<Value>) {
+        match self {
+            Self::Values(payloads) => {
+                for payload in payloads.iter_mut() {
+                    if matches!(payload, Value::EnumVariant(_)) {
+                        pending.push(std::mem::replace(payload, Value::Unit));
+                    }
+                }
+            }
+            Self::Typed(typed) => {
+                for index in 0..typed.len() {
+                    let nested = typed
+                        .payload_box(index)
+                        .is_some_and(|boxed| matches!(boxed.value(), Value::EnumVariant(_)));
+                    if nested {
+                        if let Some(boxed) = typed.take_box(index) {
+                            pending.push(boxed.into_value());
+                        }
+                    }
+                }
+            }
+            Self::Json(_) => {}
+        }
     }
 }
 
@@ -1569,10 +1728,24 @@ impl VariantPayloads {
     }
 
     pub fn into_vec(self) -> Vec<Value> {
-        match self {
-            Self::Values(payloads) => payloads,
-            Self::Typed(typed) => typed.into_vec(),
-            Self::Json(node) => node.payload().into_iter().collect(),
+        match self.into_parts() {
+            PayloadParts::Values(payloads) => payloads,
+            PayloadParts::Typed(typed) => typed.into_vec(),
+            PayloadParts::Json(node) => node.payload().into_iter().collect(),
+        }
+    }
+
+    /// The payloads as what they are kept in, moved out of the variant.
+    pub fn into_parts(self) -> PayloadParts {
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: `this` is never dropped or used again, so each field is
+        // read out exactly once and owned by the result.
+        unsafe {
+            match &*this {
+                Self::Values(payloads) => PayloadParts::Values(std::ptr::read(payloads)),
+                Self::Typed(typed) => PayloadParts::Typed(std::ptr::read(typed)),
+                Self::Json(node) => PayloadParts::Json(std::ptr::read(node)),
+            }
         }
     }
 }
@@ -1902,9 +2075,27 @@ impl PartialEq for InstanceValue {
 
 impl PartialEq for EnumVariantValue {
     fn eq(&self, other: &Self) -> bool {
-        nominal_runtime_base_name(&self.enum_name) == nominal_runtime_base_name(&other.enum_name)
-            && self.variant_name == other.variant_name
-            && self.payloads == other.payloads
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            if nominal_runtime_base_name(&left.enum_name)
+                != nominal_runtime_base_name(&right.enum_name)
+                || left.variant_name != right.variant_name
+                || left.payloads.len() != right.payloads.len()
+            {
+                return false;
+            }
+            for index in 0..left.payloads.len() {
+                match (left.payloads.get(index), right.payloads.get(index)) {
+                    (
+                        Some(Cow::Borrowed(Value::EnumVariant(a))),
+                        Some(Cow::Borrowed(Value::EnumVariant(b))),
+                    ) => pending.push((a, b)),
+                    (a, b) if a != b => return false,
+                    _ => {}
+                }
+            }
+        }
+        true
     }
 }
 
@@ -21714,3 +21905,7 @@ pub fn io_error(error: io::Error) -> Value {
 #[cfg(test)]
 #[path = "runtime_value_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "runtime_value_deep_tests.rs"]
+mod deep_tests;

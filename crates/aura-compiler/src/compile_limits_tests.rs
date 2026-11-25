@@ -133,3 +133,47 @@ fn chained_method_calls_lower_quickly() {
     let output = crate::run_source(&source).expect("the chain runs");
     assert_eq!(output.stdout, "40\n");
 }
+
+// ----- B-MED-24 to B-MED-27: a long chain of `indirect` variants --------
+
+#[test]
+fn deep_indirect_chains_run_in_a_task_and_a_generator() {
+    let source = r#"
+from iter import Generator
+
+enum Chain:
+    Nil
+    Cons(int64, indirect Chain)
+
+def build(n: int64) -> Chain:
+    mut x = Chain.Nil
+    mut i: int64 = 0
+    while i < n:
+        x = Chain.Cons(i, x)
+        i += 1
+    return x
+
+def worker(depth: int64) -> bool:
+    a = build(depth)
+    b = build(depth)
+    s = str(a)
+    return a == b and len(s) > depth
+
+def gen() -> Generator[int64]:
+    x = build(30000)
+    yield 1
+
+def main():
+    with g = TaskGroup():
+        t = g.start(worker, 30000)
+        match t.result():
+            case TaskResult.Ready(v):
+                print(v)
+            case _:
+                print("other")
+    for v in gen():
+        print(v)
+"#;
+    let output = crate::run_source(source).expect("the chains run");
+    assert_eq!(output.stdout, "true\n1\n");
+}
