@@ -372,6 +372,8 @@ pub(crate) fn broadcast_offset(to: &[usize], from: &[usize], index: usize) -> us
         .sum()
 }
 
+type LaneKernels = (Vec<Vec<(usize, usize)>>, Vec<bool>);
+
 struct Generator<'a> {
     plan: &'a Plan,
     /// Whether each slot has a buffer when the steps after it run.
@@ -691,7 +693,7 @@ impl<'a> Generator<'a> {
         plan: &Plan,
         materialized: &[bool],
         beside: &[Vec<usize>],
-    ) -> Result<(Vec<Vec<(usize, usize)>>, Vec<bool>)> {
+    ) -> Result<LaneKernels> {
         let count = plan.slots.len();
         let mut users = vec![Vec::new(); count];
         for (index, slot) in plan.slots.iter().enumerate() {
