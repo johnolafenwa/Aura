@@ -15074,7 +15074,14 @@ impl<'a> FunctionCompiler<'a> {
                 // boxed member moves into the boxed value.
                 let handle = matches!(member.ty, DirectType::Opaque(_));
                 let borrowed_handle = !owned && handle;
+                // Boxing an inline callable retains its captures for the
+                // box. A moved union gives its own reference up here.
+                let owned_callable_words = (owned && matches!(member.ty, DirectType::Callable(_)))
+                    .then(|| member.values.clone());
                 let payload = codegen.ensure_opaque(member)?;
+                if let Some(words) = owned_callable_words {
+                    codegen.call_callable_adapter_on_words(&words, callables::DESCRIPTOR_DROP);
+                }
                 let (inject, transferred) = if retained && handle {
                     (
                         codegen.runtime[RuntimeFn::UnionInjectCopy],
