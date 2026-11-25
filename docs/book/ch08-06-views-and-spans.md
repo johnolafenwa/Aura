@@ -403,9 +403,9 @@ want an independent copy of the range, `to_list()` makes one. That is also
 how you print a span: a span has no text form of its own, and `print(afternoon)`
 is an error whose help line suggests `to_list()`.
 
-One thing a span doesn't have yet is support in `aura verify`. The verifier
-can't prove that an index into a span is in range today, even under a
-`requires len(values) > 0`, so a function you want proved takes a `list[T]`.
+`aura verify` reasons about a span as it does about a list: under a
+`requires len(values) > 0`, `values[0]` is proved in range, and a write
+through the span is a write to the list it came from.
 
 ### An in-place sort
 

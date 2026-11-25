@@ -1,0 +1,143 @@
+# Loops over `items()`, `keys()`, and `values()` see the entries the dict
+# held when the loop began, in insertion order, whatever the body does to
+# the dict: add, replace, remove, or clear.
+class Tally:
+    counts: dict[str, int64]
+    seen: int64
+
+    def total(self) -> int64:
+        mut total = 0
+        for name, count in self.counts.items():
+            total += name.len() * count
+        return total
+
+    def grow(mut self):
+        for name, count in self.counts.items():
+            self.counts[name + "!"] = count + 1
+            self.seen += 1
+
+
+def sum_items(table: dict[int64, int64]) -> int64:
+    mut total = 0
+    for key, value in table.items():
+        total += key * 3 + value
+    return total
+
+
+def join_items(table: dict[str, str]) -> str:
+    mut parts: list[str] = []
+    for key, value in table.items():
+        parts.append(key + "=" + value)
+    return ",".join(parts)
+
+
+def bump_all(table: mut dict[str, int64]):
+    for key, value in table.items():
+        table[key.clone()] = value * 10
+
+
+def drop_small(table: mut dict[int64, float64]) -> float64:
+    mut kept = 0.0
+    for key, value in table.items():
+        if value < 2.0:
+            table.remove(key)
+        else:
+            kept += value
+    return kept
+
+
+def first_long(table: dict[str, int64]) -> str:
+    for key in table.keys():
+        if key.len() > 3:
+            return key.clone()
+    return ""
+
+
+def pairs(table: dict[int64, bool]) -> int64:
+    mut total = 0
+    for outer, flag in table.items():
+        for inner in table.keys():
+            if flag:
+                total += outer * inner
+            if inner > 2:
+                break
+    return total
+
+
+def main():
+    mut numbers: dict[int64, int64] = {}
+    print(sum_items(numbers))
+    for i in range(5):
+        numbers[i * 7] = i
+    print(sum_items(numbers))
+    for i in range(40):
+        numbers[i * 7] = i + 1
+    numbers.remove(14)
+    numbers.remove(273)
+    numbers.remove(0)
+    print(sum_items(numbers))
+    mut key_total = 0
+    for key in numbers.keys():
+        key_total += key
+        numbers[key + 1] = 0
+    print(key_total)
+    print(numbers.len())
+    mut value_total = 0
+    for value in numbers.values():
+        value_total += value
+        numbers.clear()
+    print(value_total)
+    print(numbers.len())
+
+    mut words: dict[str, str] = {}
+    print(join_items(words))
+    for word in ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]:
+        words[word.clone()] = word.to_upper()
+    words.remove("four")
+    print(join_items(words))
+    mut lengths = 0
+    for value in words.values():
+        lengths += value.len()
+    print(lengths)
+    mut names: list[str] = []
+    for key in words.keys():
+        names.append(key.clone())
+        words.remove("ten")
+    print(" ".join(names))
+    print(words.len())
+
+    mut counts: dict[str, int64] = {}
+    counts["a"] = 1
+    counts["bb"] = 2
+    counts["ccc"] = 3
+    bump_all(counts)
+    print(counts["a"] + counts["bb"] + counts["ccc"])
+    print(first_long(counts))
+    counts["dddd"] = 4
+    print(first_long(counts))
+
+    mut tally = Tally(counts=counts, seen=0)
+    print(tally.total())
+    tally.grow()
+    print(tally.seen)
+    print(tally.counts.len())
+    print(tally.total())
+
+    mut sizes: dict[int64, float64] = {}
+    for i in range(12):
+        sizes[i] = (i as float64) * 0.5
+    print(drop_small(sizes))
+    print(sizes.len())
+
+    mut flags: dict[int64, bool] = {}
+    for i in range(6):
+        flags[i] = i % 2 == 0
+    print(pairs(flags))
+
+    mut small: dict[uint8, int32] = {}
+    small[7] = 70
+    small[9] = 90
+    mut mixed = 0
+    for key, value in small.items():
+        mixed += (key as int64) + (value as int64)
+    print(mixed)

@@ -1,0 +1,104 @@
+# `remove` hands back the value it took out. A result that is dropped,
+# matched, or kept whole removes the same entry and leaves the same dict.
+class Point:
+    x: int64
+    y: int64
+
+
+class Registry:
+    names: dict[str, str]
+    hits: int64
+
+    def forget(mut self, key: str) -> bool:
+        match self.names.remove(key):
+            case Lookup.Found(name):
+                self.hits += name.len()
+                return true
+            case Lookup.Missing:
+                return false
+
+
+def describe(found: Lookup[str]) -> str:
+    match found:
+        case Lookup.Found(name):
+            return "found " + name
+        case Lookup.Missing:
+            return "missing"
+
+
+def drain(table: mut dict[int64, list[int64]], keys: list[int64]) -> int64:
+    mut total = 0
+    for key in keys:
+        match table.remove(key):
+            case Lookup.Found(values):
+                for value in values:
+                    total += value
+            case Lookup.Missing:
+                total -= 1
+    return total
+
+
+def main():
+    mut names: dict[str, str] = {}
+    for word in ["ada", "bo", "cy", "di", "eve", "fay", "gus", "hal", "ivy", "jo", "kim"]:
+        names[word.clone()] = word.to_upper()
+    key = "b" + "o"
+    names.remove(key)
+    names.remove(key)
+    names.remove("nobody")
+    print(names.len())
+    other = "e" + "ve"
+    match names.remove(other):
+        case Lookup.Found(name):
+            print(name)
+        case Lookup.Missing:
+            print("missing")
+    match names.remove(other):
+        case Lookup.Found(name):
+            print(name)
+        case Lookup.Missing:
+            print("missing")
+    print(describe(names.remove("kim")))
+    print(describe(names.remove("kim")))
+    kept = names.remove("ada")
+    print(describe(kept))
+    print(", ".join(names.keys()))
+
+    mut registry = Registry(names=names, hits=0)
+    print(registry.forget("ivy"))
+    print(registry.forget("ivy"))
+    print(registry.hits)
+    print(registry.names.len())
+
+    mut groups: dict[int64, list[int64]] = {}
+    for i in range(20):
+        groups[i] = [i, i * 2]
+    print(drain(groups, [3, 4, 3, 19, 40]))
+    print(groups.len())
+    groups.remove(0)
+    mut left = 0
+    for id in groups.keys():
+        left += id
+    print(left)
+
+    mut points: dict[str, Point] = {}
+    points["origin"] = Point(x=0, y=0)
+    points["corner"] = Point(x=3, y=4)
+    match points.remove("corner"):
+        case Lookup.Found(point):
+            print(point.x + point.y)
+        case Lookup.Missing:
+            print("missing")
+    points.remove("origin")
+    print(points.len())
+
+    mut counts: dict[str, int64] = {}
+    counts["a"] = 1
+    counts["b"] = 2
+    match counts.remove("a"):
+        case Lookup.Found(count):
+            print(count)
+        case Lookup.Missing:
+            print(-1)
+    counts.remove("b")
+    print(counts.len())

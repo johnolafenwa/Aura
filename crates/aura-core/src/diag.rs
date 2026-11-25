@@ -419,6 +419,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "verify",
         title: "contract can never hold",
     },
+    DiagnosticCodeInfo {
+        code: "AU5122",
+        band: "verify",
+        title: "function marked verified has unproved checks",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

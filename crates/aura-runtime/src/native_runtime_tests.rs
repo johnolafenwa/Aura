@@ -27840,8 +27840,254 @@ fn lookup_debug(lookup: *mut OpaqueValue) -> Option<String> {
 }
 
 /// A payload box as debug text, or `None` for null.
+fn value_debug(value: *mut OpaqueValue) -> String {
+    unsafe { super::with_value(value, |value| format!("{value:?}")) }
+}
+
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_str_membership_agrees_with_boxed_membership() {
+    let map = string_map(&[("age", "41"), ("clé", "x"), ("", "empty")]);
+    let set = super::aura_direct_set_empty();
+    for element in ["age", "ключ", ""] {
+        super::aura_direct_set_insert_in_place(set, string_value(element));
+    }
+    for key in ["age", "clé", "", "ключ", "missing", "ag", "agee"] {
+        let boxed = string_value(key);
+        assert_eq!(
+            super::aura_direct_map_contains_view(map, key.as_ptr(), key.len()),
+            super::aura_direct_map_contains_key(map, boxed),
+            "dict has `{key}`"
+        );
+        assert_eq!(
+            super::aura_direct_set_contains_view(set, key.as_ptr(), key.len()),
+            super::aura_direct_set_contains(set, boxed),
+            "set has `{key}`"
+        );
+    }
+    assert_eq!(
+        super::aura_direct_map_contains_view(map, "age".as_ptr(), 3),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_set_contains_view(set, "clé".as_ptr(), 4),
+        0
+    );
+}
+
+#[test]
+fn direct_view_keyed_writes_agree_with_boxed_writes() {
+    let (viewed, boxed) = (
+        super::aura_direct_map_empty(),
+        super::aura_direct_map_empty(),
+    );
+    // Enough keys to pass from the scanned form to the indexed one.
+    let keys = (0..20)
+        .map(|index| format!("ключ{}", index % 12))
+        .collect::<Vec<_>>();
+    for (index, key) in keys.iter().enumerate() {
+        let value = index as i64;
+        if index % 2 == 0 {
+            super::aura_direct_map_set_index_int64_view(viewed, key.as_ptr(), key.len(), value);
+        } else {
+            super::aura_direct_map_set_index_view(
+                viewed,
+                key.as_ptr(),
+                key.len(),
+                int_value(value),
+            );
+        }
+        super::aura_direct_map_set_index_int64(boxed, string_value(key), value);
+        assert_eq!(value_debug(viewed), value_debug(boxed), "storing `{key}`");
+    }
+    assert_eq!(super::aura_direct_map_len(viewed), 12);
+
+    for key in ["ключ3", "missing", "ключ3", "ключ11", ""] {
+        let expected = payload_debug(super::aura_direct_map_remove_payload(
+            boxed,
+            string_value(key),
+        ));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_payload_view(
+                viewed,
+                key.as_ptr(),
+                key.len()
+            )),
+            expected,
+            "removing `{key}`"
+        );
+    }
+    for key in ["ключ0", "missing"] {
+        assert!(super::aura_direct_map_discard_view(viewed, key.as_ptr(), key.len()).is_null());
+        assert!(super::aura_direct_map_discard(boxed, string_value(key)).is_null());
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
+
+    for key in ["ключ1", "ключ0", "missing"] {
+        let by_view = super::aura_direct_map_probe_slot_view(viewed, key.as_ptr(), key.len(), 1);
+        let by_box = super::aura_direct_map_probe_slot(viewed, string_value(key), 1);
+        assert_eq!(by_view, by_box, "probing `{key}`");
+        assert_eq!(by_view.is_null(), key != "ключ1");
+    }
+
+    let (viewed, boxed) = (
+        super::aura_direct_set_empty(),
+        super::aura_direct_set_empty(),
+    );
+    for key in keys.iter().chain(&keys) {
+        assert_eq!(
+            super::aura_direct_set_insert_view(viewed, key.as_ptr(), key.len()),
+            super::aura_direct_set_insert_in_place(boxed, string_value(key)),
+            "adding `{key}`"
+        );
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
+}
+
+#[test]
+fn direct_map_remove_payload_agrees_with_remove() {
+    let entries = [("age", "41"), ("city", "Lagos"), ("name", "Ada")];
+    let with_lookup = string_map(&entries);
+    let with_payload = string_map(&entries);
+    for key in ["city", "missing", "city", "age", ""] {
+        let boxed = string_value(key);
+        let expected = lookup_debug(super::aura_direct_map_remove_in_place(with_lookup, boxed));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_payload(with_payload, boxed)),
+            expected,
+            "removing `{key}`"
+        );
+        assert_eq!(
+            super::aura_direct_map_len(with_payload),
+            super::aura_direct_map_len(with_lookup)
+        );
+    }
+    assert_eq!(super::aura_direct_map_len(with_payload), 1);
+}
+
+#[test]
+fn direct_int64_removes_and_discards_agree_with_remove() {
+    let build = || {
+        let map = super::aura_direct_map_empty();
+        for key in 0..30 {
+            super::aura_direct_map_set_index_int64_key(map, key, string_value("v"));
+        }
+        map
+    };
+    let (with_lookup, with_payload, discarded, discarded_boxed) =
+        (build(), build(), build(), build());
+    for key in [4, 4, 29, 0, 99, -1] {
+        let boxed = int_value(key);
+        let expected = lookup_debug(super::aura_direct_map_remove_in_place(with_lookup, boxed));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_int64_payload(
+                with_payload,
+                key
+            )),
+            expected,
+            "removing {key}"
+        );
+        assert!(super::aura_direct_map_discard_int64(discarded, key).is_null());
+        assert!(super::aura_direct_map_discard(discarded_boxed, boxed).is_null());
+        for map in [with_payload, discarded, discarded_boxed] {
+            assert_eq!(
+                super::aura_direct_map_len(map),
+                super::aura_direct_map_len(with_lookup)
+            );
+            assert_eq!(
+                super::aura_direct_map_contains_int64(map, key),
+                0,
+                "{key} is gone"
+            );
+        }
+    }
+    assert_eq!(super::aura_direct_map_len(discarded), 27);
+}
+
+#[test]
+fn a_map_snapshot_keeps_its_entries_through_writes() {
+    let map = super::aura_direct_map_empty();
+    for key in 0..20 {
+        super::aura_direct_map_set_index_int64_pair(map, key, key * 10);
+    }
+    super::aura_direct_map_remove_int64_payload(map, 3);
+    let snapshot = super::aura_direct_map_snapshot(map);
+    // Every kind of write to the dict leaves the snapshot as it was.
+    super::aura_direct_map_set_index_int64_pair(map, 5, -1);
+    super::aura_direct_map_set_index_int64_pair(map, 77, 7);
+    super::aura_direct_map_discard_int64(map, 0);
+    assert_eq!(super::aura_direct_map_len(snapshot), 19);
+    let mut seen = Vec::new();
+    let mut next = 0;
+    for _ in 0..super::aura_direct_map_len(snapshot) {
+        let slot = super::aura_direct_map_next_slot(snapshot, next);
+        assert!(slot >= 0);
+        next = slot + 1;
+        let key = super::aura_direct_map_key_int64_at(snapshot, slot);
+        let value = super::aura_direct_map_value_int64_at(snapshot, slot);
+        assert_eq!(
+            payload_debug(super::aura_direct_map_key_at(snapshot, slot)),
+            payload_debug(int_value(key))
+        );
+        assert_eq!(
+            payload_debug(super::aura_direct_map_value_at(snapshot, slot)),
+            payload_debug(int_value(value))
+        );
+        seen.push((key, value));
+    }
+    assert_eq!(super::aura_direct_map_next_slot(snapshot, next), -1);
+    let expected = (0..20)
+        .filter(|key| *key != 3)
+        .map(|key| (key, key * 10))
+        .collect::<Vec<_>>();
+    assert_eq!(seen, expected);
+    assert_eq!(super::aura_direct_map_len(map), 19);
+    assert_eq!(super::aura_direct_map_contains_int64(map, 77), 1);
+
+    let words = string_map(&[("a", "x"), ("b", "y")]);
+    let snapshot = super::aura_direct_map_snapshot(words);
+    super::aura_direct_map_clear_in_place(words);
+    let slot = super::aura_direct_map_next_slot(snapshot, 1);
+    assert_eq!(
+        payload_debug(super::aura_direct_map_key_at(snapshot, slot)),
+        payload_debug(string_value("b"))
+    );
+    assert_eq!(
+        payload_debug(super::aura_direct_map_value_at(snapshot, slot)),
+        payload_debug(string_value("y"))
+    );
+    let snapshot_address = snapshot as usize;
+    let message = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_map_key_at(snapshot_address as *mut OpaqueValue, 9);
+    })
+    .message;
+    assert!(message.contains("walked past the entries"), "{message}");
+}
+
+#[test]
+fn direct_int64_pair_stores_replace_and_append_in_order() {
+    let map = super::aura_direct_map_empty();
+    // Enough keys to pass the scan threshold, so the index holds them.
+    for key in 0..40 {
+        super::aura_direct_map_set_index_int64_pair(map, key * 7, key);
+    }
+    for key in (0..40).rev() {
+        super::aura_direct_map_set_index_int64_pair(map, key * 7, key + 100);
+    }
+    assert_eq!(super::aura_direct_map_len(map), 40);
+    for key in 0..40 {
+        assert_eq!(
+            payload_debug(super::aura_direct_map_get_int64_payload(map, key * 7)),
+            lookup_debug(super::aura_direct_map_get_int64(map, key * 7)),
+        );
+        assert_eq!(super::aura_direct_map_contains_int64(map, key * 7), 1);
+        assert_eq!(super::aura_direct_map_contains_int64(map, key * 7 + 1), 0);
+    }
+    assert_eq!(super::aura_direct_map_next_slot(map, 39), 39);
+    assert_eq!(super::aura_direct_map_next_slot(map, 40), -1);
 }
 
 #[test]
