@@ -118,6 +118,7 @@ fn param_uses(
     // (see `element_slots`), compare from their bytes.
     let mut loans = read_str_loans(function);
     loans.extend(str_element_reads(function));
+    let extended = extended_bytes(function);
     let views = |operand: &Operand| {
         matches!(operand, Operand::String(_))
             || matches!(operand, Operand::Place(place)
@@ -173,6 +174,13 @@ fn param_uses(
                     (op, []) => receiver_view_read(*op).is_some(),
                     _ => false,
                 },
+                // Bytes only for the next operation to extend a list
+                // with are appended from the words.
+                Instruction::Assign { target, value }
+                    if str_to_bytes(value).is_some() && extended.contains(target.as_str()) =>
+                {
+                    true
+                }
                 // The entry loan of a dict under the key a fused test
                 // probed reads the probe's slot.
                 Instruction::BeginElementLoan {
@@ -566,6 +574,108 @@ pub(super) fn appended_copies(function: &MirFunction) -> HashMap<String, String>
         .into_iter()
         .filter(|(copy, _)| uses.get(copy) == Some(&1) && strs.contains(copy))
         .map(|(copy, copied)| (copy.to_string(), copied.to_string()))
+        .collect()
+}
+
+/// The `str` operand of `value` when it is `text.to_bytes()`.
+pub(super) fn str_to_bytes(value: &Rvalue) -> Option<&Operand> {
+    match value {
+        Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::Host(builtin),
+                    ..
+                },
+            args,
+            ..
+        } if builtin.name() == "str.to_bytes" => match args.as_slice() {
+            [text] => Some(&text.value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The local `instruction` extends a list with by moving it, when it is
+/// an `extend` of a moved local.
+fn extending_local(instruction: &Instruction) -> Option<&str> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::Extend),
+                        receiver: Some(Operand::Place(_)),
+                        ..
+                    },
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    match args.as_slice() {
+        [MirArg {
+            value: Operand::MovePlace(place),
+            writeback_place: None,
+            ..
+        }] => Some(place),
+        _ => None,
+    }
+}
+
+/// The temporaries of `function` that hold the bytes of a `str` only for
+/// the next operation to extend a list with them, as in
+/// `out.extend(text.to_bytes())`. Only the end of a loan may lie between
+/// the two, so the bytes are still there when the list takes them, and
+/// the list is appended to from the `str`'s words with no list made for
+/// the bytes.
+pub(super) fn extended_bytes(function: &MirFunction) -> HashSet<String> {
+    let mut extended = HashSet::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Assign { target, value } = instruction else {
+                continue;
+            };
+            if str_to_bytes(value).is_none() {
+                continue;
+            }
+            let next = block.instructions[index + 1..].iter().find(|next| {
+                !matches!(
+                    next,
+                    Instruction::EndLoan { .. }
+                        | Instruction::SourceLocation { .. }
+                        | Instruction::SourceName { .. }
+                )
+            });
+            if next.and_then(extending_local) == Some(target.as_str()) {
+                extended.insert(target.as_str());
+            }
+        }
+    }
+    if extended.is_empty() {
+        return HashSet::new();
+    }
+    // The extend is the temporary's only use.
+    let mut uses = HashMap::<&str, usize>::new();
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            instruction_place_mentions(instruction, &mut mentions);
+        }
+        mentions.extend(terminator_place_mentions(&block.terminator));
+    }
+    for place in mentions {
+        *uses
+            .entry(place.split('.').next().unwrap_or(place))
+            .or_default() += 1;
+    }
+    extended
+        .into_iter()
+        .filter(|temp| uses.get(temp) == Some(&1))
+        .map(str::to_string)
         .collect()
 }
 
@@ -1799,6 +1909,71 @@ impl FunctionCompiler<'_> {
         };
         self.builder.call(
             self.runtime[RuntimeFn::VecPushStrView],
+            &[list, words.ptr, words.len],
+        );
+        self.release_view_arguments(words.released.into_iter().collect());
+        true
+    }
+
+    /// Keeps the words of the `str` whose bytes `value` copies into
+    /// `target`, instead of the copy, when the next operation extends a
+    /// list with `target` (see [`extended_bytes`]) and this body has the
+    /// `str` as words, as a literal, or as the box of a local that owns it.
+    pub(super) fn defer_extended_bytes(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        if !self.extended_bytes.contains(target) {
+            return Ok(false);
+        }
+        let Some(text) = str_to_bytes(value) else {
+            return Ok(false);
+        };
+        let words = match text {
+            Operand::String(text) => {
+                let (ptr, len) = self.string_constant(text.as_bytes())?;
+                let owner = self.builder.iconst(types::I64, 0);
+                ViewArgument {
+                    owner,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+            Operand::Place(place) if self.owns_counted_str(place) => {
+                let held = self.load_root(place)?.values[0];
+                let (ptr, len) = self.str_box_words(held);
+                ViewArgument {
+                    owner: held,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+            operand => match self.load_place_words(operand)? {
+                Some(words) => words,
+                None => return Ok(false),
+            },
+        };
+        self.deferred_str_copies.insert(target.to_string(), words);
+        Ok(true)
+    }
+
+    /// Extends the `list[uint8]` `list` with the deferred bytes `operand`
+    /// moves, from their words, when they are deferred.
+    pub(super) fn extend_deferred_bytes(&mut self, list: Val, operand: &Operand) -> bool {
+        let Operand::MovePlace(place) = operand else {
+            return false;
+        };
+        if !self.extended_bytes.contains(place.as_str()) {
+            return false;
+        }
+        let Some(words) = self.deferred_str_copies.remove(place.as_str()) else {
+            return false;
+        };
+        self.builder.call(
+            self.runtime[RuntimeFn::VecExtendUtf8],
             &[list, words.ptr, words.len],
         );
         self.release_view_arguments(words.released.into_iter().collect());

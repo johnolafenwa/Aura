@@ -2979,6 +2979,7 @@ impl<'a> NativeCodegen<'a> {
                 None => str_slots::clone_moves(function),
             },
             appended_copies: str_slots::appended_copies(function),
+            extended_bytes: str_slots::extended_bytes(function),
             spliced_plan: str_slots::spliced_formats(function, &formatted_reads),
             formatted_reads,
             spliced_formats: HashMap::new(),
@@ -4464,6 +4465,9 @@ struct FunctionCompiler<'a> {
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
     appended_copies: HashMap<String, String>,
+    /// The temporaries that hold the bytes of a `str` only to extend a
+    /// list with them (see [`str_slots::extended_bytes`]).
+    extended_bytes: HashSet<String>,
     /// The words of each such copy between the two operations, when this
     /// body has the copied `str` as words.
     deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
@@ -6857,6 +6861,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
+            Instruction::Assign { target, value }
+                if self.defer_extended_bytes(target, value)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();
@@ -18568,6 +18574,10 @@ impl<'a> FunctionCompiler<'a> {
                 let value = self.load_operand_for_target(&args[0].value, &element_direct_ty)?;
                 let value = self.coerce_value(value, &element_direct_ty)?;
                 self.emit_plain_list_push(&record, list, &value);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ListOp::Extend if self.extend_deferred_bytes(list, &args[0].value) => {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

@@ -5,8 +5,8 @@ use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 
 use super::super::validated_for_emission;
 use super::{
-    appended_copies, clone_moves, element_slots, formatted_reads, literal_chunks, plan_views,
-    receiver_view_read, spliced_formats, ViewParam, ViewRead,
+    appended_copies, clone_moves, element_slots, extended_bytes, formatted_reads, literal_chunks,
+    plan_views, receiver_view_read, spliced_formats, ViewParam, ViewRead,
 };
 
 const SOURCE: &str = r#"
@@ -415,4 +415,47 @@ fn a_str_key_a_dict_or_set_looks_up_is_read_from_its_bytes() {
     // reads the probe's slot; `in` tests a dict and a set.
     assert_eq!(views["add_to"], [view(1, true)]);
     assert_eq!(views["known"], [view(0, true)]);
+}
+
+const BYTES: &str = r#"
+def add_text(out: mut list[uint8], text: str):
+    out.extend(text.to_bytes())
+
+def keep(text: str) -> list[uint8]:
+    return text.to_bytes()
+
+def size(out: mut list[uint8], text: str) -> int64:
+    bytes = text.to_bytes()
+    out.extend("-".to_bytes())
+    out.extend(bytes)
+    return out.len()
+
+def main():
+    mut out: list[uint8] = []
+    add_text(out, "a")
+    print(keep("b").len())
+    print(size(out, "c"))
+"#;
+
+#[test]
+fn bytes_made_only_to_extend_a_list_are_appended_from_the_words() {
+    let mir = lower_source_to_mir(BYTES).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the module has the function")
+    };
+    assert_eq!(extended_bytes(function("add_text")).len(), 1);
+    assert!(extended_bytes(function("keep")).is_empty());
+    // Only the literal's bytes extend the list as the next operation.
+    assert_eq!(extended_bytes(function("size")).len(), 1);
+    assert!(extended_bytes(function("main")).is_empty());
+    // So `add_text` reads its text only through the bytes.
+    let views = plan_views(&module);
+    assert_eq!(views["add_text"], [view(1, true)]);
+    assert!(!views.contains_key("keep"));
+    assert!(!views.contains_key("size"));
 }

@@ -10117,6 +10117,83 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     })
 }
 
+/// Appends the `len` bytes at `ptr`, the UTF-8 of a `str`, to the
+/// `list[uint8]` `vec`, as `vec.extend(text.to_bytes())` does, with no
+/// list made for the bytes in between. A text `to_bytes` cannot copy stops
+/// the program as `to_bytes` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_extend_utf8(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    if len == 0 {
+        return;
+    }
+    // SAFETY: generated code passes the words of a live `str`.
+    let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // SAFETY: generated code passes a live list box.
+    if len <= crate::bytes_codec::MAX_CODEC_OUTPUT_LEN && unsafe { grow_uint8_list(vec, bytes) } {
+        return;
+    }
+    task_runtime_boundary(|| {
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let copied = match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {
+            Ok(Value::Vec(copied)) => copied,
+            Ok(_) => runtime_error("`to_bytes` made no `list[uint8]`"),
+            Err(error) => runtime_diagnostic_error(error),
+        };
+        with_vector_mut(vec, |vector| vector.elements.append(copied.elements));
+    })
+}
+
+/// Appends `bytes` to a confined `list[uint8]` that keeps its bytes in
+/// storage no other list shares, and keeps the length and room generated
+/// code reads in step, as [`grow_scalar_list`] does for one element.
+/// Any other list, or storage that cannot grow, gets `false`.
+unsafe fn grow_uint8_list(vec: *mut OpaqueValue, bytes: &[u8]) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    // SAFETY: as in `grow_scalar_list`, the value is confined to this
+    // thread and no access to it is in progress.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    let ListElements::Uint8(values) = &mut vector.elements else {
+        return false;
+    };
+    let Some(values) = values.unshared_mut() else {
+        return false;
+    };
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        let len = header.list_len.get();
+        if len > values.len() && len <= values.capacity() {
+            // SAFETY: generated code wrote each element up to `len`
+            // before it raised the length.
+            unsafe { values.set_len(len) };
+        } else {
+            values.truncate(len);
+        }
+    }
+    if values.try_reserve(bytes.len()).is_err() {
+        return false;
+    }
+    values.extend_from_slice(bytes);
+    header.list_elements.set(values.as_ptr() as usize);
+    header.list_len.set(values.len());
+    header.list_capacity.store(
+        u32::try_from(values.capacity()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    true
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_index(
     vec: *mut OpaqueValue,

@@ -27210,6 +27210,66 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
 }
 
 #[test]
+fn str_bytes_extend_a_byte_list_from_their_words() {
+    use super::DirectListAccess;
+    let bytes = |list: *mut OpaqueValue| -> Vec<u8> {
+        (0..super::aura_direct_vec_len(list))
+            .map(|index| super::aura_direct_vec_index_scalar(list, index, 6) as u8)
+            .collect()
+    };
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("uint8")],
+    ));
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    // No bytes change nothing, and need no address.
+    super::aura_direct_vec_extend_utf8(list, std::ptr::null(), 0);
+    assert_eq!(super::aura_direct_vec_len(list), 0);
+    let text = "h\u{e9}llo";
+    // The first bytes give the list its form, and the next find it.
+    let (head, tail) = text.split_at(1);
+    for part in [head, tail] {
+        super::aura_direct_vec_extend_utf8(list, part.as_ptr(), part.len());
+    }
+    assert_eq!(list_view_access(list), DirectListAccess::Uint8 as u32);
+    // A byte generated code appended in place is kept.
+    let len = list_view_len(list);
+    assert_eq!(len, text.len());
+    assert!(len < list_view_capacity(list));
+    let layout = super::direct_list_layout();
+    unsafe {
+        let base = list as *mut u8;
+        let elements = *(base.add(layout.elements_offset as usize) as *const usize) as *mut u8;
+        *elements.add(len) = b'!';
+        *(base.add(layout.len_offset as usize) as *mut usize) = len + 1;
+    }
+    let long = "a text longer than the room the list has left";
+    super::aura_direct_vec_extend_utf8(list, long.as_ptr(), long.len());
+    let mut expected = format!("{text}!{long}").into_bytes();
+    assert_eq!(bytes(list), expected);
+    assert_eq!(list_view_len(list), expected.len());
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    super::aura_direct_vec_extend_utf8(list, b"z".as_ptr(), 1);
+    assert_eq!(bytes(copy), expected);
+    expected.push(b'z');
+    assert_eq!(bytes(list), expected);
+    // So do a list shared with another thread and one of no form yet.
+    unsafe { super::share_direct_value(copy) };
+    super::aura_direct_vec_extend_utf8(copy, b"yz".as_ptr(), 2);
+    let mut shared = expected[..expected.len() - 1].to_vec();
+    shared.extend_from_slice(b"yz");
+    assert_eq!(bytes(copy), shared);
+    let untyped = super::aura_direct_vec_empty();
+    super::aura_direct_vec_extend_utf8(untyped, b"ab".as_ptr(), 2);
+    assert_eq!(bytes(untyped), b"ab");
+    for value in [list, copy, untyped] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn scalar_pops_in_place_are_dropped_at_the_next_access() {
     use super::DirectListAccess;
     let list = super::aura_direct_vec_empty();
