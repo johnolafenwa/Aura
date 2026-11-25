@@ -474,13 +474,14 @@ impl TypedPayloads {
         if !fits {
             return Err(payloads);
         }
-        // Every place is written below, so the block needs no zeroing.
-        let mut typed = Self::uninit(layout, variant);
-        for (index, value) in payloads.into_iter().enumerate() {
-            // SAFETY: the place is dead, and the value fits it.
-            unsafe { typed.write_dead(index, value) };
+        // Every place is written below; track initialized count so an unwind
+        // drops only slots already written before freeing the block.
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
+        for value in payloads {
+            // SAFETY: each place is dead, and the value fits it.
+            unsafe { partial.write_next(value) };
         }
-        Ok(typed)
+        Ok(partial.finish())
     }
 
     /// [`Self::from_values`] for a variant that takes one payload, with no
@@ -501,10 +502,10 @@ impl TypedPayloads {
         if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
             return Err(payload);
         }
-        let mut typed = Self::uninit(layout, variant);
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
         // SAFETY: the place is dead, and the value fits it.
-        unsafe { typed.write_dead(0, payload) };
-        Ok(typed)
+        unsafe { partial.write_next(payload) };
+        Ok(partial.finish())
     }
 
     /// [`Self::from_value`] for the variant at index `variant`, which the
@@ -523,10 +524,10 @@ impl TypedPayloads {
         if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
             return Err(payload);
         }
-        let mut typed = Self::uninit(layout, variant);
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
         // SAFETY: the place is dead, and the value fits it.
-        unsafe { typed.write_dead(0, payload) };
-        Ok(typed)
+        unsafe { partial.write_next(payload) };
+        Ok(partial.finish())
     }
 
     /// Variant `variant` with a block whose bytes are dead. The caller
@@ -826,6 +827,69 @@ impl Clone for TypedPayloads {
             };
         }
         copy
+    }
+}
+
+/// Tracks how many leading payload slots have been initialized during
+/// [`TypedPayloads`] construction so an unwind drops only initialized slots
+/// before releasing the backing block.
+struct PartialTypedPayloads {
+    typed: std::mem::ManuallyDrop<TypedPayloads>,
+    initialized: usize,
+}
+
+impl PartialTypedPayloads {
+    fn new(typed: TypedPayloads) -> Self {
+        Self {
+            typed: std::mem::ManuallyDrop::new(typed),
+            initialized: 0,
+        }
+    }
+
+    /// Writes `value` into the next uninitialized slot and advances the
+    /// initialized count only after the write completes without unwinding.
+    ///
+    /// # Safety
+    ///
+    /// The next slot index is in bounds, its bytes are dead, and `value` fits.
+    unsafe fn write_next(&mut self, value: Value) {
+        let index = self.initialized;
+        // SAFETY: caller's contract.
+        unsafe { self.typed.write_dead(index, value) };
+        self.initialized = index + 1;
+    }
+
+    fn finish(mut self) -> TypedPayloads {
+        // SAFETY: all slots are initialized and `forget(self)` suppresses
+        // `PartialTypedPayloads::drop`.
+        let typed = unsafe { std::mem::ManuallyDrop::take(&mut self.typed) };
+        std::mem::forget(self);
+        typed
+    }
+}
+
+impl Drop for PartialTypedPayloads {
+    fn drop(&mut self) {
+        let plan = &self.typed.layout.variants[self.typed.variant()];
+        let (Some(data), Some(block)) = (self.typed.data, plan.block) else {
+            return;
+        };
+        if !plan.bytes_only {
+            let table = self.typed.layout.table();
+            for index in 0..self.initialized {
+                let place = self.typed.places()[index];
+                // SAFETY: slots `0..self.initialized` were written and are live.
+                unsafe {
+                    (self.typed.layout.ops.drop)(
+                        table,
+                        place.layout,
+                        self.typed.address_mut(place),
+                    );
+                }
+            }
+        }
+        // SAFETY: initialized slots were dropped above and the block came from the pool.
+        unsafe { super::free_layout_block(data, block) };
     }
 }
 
