@@ -1476,6 +1476,11 @@ impl Env {
     }
 
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
+        let _ = self.write_place_replacing(place, value)?;
+        Ok(())
+    }
+
+    fn write_place_replacing(&mut self, place: &str, value: Value) -> Result<Option<Value>> {
         self.ensure_place_mutation_allowed(place)?;
         let resolved_place = self.resolve_loan_place(place)?;
         let place = resolved_place.as_str();
@@ -1486,8 +1491,7 @@ impl Env {
 
         if rest.is_empty() {
             self.shared_values.remove(root);
-            self.values.insert((*root).to_string(), value);
-            return Ok(());
+            return Ok(self.values.insert((*root).to_string(), value));
         }
 
         let root_value = self
@@ -1498,7 +1502,7 @@ impl Env {
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place(root_value, &rest_refs, value, place)
+        write_nested_place_replacing(root_value, &rest_refs, value, place)
     }
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
@@ -1549,15 +1553,25 @@ impl Env {
         Ok(())
     }
 
+    #[cfg(test)]
     fn write_shared_place(&mut self, place: &str, value: Arc<Value>) -> Result<()> {
+        let _ = self.write_shared_place_replacing(place, value)?;
+        Ok(())
+    }
+
+    fn write_shared_place_replacing(
+        &mut self,
+        place: &str,
+        value: Arc<Value>,
+    ) -> Result<Option<Value>> {
         if place.contains('.') {
             return Err(Diagnostic::new(format!(
                 "module constant reference cannot be assigned to nested MIR place `{place}`"
             )));
         }
-        self.values.remove(place);
+        let replaced = self.values.remove(place);
         self.shared_values.insert(place.to_string(), value);
-        Ok(())
+        Ok(replaced)
     }
 
     fn place_type(&self, place: &str) -> Option<&Type> {
@@ -1898,12 +1912,23 @@ fn enum_projection_index(
     Ok(index)
 }
 
+#[cfg(test)]
 fn write_nested_place(
     current: &mut Value,
     segments: &[&str],
     value: Value,
     full_place: &str,
 ) -> Result<()> {
+    let _ = write_nested_place_replacing(current, segments, value, full_place)?;
+    Ok(())
+}
+
+fn write_nested_place_replacing(
+    current: &mut Value,
+    segments: &[&str],
+    value: Value,
+    full_place: &str,
+) -> Result<Option<Value>> {
     let Some((segment, rest)) = segments.split_first() else {
         return Err(Diagnostic::new(format!(
             "cannot assign empty nested MIR place `{full_place}`"
@@ -1913,28 +1938,25 @@ fn write_nested_place(
         Value::EnumVariant(variant) => {
             let index = enum_projection_index(variant, segment)?;
             if rest.is_empty() {
-                variant.payloads[index] = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut variant.payloads[index], value)))
             } else {
-                write_nested_place(&mut variant.payloads[index], rest, value, full_place)
+                write_nested_place_replacing(&mut variant.payloads[index], rest, value, full_place)
             }
         }
         Value::Union(union) => {
             check_union_projection(union, segment)?;
             if rest.is_empty() {
-                union.payload = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut union.payload, value)))
             } else {
-                write_nested_place(&mut union.payload, rest, value, full_place)
+                write_nested_place_replacing(&mut union.payload, rest, value, full_place)
             }
         }
         Value::Instance(instance) => {
             if rest.is_empty() {
-                instance
+                return Ok(instance
                     .fields
                     .map_mut()
-                    .insert((*segment).to_string(), value);
-                return Ok(());
+                    .insert((*segment).to_string(), value));
             }
             let child = instance.fields.map_mut().get_mut(*segment).ok_or_else(|| {
                 Diagnostic::new(format!(
@@ -1942,7 +1964,7 @@ fn write_nested_place(
                     instance.class_name, segment, full_place
                 ))
             })?;
-            write_nested_place(child, rest, value, full_place)
+            write_nested_place_replacing(child, rest, value, full_place)
         }
         Value::Vec(vector) if segment.starts_with('[') => {
             let index = parse_element_index_segment(segment, full_place)?;
@@ -1952,10 +1974,9 @@ fn write_nested_place(
                 ))
             })?;
             if rest.is_empty() {
-                *slot = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut *slot, value)))
             } else {
-                write_nested_place(&mut slot, rest, value, full_place)
+                write_nested_place_replacing(&mut slot, rest, value, full_place)
             }
         }
         Value::Map(map) if segment.starts_with('[') => {
@@ -1968,10 +1989,9 @@ fn write_nested_place(
                     ))
                 })?;
             if rest.is_empty() {
-                *slot = value;
-                Ok(())
+                Ok(Some(std::mem::replace(slot, value)))
             } else {
-                write_nested_place(slot, rest, value, full_place)
+                write_nested_place_replacing(slot, rest, value, full_place)
             }
         }
         Value::Tuple(tuple) => {
@@ -1986,10 +2006,9 @@ fn write_nested_place(
                 ))
             })?;
             if rest.is_empty() {
-                *child = value;
-                Ok(())
+                Ok(Some(std::mem::replace(child, value)))
             } else {
-                write_nested_place(child, rest, value, full_place)
+                write_nested_place_replacing(child, rest, value, full_place)
             }
         }
         _ => Err(Diagnostic::new(format!(
@@ -4117,7 +4136,11 @@ impl MirRuntime {
                 } else {
                     evaluated
                 };
-                env.write_place(loan, evaluated)?;
+                if let Some(replaced) = env.write_place_replacing(loan, evaluated)? {
+                    if owns_generator(&replaced) {
+                        self.close_released_generators(replaced)?;
+                    }
+                }
                 Ok(None)
             }
             Instruction::EndLoan { loan } => {
@@ -4141,20 +4164,26 @@ impl MirRuntime {
                             Rvalue::Unary { span, .. } | Rvalue::Binary { span, .. } => Some(*span),
                             _ => None,
                         };
-                        if let Some(target_ty) = target_ty {
-                            let evaluated =
-                                self.coerce_value_to_type(evaluated, &target_ty, span)?;
+                        let evaluated = if let Some(target_ty) = target_ty {
+                            let coerced = self.coerce_value_to_type(evaluated, &target_ty, span)?;
                             if !target.contains('.') {
                                 env.set_place_type(target, target_ty);
                             }
-                            env.write_place(target, evaluated)?;
-                            return Ok(None);
-                        } else if !target.contains('.') {
-                            if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated) {
-                                env.set_place_type(target, inferred_ty);
+                            coerced
+                        } else {
+                            if !target.contains('.') {
+                                if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated)
+                                {
+                                    env.set_place_type(target, inferred_ty);
+                                }
+                            }
+                            evaluated
+                        };
+                        if let Some(replaced) = env.write_place_replacing(target, evaluated)? {
+                            if owns_generator(&replaced) {
+                                self.close_released_generators(replaced)?;
                             }
                         }
-                        env.write_place(target, evaluated)?;
                         Ok(None)
                     }
                     RvalueOutcome::SharedModuleConstant(evaluated) => {
@@ -4163,7 +4192,13 @@ impl MirRuntime {
                                 env.set_place_type(target, target_ty);
                             }
                         }
-                        env.write_shared_place(target, evaluated)?;
+                        if let Some(replaced) =
+                            env.write_shared_place_replacing(target, evaluated)?
+                        {
+                            if owns_generator(&replaced) {
+                                self.close_released_generators(replaced)?;
+                            }
+                        }
                         Ok(None)
                     }
                     RvalueOutcome::Return(value) => Ok(Some(value)),
@@ -12148,6 +12183,11 @@ fn owns_generator(value: &Value) -> bool {
         Value::Union(union) => owns_generator(&union.payload),
         Value::Map(map) => map.entries.iter().any(|(_, v)| owns_generator(v)),
         Value::TraitObject(object) => owns_generator(&object.value),
+        Value::Function(function) => function
+            .closure_environment
+            .as_ref()
+            .is_some_and(|env| env.any_capture(owns_generator)),
+        Value::CollectionStore(store) => store.any_value(owns_generator),
         _ => false,
     }
 }
@@ -12171,15 +12211,9 @@ impl MirRuntime {
                     // A recovered snapshot contains only text, integers and a
                     // list of text. Mutation first converts it to an ordinary map.
                     crate::runtime_value::InstanceFields::Recovered(_) => {}
-                    crate::runtime_value::InstanceFields::Typed(_) => {
-                        for (_, field) in instance.fields.iter() {
-                            if let Value::Generator(generator) = field.as_ref() {
-                                if matches!(field, Cow::Borrowed(_))
-                                    && generator.should_close_on_release()
-                                {
-                                    self.with_generator_resumer(|| generator.close())?;
-                                }
-                            }
+                    crate::runtime_value::InstanceFields::Typed(typed) => {
+                        for (_, field) in typed.into_map() {
+                            self.close_released_generators(field)?;
                         }
                     }
                 }
@@ -12199,6 +12233,14 @@ impl MirRuntime {
                 }
                 Ok(())
             }
+            Value::Map(map) => {
+                if !map.entries.is_shared() {
+                    for (_, entry) in map.entries.into_vec() {
+                        self.close_released_generators(entry)?;
+                    }
+                }
+                Ok(())
+            }
             Value::EnumVariant(variant) => {
                 for payload in variant.payloads.into_vec() {
                     self.close_released_generators(payload)?;
@@ -12206,6 +12248,23 @@ impl MirRuntime {
                 Ok(())
             }
             Value::Union(union) => self.close_released_generators(union.payload),
+            Value::TraitObject(object) => self.close_released_generators(object.value),
+            Value::Function(function) => {
+                if let Ok(function) = Arc::try_unwrap(function) {
+                    if let Some(env) = function.closure_environment {
+                        for captured in env.into_captured_values() {
+                            self.close_released_generators(captured)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Value::CollectionStore(store) => {
+                for element in store.into_owned_values() {
+                    self.close_released_generators(element)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

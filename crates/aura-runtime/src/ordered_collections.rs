@@ -12,6 +12,40 @@ pub struct Store {
     data: Arc<Data>,
 }
 
+impl Store {
+    /// Whether any stored element value satisfies `predicate`.
+    pub fn any_value(&self, predicate: impl Fn(&Value) -> bool) -> bool {
+        match self.data.as_ref() {
+            Data::Deque(items) => items.iter().any(predicate),
+            Data::Map(entries) => entries.values().any(predicate),
+            Data::Min(_)
+            | Data::Max(_)
+            | Data::I64Deque(_)
+            | Data::I64Min(_)
+            | Data::I64Max(_)
+            | Data::I64Map(_) => false,
+        }
+    }
+
+    /// Consumes this store and returns its stored element values when no other
+    /// clone shares its storage.
+    pub fn into_owned_values(self) -> Vec<Value> {
+        let Ok(data) = Arc::try_unwrap(self.data) else {
+            return Vec::new();
+        };
+        match data {
+            Data::Deque(items) => items.into_iter().collect(),
+            Data::Map(entries) => entries.into_values().collect(),
+            Data::Min(_)
+            | Data::Max(_)
+            | Data::I64Deque(_)
+            | Data::I64Min(_)
+            | Data::I64Max(_)
+            | Data::I64Map(_) => Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Data {
     Deque(VecDeque<Value>),

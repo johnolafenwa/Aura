@@ -977,6 +977,28 @@ impl ClosureEnvironment {
             .map_or(0, Vec::len)
     }
 
+    /// Whether any captured value satisfies `predicate`.
+    pub fn any_capture(&self, predicate: impl Fn(&Value) -> bool) -> bool {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|captures| captures.iter().any(|capture| predicate(&capture.value)))
+    }
+
+    /// Consumes this environment when uniquely owned and returns its captured values.
+    pub fn into_captured_values(self: Arc<Self>) -> Vec<Value> {
+        let Ok(env) = Arc::try_unwrap(self) else {
+            return Vec::new();
+        };
+        env.captures
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map_or_else(Vec::new, |captures| {
+                captures.into_iter().map(|capture| capture.value).collect()
+            })
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         representation_stats::note_closure_environment();
         Self {
