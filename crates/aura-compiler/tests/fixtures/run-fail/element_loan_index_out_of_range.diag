@@ -1,0 +1,6 @@
+error[AU4003]: list index `2` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/element_loan_index_out_of_range.au:6:24
+  |
+6 |     return shout(names[index])
+  |                        ^
+  = note: Aura call chain (innermost first): pick at 5:1 -> main at 9:1

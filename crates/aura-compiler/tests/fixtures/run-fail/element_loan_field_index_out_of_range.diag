@@ -1,0 +1,6 @@
+error[AU4003]: list index `-3` is out of bounds for length `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/element_loan_field_index_out_of_range.au:10:33
+   |
+10 |     return shout(template.texts[index])
+   |                                 ^
+  = note: Aura call chain (innermost first): read at 9:1 -> main at 13:1

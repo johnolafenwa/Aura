@@ -12949,10 +12949,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
-            self.builder.call(
-                self.runtime[RuntimeFn::VecCheckIndex],
-                &[list, index, line, column],
-            );
+            self.emit_list_index_check(list, index, line, column);
             return Ok(());
         }
         // An unchecked loan of a callable element of a local list is read
@@ -13000,10 +12997,7 @@ impl<'a> FunctionCompiler<'a> {
             let list = self.load_nested_field_list(&nested, slow_block)?;
             let index = self.builder.use_var(nested.inner.variable);
             let (line, column) = self.span_operands(nested.inner.span);
-            self.builder.call(
-                self.runtime[RuntimeFn::VecCheckIndex],
-                &[list, index, line, column],
-            );
+            self.emit_list_index_check(list, index, line, column);
             self.builder.jump(join_block, &[]);
 
             self.builder.switch_to_block(slow_block);
@@ -13046,10 +13040,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(field_block);
         self.builder.seal_block(field_block);
         let (line, column) = self.span_operands(selector.span);
-        self.builder.call(
-            self.runtime[RuntimeFn::VecCheckIndex],
-            &[field, index, line, column],
-        );
+        self.emit_list_index_check(field, index, line, column);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -13060,6 +13051,40 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(true)
+    }
+
+    /// Checks that `index` selects an element of `list`, counting a
+    /// negative one from the end, against the length its list view keeps
+    /// (see `emit_list_len`). An index out of range calls
+    /// `aura_direct_vec_check_index`, which reports it.
+    fn emit_list_index_check(&mut self, list: Val, index: Val, line: Val, column: Val) {
+        let len = self.emit_list_len(list, false);
+        let forward = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
+        let wrap_block = self.builder.create_block();
+        let fail_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(wrap_block);
+        self.builder.set_cold_block(fail_block);
+        self.builder
+            .brif(forward, join_block, &[], wrap_block, &[]);
+
+        self.builder.switch_to_block(wrap_block);
+        self.builder.seal_block(wrap_block);
+        let from_end = self.builder.iadd(len, index);
+        let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
+        self.builder
+            .brif(counted, join_block, &[], fail_block, &[]);
+
+        self.builder.switch_to_block(fail_block);
+        self.builder.seal_block(fail_block);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecCheckIndex],
+            &[list, index, line, column],
+        );
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
     }
 
     /// A span as the line and column words the runtime's indexing helpers

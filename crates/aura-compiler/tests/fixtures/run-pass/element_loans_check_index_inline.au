@@ -1,0 +1,30 @@
+class Template:
+    kinds: list[int64]
+    texts: list[str]
+
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+
+def render(template: Template, out: mut list[str]):
+    mut i = 0
+    while i < template.kinds.len():
+        out.append(shout(template.texts[i]))
+        out.append(shout(template.texts[-1 - i]))
+        i += 1
+
+
+def pick(names: list[str], index: int64) -> str:
+    return shout(names[index])
+
+
+def main():
+    template = Template(kinds=[0, 1, 2], texts=["a", "b", "c"])
+    mut out: list[str] = []
+    render(template, out)
+    print(", ".join(out))
+    names = ["ada", "grace", "linus"]
+    print(pick(names, 0))
+    print(pick(names, -1))
+    print(pick(names, -3))
