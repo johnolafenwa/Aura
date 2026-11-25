@@ -17,6 +17,14 @@ in this file.
 - `aura verify --cross-check` asks a second solver, cvc5 for Z3 and Z3 for
   cvc5, about every check the first one proves, and reports a disagreement
   as `AU5123`. `--cross-solver <path>` names the second solver.
+- Speed: `d.remove(key)` builds no `Lookup` value when its result is
+  matched or dropped, and takes about a quarter of the instructions. A loop
+  over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`
+  keys and values walks the dict and makes no list: one entry of an
+  `items()` loop went from about 4,000 instructions to about 250.
+- Speed: a `str` read from a list only to be looked up, as in
+  `words[i] in seen` or `table.get(words[i])`, is no longer copied first.
+  A membership test takes about a third of the instructions.
 - `aura verify` no longer reports a made-up counterexample for a check that
   reads the result of a step it does not model, such as `split`, an
   f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
