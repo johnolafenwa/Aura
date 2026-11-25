@@ -31877,3 +31877,132 @@ fn float_trait_object_preserves_width_through_generic_boxing() {
     );
     unsafe { release_value(wrapped) };
 }
+
+#[test]
+fn cancelled_task_with_trapping_cleanup_reports_trap_cleanly() {
+    unsafe extern "C-unwind" fn trapping_cleanup(_: *const i64, _: usize) -> *mut OpaqueValue {
+        super::aura_direct_assert_fail(0, 12, 3, 0)
+    }
+
+    let leaked_panic = Arc::new(AtomicBool::new(false));
+    let leaked_panic_flag = Arc::clone(&leaked_panic);
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _id = super::aura_direct_register_cleanup(
+                    trapping_cleanup as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::task_runtime_boundary(|| {
+                        std::panic::panic_any(crate::runtime_value::TaskCancelledSignal);
+                    });
+                }));
+                if let Err(payload) = outcome {
+                    if payload.is::<super::LightweightTaskFailureSignal>() {
+                        leaked_panic_flag.store(true, Ordering::SeqCst);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert!(
+        !leaked_panic.load(Ordering::SeqCst),
+        "task_runtime_boundary must not let LightweightTaskFailureSignal escape uncaught on cancelled cleanup trap"
+    );
+    let err = result.expect_err("cancelled task with trapping cleanup must fail with trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+}
+
+#[test]
+fn nested_rust_boundary_runs_destructors_before_task_exit() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_flag = Arc::clone(&dropped);
+
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let result = unsafe {
+        crate::runtime_value::run_lightweight_root_task_with_forced_exit_cleanup(
+            move || {
+                super::with_direct_task_runtime_scope(|| {
+                    super::with_task_runtime_error_capture(|| {
+                        super::task_runtime_boundary(|| {
+                            let _guard = DropFlag(dropped_flag);
+                            super::aura_direct_assert_fail(0, 7, 1, 0);
+                        });
+                        #[allow(unreachable_code)]
+                        Ok(Value::Unit)
+                    })
+                })
+            },
+            || {
+                super::discard_current_direct_task_runtime_state();
+            },
+        )
+    };
+    let err = result.expect_err("inner assertion trap must fail the task");
+    assert_eq!(err.code, "AU4001");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "enclosing Rust frame destructors must run before task exit or recovery jump"
+    );
+}
+
+#[test]
+fn dropping_list_of_trapping_generators_completes_all_drops_and_reports_trap() {
+    use crate::runtime_value::{
+        generator_yield, GeneratorValue, VecValue, DIRECT_GENERATOR_STACK_BYTES,
+    };
+
+    let second_closed = Arc::new(AtomicBool::new(false));
+    let second_closed_flag = Arc::clone(&second_closed);
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let first = GeneratorValue::new(
+                    || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(1)))?;
+                        super::aura_direct_assert_fail(0, 11, 2, 0)
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                let second = GeneratorValue::new(
+                    move || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(2)))?;
+                        second_closed_flag.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                assert!(first.resume().expect("first yields"));
+                assert!(second.resume().expect("second yields"));
+                let list = boxed_value(Value::Vec(VecValue::new(
+                    Type::named("Generator"),
+                    vec![Value::Generator(first), Value::Generator(second)].into(),
+                )));
+                unsafe { super::aura_direct_release_value(list) };
+                Ok(Value::Unit)
+            })
+        })
+    });
+    let err = result.expect_err("dropping a trapping generator must report its trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+    assert!(
+        second_closed.load(Ordering::SeqCst),
+        "remaining generators in the dropped Vec must still close cleanly"
+    );
+}
+

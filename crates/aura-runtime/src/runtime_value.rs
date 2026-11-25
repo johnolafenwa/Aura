@@ -87,6 +87,10 @@ pub mod tensor_host;
 pub mod time_host;
 
 pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
+pub(crate) use generator::{
+    clear_pending_generator_drop_exit, swap_generator_drop_trap_state,
+    take_pending_generator_drop_exit, GeneratorDropTrapScope, PendingGeneratorDropExit,
+};
 pub use generator::{
     generator_yield, run_isolated, running_generator_depth, without_generator_drop_close,
     GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
@@ -9415,6 +9419,16 @@ impl PendingTaskExit {
         CURRENT_LIGHTWEIGHT_TASK_EXIT
             .with(|slot| slot.borrow_mut().take())
             .map(Self)
+    }
+
+    /// Records a trap diagnostic as a pending task exit.
+    pub fn from_trap(diagnostic: Diagnostic) -> Self {
+        Self(TaskExecutionResult::Ready(Err(diagnostic)))
+    }
+
+    /// Whether the pending task exit represents task cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self.0, TaskExecutionResult::Cancelled)
     }
 
     /// The trap, when the task was exiting because it failed. Any other

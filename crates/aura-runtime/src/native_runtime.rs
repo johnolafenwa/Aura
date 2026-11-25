@@ -569,6 +569,10 @@ struct DirectTaskRuntimeState {
     /// Set while this state belongs to a call that `control.recover` runs
     /// in generated code: where a trap goes back to, and the caller's state.
     recovered_call: Option<DirectRecoveredCall>,
+    /// Number of active Rust `task_runtime_boundary` frames on this task's
+    /// stack within this runtime state. Prevents `_longjmp` or forced task
+    /// exits from bypassing enclosing Rust destructors.
+    rust_boundary_depth: usize,
 }
 
 /// A `control.recover` call that runs its function on the caller's stack
@@ -722,6 +726,7 @@ impl Default for DirectTaskRuntimeState {
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
             recovered_call: None,
+            rust_boundary_depth: 0,
         }
     }
 }
@@ -5485,27 +5490,40 @@ fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalD
     }
 }
 
-thread_local! {
-    /// Set by `leaf_trap` for the one `runtime_diagnostic_error` call it
-    /// makes next.
-    static LEAF_TRAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 /// Ends the running task with the trap `build` describes. For an entry
-/// point generated code calls only to trap: nothing of the runtime is
-/// active between that call and the trap, so when a recovered call on
-/// this machine stack takes the trap (ADR-0104), no Rust frame has to be
-/// unwound to hand it over.
+/// point generated code calls only to trap: when no enclosing Rust runtime
+/// boundary sits between a `control.recover` call on this machine stack and
+/// this trap, no Rust frame has to be unwound to hand the trap over.
 fn leaf_trap(build: impl FnOnce() -> Diagnostic) -> ! {
+    let direct_recovery = recovered_call_takes_exit()
+        && with_direct_task_runtime_state(|state| {
+            state.foreign_callback_cleanup_base.is_none()
+                && state.rust_boundary_depth == 0
+                && !state.cleanup_draining
+        });
+    if direct_recovery {
+        let mut diagnostic = build().into_runtime_trap();
+        capture_direct_runtime_frames_once(&mut diagnostic);
+        let needs_cleanup = with_direct_task_runtime_state(|state| {
+            !state.cleanup_stack.is_empty() || !state.manager_exit_failures.is_empty()
+        });
+        if needs_cleanup {
+            let diagnostic = {
+                let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+                drain_direct_cleanup_stack();
+                attach_direct_manager_exit_failures(diagnostic)
+            };
+            fail_current_lightweight_task(diagnostic)
+        }
+        fail_current_lightweight_task(diagnostic)
+    }
     task_runtime_boundary(|| {
         let diagnostic = build();
-        LEAF_TRAP.with(|leaf| leaf.set(true));
         runtime_diagnostic_error(diagnostic)
     })
 }
 
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
-    let leaf = LEAF_TRAP.with(|leaf| leaf.replace(false));
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
@@ -5517,27 +5535,11 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
         });
         std::panic::panic_any(CleanupTrapSignal);
     }
-    // A generated trap with no pending exits can return its diagnostic
-    // directly. Only a cleanup can replace the primary failure or add notes.
-    // C completes its call before a surrounding recovered call takes a callback trap.
-    let direct_recovery = leaf
-        && recovered_call_takes_exit()
-        && with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_none());
-    if direct_recovery
-        && with_direct_task_runtime_state(|state| {
-            state.cleanup_stack.is_empty() && state.manager_exit_failures.is_empty()
-        })
-    {
-        fail_current_lightweight_task(diagnostic)
-    }
-    let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
-    drain_direct_cleanup_stack();
-    let diagnostic = attach_direct_manager_exit_failures(diagnostic);
-    if direct_recovery {
-        // The exit is taken where it is recorded, and the frames from here
-        // to the generated code that trapped are abandoned with it.
-        fail_current_lightweight_task(diagnostic)
-    }
+    let diagnostic = {
+        let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+        drain_direct_cleanup_stack();
+        attach_direct_manager_exit_failures(diagnostic)
+    };
     emit_runtime_diagnostic_error(diagnostic);
 }
 
@@ -5578,44 +5580,127 @@ fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+struct RustBoundaryDepthGuard {
+    key: u64,
+}
+
+impl RustBoundaryDepthGuard {
+    fn enter() -> Self {
+        let key = direct_task_runtime_key();
+        with_direct_task_runtime_state_for_key(key, |state| {
+            state.rust_boundary_depth = state.rust_boundary_depth.saturating_add(1);
+        });
+        Self { key }
+    }
+}
+
+impl Drop for RustBoundaryDepthGuard {
+    fn drop(&mut self) {
+        with_direct_task_runtime_state_for_key(self.key, |state| {
+            state.rust_boundary_depth = state.rust_boundary_depth.saturating_sub(1);
+        });
+    }
+}
+
+fn finish_task_boundary_failure(mut diagnostic: Diagnostic) -> Diagnostic {
+    capture_direct_runtime_frames_once(&mut diagnostic);
+    // A trapping cleanup must not replace the failure that caused this
+    // boundary to drain the remaining task-local cleanup registrations.
+    // Drop `_primary_guard` before returning so `_longjmp` never skips it.
+    {
+        let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
+        if direct_runtime_error_capture_enabled() {
+            drain_direct_cleanup_stack();
+        }
+    }
+    attach_direct_manager_exit_failures(diagnostic)
+}
+
 #[track_caller]
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
-        Ok(value) => value,
+    let outcome = {
+        let _depth_guard = RustBoundaryDepthGuard::enter();
+        let _drop_trap_guard = crate::runtime_value::GeneratorDropTrapScope::enter();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+    };
+    let (enclosing_rust_boundary, in_foreign_callback) = with_direct_task_runtime_state(|state| {
+        (
+            state.rust_boundary_depth > 0,
+            state.foreign_callback_cleanup_base.is_some(),
+        )
+    });
+    match outcome {
+        Ok(value) => {
+            if let Some(exit) = crate::runtime_value::take_pending_generator_drop_exit() {
+                match exit {
+                    crate::runtime_value::PendingGeneratorDropExit::Trap(diagnostic) => {
+                        if direct_cleanup_is_draining() {
+                            with_direct_task_runtime_state(|state| {
+                                state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+                            });
+                            std::panic::panic_any(CleanupTrapSignal);
+                        }
+                        if enclosing_rust_boundary || in_foreign_callback {
+                            std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
+                        }
+                        let diagnostic = finish_task_boundary_failure(diagnostic);
+                        fail_current_lightweight_task(diagnostic)
+                    }
+                    crate::runtime_value::PendingGeneratorDropExit::Cancelled => {
+                        if in_foreign_callback {
+                            drain_direct_cleanup_stack();
+                            std::panic::panic_any(TaskCancelledSignal);
+                        }
+                        if enclosing_rust_boundary {
+                            std::panic::panic_any(TaskCancelledSignal);
+                        }
+                        if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                            fail_current_lightweight_task(diagnostic)
+                        }
+                        cancel_current_lightweight_task_boundary()
+                    }
+                }
+            }
+            value
+        }
         // The callback guard is the nearest boundary. A forced task exit
         // here would bypass C's cleanup and the entry's argument releases.
-        Err(payload)
-            if with_direct_task_runtime_state(|state| {
-                state.foreign_callback_cleanup_base.is_some()
-            }) =>
-        {
+        Err(payload) if in_foreign_callback => {
+            crate::runtime_value::clear_pending_generator_drop_exit();
             if payload.is::<TaskCancelledSignal>() {
                 drain_direct_cleanup_stack();
             }
             std::panic::resume_unwind(payload)
         }
         Err(payload) if payload.is::<TaskCancelledSignal>() => {
-            if direct_runtime_error_capture_enabled() {
-                drain_direct_cleanup_stack();
+            crate::runtime_value::clear_pending_generator_drop_exit();
+            if enclosing_rust_boundary {
+                std::panic::resume_unwind(payload)
             }
-            // No diagnostic is primary under cancellation, so a failing
-            // manager exit has nothing to attach to.
-            with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
+            if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                fail_current_lightweight_task(diagnostic)
+            }
             cancel_current_lightweight_task_boundary()
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
-                let mut diagnostic = signal.0;
-                capture_direct_runtime_frames_once(&mut diagnostic);
-                // A trapping cleanup must not replace the failure that caused this
-                // boundary to drain the remaining task-local cleanup registrations.
-                let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
-                if direct_runtime_error_capture_enabled() {
-                    drain_direct_cleanup_stack();
+                crate::runtime_value::clear_pending_generator_drop_exit();
+                // Free the `Box<LightweightTaskFailureSignal>` before any
+                // non-local exit or recovery jump.
+                let diagnostic = {
+                    let signal = signal;
+                    signal.0
+                };
+                if enclosing_rust_boundary {
+                    std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
                 }
-                fail_current_lightweight_task(attach_direct_manager_exit_failures(diagnostic))
+                let diagnostic = finish_task_boundary_failure(diagnostic);
+                fail_current_lightweight_task(diagnostic)
             }
-            Err(payload) => std::panic::resume_unwind(payload),
+            Err(payload) => {
+                crate::runtime_value::clear_pending_generator_drop_exit();
+                std::panic::resume_unwind(payload)
+            }
         },
     }
 }
@@ -16887,16 +16972,27 @@ host_builtin_entries! {
     borrowed "iter::__aura_generator_close" => aura_host_iter_generator_close(|args| direct_generator_handle("iter::__aura_generator_close", args));
 }
 
-/// Moves a generator body's frame-stack entries out of the task's stack
-/// while the body is suspended, so the caller's calls stay on top.
+/// Moves a generator body's frame-stack entries and Rust-boundary tracking out
+/// of the task's stack while the body is suspended, so the caller's calls stay
+/// isolated on top.
 #[derive(Default)]
 struct DirectGeneratorFrames {
     base: usize,
     saved: Vec<usize>,
+    boundary_depth: usize,
+    drop_trap_depth: usize,
+    drop_trap_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
 }
 
 impl GeneratorHooks for DirectGeneratorFrames {
     fn before_resume(&mut self) {
+        with_direct_task_runtime_state(|state| {
+            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
+        });
+        crate::runtime_value::swap_generator_drop_trap_state(
+            &mut self.drop_trap_depth,
+            &mut self.drop_trap_exit,
+        );
         let Some(stack) = current_direct_frame_stack() else {
             return;
         };
@@ -16908,12 +17004,18 @@ impl GeneratorHooks for DirectGeneratorFrames {
     }
 
     fn after_suspend(&mut self) {
-        let Some(stack) = current_direct_frame_stack() else {
-            return;
-        };
-        // SAFETY: as in `before_resume`.
-        let stack = unsafe { &mut *stack.as_ptr() };
-        self.saved = stack.take_entries_from(self.base);
+        if let Some(stack) = current_direct_frame_stack() {
+            // SAFETY: as in `before_resume`.
+            let stack = unsafe { &mut *stack.as_ptr() };
+            self.saved = stack.take_entries_from(self.base);
+        }
+        crate::runtime_value::swap_generator_drop_trap_state(
+            &mut self.drop_trap_depth,
+            &mut self.drop_trap_exit,
+        );
+        with_direct_task_runtime_state(|state| {
+            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
+        });
     }
 }
 
@@ -22616,7 +22718,9 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
             // the caller's run now, as they do when a task is cancelled
             // outside any recovered call.
             caller.restore();
-            drain_cleanups_for_task_exit();
+            if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                fail_current_lightweight_task(diagnostic)
+            }
             exit.resume()
         }
     };
@@ -22625,12 +22729,22 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
 }
 
 /// Runs the current state's `with` exits before its task exits for a
-/// reason other than a trap.
-fn drain_cleanups_for_task_exit() {
-    if direct_runtime_error_capture_enabled() {
-        drain_direct_cleanup_stack();
-    }
+/// reason other than a trap. Returns the first trap raised by a cleanup
+/// exit instead of unwinding out of the caller's boundary.
+fn drain_cleanups_for_task_exit() -> Option<Diagnostic> {
+    let failure = if direct_runtime_error_capture_enabled() {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain_direct_cleanup_stack)) {
+            Ok(()) => None,
+            Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+                Ok(signal) => Some(signal.0),
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+        }
+    } else {
+        None
+    };
     with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
+    failure
 }
 
 thread_local! {
@@ -22774,7 +22888,8 @@ fn recycle_recovered_state(mut state: Box<DirectTaskRuntimeState>) {
         && state.returned_views.is_empty()
         && state.pending_mutable_sinks.is_none()
         && state.mutable_sinks.is_empty()
-        && state.manager_exit_failures.is_empty();
+        && state.manager_exit_failures.is_empty()
+        && state.rust_boundary_depth == 0;
     if !clean {
         release_direct_task_runtime_state(state);
         return;
@@ -22891,8 +23006,11 @@ fn stop_exit_at_recovered_call() {
                 }
             }
             Err(exit) => {
-                drain_cleanups_for_task_exit();
-                exit.restore();
+                if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                    crate::runtime_value::PendingTaskExit::from_trap(diagnostic).restore();
+                } else {
+                    exit.restore();
+                }
             }
         }
     }
