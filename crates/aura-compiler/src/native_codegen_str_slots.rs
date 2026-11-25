@@ -105,6 +105,15 @@ fn param_uses(
         Operand::Place(place) => candidates.get(place.as_str()).copied(),
         _ => None,
     };
+    let dicts = function
+        .local_types
+        .iter()
+        .filter(|local| {
+            matches!(&local.ty, Type::Named(name, args)
+                if name == "dict" && args.first().is_some_and(is_str))
+        })
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
     // A loaned element, and an element read that may be held as words
     // (see `element_slots`), compare from their bytes.
     let mut loans = read_str_loans(function);
@@ -156,12 +165,19 @@ fn param_uses(
                         },
                     ..
                 } => match (op, args.as_slice()) {
-                    (RuntimeOp::Dict(DictOp::Get), [key]) => {
-                        candidate(receiver).is_none() && candidate(&key.value).is_some()
-                    }
+                    (
+                        RuntimeOp::Dict(DictOp::Get | DictOp::ContainsKey)
+                        | RuntimeOp::Set(SetOp::Contains),
+                        [key],
+                    ) => candidate(receiver).is_none() && candidate(&key.value).is_some(),
                     (op, []) => receiver_view_read(*op).is_some(),
                     _ => false,
                 },
+                // The entry loan of a dict under the key a fused test
+                // probed reads the probe's slot.
+                Instruction::BeginElementLoan {
+                    source, selector, ..
+                } => candidate(selector).is_some() && dicts.contains(source.as_str()),
                 // An f-string part is pushed from its bytes.
                 Instruction::Assign {
                     value: Rvalue::FormatString { parts },
@@ -732,7 +748,11 @@ fn reads_words(
             args,
             ..
         } => match (op, args.as_slice()) {
-            (RuntimeOp::Dict(DictOp::Get), [key]) => is_local(&key.value),
+            (
+                RuntimeOp::Dict(DictOp::Get | DictOp::ContainsKey)
+                | RuntimeOp::Set(SetOp::Contains),
+                [key],
+            ) => is_local(&key.value),
             (op, []) => is_local(receiver) && receiver_view_read(*op).is_some(),
             _ => false,
         },
@@ -948,6 +968,13 @@ pub(super) struct StrSlot {
     /// For a parameter of a view twin, the box this body made for the
     /// owner, or 0. A local releases its owner itself.
     made: Option<Var>,
+}
+
+impl StrSlot {
+    /// Whether the slot is a parameter of a view twin.
+    pub(super) fn is_param(&self) -> bool {
+        self.made.is_some()
+    }
 }
 
 /// Declares the `ptr` and `len` of each local `elements` holds as words.
@@ -1582,6 +1609,39 @@ impl FunctionCompiler<'_> {
         };
         self.push_view_argument(handle, words);
         Ok(true)
+    }
+
+    /// The result of `in_place` on `receiver`, the bytes and length of the
+    /// `str` key `key`, and `extra`, when this body holds the key as words.
+    /// The copy the words were read from, if any, is released after it.
+    pub(super) fn call_with_held_str_key(
+        &mut self,
+        key: &Operand,
+        receiver: Val,
+        in_place: FuncRef,
+        extra: &[Val],
+    ) -> std::result::Result<Option<Val>, String> {
+        let Some(words) = self.load_place_words(key)? else {
+            return Ok(None);
+        };
+        let mut arguments = vec![receiver, words.ptr, words.len];
+        arguments.extend_from_slice(extra);
+        let found = self.builder.call(in_place, &arguments).results[0];
+        self.release_view_arguments(words.released.into_iter().collect());
+        Ok(Some(found))
+    }
+
+    /// Boxes the key of the entry loan `loan` that a view twin holds as
+    /// words, for the walk to the entry, when it is still deferred.
+    pub(super) fn load_deferred_entry_key(
+        &mut self,
+        loan: &str,
+    ) -> std::result::Result<(), String> {
+        if let Some((key, variable)) = self.deferred_entry_keys.remove(loan) {
+            let key = self.load_root(&key)?.values[0];
+            self.builder.def_var(variable, key);
+        }
+        Ok(())
     }
 
     /// Pushes `words` into the f-string `handle` builds and releases the

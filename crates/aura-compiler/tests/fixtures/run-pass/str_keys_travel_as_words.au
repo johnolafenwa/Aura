@@ -1,0 +1,54 @@
+# A `str` key a view twin holds as words is looked up from its bytes: a
+# counting `match mut d.lookup(key)`, `key in d`, and `key in s`. The key
+# is boxed only for a new entry, or for the walk a dict shared with a copy
+# takes, and a trap in the twin leaves nothing behind.
+import control
+
+
+def add_to(totals: mut dict[str, int64], key: str, amount: int64):
+    match mut totals.lookup(key):
+        case Lookup.Found(total):
+            total += amount
+        case Lookup.Missing:
+            totals[key.clone()] = amount
+
+
+def known(key: str, totals: dict[str, int64], seen: set[str]) -> int64:
+    mut score = 0
+    if key in totals:
+        score += 1
+    if key in seen:
+        score += 2
+    return score
+
+
+def overflow(index: int64) -> int64:
+    mut totals: dict[str, int64] = {"big": 9223372036854775807}
+    keys = ["small", "big"]
+    add_to(totals, keys[index], 1)
+    return totals[keys[index]]
+
+
+def main():
+    fields = ["north", "south", "a region name longer than any inline text", "north"]
+    mut totals: dict[str, int64] = {}
+    for round in range(3):
+        for i in range(fields.len()):
+            add_to(totals, fields[i], i + round)
+    add_to(totals, "east", 5)
+    print(totals)
+    shared = totals.copy()
+    add_to(totals, fields[0], 100)
+    add_to(totals, fields[2], 100)
+    print(totals)
+    print(shared)
+    seen: set[str] = {"south", "west"}
+    for word in ["north", "south", "west", "none"]:
+        print(f"{word} {known(word, totals, seen)}")
+    print(known(fields[1], totals, seen) + known(fields[2], totals, seen))
+    for index in [0, 1]:
+        match control.recover(overflow, index):
+            case Ok(total):
+                print(total)
+            case Err(trap):
+                print(trap.message)

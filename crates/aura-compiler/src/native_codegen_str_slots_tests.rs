@@ -360,3 +360,33 @@ fn a_view_read_only_into_an_f_string_is_pushed_from_its_words() {
     assert!(!spliced_formats(kept, &reads).contains("text"));
     assert!(formatted_reads(function("main")).is_empty());
 }
+
+const KEYS: &str = r#"
+def add_to(totals: mut dict[str, int64], key: str, amount: int64):
+    match mut totals.lookup(key):
+        case Lookup.Found(total):
+            total += amount
+        case Lookup.Missing:
+            totals[key.clone()] = amount
+
+def known(key: str, totals: dict[str, int64], seen: set[str]) -> bool:
+    return key in totals or key in seen
+
+def main():
+    mut totals: dict[str, int64] = {}
+    words = ["a", "b"]
+    add_to(totals, words[0], 1)
+    seen: set[str] = {"a"}
+    print(known(words[1], totals, seen))
+"#;
+
+#[test]
+fn a_str_key_a_dict_or_set_looks_up_is_read_from_its_bytes() {
+    let mir = lower_source_to_mir(KEYS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let views = plan_views(&module);
+    // The counting lookup probes by the key's bytes and its entry loan
+    // reads the probe's slot; `in` tests a dict and a set.
+    assert_eq!(views["add_to"], [view(1, true)]);
+    assert_eq!(views["known"], [view(0, true)]);
+}

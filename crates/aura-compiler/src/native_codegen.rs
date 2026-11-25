@@ -2841,6 +2841,7 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_probes,
             pending_try_read: None,
             fused_entry_slots: HashMap::new(),
+            deferred_entry_keys: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
             shadow_entry_copies,
             shadow_read_targets,
@@ -4430,6 +4431,9 @@ struct FunctionCompiler<'a> {
     /// `try file.read_line()` whose read is emitted and whose `try` is next.
     pending_try_read: Option<(String, Val, Val)>,
     fused_entry_slots: HashMap<String, Var>,
+    /// The entry loans whose key a view twin holds as words, with the key
+    /// and the loan's selector variable, until a walk needs the key's box.
+    deferred_entry_keys: HashMap<String, (String, Var)>,
     /// The entry loans of the function a fused test may copy for, with
     /// whether each is read once, and the copies those tests made, by loan.
     entry_copy_loans: HashMap<String, bool>,
@@ -12435,7 +12439,28 @@ impl<'a> FunctionCompiler<'a> {
         };
         // The loan's local carries the type the selection reaches.
         let element_type = direct_type_to_type(&self.local_type(loan)?);
-        let loaded = self.load_operand_for_target(selector, &selector_ty)?;
+        // A key a view twin holds as words, which a fused test probed by
+        // its bytes, is boxed only on the way that walks to the entry.
+        let deferred_key = match selector {
+            Operand::Place(place)
+                if self.fused_entry_slots.contains_key(loan)
+                    && self.tracked_roots.contains(place)
+                    && self
+                        .str_slots
+                        .get(place.as_str())
+                        .is_some_and(|slot| slot.is_param()) =>
+            {
+                Some(place.clone())
+            }
+            _ => None,
+        };
+        let loaded = match &deferred_key {
+            Some(place) => ValueRef {
+                values: vec![self.builder.use_var(self.local_vars(place)?[0])],
+                ty: selector_ty.clone(),
+            },
+            None => self.load_operand_for_target(selector, &selector_ty)?,
+        };
         let selected = self.coerce_value(loaded, &selector_ty)?;
         // An explicit module keeps a selector's place until the loan ends,
         // so a key read from its place is lent to the loan. A key the load
@@ -12454,6 +12479,10 @@ impl<'a> FunctionCompiler<'a> {
         self.next_variable_index += 1;
         self.builder.declare_var(variable, abi);
         self.builder.def_var(variable, words[0]);
+        if let Some(place) = deferred_key {
+            self.deferred_entry_keys
+                .insert(loan.to_string(), (place, variable));
+        }
         if matches!(selector_ty, DirectType::Opaque(_)) && !lent_key {
             self.view_element_keys
                 .entry(loan.to_string())
@@ -12476,6 +12505,7 @@ impl<'a> FunctionCompiler<'a> {
         if self.begin_native_element_loan(loan)? {
             return Ok(());
         }
+        self.load_deferred_entry_key(loan)?;
         if checked
             && kind == DirectElementKind::Dict
             && self.begin_shadow_entry_loan(loan, source, selector_operand)?
@@ -18469,6 +18499,16 @@ impl<'a> FunctionCompiler<'a> {
                             ty: DirectType::Scalar(ScalarKind::Bool),
                         });
                     }
+                    // A `str` key held as words is looked up from its bytes.
+                    let in_place = self.runtime[RuntimeFn::MapContainsView];
+                    if let Some(found) =
+                        self.call_with_held_str_key(&key.value, map, in_place, &[])?
+                    {
+                        return Ok(ValueRef {
+                            values: vec![found],
+                            ty: DirectType::Scalar(ScalarKind::Bool),
+                        });
+                    }
                     let key = self.load_operand_as_opaque_direct(&key.value, &key_direct_ty)?;
                     words.push(key.values[0]);
                 }
@@ -18762,6 +18802,16 @@ impl<'a> FunctionCompiler<'a> {
                         self.runtime_call_results(function, &[set, value.values[0]])[0]
                     }
                 };
+                Ok(ValueRef {
+                    values: vec![found],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            SetOp::Contains if self.holds_place_words(&args[0].value) => {
+                let in_place = self.runtime[RuntimeFn::SetContainsView];
+                let found = self
+                    .call_with_held_str_key(&args[0].value, set, in_place, &[])?
+                    .expect("the needle is held as words");
                 Ok(ValueRef {
                     values: vec![found],
                     ty: DirectType::Scalar(ScalarKind::Bool),

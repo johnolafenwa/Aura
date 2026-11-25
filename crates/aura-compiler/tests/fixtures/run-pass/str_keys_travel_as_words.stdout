@@ -1,0 +1,10 @@
+{north: 15, south: 6, a region name longer than any inline text: 9, east: 5}
+{north: 115, south: 6, a region name longer than any inline text: 109, east: 5}
+{north: 15, south: 6, a region name longer than any inline text: 9, east: 5}
+north 1
+south 3
+west 2
+none 0
+4
+1
+integer value `9223372036854775808` does not fit in `int64`
