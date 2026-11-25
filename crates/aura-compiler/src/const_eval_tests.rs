@@ -477,3 +477,87 @@ values = [Holder(Guard(42))]
 
 #[path = "const_eval_systems_tests.rs"]
 mod systems_data;
+
+#[test]
+fn named_arguments_replace_defaults_during_purity_analysis() {
+    let source = r#"def side() -> int64:
+    print(5)
+    return 5
+
+def combine(base: int64, bonus: int64 = side()) -> int64:
+    return base + bonus
+
+const answer = combine(-7, bonus=4)
+"#;
+    assert_eq!(
+        check_source(source).unwrap().frozen_constants["<main>::answer"],
+        FrozenValue::Int(crate::integer::IntegerValue::from_i64(-3))
+    );
+    let omitted_default = source.replace("combine(-7, bonus=4)", "combine(-7)");
+    assert_eq!(check_source(&omitted_default).unwrap_err().code, "AU3025");
+}
+
+#[test]
+fn union_method_purity_checks_each_dispatch_arm() {
+    let source = r#"trait Readable:
+    def read(self) -> int64
+
+class Quiet:
+    n: int64
+
+class Loud:
+    n: int64
+
+impl Readable for Quiet:
+    def read(self) -> int64:
+        return self.n
+
+impl Readable for Loud:
+    def read(self) -> int64:
+        print(self.n)
+        return self.n
+
+def choose(item: Quiet | Loud) -> int64:
+    return item.read()
+
+const observed = choose(Quiet(13))
+"#;
+    assert_eq!(check_source(source).unwrap_err().code, "AU3025");
+    let pure = source.replace("        print(self.n)\n", "");
+    assert_eq!(
+        check_source(&pure).unwrap().frozen_constants["<main>::observed"],
+        FrozenValue::Int(crate::integer::IntegerValue::from_i64(13))
+    );
+}
+
+#[test]
+fn frozen_operations_preserve_absent_paths_and_set_operands() {
+    let source = r#"import path
+const extension = path.extension("README")
+
+def combine() -> set[int64]:
+    a: set[int64] = {1, 2}
+    b: set[int64] = {2, 3}
+    return a.union(b)
+
+const combined = combine()
+"#;
+    let program = check_source(source).unwrap();
+    assert!(matches!(
+        &program.frozen_constants["<main>::extension"],
+        FrozenValue::Union(_, _, inner) if **inner == FrozenValue::None
+    ));
+    assert!(matches!(
+        &program.frozen_constants["<main>::combined"],
+        FrozenValue::Set(_, elements) if elements.len() == 3
+    ));
+}
+
+#[test]
+fn serialized_float_operands_require_a_number_or_ieee_bits() {
+    let mut input = serde_json::Deserializer::from_str(r#"{"bits":"NaN"}"#);
+    let error = super::float_operand::deserialize(&mut input).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("expected a float or its IEEE bits"));
+}
