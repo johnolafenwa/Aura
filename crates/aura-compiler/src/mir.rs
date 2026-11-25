@@ -11295,6 +11295,32 @@ fn program_imports_control_retry(program: &Program) -> bool {
             .any(namespace_imports_control_retry)
 }
 
+fn namespace_imports_mem(namespace: &ModuleNamespace) -> bool {
+    namespace.path == "mem"
+        || namespace
+            .all_functions
+            .values()
+            .any(|function| function.module_name == "mem")
+        || namespace.modules.values().any(namespace_imports_mem)
+        || namespace
+            .imported_modules
+            .values()
+            .any(namespace_imports_mem)
+}
+
+fn program_imports_mem(program: &Program) -> bool {
+    program
+        .functions
+        .values()
+        .any(|function| function.module_name == "mem")
+        || program.imported_modules.values().any(namespace_imports_mem)
+        || program
+            .module_registry
+            .values()
+            .filter(|namespace| namespace.path != "mem")
+            .any(namespace_imports_mem)
+}
+
 fn push_imported_module_classes(
     program: &Program,
     classes: &mut Vec<MirClass>,
@@ -11669,6 +11695,11 @@ fn push_imported_module_functions_from_namespace(
             // which cannot name it; besides keeping the MIR honest, this
             // prevents its runtime adapters from leaking into unrelated
             // native objects.
+            continue;
+        }
+        if qualified_name.starts_with("mem::") && !program_imports_mem(program) {
+            // `mem` requires `allow_ffi = true`; omit its wrappers unless a
+            // module in the program actually imports `mem`.
             continue;
         }
         if seen.insert(qualified_name.clone()) {

@@ -16938,6 +16938,28 @@ fn run_owned_host_builtin(
     })
 }
 
+/// Runs an unsafe host builtin that takes owned arguments from generated code.
+///
+/// # Safety
+///
+/// `args_ptr` must be valid for `arg_count` entries and any raw addresses
+/// supplied in those arguments must satisfy the builtin's memory contract.
+unsafe fn run_unsafe_owned_host_builtin(
+    args_ptr: *mut i64,
+    arg_count: i64,
+    evaluate: host_builtins::UnsafeHostBuiltinFn,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let arg_count = usize::try_from(arg_count)
+            .unwrap_or_else(|_| runtime_error("invalid host builtin argument count"));
+        let args = unsafe { consume_opaque_buffer(args_ptr, arg_count) };
+        match unsafe { evaluate(args, None) } {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// Runs a host builtin that reads one opaque handle per argument, as
 /// `DYNAMIC_HOST_ABI` declares.
 fn run_borrowed_host_builtin(
@@ -16959,22 +16981,38 @@ fn run_borrowed_host_builtin(
     })
 }
 
-macro_rules! host_builtin_entry {
-    (owned $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
-        run_owned_host_builtin($args_ptr, $arg_count, $evaluate)
+macro_rules! host_builtin_entry_fn {
+    (owned $name:literal => $symbol:ident($evaluate:expr)) => {
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
+            run_owned_host_builtin(args_ptr, arg_count, $evaluate)
+        }
     };
-    (borrowed $name:literal, $evaluate:expr, $args_ptr:ident, $arg_count:ident) => {
-        run_borrowed_host_builtin($name, $args_ptr, $arg_count, $evaluate)
+    (unsafe_owned $name:literal => $symbol:ident($evaluate:expr)) => {
+        /// # Safety
+        ///
+        /// `args_ptr` must be valid for `arg_count` entries and any raw
+        /// addresses in those arguments must satisfy the builtin's contract.
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub unsafe extern "C-unwind" fn $symbol(
+            args_ptr: *mut i64,
+            arg_count: i64,
+        ) -> *mut OpaqueValue {
+            unsafe { run_unsafe_owned_host_builtin(args_ptr, arg_count, $evaluate) }
+        }
+    };
+    (borrowed $name:literal => $symbol:ident($evaluate:expr)) => {
+        #[cfg_attr(not(coverage), no_mangle)]
+        pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
+            run_borrowed_host_builtin($name, args_ptr, arg_count, $evaluate)
+        }
     };
 }
 
 macro_rules! host_builtin_entries {
     ($($passing:ident $name:literal => $symbol:ident($evaluate:expr);)*) => {
         $(
-            #[cfg_attr(not(coverage), no_mangle)]
-            pub extern "C-unwind" fn $symbol(args_ptr: *mut i64, arg_count: i64) -> *mut OpaqueValue {
-                host_builtin_entry!($passing $name, $evaluate, args_ptr, arg_count)
-            }
+            host_builtin_entry_fn!($passing $name => $symbol($evaluate));
         )*
 
         /// Each host builtin's qualified name and the exported entry generated
@@ -16986,7 +17024,7 @@ macro_rules! host_builtin_entries {
         #[cfg(test)]
         pub(crate) const HOST_BUILTIN_ENTRIES: &[(
             &str,
-            extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+            unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
         )] = &[$(($name, $symbol)),*];
     };
 }
@@ -17214,33 +17252,33 @@ host_builtin_entries! {
     borrowed "bytes::starts_with" => aura_host_bytes_starts_with(|args| direct_bytes_search("bytes::starts_with", args));
     borrowed "bytes::ends_with" => aura_host_bytes_ends_with(|args| direct_bytes_search("bytes::ends_with", args));
     borrowed "bytes::find" => aura_host_bytes_find(|args| direct_bytes_search("bytes::find", args));
-    owned "mem::read_uint8" => aura_host_mem_read_uint8(host_builtins::host_mem_read_uint8);
-    owned "mem::read_uint16" => aura_host_mem_read_uint16(host_builtins::host_mem_read_uint16);
-    owned "mem::read_uint32" => aura_host_mem_read_uint32(host_builtins::host_mem_read_uint32);
-    owned "mem::read_uint64" => aura_host_mem_read_uint64(host_builtins::host_mem_read_uint64);
-    owned "mem::write_uint8" => aura_host_mem_write_uint8(host_builtins::host_mem_write_uint8);
-    owned "mem::write_uint16" => aura_host_mem_write_uint16(host_builtins::host_mem_write_uint16);
-    owned "mem::write_uint32" => aura_host_mem_write_uint32(host_builtins::host_mem_write_uint32);
-    owned "mem::write_uint64" => aura_host_mem_write_uint64(host_builtins::host_mem_write_uint64);
-    owned "mem::volatile_read_uint8" => aura_host_mem_volatile_read_uint8(host_builtins::host_mem_volatile_read_uint8);
-    owned "mem::volatile_read_uint16" => aura_host_mem_volatile_read_uint16(host_builtins::host_mem_volatile_read_uint16);
-    owned "mem::volatile_read_uint32" => aura_host_mem_volatile_read_uint32(host_builtins::host_mem_volatile_read_uint32);
-    owned "mem::volatile_read_uint64" => aura_host_mem_volatile_read_uint64(host_builtins::host_mem_volatile_read_uint64);
-    owned "mem::volatile_write_uint8" => aura_host_mem_volatile_write_uint8(host_builtins::host_mem_volatile_write_uint8);
-    owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
-    owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
-    owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
-    owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
-    owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
-    owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
-    owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
-    owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
-    owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
-    owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
-    owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
-    owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
-    owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
-    owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    unsafe_owned "mem::read_uint8" => aura_host_mem_read_uint8(host_builtins::host_mem_read_uint8);
+    unsafe_owned "mem::read_uint16" => aura_host_mem_read_uint16(host_builtins::host_mem_read_uint16);
+    unsafe_owned "mem::read_uint32" => aura_host_mem_read_uint32(host_builtins::host_mem_read_uint32);
+    unsafe_owned "mem::read_uint64" => aura_host_mem_read_uint64(host_builtins::host_mem_read_uint64);
+    unsafe_owned "mem::write_uint8" => aura_host_mem_write_uint8(host_builtins::host_mem_write_uint8);
+    unsafe_owned "mem::write_uint16" => aura_host_mem_write_uint16(host_builtins::host_mem_write_uint16);
+    unsafe_owned "mem::write_uint32" => aura_host_mem_write_uint32(host_builtins::host_mem_write_uint32);
+    unsafe_owned "mem::write_uint64" => aura_host_mem_write_uint64(host_builtins::host_mem_write_uint64);
+    unsafe_owned "mem::volatile_read_uint8" => aura_host_mem_volatile_read_uint8(host_builtins::host_mem_volatile_read_uint8);
+    unsafe_owned "mem::volatile_read_uint16" => aura_host_mem_volatile_read_uint16(host_builtins::host_mem_volatile_read_uint16);
+    unsafe_owned "mem::volatile_read_uint32" => aura_host_mem_volatile_read_uint32(host_builtins::host_mem_volatile_read_uint32);
+    unsafe_owned "mem::volatile_read_uint64" => aura_host_mem_volatile_read_uint64(host_builtins::host_mem_volatile_read_uint64);
+    unsafe_owned "mem::volatile_write_uint8" => aura_host_mem_volatile_write_uint8(host_builtins::host_mem_volatile_write_uint8);
+    unsafe_owned "mem::volatile_write_uint16" => aura_host_mem_volatile_write_uint16(host_builtins::host_mem_volatile_write_uint16);
+    unsafe_owned "mem::volatile_write_uint32" => aura_host_mem_volatile_write_uint32(host_builtins::host_mem_volatile_write_uint32);
+    unsafe_owned "mem::volatile_write_uint64" => aura_host_mem_volatile_write_uint64(host_builtins::host_mem_volatile_write_uint64);
+    unsafe_owned "mem::atomic_load_uint32" => aura_host_mem_atomic_load_uint32(host_builtins::host_mem_atomic_load_uint32);
+    unsafe_owned "mem::atomic_load_uint64" => aura_host_mem_atomic_load_uint64(host_builtins::host_mem_atomic_load_uint64);
+    unsafe_owned "mem::atomic_store_uint32" => aura_host_mem_atomic_store_uint32(host_builtins::host_mem_atomic_store_uint32);
+    unsafe_owned "mem::atomic_store_uint64" => aura_host_mem_atomic_store_uint64(host_builtins::host_mem_atomic_store_uint64);
+    unsafe_owned "mem::atomic_swap_uint32" => aura_host_mem_atomic_swap_uint32(host_builtins::host_mem_atomic_swap_uint32);
+    unsafe_owned "mem::atomic_swap_uint64" => aura_host_mem_atomic_swap_uint64(host_builtins::host_mem_atomic_swap_uint64);
+    unsafe_owned "mem::atomic_add_uint32" => aura_host_mem_atomic_add_uint32(host_builtins::host_mem_atomic_add_uint32);
+    unsafe_owned "mem::atomic_add_uint64" => aura_host_mem_atomic_add_uint64(host_builtins::host_mem_atomic_add_uint64);
+    unsafe_owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
+    unsafe_owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
+    unsafe_owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
     owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
     owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
     owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);

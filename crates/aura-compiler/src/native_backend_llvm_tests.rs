@@ -1958,3 +1958,75 @@ fn hosted_targets_name_their_triple_and_architecture() {
     assert_eq!(crate::native_backend::hosted_target(), None);
     assert_eq!(crate::native_backend::target_arch(), std::env::consts::ARCH);
 }
+
+#[test]
+fn freestanding_x86_64_functions_carry_noredzone_and_avoid_red_zone_spills() {
+    use crate::native_backend::FreestandingTarget;
+    use inkwell::targets::FileType;
+
+    let mut module =
+        LlvmModule::for_freestanding(FreestandingTarget::X86_64).expect("x86_64 freestanding");
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "leaf_slot", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let value = builder.block_params(entry)[0];
+        let other = builder.block_params(entry)[1];
+        let slot = builder.create_sized_stack_slot(64, 3);
+        let ptr = builder.stack_addr(types::I64, slot, 0);
+        builder.memory_access(
+            crate::native_backend::MemoryAccess::VolatileWrite,
+            types::I64,
+            &[ptr, value],
+        );
+        let ptr2 = builder.stack_addr(types::I64, slot, 32);
+        builder.memory_access(
+            crate::native_backend::MemoryAccess::VolatileWrite,
+            types::I64,
+            &[ptr2, other],
+        );
+        let loaded = builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::VolatileRead,
+                types::I64,
+                &[ptr],
+            )
+            .expect("volatile read returns a value");
+        builder.return_(&[loaded]);
+    });
+
+    let machine = super::freestanding_target_machine(FreestandingTarget::X86_64)
+        .expect("x86_64 freestanding machine");
+    let context = Context::create();
+    let lowered = module
+        .lower(&context, &machine)
+        .expect("freestanding module should lower");
+    let ir_text = lowered.print_to_string().to_string();
+    assert!(
+        ir_text.contains("noredzone"),
+        "every x86_64 freestanding function must carry LLVM `noredzone`: {ir_text}"
+    );
+    let asm_buffer = machine
+        .write_to_memory_buffer(&lowered, FileType::Assembly)
+        .expect("x86_64 freestanding assembly should emit");
+    let asm = std::str::from_utf8(asm_buffer.as_slice()).expect("assembly should be UTF-8");
+    assert!(
+        !asm.contains("-(%rsp)")
+            && !asm.lines().any(|line| {
+                line.contains("(%rsp)")
+                    && line.split("(%rsp)").next().is_some_and(|prefix| {
+                        prefix
+                            .rsplit(|ch: char| ch.is_whitespace() || ch == ',')
+                            .next()
+                            .is_some_and(|offset| offset.starts_with('-'))
+                    })
+            }),
+        "x86_64 freestanding leaf function must not access negative offsets below %rsp:\n{asm}"
+    );
+    assert!(
+        asm.contains("subq") && asm.contains("%rsp"),
+        "x86_64 freestanding leaf function with stack slots must adjust %rsp:\n{asm}"
+    );
+}
