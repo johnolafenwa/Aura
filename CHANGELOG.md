@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` proves more on paths it used to accept. The error path of
+  `try` proves the function's `ensures` and the class invariants of its
+  `mut` parameters and of `self`. `==` of dicts with float values compares
+  them as numbers, so `0.0` equals `-0.0`. A `mut` parameter of a
+  contracted callable alias proves that what is stored in it keeps the
+  contract. Each position `enumerate(xs, start)` counts in a contract must
+  fit an `int64`. Arithmetic and conversions on `int128`, `uint128`,
+  `intsize`, and `uintsize` are reported as not modeled (`AU5104`) instead
+  of being skipped.
 - Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
   `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
   the random tensors on the GPU. They ran on the CPU before. Tensors

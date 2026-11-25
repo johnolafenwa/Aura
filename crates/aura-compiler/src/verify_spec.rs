@@ -214,6 +214,76 @@ impl Exec<'_> {
         self.prove_inner_returns(state, result);
     }
 
+    /// Where `try` returns the error of its operand, the function returns
+    /// from inside an expression: no `ensures` check and no invariant check
+    /// on `self` runs there. Callers assume them on every return, so each
+    /// is proved on that path, with `result` the returned `Err`.
+    pub(super) fn prove_try_return(&mut self, state: &State, result: &Val) {
+        self.prove_return_invariants(state, result);
+        let erasing = self.erasing;
+        self.erasing = true;
+        let name = self.function.name.clone();
+        if let Some((inv_module, clauses)) = self.guarded_invariant(&name) {
+            if let Some(receiver) = state.env.get("self").cloned() {
+                let env: Env = [("self".to_string(), receiver)].into();
+                for clause in clauses {
+                    let message = format!(
+                        "class invariant holds for `self` where `try` returns: `{}`",
+                        clause.text
+                    );
+                    self.prove_clause_in(
+                        state,
+                        ObligationKind::ClassInvariant,
+                        self.span,
+                        message,
+                        &clause,
+                        &env,
+                        Some(&inv_module),
+                    );
+                }
+            }
+        }
+        if let Some(decl) = self.cx.decl(&name) {
+            let module_name = self.cx.decl_module(decl);
+            let mut env: Env = state.env.clone();
+            bind_span_views(&mut env);
+            env.insert("result".to_string(), result.clone());
+            for clause in decl
+                .contracts
+                .iter()
+                .filter(|clause| clause.kind == ContractKind::Ensures)
+            {
+                let message = format!(
+                    "`ensures` clause holds where `try` returns: `{}`",
+                    clause.text
+                );
+                if clause.olds.is_empty() {
+                    self.prove_clause_in(
+                        state,
+                        ObligationKind::Ensures,
+                        self.span,
+                        message,
+                        clause,
+                        &env,
+                        module_name,
+                    );
+                } else {
+                    let pc = state.pc.clone();
+                    self.oblige(
+                        ObligationKind::Ensures,
+                        self.span,
+                        message,
+                        &pc,
+                        Goal::Unsupported(
+                            "`old` values where `try` returns are not modeled yet".into(),
+                        ),
+                    );
+                }
+            }
+        }
+        self.erasing = erasing;
+    }
+
     /// Whether `callee` is a method that only reads `self`.
     fn reads_only(&self, callee: &str) -> bool {
         self.cx
@@ -1488,7 +1558,13 @@ impl Exec<'_> {
                 let position = if start == "0" {
                     k.to_string()
                 } else {
-                    format!("(+ {start} {k})")
+                    // Each position the run counts must be an `int64`.
+                    let position = format!("(+ {start} {k})");
+                    wd.push(format!(
+                        "(forall (({k} Int)) (=> {range} {}))",
+                        IntTy::INT64.contains(&position)
+                    ));
+                    position
                 };
                 return Ok((
                     range,
