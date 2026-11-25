@@ -18235,6 +18235,28 @@ impl<'a> FunctionCompiler<'a> {
         let call = op.runtime_call();
         let receiver_ty = direct_type_to_type(&object.ty);
         let object = self.ensure_opaque(object)?;
+        if op == RuntimeOp::Queue(QueueOp::Put)
+            && self.lookup_payload == Some(false)
+            && crate::runtime_ops::first_type_arg(Some(&receiver_ty)) == Some(Type::named("int64"))
+        {
+            if let [argument] = args {
+                // A discarded `put` of an `int64` passes the integer itself,
+                // so no box is made for it.
+                self.lookup_payload = Some(true);
+                let loaded = self
+                    .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let value = self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
+                self.runtime_call_results(
+                    self.runtime[RuntimeFn::ChannelSendDiscardedInt64],
+                    &[object.values[0], value.values[0]],
+                );
+                let null = self.builder.iconst(types::I64, 0);
+                return Ok(ValueRef {
+                    values: vec![null],
+                    ty: DirectType::Opaque(Type::named("Unknown")),
+                });
+            }
+        }
         let params = op.params();
         let mut lowered = Vec::with_capacity(params.len());
         let mut writeback = None;

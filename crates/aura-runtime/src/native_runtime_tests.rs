@@ -12945,6 +12945,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "queue-send-discarded-type" => {
                 super::aura_direct_channel_send_discarded(bool_value(true), int_value(1));
             }
+            "queue-send-discarded-i64-type" => {
+                super::aura_direct_channel_send_discarded_i64(bool_value(true), 1);
+            }
             "queue-recv-item-type" => {
                 super::aura_direct_channel_recv_item(bool_value(true));
             }
@@ -14449,6 +14452,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("queue-send-type", "expected `Queue`, found `bool`"),
         (
             "queue-send-discarded-type",
+            "expected `Queue`, found `bool`",
+        ),
+        (
+            "queue-send-discarded-i64-type",
             "expected `Queue`, found `bool`",
         ),
         ("queue-recv-item-type", "expected `Queue`, found `bool`"),
@@ -23156,10 +23163,17 @@ fn queue_item_helpers_return_the_item_box_or_null_and_discarded_sends_build_no_r
         },
         7
     );
+    // An `int64` put passes the integer and arrives as the same item.
+    super::aura_direct_channel_send_discarded_i64(channel, i64::MIN);
+    assert_eq!(
+        unsafe { take_int(super::aura_direct_channel_recv_item(channel)) },
+        i128::from(i64::MIN)
+    );
     expect_unit(super::aura_direct_channel_close(channel));
     // A send to a closed queue drops its value, as its discarded `Result`
     // would have.
     super::aura_direct_channel_send_discarded(channel, int_value(8));
+    super::aura_direct_channel_send_discarded_i64(channel, 9);
     assert!(super::aura_direct_channel_recv_item(channel).is_null());
     assert!(super::aura_direct_channel_recv_in_task_group_item(channel, group).is_null());
     assert!(super::aura_direct_channel_recv_with_registered_producers_item(channel).is_null());

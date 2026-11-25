@@ -523,6 +523,7 @@ runtime_functions! {
     ChannelNew => ("aura_direct_channel_new", [I64], Some(I64)),
     ChannelSend => ("aura_direct_channel_send", [I64, I64], Some(I64)),
     ChannelSendDiscarded => ("aura_direct_channel_send_discarded", [I64, I64], None),
+    ChannelSendDiscardedInt64 => ("aura_direct_channel_send_discarded_i64", [I64, I64], None),
     ChannelSendTimeoutValue => ("aura_direct_channel_send_timeout_value", [I64, I64, I64], Some(I64)),
     ChannelTrySend => ("aura_direct_channel_try_send", [I64, I64], Some(I64)),
     ChannelRecv => ("aura_direct_channel_recv", [I64], Some(I64)),

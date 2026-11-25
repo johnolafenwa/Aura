@@ -19046,6 +19046,25 @@ pub extern "C-unwind" fn aura_direct_channel_send_discarded(
     })
 }
 
+/// [`aura_direct_channel_send_discarded`] for an `int64` item, which
+/// generated code passes as the integer, so no box is made for it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_channel_send_discarded_i64(
+    channel: *mut OpaqueValue,
+    value: i64,
+) {
+    task_runtime_boundary(|| match unsafe { value_ref(channel) } {
+        Value::Channel(channel) => {
+            let value = Value::Int(IntegerValue::from_i64(value));
+            let _ = channel.send_with_cancellation(value, Some(&current_cancellation()));
+        }
+        other => runtime_error(format!(
+            "expected `Queue`, found `{}`",
+            value_type_name(other)
+        )),
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_channel_send_timeout_value(
     channel: *mut OpaqueValue,

@@ -1,0 +1,32 @@
+# A discarded `put` of an `int64` hands the integer to the queue without a
+# box; the receiver sees the same values, and a put to a closed queue is
+# still dropped.
+
+
+def produce(out: Queue[int64], n: int64):
+    for i in range(n):
+        _ = out.put(i * 1000003 - 9223372036854775807 + i)
+    out.close()
+    _ = out.put(42)
+
+
+def main():
+    mut total = 0
+    mut count = 0
+    mut smallest = 0
+    with TaskGroup() as group:
+        values = Queue[int64](capacity=4)
+        group.start_soon(produce, values, 50)
+        for value in values:
+            total = (total + value % 1000) % 1000000
+            count += 1
+            smallest = min(smallest, value)
+    print(f"{count} {total} {smallest}")
+    late = Queue[int64](capacity=2)
+    _ = late.put(-7)
+    _ = late.put(9)
+    match late.get():
+        case QueueReceive.Item(value):
+            print(value)
+        case _:
+            print("none")
