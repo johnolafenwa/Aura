@@ -515,6 +515,8 @@ pub(super) struct Exec<'a> {
     /// The module whose scope resolves unqualified names in the clause
     /// currently being evaluated.
     pub(super) spec_module: String,
+    /// Enclosing quantifier binders `(name, sort)` during specification evaluation.
+    pub(super) bound_vars: Vec<(String, &'static str)>,
     /// Active `(spec_decl_ptr, rendered_args)` calls to stop direct or
     /// mutual cycles immediately.
     pub(super) active_specs: Vec<(usize, Vec<String>)>,
@@ -586,6 +588,7 @@ impl<'a> Exec<'a> {
             position: (0, 0),
             proving: true,
             spec_module: function.module_name.clone(),
+            bound_vars: Vec::new(),
             active_specs: Vec::new(),
             spec_limit_hit: None,
             unmodeled_steps: Vec::new(),
@@ -614,6 +617,23 @@ impl<'a> Exec<'a> {
             .collect();
         let name = format!("{clean}!{}", self.counter);
         self.decls.push(format!("(declare-const {name} {sort})"));
+        if let Some(step) = self.origin {
+            self.unmodeled.insert(name.clone(), step);
+        }
+        name
+    }
+
+    pub(super) fn fresh_fun(&mut self, arg_sorts: &[&str], ret_sort: &str, hint: &str) -> String {
+        self.counter += 1;
+        let clean: String = hint
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .take(24)
+            .collect();
+        let name = format!("{clean}!{}", self.counter);
+        let domain = arg_sorts.join(" ");
+        self.decls
+            .push(format!("(declare-fun {name} ({domain}) {ret_sort})"));
         if let Some(step) = self.origin {
             self.unmodeled.insert(name.clone(), step);
         }
@@ -840,6 +860,38 @@ impl<'a> Exec<'a> {
 
     pub(super) fn fresh(&mut self, ty: &Type, hint: &str) -> Val {
         self.fresh_at(ty, hint, 0)
+    }
+
+    /// A fresh uninterpreted value parameterized over the enclosing quantifier
+    /// binders, for scalar `spec def` cutoffs under a binder.
+    pub(super) fn fresh_under_binders(&mut self, ty: &Type, hint: &str) -> Option<Val> {
+        if matches!(ty, Type::Unit) {
+            return Some(Val::Unit);
+        }
+        let arg_sorts: Vec<&str> = self.bound_vars.iter().map(|(_, sort)| *sort).collect();
+        let args: String = self
+            .bound_vars
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let call = |exec: &mut Self, ret_sort: &str| {
+            let fun = exec.fresh_fun(&arg_sorts, ret_sort, hint);
+            format!("({fun} {args})")
+        };
+        if let Some(int) = IntTy::of(ty) {
+            return Some(Val::Int(call(self, "Int"), int));
+        }
+        if is_bool(ty) {
+            return Some(Val::Bool(call(self, "Bool")));
+        }
+        if is_str(ty) {
+            return Some(Val::Str(call(self, "String")));
+        }
+        if let Some(float) = FloatTy::of(ty) {
+            return Some(Val::Float(call(self, float.sort()), float));
+        }
+        None
     }
 
     fn fresh_at(&mut self, ty: &Type, hint: &str, depth: usize) -> Val {

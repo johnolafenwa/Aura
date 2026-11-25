@@ -1125,6 +1125,11 @@ impl Exec<'_> {
             }
             return match self.cx.spec_return_type(spec) {
                 Some(Type::Unit) => Ok(Val::Unit),
+                Some(ty) if !self.bound_vars.is_empty() => {
+                    self.fresh_under_binders(ty, &spec.name).ok_or_else(|| {
+                        format!("`spec def {}` unfolds more than {limit} levels", spec.name)
+                    })
+                }
                 Some(ty) => {
                     let fresh = self.fresh(ty, &spec.name);
                     if matches!(fresh, Val::Opaque) {
@@ -1325,43 +1330,49 @@ impl Exec<'_> {
         };
         // Each `for` clause binds one more variable, over positions that may
         // depend on the variables before it.
-        let mut ks: Vec<String> = Vec::new();
-        let mut hypotheses: Vec<String> = Vec::new();
-        let mut inner = env.clone();
-        for clause in clauses {
-            let k = self.bound_name();
-            let mut iterable_wd = Vec::new();
-            let (range, value, sort) =
-                self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
-            push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
-            ks.push(format!("({k} {sort})"));
-            // An element of a list of integers lies in its type's range.
-            hypotheses.push(range);
-            int_ranges(&value, &mut hypotheses);
-            bind_target(&clause.target, value, &mut inner)?;
-            // Each filter, then the condition, is evaluated only where the
-            // filters before it hold, so each is well-defined there.
-            for filter in &clause.filters {
-                let mut filter_wd = Vec::new();
-                let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
-                    return Err("a comprehension filter is not a modeled `bool`".into());
-                };
-                push_quantified_wd(wd, &ks, &hypotheses, &filter_wd);
-                hypotheses.push(term);
+        let saved_bound = self.bound_vars.len();
+        let result = (|| {
+            let mut ks: Vec<String> = Vec::new();
+            let mut hypotheses: Vec<String> = Vec::new();
+            let mut inner = env.clone();
+            for clause in clauses {
+                let k = self.bound_name();
+                let mut iterable_wd = Vec::new();
+                let (range, value, sort) =
+                    self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
+                push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
+                ks.push(format!("({k} {sort})"));
+                self.bound_vars.push((k, sort));
+                // An element of a list of integers lies in its type's range.
+                hypotheses.push(range);
+                int_ranges(&value, &mut hypotheses);
+                bind_target(&clause.target, value, &mut inner)?;
+                // Each filter, then the condition, is evaluated only where the
+                // filters before it hold, so each is well-defined there.
+                for filter in &clause.filters {
+                    let mut filter_wd = Vec::new();
+                    let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
+                        return Err("a comprehension filter is not a modeled `bool`".into());
+                    };
+                    push_quantified_wd(wd, &ks, &hypotheses, &filter_wd);
+                    hypotheses.push(term);
+                }
             }
-        }
-        let mut body_wd = Vec::new();
-        let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
-            return Err("a quantified condition is not a modeled `bool`".into());
-        };
-        push_quantified_wd(wd, &ks, &hypotheses, &body_wd);
-        let binders = binders(&ks);
-        let hypotheses = conjoin(&hypotheses);
-        Ok(Val::Bool(if universal {
-            format!("(forall ({binders}) (=> {hypotheses} {condition}))")
-        } else {
-            format!("(exists ({binders}) (and {hypotheses} {condition}))")
-        }))
+            let mut body_wd = Vec::new();
+            let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
+                return Err("a quantified condition is not a modeled `bool`".into());
+            };
+            push_quantified_wd(wd, &ks, &hypotheses, &body_wd);
+            let binders = binders(&ks);
+            let hypotheses = conjoin(&hypotheses);
+            Ok(Val::Bool(if universal {
+                format!("(forall ({binders}) (=> {hypotheses} {condition}))")
+            } else {
+                format!("(exists ({binders}) (and {hypotheses} {condition}))")
+            }))
+        })();
+        self.bound_vars.truncate(saved_bound);
+        result
     }
 
     /// The positions a quantifier's `for` clause ranges over, as a condition

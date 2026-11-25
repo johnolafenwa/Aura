@@ -5130,3 +5130,104 @@ def main():
         );
     }
 }
+
+#[test]
+fn spec_def_cutoff_inside_assumed_quantifier_does_not_prove_false_ensures() {
+    let cases: [(&str, &str); 3] = [
+        (
+            "recursive spec def past depth limit in assumed quantifier",
+            r#"
+spec def id_rec(n: int64) -> int64:
+    return 0 if n <= 0 else 1 + id_rec(n - 1)
+
+def f(xs: list[int64]) -> int64:
+    requires all([id_rec(i) == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "cyclic spec def in assumed quantifier",
+            r#"
+spec def loop_rec(n: int64) -> int64:
+    return loop_rec(n)
+
+def f(xs: list[int64]) -> int64:
+    requires all([loop_rec(i) == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "tuple-returning recursive spec def in assumed quantifier",
+            r#"
+spec def pair_rec(n: int64) -> (int64, int64):
+    return (0, 0) if n <= 0 else (1 + pair_rec(n - 1)[0], 0)
+
+def f(xs: list[int64]) -> int64:
+    requires all([pair_rec(i)[0] == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let ensures_open = report.obligations.iter().any(|ob| {
+            ob.function == "f"
+                && ob.kind == ObligationKind::Ensures
+                && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            ensures_open,
+            "`{label}` must not prove `ensures result == 999`: {report:#?}"
+        );
+        let index_open = report.obligations.iter().any(|ob| {
+            ob.function == "f"
+                && ob.kind == ObligationKind::IndexInRange
+                && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            index_open,
+            "`{label}` must not prove `xs[999]`: {report:#?}"
+        );
+        assert!(
+            report.obligations.iter().all(|ob| {
+                ob.function != "f"
+                    || ob.kind != ObligationKind::Satisfiable
+                    || matches!(ob.status, Status::Proved)
+            }),
+            "`{label}` must not turn a satisfiable `requires` into UNSAT: {report:#?}"
+        );
+    }
+
+    assert_proved(
+        r#"
+spec def id_rec(n: int64) -> int64:
+    return 0 if n <= 0 else 1 + id_rec(n - 1)
+
+def f(x: int64) -> int64:
+    requires all([id_rec(i) == i for i in range(0, 5)])
+    requires 0 <= x and x < 5
+    ensures result == x
+    return x
+
+def main():
+    pass
+"#,
+    );
+}
