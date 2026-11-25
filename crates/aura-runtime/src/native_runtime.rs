@@ -1790,8 +1790,9 @@ impl OpaqueValue {
         };
         // SAFETY: the value is confined to this thread, and nothing else
         // holds its view.
-        let view = unsafe { vector.str_view.get_or_create() };
-        view.misses += 1;
+        let Some(view) = (unsafe { vector.str_view.note_miss(STR_VIEW_MIN_MISSES) }) else {
+            return;
+        };
         if view.misses < STR_VIEW_MIN_MISSES
             || view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len()
         {

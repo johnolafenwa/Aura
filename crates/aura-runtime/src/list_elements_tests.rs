@@ -1175,3 +1175,29 @@ fn scalar_forms_lend_their_elements_as_a_c_array() {
     );
     assert_eq!(text.len(), 1, "a list that cannot move keeps its elements");
 }
+
+#[test]
+fn a_str_view_cache_counts_early_misses_without_a_view() {
+    let cache = StrViewCache::default();
+    // SAFETY: the cache is this test's alone.
+    unsafe {
+        assert!(cache.note_miss(3).is_none());
+        assert!(cache.note_miss(3).is_none());
+        assert!(cache.is_empty());
+        let view = cache.note_miss(3).expect("the third miss makes the view");
+        assert_eq!(view.misses, 3);
+        assert!(!cache.is_empty());
+        assert_eq!(cache.note_miss(3).expect("the view stays").misses, 4);
+    }
+    let counted = StrViewCache::default();
+    // SAFETY: as above.
+    unsafe {
+        assert!(counted.note_miss(4).is_none());
+        assert_eq!(counted.get_or_create().misses, 1);
+    }
+    // A cache that only counts drops nothing.
+    let only_counts = StrViewCache::default();
+    // SAFETY: as above.
+    assert!(unsafe { only_counts.note_miss(2) }.is_none());
+    drop(only_counts);
+}
