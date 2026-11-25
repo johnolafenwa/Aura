@@ -28048,7 +28048,10 @@ fn a_freed_scalar_list_is_the_next_empty_list_of_its_type() {
             assert_eq!(super::aura_direct_vec_len(reused), 0);
             assert_eq!(entries(), [(reused as usize, 1)]);
             assert_eq!(
-                unsafe { &*reused }.shape_tag.load(Ordering::Relaxed).cast::<std::ffi::c_void>(),
+                unsafe { &*reused }
+                    .shape_tag
+                    .load(Ordering::Relaxed)
+                    .cast::<std::ffi::c_void>(),
                 ints.load(Ordering::Relaxed)
             );
             super::aura_direct_vec_push_scalar(reused, 7, int64);
