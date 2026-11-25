@@ -30518,6 +30518,41 @@ fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
 }
 
 #[test]
+fn a_split_of_words_gives_the_parts_a_split_of_the_box_gives() {
+    let split = |text: &str, separator: &str| {
+        let parts = super::aura_direct_string_split_literal_words(
+            text.as_ptr(),
+            text.len(),
+            separator.as_ptr(),
+            separator.len(),
+        );
+        let boxed = super::aura_direct_string_split_literal(
+            string_value(text),
+            separator.as_ptr(),
+            separator.len(),
+        );
+        let (parts, boxed) = unsafe { (take_value(parts), take_value(boxed)) };
+        assert_eq!(parts, boxed);
+        parts
+    };
+    let strings = |parts: &[&str]| {
+        Value::Vec(VecValue {
+            element_type: crate::runtime_value::SharedType::named("str"),
+            elements: parts
+                .iter()
+                .map(|part| Value::String(part.to_string().into()))
+                .collect::<Vec<_>>()
+                .into(),
+            str_view: Default::default(),
+        })
+    };
+    assert_eq!(split("1 read 20", " "), strings(&["1", "read", "20"]));
+    assert_eq!(split("a, b,, c", ", "), strings(&["a", "b,", "c"]));
+    assert_eq!(split("", " "), strings(&[""]));
+    assert_eq!(split("é é", " "), strings(&["é", "é"]));
+}
+
+#[test]
 fn an_int64_parse_for_a_word_slot_writes_the_number_or_reports_none() {
     let parse = |text: &str| {
         let mut out = -1_i64;

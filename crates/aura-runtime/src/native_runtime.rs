@@ -8574,6 +8574,46 @@ pub extern "C-unwind" fn aura_direct_string_split_literal(
     task_runtime_boundary(|| split_value(value, literal_str(separator_ptr, separator_len)))
 }
 
+/// A new `list[str]` box of the parts of the `len` UTF-8 bytes at `ptr`
+/// between occurrences of the literal `separator`: a `str` generated code
+/// holds as words, such as a list element read where the list keeps it,
+/// split with no box of its own.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_split_literal_words(
+    ptr: *const u8,
+    len: usize,
+    separator_ptr: *const u8,
+    separator_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: generated code passes the bytes of a `str`.
+        let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let separator = literal_str(separator_ptr, separator_len);
+        let part = |part: &str| Value::String(crate::text::Text::from(part));
+        // The parts are made as `split_text` makes them from a `Text`.
+        let parts: Vec<Value> = match separator.as_bytes() {
+            [byte] => {
+                let mut parts = Vec::with_capacity(memchr::memchr_iter(*byte, bytes).count() + 1);
+                let mut start = 0;
+                for position in memchr::memchr_iter(*byte, bytes) {
+                    parts.push(part(&text[start..position]));
+                    start = position + 1;
+                }
+                parts.push(part(&text[start..]));
+                parts
+            }
+            _ => text.split(separator).map(part).collect(),
+        };
+        boxed_value(Value::Vec(VecValue {
+            element_type: SharedType::named("str"),
+            elements: parts.into(),
+            str_view: Default::default(),
+        }))
+    })
+}
+
 /// A new `list[str]` box of the parts of the `str` box `value` between
 /// occurrences of `separator`.
 fn split_value(value: *mut OpaqueValue, separator: &str) -> *mut OpaqueValue {

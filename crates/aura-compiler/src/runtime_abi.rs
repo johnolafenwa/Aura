@@ -148,6 +148,7 @@ runtime_functions! {
     VecStrElement => ("aura_direct_vec_str_element", [I64, I64, I64, I64], Some(I64)),
     StringSplit => ("aura_direct_string_split", [I64, I64], Some(I64)),
     StringSplitLiteral => ("aura_direct_string_split_literal", [I64, I64, I64], Some(I64)),
+    StringSplitLiteralWords => ("aura_direct_string_split_literal_words", [I64, I64, I64, I64], Some(I64)),
     StringReplace => ("aura_direct_string_replace", [I64, I64, I64], Some(I64)),
     StringToLower => ("aura_direct_string_to_lower", [I64], Some(I64)),
     StringToUpper => ("aura_direct_string_to_upper", [I64], Some(I64)),

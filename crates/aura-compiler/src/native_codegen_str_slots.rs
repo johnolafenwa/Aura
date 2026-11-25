@@ -55,6 +55,13 @@ pub(super) fn receiver_view_read(op: RuntimeOp) -> Option<ViewRead> {
     }
 }
 
+/// Whether `op` with the one argument `separator` splits its receiver by a
+/// literal, which `aura_direct_string_split_literal_words` does from the
+/// receiver's words.
+fn splits_by_literal(op: RuntimeOp, separator: &MirArg) -> bool {
+    op == RuntimeOp::Str(StrOp::Split) && matches!(separator.value, Operand::String(_))
+}
+
 /// One parameter a view twin takes as words.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ViewParam {
@@ -176,6 +183,7 @@ fn param_uses(
                         [key],
                     ) => candidate(receiver).is_none() && candidate(&key.value).is_some(),
                     (op, []) => receiver_view_read(*op).is_some(),
+                    (op, [separator]) => splits_by_literal(*op, separator),
                     _ => false,
                 },
                 // The bytes of a `str` are copied from its words.
@@ -1078,6 +1086,7 @@ fn reads_words(
                 [key],
             ) => is_local(&key.value),
             (op, []) => is_local(receiver) && receiver_view_read(*op).is_some(),
+            (op, [separator]) => is_local(receiver) && splits_by_literal(*op, separator),
             _ => false,
         },
         Rvalue::FormatString { parts } => parts
@@ -1713,6 +1722,25 @@ impl FunctionCompiler<'_> {
         else {
             return Ok(None);
         };
+        if let [separator] = args {
+            let (Operand::String(separator), Some((ptr, len))) =
+                (&separator.value, self.str_slot_words(receiver))
+            else {
+                return Ok(None);
+            };
+            if *op != RuntimeOp::Str(StrOp::Split) {
+                return Ok(None);
+            }
+            let (separator_ptr, separator_len) = self.string_constant(separator.as_bytes())?;
+            let results = self.runtime_call_results(
+                self.runtime[RuntimeFn::StringSplitLiteralWords],
+                &[ptr, len, separator_ptr, separator_len],
+            );
+            return Ok(Some(self.owned_opaque_result(
+                results,
+                Type::Named("list".to_string(), vec![Type::named("str")]),
+            )));
+        }
         if !args.is_empty() {
             return Ok(None);
         }

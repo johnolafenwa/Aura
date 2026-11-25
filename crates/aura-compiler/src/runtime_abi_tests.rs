@@ -209,6 +209,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::StringReplaceLiteral
                     | RuntimeFn::StringReplaceLiteralOwned
                     | RuntimeFn::StringSplitLiteral
+                    | RuntimeFn::StringSplitLiteralWords
                     | RuntimeFn::StringFromView
                     | RuntimeFn::StringToBytesView
                     | RuntimeFn::StringBytes
