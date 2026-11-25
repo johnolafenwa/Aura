@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use mio::unix::SourceFd;
 #[cfg(unix)]
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[cfg(unix)]
 use std::os::fd::RawFd;
 
@@ -258,8 +258,108 @@ struct TimerEntry {
 #[cfg(unix)]
 struct FdEntry {
     token: Token,
-    waiters: BTreeMap<WaitKey, IoInterest>,
+    waiters: FdWaiters,
     interest: IoInterest,
+}
+
+/// The waits on one descriptor, in key order, which is the order its
+/// events wake them in. A descriptor has one waiter or a few, and its
+/// entry outlives each wait, so the vector keeps its room for the next.
+#[cfg(unix)]
+#[derive(Default)]
+struct FdWaiters(Vec<(WaitKey, IoInterest)>);
+
+#[cfg(unix)]
+impl FdWaiters {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn position(&self, key: &WaitKey) -> Result<usize, usize> {
+        self.0.binary_search_by(|(current, _)| current.cmp(key))
+    }
+
+    fn contains_key(&self, key: &WaitKey) -> bool {
+        self.position(key).is_ok()
+    }
+
+    /// Adds `interest` to the interest `key` already waits for, or adds
+    /// the wait.
+    fn merge(&mut self, key: WaitKey, interest: IoInterest) {
+        match self.position(&key) {
+            Ok(index) => self.0[index].1 = self.0[index].1 | interest,
+            Err(index) => self.0.insert(index, (key, interest)),
+        }
+    }
+
+    fn remove(&mut self, key: &WaitKey) {
+        if let Ok(index) = self.position(key) {
+            self.0.remove(index);
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &(WaitKey, IoInterest)> {
+        self.0.iter()
+    }
+
+    fn into_keys(self) -> impl Iterator<Item = WaitKey> {
+        self.0.into_iter().map(|(key, _)| key)
+    }
+
+    /// The interest of every wait but `skip`'s, with `added` for `skip`
+    /// when given, or `None` when no wait would remain.
+    fn interest_with(&self, skip: WaitKey, added: Option<IoInterest>) -> Option<IoInterest> {
+        self.0
+            .iter()
+            .filter(|(key, _)| *key != skip)
+            .map(|(_, interest)| *interest)
+            .chain(added.map(|added| {
+                self.0
+                    .iter()
+                    .find(|(key, _)| *key == skip)
+                    .map_or(added, |(_, current)| *current | added)
+            }))
+            .reduce(BitOr::bitor)
+    }
+}
+
+/// The descriptors one wait is registered on: almost always one.
+#[cfg(unix)]
+enum KeyFds {
+    One(RawFd),
+    Many(BTreeSet<RawFd>),
+}
+
+#[cfg(unix)]
+impl KeyFds {
+    fn insert(&mut self, fd: RawFd) {
+        match self {
+            Self::One(current) if *current == fd => {}
+            Self::One(current) => *self = Self::Many(BTreeSet::from([*current, fd])),
+            Self::Many(descriptors) => {
+                descriptors.insert(fd);
+            }
+        }
+    }
+
+    /// Removes `fd`, and returns whether none remain.
+    fn remove(&mut self, fd: RawFd) -> bool {
+        match self {
+            Self::One(current) => *current == fd,
+            Self::Many(descriptors) => {
+                descriptors.remove(&fd);
+                descriptors.is_empty()
+            }
+        }
+    }
+
+    /// The descriptors in ascending order.
+    fn into_sorted(self) -> Vec<RawFd> {
+        match self {
+            Self::One(fd) => vec![fd],
+            Self::Many(descriptors) => descriptors.into_iter().collect(),
+        }
+    }
 }
 
 /// Single-owner persistent poller. Registration methods are called by the
@@ -279,7 +379,7 @@ pub struct RuntimeReactor {
     #[cfg(unix)]
     token_fds: IdHashMap<Token, RawFd>,
     #[cfg(unix)]
-    key_fds: IdHashMap<WaitKey, BTreeSet<RawFd>>,
+    key_fds: IdHashMap<WaitKey, KeyFds>,
     #[cfg(unix)]
     next_fd_token: usize,
     /// The waits that have a socket, polled here while fresh and by the
@@ -722,7 +822,13 @@ impl RuntimeReactor {
         self.compact_stale_timers_if_needed();
         #[cfg(unix)]
         {
-            let descriptors = self.key_fds.get(&key).cloned().unwrap_or_default();
+            // Each removal below unlinks its descriptor from the key, so
+            // the key's set leaves the map first.
+            let descriptors = self
+                .key_fds
+                .remove(&key)
+                .map(KeyFds::into_sorted)
+                .unwrap_or_default();
             let mut first_error = None;
             for fd in descriptors {
                 if let Err(error) = self.remove_fd_waiter(key, fd) {
@@ -803,11 +909,11 @@ impl RuntimeReactor {
                 Ok(()) => {
                     let entry = self.fds.get_mut(&fd).expect("checked above");
                     let stale = std::mem::replace(&mut entry.token, token);
-                    entry.waiters.insert(key, interest);
+                    entry.waiters.merge(key, interest);
                     entry.interest = interest;
                     self.token_fds.remove(&stale);
                     self.token_fds.insert(token, fd);
-                    self.key_fds.entry(key).or_default().insert(fd);
+                    self.link_key_fd(key, fd);
                     return Ok(());
                 }
                 Err(error) if fd_registration_is_gone(&error) => {
@@ -818,12 +924,10 @@ impl RuntimeReactor {
         }
 
         if let Some(entry) = self.fds.get(&fd) {
-            let mut waiters = entry.waiters.clone();
-            waiters
-                .entry(key)
-                .and_modify(|current| *current = *current | interest)
-                .or_insert(interest);
-            let combined = combined_interest(&waiters);
+            let combined = entry
+                .waiters
+                .interest_with(key, Some(interest))
+                .expect("the added wait remains");
             if combined != entry.interest {
                 let mut source = SourceFd(&fd);
                 retry_on_interrupt(|| {
@@ -833,7 +937,7 @@ impl RuntimeReactor {
                 })?;
             }
             let entry = self.fds.get_mut(&fd).expect("checked above");
-            entry.waiters = waiters;
+            entry.waiters.merge(key, interest);
             entry.interest = combined;
         } else {
             let token = self.allocate_fd_token()?;
@@ -843,8 +947,8 @@ impl RuntimeReactor {
                     .registry()
                     .register(&mut source, token, interest.as_mio())
             })?;
-            let mut waiters = BTreeMap::new();
-            waiters.insert(key, interest);
+            let mut waiters = FdWaiters::default();
+            waiters.merge(key, interest);
             self.fds.insert(
                 fd,
                 FdEntry {
@@ -855,8 +959,18 @@ impl RuntimeReactor {
             );
             self.token_fds.insert(token, fd);
         }
-        self.key_fds.entry(key).or_default().insert(fd);
+        self.link_key_fd(key, fd);
         Ok(())
+    }
+
+    #[cfg(unix)]
+    fn link_key_fd(&mut self, key: WaitKey, fd: RawFd) {
+        match self.key_fds.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut().insert(fd),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(KeyFds::One(fd));
+            }
+        }
     }
 
     #[cfg(unix)]
@@ -872,16 +986,9 @@ impl RuntimeReactor {
 
         let token = entry.token;
         let old_interest = entry.interest;
-        let mut waiters = entry.waiters.clone();
-        waiters.remove(&key);
+        let remaining = entry.waiters.interest_with(key, None);
         let mut source = SourceFd(&fd);
-        if waiters.is_empty() {
-            // The last waiter leaves the descriptor registered and idle.
-            // Events that arrive meanwhile find no waiter to wake.
-            let entry = self.fds.get_mut(&fd).expect("checked above");
-            entry.waiters = waiters;
-        } else {
-            let interest = combined_interest(&waiters);
+        if let Some(interest) = remaining {
             if interest != old_interest {
                 let result = retry_on_interrupt(|| {
                     self.poll
@@ -907,8 +1014,13 @@ impl RuntimeReactor {
                 }
             }
             let entry = self.fds.get_mut(&fd).expect("checked above");
-            entry.waiters = waiters;
+            entry.waiters.remove(&key);
             entry.interest = interest;
+        } else {
+            // The last waiter leaves the descriptor registered and idle.
+            // Events that arrive meanwhile find no waiter to wake.
+            let entry = self.fds.get_mut(&fd).expect("checked above");
+            entry.waiters.remove(&key);
         }
         self.unlink_key_fd(key, fd);
         Ok(())
@@ -930,8 +1042,7 @@ impl RuntimeReactor {
     #[cfg(unix)]
     fn unlink_key_fd(&mut self, key: WaitKey, fd: RawFd) {
         if let Some(descriptors) = self.key_fds.get_mut(&key) {
-            descriptors.remove(&fd);
-            if descriptors.is_empty() {
+            if descriptors.remove(fd) {
                 self.key_fds.remove(&key);
             }
         }
@@ -995,15 +1106,6 @@ impl RuntimeReactor {
     fn fd_interest(&self, fd: RawFd) -> Option<IoInterest> {
         self.fds.get(&fd).map(|entry| entry.interest)
     }
-}
-
-#[cfg(unix)]
-fn combined_interest(waiters: &BTreeMap<WaitKey, IoInterest>) -> IoInterest {
-    waiters
-        .values()
-        .copied()
-        .reduce(BitOr::bitor)
-        .expect("a registered descriptor has at least one waiter")
 }
 
 #[cfg(unix)]
@@ -1636,6 +1738,48 @@ mod tests {
                 vec![next],
                 "re-arming reports readiness the socket already had"
             );
+        }
+
+        #[test]
+        fn one_wait_on_several_descriptors_leaves_each_on_cleanup() {
+            let mut reactor = RuntimeReactor::new().unwrap();
+            let (first, _first_peer) = UnixStream::pair().unwrap();
+            let (second, _second_peer) = UnixStream::pair().unwrap();
+            let (first, second) = (first.as_raw_fd(), second.as_raw_fd());
+            let key = WaitKey(1, 1);
+            let later = WaitKey(3, 1);
+            let earlier = WaitKey(2, 1);
+            for wait in [key, later, earlier] {
+                reactor.begin_wait(wait).unwrap();
+            }
+            reactor.add_fd(key, second, IoInterest::READABLE).unwrap();
+            reactor.add_fd(key, first, IoInterest::READABLE).unwrap();
+            reactor.add_fd(key, first, IoInterest::WRITABLE).unwrap();
+            assert_eq!(
+                reactor.fd_interest(first),
+                Some(IoInterest::READABLE | IoInterest::WRITABLE),
+                "a second interest of one wait widens its registration"
+            );
+            reactor.add_fd(later, second, IoInterest::WRITABLE).unwrap();
+            reactor
+                .add_fd(earlier, second, IoInterest::WRITABLE)
+                .unwrap();
+            let order: Vec<_> = reactor.fds[&second]
+                .waiters
+                .iter()
+                .map(|(wait, _)| *wait)
+                .collect();
+            assert_eq!(order, vec![key, earlier, later], "waiters keep key order");
+
+            reactor.cancel_wait(key).unwrap();
+            assert!(!reactor.key_fds.contains_key(&key));
+            assert!(reactor.fds[&first].waiters.is_empty());
+            assert!(!reactor.fds[&second].waiters.contains_key(&key));
+            assert_eq!(reactor.fd_interest(second), Some(IoInterest::WRITABLE));
+            reactor.cancel_wait(earlier).unwrap();
+            reactor.cancel_wait(later).unwrap();
+            assert!(reactor.key_fds.is_empty());
+            assert!(reactor.fds[&second].waiters.is_empty());
         }
 
         #[test]
