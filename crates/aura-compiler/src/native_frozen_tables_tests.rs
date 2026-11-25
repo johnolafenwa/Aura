@@ -181,3 +181,25 @@ fn dotted_tuple_reads_expand_atomically_in_instructions_and_terminators() {
         &HashMap::new()
     ));
 }
+
+#[test]
+fn freestanding_emission_reports_a_missing_compiled_payload() {
+    let source = "const table = [5, 9]\nexport \"C\" def at(index: int64) -> int64:\n    return table[index]\n";
+    let module = crate::lower_source_to_mir(source).unwrap();
+    let mut prepared = crate::native_codegen::freestanding::prepare(&module).unwrap();
+    let constant = prepared.constants.pop().unwrap();
+    // A reference to static storage still exists in the MIR. Removing its
+    // payload must report the missing binding before the object can be linked.
+    let error = crate::native_codegen::NativeCodegen::for_target(
+        &prepared,
+        "table.au",
+        source,
+        Some(FreestandingTarget::Aarch64),
+    )
+    .and_then(crate::native_codegen::NativeCodegen::emit)
+    .unwrap_err();
+    assert!(
+        error.contains(&format!("missing frozen value for {}", constant.key)),
+        "{error}"
+    );
+}

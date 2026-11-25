@@ -66,3 +66,24 @@ fn compiled_data_publishes_one_typed_tuple_per_program_cell() {
     native_runtime::clear_direct_module_constants();
     assert_eq!(CELL.load(Ordering::Acquire), 0);
 }
+
+#[test]
+fn invalid_compiled_data_reports_the_decode_error_and_leaves_the_cell_empty() {
+    static CELL: AtomicUsize = AtomicUsize::new(0);
+    let error = super::capture_direct_boundary_error_message(|| {
+        let data = b"not-json";
+        let descriptor = b"bool";
+        // SAFETY: the cell is static and both byte slices are valid for the call.
+        unsafe {
+            native_runtime::frozen::aura_direct_frozen_constant(
+                &CELL,
+                data.as_ptr(),
+                data.len(),
+                descriptor.as_ptr(),
+                descriptor.len(),
+            );
+        }
+    });
+    assert!(error.starts_with("invalid compiled constant:"), "{error}");
+    assert_eq!(CELL.load(Ordering::Acquire), 0);
+}
