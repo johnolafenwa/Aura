@@ -22,7 +22,7 @@ else:
 
 The compiler evaluates pure module initializers, including ordinary bindings without the marker. An initializer can read earlier bindings and call pure Aura functions. It can construct a scalar, string, byte string, tuple, list, dictionary, set, class or enum. Iteration order and type information survive evaluation. `public const` makes a required binding available to importers.
 
-A pure computation can update its own local variables and collections. Reading the environment, performing I/O, consulting the clock, starting a task or calling foreign code requires runtime execution. An ordinary binding with such an initializer runs during module initialization. Writing `const` there produces `AU3025`. Move the effect into a runtime function, or use an ordinary binding if the effect belongs at startup.
+A pure computation can update its own local variables and collections. Reading the environment or mutable module storage, performing I/O, consulting the clock, starting a task, running machine assembly or calling foreign code requires runtime execution. An ordinary binding with such an initializer runs during module initialization. Writing `const` there produces `AU3025`. Move the effect into a runtime function, or use an ordinary binding if the effect belongs at startup.
 
 A local value can run a pure `__drop__` hook within the initializer’s budget. A result that still owns a drop hook needs runtime initialization. This includes a hook owned by an item in a returned collection.
 
