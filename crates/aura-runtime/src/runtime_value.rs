@@ -14360,6 +14360,17 @@ fn parse_http_body_framing(
                 None => Ok(Some(parsed)),
             }
         })?;
+    let has_transfer_encoding = headers
+        .iter()
+        .any(|(name, _)| http_header_name_eq(name, "Transfer-Encoding"));
+    if has_transfer_encoding && content_length.is_some() {
+        // A reader that honours one header and one that honours the other
+        // would split the stream differently.
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HTTP message cannot combine transfer-encoding with content-length",
+        ));
+    }
     let transfer_codings = headers
         .iter()
         .filter(|(name, _)| http_header_name_eq(name, "Transfer-Encoding"))
@@ -14373,12 +14384,6 @@ fn parse_http_body_framing(
             .unwrap_or(default));
     }
     if transfer_codings.as_slice() == ["chunked"] {
-        if content_length.is_some() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "HTTP message cannot combine transfer-encoding chunked with content-length",
-            ));
-        }
         return Ok(HttpBodyFraming::Chunked);
     }
     Err(io::Error::new(
@@ -14406,65 +14411,147 @@ fn find_http_crlf(bytes: &[u8], start: usize) -> Option<usize> {
         .map(|offset| start + offset)
 }
 
+/// The longest chunk-size line, extensions included, a chunked body may
+/// have.
+const MAX_HTTP_CHUNK_LINE_BYTES: usize = 4096;
+
+/// The most bytes of trailer fields a chunked body may end with.
+const MAX_HTTP_TRAILER_BYTES: usize = 16 * 1024;
+
+fn invalid_chunked_body(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+
+/// Decodes a chunked body as its bytes arrive. Each step resumes where the
+/// last complete chunk ended, so a body that arrives in many reads is read
+/// once, not again from its start after every read.
+#[derive(Default)]
+struct ChunkedBodyDecoder {
+    /// Where the next chunk-size line starts, once a step has run.
+    cursor: Option<usize>,
+    body: Vec<u8>,
+    /// Inside the trailer: where the next trailer line starts.
+    trailer: Option<usize>,
+}
+
+impl ChunkedBodyDecoder {
+    /// The whole body once `buffer`, whose chunked body starts at `start`,
+    /// holds all of it, or `None` while more is to come.
+    fn step(&mut self, buffer: &[u8], start: usize, limit: usize) -> io::Result<Option<Vec<u8>>> {
+        let mut cursor = *self.cursor.get_or_insert(start);
+        loop {
+            if let Some(trailer_start) = self.trailer {
+                return self.trailer_step(buffer, trailer_start, limit);
+            }
+            let Some(line_end) = find_http_crlf(buffer, cursor) else {
+                if buffer.len().saturating_sub(cursor) > MAX_HTTP_CHUNK_LINE_BYTES {
+                    return Err(invalid_chunked_body("HTTP chunk-size line is too long"));
+                }
+                return Ok(None);
+            };
+            let line = &buffer[cursor..line_end];
+            if line.len() > MAX_HTTP_CHUNK_LINE_BYTES {
+                return Err(invalid_chunked_body("HTTP chunk-size line is too long"));
+            }
+            let (size_bytes, extension) = match line.iter().position(|byte| *byte == b';') {
+                Some(at) => (&line[..at], Some(&line[at + 1..])),
+                None => (line, None),
+            };
+            // The size is bare hex digits: no sign, no space and no bare CR
+            // or LF that another reader might take differently.
+            let size_text = std::str::from_utf8(size_bytes).map_err(|error| {
+                invalid_chunked_body(format!("invalid chunk-size line: {error}"))
+            })?;
+            let size = parse_http_chunk_size(size_text).map_err(|error| {
+                invalid_chunked_body(format!(
+                    "invalid HTTP chunk size `{}`: {error}",
+                    size_text.escape_debug()
+                ))
+            })?;
+            if extension.is_some_and(|extension| {
+                extension
+                    .iter()
+                    .any(|byte| *byte != b'\t' && !(0x20..0x7f).contains(byte))
+            }) {
+                return Err(invalid_chunked_body(
+                    "invalid HTTP chunk extension: control bytes are not allowed",
+                ));
+            }
+            let data_start = line_end + 2;
+            if size == 0 {
+                self.trailer = Some(data_start);
+                self.cursor = Some(data_start);
+                continue;
+            }
+            if self.body.len().saturating_add(size) > limit {
+                return Err(http_message_too_large_error_with_limit(limit));
+            }
+            let Some(chunk_end) = data_start.checked_add(size) else {
+                return Err(http_message_too_large_error_with_limit(limit));
+            };
+            if buffer.len() < chunk_end.saturating_add(2) {
+                return Ok(None);
+            }
+            if buffer.get(chunk_end..chunk_end + 2) != Some(b"\r\n") {
+                return Err(invalid_chunked_body(
+                    "HTTP chunk data was not followed by CRLF",
+                ));
+            }
+            self.body.extend_from_slice(&buffer[data_start..chunk_end]);
+            cursor = chunk_end + 2;
+            self.cursor = Some(cursor);
+        }
+    }
+
+    /// Reads trailer lines from `at`: each is a field line ending in CRLF,
+    /// and an empty line ends the body.
+    fn trailer_step(
+        &mut self,
+        buffer: &[u8],
+        mut at: usize,
+        limit: usize,
+    ) -> io::Result<Option<Vec<u8>>> {
+        let trailer_start = self.cursor.unwrap_or(at);
+        let cap = limit.min(MAX_HTTP_TRAILER_BYTES);
+        loop {
+            let Some(line_end) = find_http_crlf(buffer, at) else {
+                if buffer.len().saturating_sub(trailer_start) > cap {
+                    return Err(http_message_too_large_error_with_limit(limit));
+                }
+                self.trailer = Some(at);
+                return Ok(None);
+            };
+            if line_end - trailer_start > cap {
+                return Err(http_message_too_large_error_with_limit(limit));
+            }
+            let line = &buffer[at..line_end];
+            if line.is_empty() {
+                return Ok(Some(std::mem::take(&mut self.body)));
+            }
+            let valid = match line.iter().position(|byte| *byte == b':') {
+                Some(colon) => {
+                    colon > 0
+                        && line[..colon].iter().all(|byte| is_http_tchar(*byte))
+                        && line[colon + 1..]
+                            .iter()
+                            .all(|byte| *byte == b'\t' || (0x20..0x7f).contains(byte) || *byte >= 0x80)
+                }
+                None => false,
+            };
+            if !valid {
+                return Err(invalid_chunked_body("invalid HTTP trailer field"));
+            }
+            at = line_end + 2;
+        }
+    }
+}
+
 fn try_decode_chunked_http_body_with_limit(
     buffer: &[u8],
     start: usize,
     limit: usize,
 ) -> io::Result<Option<Vec<u8>>> {
-    let mut cursor = start;
-    let mut body = Vec::new();
-    loop {
-        let Some(line_end) = find_http_crlf(buffer, cursor) else {
-            return Ok(None);
-        };
-        let line = std::str::from_utf8(&buffer[cursor..line_end]).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid chunk-size line: {error}"),
-            )
-        })?;
-        let size_text = line.split_once(';').map_or(line, |(size, _)| size).trim();
-        let size = parse_http_chunk_size(size_text).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("invalid HTTP chunk size `{size_text}`: {error}"),
-            )
-        })?;
-        cursor = line_end + 2;
-        if size == 0 {
-            if buffer.get(cursor..cursor + 2) == Some(b"\r\n") {
-                return Ok(Some(body));
-            }
-            let Some(trailer_end) = buffer
-                .get(cursor..)
-                .and_then(|tail| tail.windows(4).position(|window| window == b"\r\n\r\n"))
-            else {
-                return Ok(None);
-            };
-            let trailer_bytes = &buffer[cursor..cursor + trailer_end];
-            if trailer_bytes.len() > limit {
-                return Err(http_message_too_large_error_with_limit(limit));
-            }
-            return Ok(Some(body));
-        }
-        if body.len().saturating_add(size) > limit {
-            return Err(http_message_too_large_error_with_limit(limit));
-        }
-        let Some(chunk_end) = cursor.checked_add(size) else {
-            return Err(http_message_too_large_error_with_limit(limit));
-        };
-        if buffer.len() < chunk_end.saturating_add(2) {
-            return Ok(None);
-        }
-        if buffer.get(chunk_end..chunk_end + 2) != Some(b"\r\n") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "HTTP chunk data was not followed by CRLF",
-            ));
-        }
-        body.extend_from_slice(&buffer[cursor..chunk_end]);
-        cursor = chunk_end + 2;
-    }
+    ChunkedBodyDecoder::default().step(buffer, start, limit)
 }
 
 #[cfg(test)]
@@ -14483,6 +14570,15 @@ fn parse_http_request_head(buffer: &[u8]) -> io::Result<Option<HttpRequestHead>>
         ),
     })? {
         HttpParseStatus::Complete(header_len) => {
+            // Every line of the head ends in CRLF: a bare LF, which some
+            // readers take as a line end and others do not, is refused.
+            let head = &buffer[..header_len];
+            if memchr::memchr_iter(b'\n', head).any(|at| at == 0 || head[at - 1] != b'\r') {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "invalid HTTP request: a line of the head does not end with CRLF",
+                ));
+            }
             let method = request
                 .method
                 .ok_or(io::Error::new(
@@ -14530,6 +14626,7 @@ fn parse_http_request_head_step(
 }
 
 fn decode_chunked_http_body_step(
+    decoder: &mut ChunkedBodyDecoder,
     buffer: &[u8],
     start: usize,
     limit: usize,
@@ -14537,11 +14634,14 @@ fn decode_chunked_http_body_step(
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<Vec<u8>>> {
     run_http_step_before(
-        || try_decode_chunked_http_body_with_limit(buffer, start, limit),
+        || decoder.step(buffer, start, limit),
         deadline,
         cancellation,
     )
 }
+
+/// The longest request head the server reads.
+const MAX_HTTP_REQUEST_HEAD_BYTES: usize = 64 * 1024;
 
 fn read_http_request_from_stream_with_limit(
     stream: &mut StdTcpStream,
@@ -14550,11 +14650,28 @@ fn read_http_request_from_stream_with_limit(
     message_limit: usize,
 ) -> io::Result<HttpRequestParts> {
     let mut buffer = Vec::new();
+    // Where the search for the blank line that ends the head resumes. The
+    // head is parsed once it is whole, not again after every read.
+    let mut head_scanned = 0;
     let (header_len, method, path, headers, framing) = loop {
-        let parsed = parse_http_request_head_step(&buffer, deadline, cancellation)?;
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        if let Some(parsed) = parsed {
-            break parsed;
+        // A blank line, ended by CRLF or a bare LF that the parser then
+        // refuses.
+        let whole = buffer.get(head_scanned..).is_some_and(|tail| {
+            memchr::memmem::find(tail, b"\n\r\n").is_some()
+                || memchr::memmem::find(tail, b"\n\n").is_some()
+        });
+        head_scanned = buffer.len().saturating_sub(3);
+        if whole || buffer.len() > MAX_HTTP_REQUEST_HEAD_BYTES {
+            let parsed = parse_http_request_head_step(&buffer, deadline, cancellation)?;
+            check_deadline_and_cancellation(deadline, cancellation)?;
+            if let Some(parsed) = parsed {
+                break parsed;
+            }
+            if buffer.len() > MAX_HTTP_REQUEST_HEAD_BYTES {
+                return Err(http_message_too_large_error_with_limit(
+                    MAX_HTTP_REQUEST_HEAD_BYTES,
+                ));
+            }
         }
         let Some(chunk) = read_some_with_deadline(stream, 4096, deadline, cancellation)? else {
             return Err(io::Error::new(
@@ -14565,6 +14682,7 @@ fn read_http_request_from_stream_with_limit(
         push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
     };
 
+    let mut chunked = ChunkedBodyDecoder::default();
     let body = match framing {
         HttpBodyFraming::ContentLength(content_length) => {
             if header_len.saturating_add(content_length) > message_limit {
@@ -14584,6 +14702,7 @@ fn read_http_request_from_stream_with_limit(
         }
         HttpBodyFraming::Chunked => loop {
             let decoded = decode_chunked_http_body_step(
+                &mut chunked,
                 &buffer,
                 header_len,
                 message_limit,
@@ -14658,11 +14777,36 @@ fn build_http_request_bytes(
     let mut saw_host = false;
     let mut saw_content_length = false;
     let mut saw_connection = false;
+    let framing_error = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     for (name, value) in headers {
+        // The request carries its whole body with one `Content-Length`, so
+        // a caller's framing headers must agree with it: a second length,
+        // a second host, or a transfer coding would let the server read
+        // the message differently than it was meant.
         if http_header_name_eq(&name, "Host") {
+            if saw_host {
+                return Err(framing_error(
+                    "an HTTP request cannot carry two `Host` headers".to_string(),
+                ));
+            }
             saw_host = true;
         } else if http_header_name_eq(&name, "Content-Length") {
+            if saw_content_length {
+                return Err(framing_error(
+                    "an HTTP request cannot carry two `Content-Length` headers".to_string(),
+                ));
+            }
+            if parse_http_content_length_value(&value).ok() != Some(body.len()) {
+                return Err(framing_error(format!(
+                    "the `Content-Length` header `{value}` does not match the {}-byte body",
+                    body.len()
+                )));
+            }
             saw_content_length = true;
+        } else if http_header_name_eq(&name, "Transfer-Encoding") {
+            return Err(framing_error(
+                "the HTTP client sends the whole body with `Content-Length`; a `Transfer-Encoding` header is not supported".to_string(),
+            ));
         } else if http_header_name_eq(&name, "Connection") {
             saw_connection = true;
         }

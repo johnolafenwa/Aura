@@ -183,8 +183,10 @@ The client follows statuses 301, 302, 303, 307, and 308 that carry a
 the next request is a `GET` without a body. After 307 and 308 the method
 and body are kept. When the redirect leads to another scheme, host, or
 port, the client drops the `Authorization`, `Cookie`, and
-`Proxy-Authorization` headers. A request that meets more than
-`max_redirects` redirects fails with `io.Error.Other`.
+`Proxy-Authorization` headers. A redirect from `https://` to `http://`
+fails with `io.Error.InvalidData`, so nothing of a secure request is sent
+in clear text. A request that meets more than `max_redirects` redirects
+fails with `io.Error.Other`.
 
 ## Compression
 
@@ -197,7 +199,12 @@ caller sets `Accept-Encoding`, the body is returned as sent.
 
 - The client speaks HTTP/1.1. It does not speak HTTP/2 or HTTP/3.
 - It does not use proxies and does not keep cookies.
-- A request body is sent whole. It cannot be streamed.
+- A request body is sent whole. It cannot be streamed. A caller's
+  `Content-Length` header must match the body, a request may name one
+  `Host` and one `Content-Length`, and a `Transfer-Encoding` header fails
+  with `io.Error.InvalidInput`.
+- A response may send at most 32 interim (1xx) responses and 64 KiB of
+  chunked trailer fields, and a server-sent event at most 64 MiB of data.
 - A response head is limited to 256 KiB and 64 headers, and one line of a
   body to 64 MiB.
 - Server-sent event lines that end with a lone `\r` are not supported.

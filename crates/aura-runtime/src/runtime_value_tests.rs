@@ -21587,3 +21587,92 @@ fn a_custom_ca_file_replaces_the_built_in_roots() {
         assert!(error.to_string().contains("did not contain a certificate"));
     }
 }
+
+#[test]
+fn chunked_request_bodies_are_framed_strictly_and_read_once() {
+    for refused in [
+        &b" 4\r\nWiki\r\n0\r\n\r\n"[..],
+        b"4 \r\nWiki\r\n0\r\n\r\n",
+        b"4\n\r\nWiki\r\n0\r\n\r\n",
+        b"4;a\x01\r\nWiki\r\n0\r\n\r\n",
+        b"0\r\nnot a field\r\n\r\n",
+        b"0\r\nBad Name: x\r\n\r\n",
+    ] {
+        let error = super::try_decode_chunked_http_body(refused, 0)
+            .expect_err("strict chunk framing");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{refused:?}");
+    }
+    assert_eq!(
+        super::try_decode_chunked_http_body(b"4;name=\"v\"\r\nWiki\r\n0\r\nA: b\r\n\r\n", 0)
+            .unwrap(),
+        Some(b"Wiki".to_vec())
+    );
+    // A size line that never ends is refused once it is too long.
+    let long = vec![b'0'; super::MAX_HTTP_CHUNK_LINE_BYTES + 2];
+    assert!(super::try_decode_chunked_http_body(&long, 0).is_err());
+    // Trailers past their cap are refused before they end.
+    let mut trailer = b"0\r\n".to_vec();
+    trailer.extend(std::iter::repeat_n(b'a', super::MAX_HTTP_TRAILER_BYTES + 1));
+    assert!(super::try_decode_chunked_http_body(&trailer, 0).is_err());
+
+    // The decoder resumes where the last whole chunk ended.
+    let body = b"3\r\nabc\r\n2\r\nde\r\n0\r\nX: y\r\n\r\n";
+    let mut decoder = super::ChunkedBodyDecoder::default();
+    for end in 0..body.len() {
+        assert!(decoder.step(&body[..end], 0, 1 << 20).unwrap().is_none(), "{end}");
+    }
+    assert_eq!(
+        decoder.step(body, 0, 1 << 20).unwrap(),
+        Some(b"abcde".to_vec())
+    );
+}
+
+#[test]
+fn request_framing_headers_must_agree() {
+    let with_both = vec![
+        ("Transfer-Encoding".to_string(), "identity".to_string()),
+        ("Content-Length".to_string(), "2".to_string()),
+    ];
+    assert_eq!(
+        super::parse_http_body_framing(&with_both, super::HttpBodyFraming::UntilClose)
+            .expect_err("transfer-encoding and content-length together")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    let bare_lf = b"GET / HTTP/1.1\nHost: a\r\n\r\n";
+    assert_eq!(
+        super::parse_http_request_head(bare_lf)
+            .expect_err("a bare LF ends no line")
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(super::parse_http_request_head(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+        .unwrap()
+        .is_some());
+
+    let url = url::Url::parse("http://127.0.0.1:1/").unwrap();
+    let request = |headers: &[(&str, &str)]| {
+        super::build_http_request_bytes(
+            "POST",
+            &url,
+            b"ok",
+            headers
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        )
+    };
+    assert!(request(&[("Content-Length", "2")]).is_ok());
+    for refused in [
+        &[("Content-Length", "3")][..],
+        &[("Content-Length", "2"), ("content-length", "2")],
+        &[("Host", "a"), ("host", "b")],
+        &[("Transfer-Encoding", "chunked")],
+    ] {
+        assert_eq!(
+            request(refused).expect_err("conflicting framing").kind(),
+            io::ErrorKind::InvalidInput,
+            "{refused:?}"
+        );
+    }
+}
