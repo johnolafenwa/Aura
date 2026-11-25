@@ -1463,6 +1463,7 @@ fn encode_text_result(text: &str, encoding: crate::text_encodings::Encoding) -> 
         Err(EncodingError::Unencodable { index } | EncodingError::Invalid { index }) => Ok(
             encoding_error_value("Unencodable", encoding_error_index(index)),
         ),
+        Err(EncodingError::TooLarge) => Err(encoding_too_large("bytes.encode")),
     }
 }
 
@@ -1484,7 +1485,15 @@ fn decode_text_result(bytes: &[u8], encoding: crate::text_encodings::Encoding) -
         Err(EncodingError::Invalid { index } | EncodingError::Unencodable { index }) => {
             Ok(encoding_error_value("Invalid", encoding_error_index(index)))
         }
+        Err(EncodingError::TooLarge) => Err(encoding_too_large("bytes.decode")),
     }
+}
+
+fn encoding_too_large(name: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!("`{name}` result exceeds the runtime's size limit or the memory left"),
+    )
 }
 
 /// Converts one borrowed value when native code has resolved the encoding name.
