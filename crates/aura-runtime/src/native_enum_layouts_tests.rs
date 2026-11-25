@@ -1577,3 +1577,47 @@ fn a_literal_documents_string_must_be_a_str() {
     });
     assert!(message.contains("expected `str`"), "{message}");
 }
+
+#[test]
+fn shared_typed_payloads_support_overlapping_and_concurrent_reads() {
+    let prefix = "SharedPayloads";
+    let access = FIRST_TEST_ACCESS + 80;
+    let circle = typed(prefix, access, "Circle", vec![Value::Float(2.5)]);
+    let named = typed(prefix, access, "Named", vec![text("hello"), int32(9)]);
+    let pair = typed(prefix, access, "Pair", vec![circle.clone(), named.clone()]);
+    let payloads = typed_payloads(&pair);
+
+    let first = payloads.get(0);
+    let second = payloads.get(0);
+    let first_box = payloads.payload_box(0);
+    let second_box = payloads.payload_box(0);
+    assert_eq!(first.as_deref(), Some(&circle));
+    assert_eq!(second, first);
+    assert!(first_box.is_some() && second_box.is_some());
+
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            let shared = payloads;
+            let expected_circle = &circle;
+            let expected_named = &named;
+            scope.spawn(move || {
+                for _ in 0..200 {
+                    let a = shared.get(0);
+                    let b = shared.get(1);
+                    let box_a = shared.payload_box(0);
+                    assert_eq!(a.as_deref(), Some(expected_circle));
+                    assert_eq!(b.as_deref(), Some(expected_named));
+                    assert!(box_a.is_some());
+                    assert!(shared.boxed_payloads_all(|_| true));
+                    let copied = shared
+                        .copy_with_boxes([expected_circle.clone(), expected_named.clone()].into_iter());
+                    assert_eq!(copied.get(0).as_deref(), Some(expected_circle));
+                }
+            });
+        }
+    });
+
+    payloads.refresh_views();
+    assert_eq!(payloads.get(0).as_deref(), Some(&circle));
+}
+
