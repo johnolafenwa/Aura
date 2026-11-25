@@ -525,6 +525,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
 | `AU5104` | check outside the verified subset | The check reads the result of a step the verifier does not model yet, such as `split`, a slice, a comprehension, a bit operation, a power with a large or unknown exponent, or a contract expression it cannot read. The message names the step. No counterexample is given. | Keep it as a runtime check, or restate the code or the contract with modeled operations. |
 | `AU5120` | contract can never hold | The `requires` clauses and class invariants a function assumes on entry contradict each other, so no call can meet them and every check in the function would pass for nothing. | Fix the contradictory clause. The function does not count as proved until some input meets its contract. |
+| `AU5122` | function marked verified has unproved checks | A function named with `aura verify --must-verify` has a check that failed, is not modeled, or is undecided. The note counts them, and each has its own diagnostic. | Fix or restate each open check, or drop the function from `--must-verify`. See [Functions That Must Verify](/manual/verification#functions-that-must-verify). |
 
 ## Diagnostic Structure
 

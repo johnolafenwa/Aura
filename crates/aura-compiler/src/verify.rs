@@ -12,6 +12,10 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_closures.rs"]
+mod closures;
+#[path = "verify_collections.rs"]
+mod collections;
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
@@ -21,10 +25,22 @@ mod float;
 mod frame;
 #[path = "verify_guard.rs"]
 mod guard;
+#[path = "verify_integers.rs"]
+mod integers;
+#[path = "verify_shapes.rs"]
+mod shapes;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
 mod spec;
+#[path = "verify_text.rs"]
+mod text;
+#[path = "verify_workflow.rs"]
+mod workflow;
+pub use workflow::{
+    package_source_root, unmatched_must_verify, verify_files, Deny, FileReport, MustVerify,
+    PackageReport, Totals, MODULE_BODY,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -128,6 +144,11 @@ pub struct Report {
     /// no bounds check, by MIR function name, block, and position.
     pub proved_sites: BTreeSet<(String, usize, usize)>,
     pub obligations: Vec<ObligationReport>,
+    /// Each function [`Options::must_verify`] names, and how many of its
+    /// checks are not proved.
+    pub must_verify: Vec<MustVerify>,
+    /// The imported modules whose functions this run did not verify.
+    pub unchecked_modules: Vec<String>,
 }
 
 impl Report {
@@ -220,6 +241,7 @@ impl Report {
                 };
                 Some(diagnostic)
             })
+            .chain(self.unverified().map(MustVerify::diagnostic))
             .collect()
     }
 }
@@ -241,6 +263,9 @@ pub struct Options {
     /// Also prove which element accesses can skip their bounds check, for
     /// a build that removes proved checks.
     pub prove_sites: bool,
+    /// The functions that must verify completely, by the name a report
+    /// shows. One with a check that is not proved is reported as `AU5122`.
+    pub must_verify: Vec<String>,
 }
 
 impl Default for Options {
@@ -252,6 +277,7 @@ impl Default for Options {
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
             cache_dir: None,
             prove_sites: false,
+            must_verify: Vec::new(),
         }
     }
 }
@@ -1024,6 +1050,19 @@ impl<'a> VerifyContext<'a> {
         )
     }
 
+    /// The names of the variants of enum `name`, in order.
+    pub(crate) fn variant_names(&self, name: &str) -> Vec<String> {
+        self.enums
+            .get(name)
+            .map(|item| {
+                item.variants
+                    .iter()
+                    .map(|variant| variant.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn variant_index(&self, name: &str, variant: &str) -> Option<usize> {
         // The builtin `Lookup` a checked list read returns.
         if name == LOOKUP && !self.enums.contains_key(name) {
@@ -1155,10 +1194,21 @@ pub fn verify_module(
     let mut rough_solver: Option<smt::Solver> = None;
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
-    for function in &module.functions {
+    // The module body is verified like a function. A build that removes
+    // proved checks leaves it alone.
+    let at_calls = closures::checked_at_calls(program, &cx, module);
+    let top_level = module.top_level.iter().filter(|_| !options.prove_sites);
+    let mut function_spans: BTreeMap<String, Span> = BTreeMap::new();
+    for function in module.functions.iter().chain(top_level) {
         let is_primary = verified_function(program, &cx, function);
         let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
         if !is_primary && !is_auxiliary {
+            continue;
+        }
+        // A closure checked where it is called is run on its own only for
+        // a build, which asks which of its checks hold for any capture.
+        let at_calls = at_calls.contains(function.name.as_str());
+        if at_calls && !options.prove_sites {
             continue;
         }
         if let Some(filter) = &options.function_filter {
@@ -1166,14 +1216,20 @@ pub fn verify_module(
                 continue;
             }
         }
-        if is_primary {
-            report.functions += 1;
-        }
-        // A check in a generator's body is reported under the generator.
-        let public = match cx.generator_of_body(&function.name) {
-            Some((generator, _)) => generator,
-            None => crate::mir::public_function_name(&function.name),
+        // A check in a generator's body is reported under the generator,
+        // and one in a copy made for a generator argument under the
+        // function that was copied, at the place it was written.
+        let (public, is_copy) = match cx.generator_of_body(&function.name) {
+            Some((generator, _)) => (generator, false),
+            None => workflow::reported_name(&function.name),
         };
+        let reported_span = |span: Span| if is_copy { span.written() } else { span };
+        if is_primary && !is_copy {
+            report.functions += 1;
+            function_spans
+                .entry(public.clone())
+                .or_insert(function.span);
+        }
         let module_order = if function.module_name == program.module_name {
             String::new()
         } else {
@@ -1239,7 +1295,7 @@ pub fn verify_module(
             .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
         let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
             Some(statuses) => {
-                if is_primary {
+                if is_primary && !is_copy {
                     report.cached += 1;
                 }
                 statuses
@@ -1277,7 +1333,7 @@ pub fn verify_module(
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
             }
-            if !is_primary && status == Status::Proved {
+            if at_calls || (!is_primary && status == Status::Proved) {
                 continue;
             }
             // A contract that can hold is not a check of the program, so
@@ -1285,9 +1341,15 @@ pub fn verify_module(
             if obligation.kind == ObligationKind::Satisfiable && status == Status::Proved {
                 continue;
             }
+            let span = reported_span(obligation.span);
+            let status = if is_copy {
+                workflow::copy_status(status)
+            } else {
+                status
+            };
             let key = (
                 module_order.clone(),
-                (obligation.span.line, obligation.span.column),
+                (span.line, span.column),
                 obligation.kind,
                 obligation.message.clone(),
             );
@@ -1304,7 +1366,7 @@ pub fn verify_module(
                         ObligationReport {
                             kind: obligation.kind,
                             function: public.clone(),
-                            span: obligation.span,
+                            span,
                             message: obligation.message.clone(),
                             status,
                         },
@@ -1320,6 +1382,8 @@ pub fn verify_module(
         );
     }
     report.obligations = merged.into_values().collect();
+    report.must_verify = workflow::must_verify(&options.must_verify, &function_spans, &report);
+    report.unchecked_modules = workflow::unchecked_modules(program, module);
     // A lemma that is not proved may have let the verifier assume what no
     // run checks, so no access counts as proved.
     if !erased_open {
@@ -1614,7 +1678,9 @@ fn ask_once(
                             exec.inputs
                                 .iter()
                                 .zip(values)
-                                .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
+                                .map(|((name, _), value)| {
+                                    (name.clone(), exec.input_text(name, smt::render_int(&value)))
+                                })
                                 .collect()
                         })
                         .unwrap_or_default()
@@ -1673,6 +1739,9 @@ fn solve(
     let mut attempts = SAMPLE_CHECKS * float::SAMPLES;
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
+    // What says what a made-up result is goes only to the checks that read
+    // the result.
+    let described = exec.described_by();
     for obligation in &exec.obligations {
         // Facts are asserted in the order the walk assumed them, so each
         // check sees only what holds before it.
@@ -1680,6 +1749,13 @@ fn solve(
             let mut text = String::new();
             let mut rough_text = String::new();
             for (index, fact) in exec.facts[asserted..obligation.facts].iter().enumerate() {
+                // A fact about constants of its own is asserted only for
+                // the checks that reach them.
+                if exec.lazy.contains_key(&(asserted + index))
+                    || exec.is_described(asserted + index)
+                {
+                    continue;
+                }
                 text.push_str(&format!("(assert {fact})\n"));
                 match replaced.get(&(asserted + index)) {
                     Some(axioms) => {
@@ -1722,7 +1798,9 @@ fn solve(
             exec::Goal::Holds(goal) => goal,
         };
         let query = format!(
-            "(push 1)\n(assert {})\n",
+            "(push 1)\n{}{}(assert {})\n",
+            exec.lazy_asserts(obligation),
+            exec.descriptions(&described, obligation, goal),
             exec::and(&obligation.pc, &exec::not(goal))
         );
         if trace {
@@ -1750,8 +1828,10 @@ fn solve(
             }
             let rows = samples.as_mut().expect("the samples were just drawn");
             let mut facts = String::from("; the check with its float inputs fixed\n");
-            for fact in &exec.facts[..obligation.facts] {
-                facts.push_str(&format!("(assert {fact})\n"));
+            for (index, fact) in exec.facts[..obligation.facts].iter().enumerate() {
+                if !exec.lazy.contains_key(&index) && !exec.is_described(index) {
+                    facts.push_str(&format!("(assert {fact})\n"));
+                }
             }
             let goal = &query["(push 1)\n".len()..];
             for fixed in rows.iter().take(attempts) {
@@ -1809,8 +1889,14 @@ fn solve(
 #[path = "verify_tests.rs"]
 mod tests;
 #[cfg(test)]
+#[path = "verify_closures_tests.rs"]
+mod tests_closures;
+#[cfg(test)]
 #[path = "verify_outcomes_tests.rs"]
 mod tests_outcomes;
+#[cfg(test)]
+#[path = "verify_text_tests.rs"]
+mod tests_text;
 
 #[cfg(test)]
 #[path = "verify_generators_tests.rs"]
@@ -1823,6 +1909,22 @@ mod tests_spans;
 #[cfg(test)]
 #[path = "verify_classes_tests.rs"]
 mod tests_classes;
+
+#[cfg(test)]
+#[path = "verify_collections_tests.rs"]
+mod tests_collections;
+
+#[cfg(test)]
+#[path = "verify_integers_tests.rs"]
+mod tests_integers;
+
+#[cfg(test)]
+#[path = "verify_workflow_tests.rs"]
+mod tests_workflow;
+
+#[cfg(test)]
+#[path = "verify_shapes_tests.rs"]
+mod tests_shapes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.
