@@ -206,6 +206,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::StringScalarAt
                     | RuntimeFn::StringAffixLiteral
                     | RuntimeFn::StringReplaceLiteral
+                    | RuntimeFn::StringReplaceLiteralOwned
+                    | RuntimeFn::StringSplitLiteral
                     | RuntimeFn::StringFromView
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
@@ -261,6 +263,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecStrElement,
             RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecPushStrLiteral,
+            RuntimeFn::VecExtendStrBytes,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,

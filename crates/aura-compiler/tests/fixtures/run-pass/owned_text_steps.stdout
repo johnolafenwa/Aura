@@ -1,0 +1,10 @@
+plain
+a&lt;b&gt; &amp; &quot;c&quot;
+a text that is long enough to live on the heap, with &lt;one&gt; tag
+AbbA|4BB4
+twoy
+8 &lt;0&gt; a much longer piece of text that does not fit in the value: &amp;
+&lt;0&gt;|a much longer piece of text that does not fit in the value: &amp;|&lt;1&gt;
+5 2026-01-02 north [] []
+01 3
+[a, b, ] [none] [é, ü]
