@@ -16921,6 +16921,14 @@ def to_int(text: str) -> int64:
             return -1
 
 
+def to_float(text: str) -> float64:
+    match parse_float64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return -1.0
+
+
 def why(text: str) -> str:
     match own parse_float64(text):
         case Result.Ok(_):
@@ -16931,6 +16939,7 @@ def why(text: str) -> str:
 
 def main() -> int32:
     print(to_int("4"))
+    print(to_float("2.5"))
     print(why("x"))
     return 0
 "#;
@@ -16944,6 +16953,7 @@ def main() -> int32:
         super::lookups::lookup_payload_slots(function)
     };
     assert_eq!(slots("to_int").len(), 1);
+    assert_eq!(slots("to_float").len(), 1);
     // A match that reads the error keeps the `Result`.
     assert!(slots("why").is_empty());
     let object = emit_host_object(&mir).expect("the parses should compile directly");
@@ -16954,6 +16964,11 @@ def main() -> int32:
     );
     assert!(
         referenced.contains("aura_direct_parse_float64"),
+        "{referenced:?}"
+    );
+    // An `int64` parse keeps the number as a word.
+    assert!(
+        referenced.contains("aura_direct_parse_int64_word"),
         "{referenced:?}"
     );
     assert!(
