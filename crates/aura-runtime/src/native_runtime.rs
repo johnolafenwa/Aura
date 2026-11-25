@@ -1801,6 +1801,38 @@ impl OpaqueValue {
         self.fill_str_view(values, view);
     }
 
+    /// Switches the view of a confined `list[str]` back to the `Str` view
+    /// it had before a store of a `str` at `position`, which landed in place,
+    /// with that element's words brought up to date. Every other element
+    /// lies where the view recorded it.
+    fn keep_str_view(&self, position: usize) {
+        // A shared list has no view, so the list is confined.
+        let _access = self.access(false);
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let (Some(values), false) = (vector.elements.as_values(), vector.str_view.is_empty())
+        else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        let whole = view.entries.len() == values.len();
+        if let (Some(Value::String(text)), Some(entry), true) =
+            (values.get(position), view.entries.get_mut(position), whole)
+        {
+            *entry = DirectStrViewEntry {
+                ptr: text.as_ptr() as usize,
+                len: text.len(),
+            };
+            self.list_elements.set(view.entries.as_ptr() as usize);
+            self.list_access
+                .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+        }
+    }
+
     /// Makes the `Str` view of a list of `str` values that nothing else
     /// holds, as enough misses would, so generated code reads its elements'
     /// words from the first read on.
@@ -11517,6 +11549,13 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_scalar(
 /// end. An index out of range traps with the list-index diagnostic at
 /// `line:column`.
 fn set_vec_element(vec: *mut OpaqueValue, index: i64, value: Value, line: i64, column: i64) {
+    // A `str` stored into a list read through its `str` view keeps the view
+    // when the store lands in place (see `OpaqueValue::keep_str_view`).
+    // SAFETY: generated code passes null or a live box.
+    let str_view = matches!(value, Value::String(_))
+        && unsafe { vec.as_ref() }.is_some_and(|header| {
+            header.list_access.load(Ordering::Relaxed) == DirectListAccess::Str as u32
+        });
     let result = with_vector_mut(vec, |vector| {
         let normalized = match normalize_vec_index(index, vector.elements.len())
             .filter(|normalized| *normalized < vector.elements.len())
@@ -11524,9 +11563,16 @@ fn set_vec_element(vec: *mut OpaqueValue, index: i64, value: Value, line: i64, c
             Some(normalized) => normalized,
             None => return Err(vector.elements.len()),
         };
+        // Storage no other list shares takes the value where the old one
+        // lay, so every other element keeps its place.
+        let in_place = str_view && !vector.elements.is_shared();
         vector.elements.replace(normalized, value);
-        Ok(())
+        Ok(in_place.then_some(normalized))
     });
+    if let Ok(Some(position)) = result {
+        // SAFETY: the write above found a live box.
+        unsafe { &*vec }.keep_str_view(position);
+    }
     if let Err(len) = result {
         let message = format!("list index `{index}` is out of bounds for length `{len}`");
         match runtime_span(line, column) {
@@ -17051,10 +17097,20 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
         // SAFETY: the caller's contract.
         let layout =
             unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
-        boxed_value(Value::Instance(InstanceValue {
+        let boxed = boxed_value(Value::Instance(InstanceValue {
             class_name: layout.runtime_name(),
             fields: InstanceFields::Typed(TypedFields::new(layout)),
-        }))
+        }));
+        // The box takes its class's tag as tagging it would: the name, and
+        // the shape the tag records.
+        let tag = layout.type_tag();
+        // SAFETY: the box is new and nothing else reads it yet.
+        let header = unsafe { &*boxed };
+        unsafe { *header.runtime_type_name.get() = Some(tag.name.clone()) };
+        header
+            .shape_tag
+            .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+        boxed
     })
 }
 

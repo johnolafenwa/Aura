@@ -63,6 +63,10 @@ pub struct ClassLayout {
     /// Whether dropping a block only releases the boxes at `boxes`: every
     /// field is a scalar, a box, or a class or tuple of such fields.
     drops_boxes_only: bool,
+    /// The type tag of the class, the one generated code tags a new
+    /// instance with through a cell. A new instance takes it at once, so
+    /// that tag finds the shape it records and makes no call.
+    type_tag: std::sync::Arc<super::RuntimeTypeTag>,
     /// How values move in and out of the block.
     ops: &'static FieldOps,
 }
@@ -80,6 +84,10 @@ impl ClassLayout {
 
     pub fn class_name(&self) -> &str {
         &self.class_name
+    }
+
+    pub(super) fn type_tag(&self) -> &super::RuntimeTypeTag {
+        &self.type_tag
     }
 
     /// The class's name for an instance of a registered layout, which
@@ -210,6 +218,8 @@ impl ClassLayout {
         let mut boxes = Vec::new();
         collect_boxes(table, layout.root(), 0, &mut boxes);
         let drops_boxes_only = only_boxes(table, layout.root());
+        let type_tag =
+            super::shared_runtime_type_tag(super::canonical_runtime_type_name(&root.ty).as_bytes());
         let class_name = class_name.clone();
         Ok(Self {
             access,
@@ -219,6 +229,7 @@ impl ClassLayout {
             by_name,
             boxes,
             drops_boxes_only,
+            type_tag,
             ops: &typed_layout::FIELD_OPS,
         })
     }

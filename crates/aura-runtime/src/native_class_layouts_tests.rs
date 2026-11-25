@@ -277,6 +277,36 @@ fn a_block_of_scalars_and_boxes_drops_by_releasing_its_boxes() {
 }
 
 #[test]
+fn a_new_typed_instance_has_the_shape_of_its_class_tag() {
+    in_task(|| {
+        let prefix = "Tagged";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 0x210);
+        let cell: &'static ClassLayoutCell = Box::leak(Box::default());
+        cell.access.store(layout.access(), Ordering::Release);
+        cell.layout
+            .store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
+        let built = unsafe { aura_direct_instance_new_typed(cell) };
+        // The tag generated code names the class with, through its cell.
+        let descriptor = crate::native_runtime::canonical_runtime_type_name(&Type::named(format!(
+            "{prefix}Book"
+        )));
+        let tag_cell: &'static std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+            Box::leak(Box::default());
+        let tag = crate::native_runtime::celled_runtime_type_tag(tag_cell, descriptor.as_bytes());
+        let header = unsafe { &*built };
+        assert!(std::ptr::eq(
+            header.shape_tag.load(Ordering::Relaxed),
+            std::ptr::from_ref(tag)
+        ));
+        assert_eq!(
+            unsafe { crate::native_runtime::explicit_runtime_type_name(built) },
+            Some(descriptor)
+        );
+        unsafe { aura_direct_release_value(built) };
+    });
+}
+
+#[test]
 fn only_classes_without_parameters_or_recursion_keep_their_fields_in_place() {
     let env = LayoutEnv {
         classes: [

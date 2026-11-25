@@ -29819,6 +29819,38 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
 }
 
 #[test]
+fn a_str_stored_in_place_keeps_the_str_view() {
+    use super::DirectListAccess;
+    let list = string_vec(&["alpha", "b", "c"]);
+    unsafe { &*list }.make_str_view();
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    let long = "a text too long to keep inline in its value";
+    let unit = super::aura_direct_vec_set_index_in_place(list, 1, string_value(long), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
+    assert_eq!(str_view_texts(list), ["alpha", long, "c"]);
+    let unit = super::aura_direct_vec_set_index_in_place(list, -1, string_value("z"), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(str_view_texts(list), ["alpha", long, "z"]);
+
+    // Storage another list shares is copied by the store, so the view
+    // waits for misses again.
+    let before = unsafe { super::value_ref(list) };
+    let copy = super::boxed_value(before.clone());
+    let unit = super::aura_direct_vec_set_index_in_place(list, 0, string_value("y"), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    assert_eq!(unsafe { super::value_ref(copy) }, before);
+    // Any other value switches the view back as every write does.
+    unsafe { &*list }.make_str_view();
+    let unit = super::aura_direct_vec_set_index_in_place(list, 0, int_value(1), 0, 0);
+    unsafe { release_value(unit) };
+    assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    unsafe { release_value(copy) };
+    unsafe { release_value(list) };
+}
+
+#[test]
 fn str_view_misses_keep_the_runtime_diagnostics() {
     assert_eq!(
         capture_direct_boundary_error_message(|| {
