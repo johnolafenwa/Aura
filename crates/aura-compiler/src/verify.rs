@@ -23,14 +23,14 @@ mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
 #[path = "verify_float.rs"]
 mod float;
-#[path = "verify_raw_memory.rs"]
-mod raw_memory;
 #[path = "verify_frame.rs"]
 mod frame;
 #[path = "verify_guard.rs"]
 mod guard;
 #[path = "verify_integers.rs"]
 mod integers;
+#[path = "verify_raw_memory.rs"]
+mod raw_memory;
 #[path = "verify_shapes.rs"]
 mod shapes;
 #[path = "verify_smt.rs"]
