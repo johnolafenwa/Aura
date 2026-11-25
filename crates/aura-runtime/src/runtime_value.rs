@@ -10191,7 +10191,14 @@ impl LightweightTaskScheduler {
 
     /// Takes tasks that have not run from another worker's inbox.
     fn steal_worker_requests(&mut self) -> bool {
-        let Some(workers) = self.workers.clone() else {
+        // A request is counted before it enters an inbox and after it
+        // leaves one, so no count means no inbox holds one.
+        let Some(workers) = self
+            .workers
+            .as_ref()
+            .filter(|workers| workers.pending_requests.load(Ordering::SeqCst) != 0)
+            .cloned()
+        else {
             return false;
         };
         let mut stolen = workers.steal(self.worker_index).into_iter();
