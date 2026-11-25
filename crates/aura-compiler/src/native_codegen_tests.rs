@@ -9653,8 +9653,10 @@ def main() -> int32:
 fn direct_string_to_bytes_routes_through_the_registered_host_builtin() {
     let source = r#"
 def main() -> int32:
-    payload = "café".to_bytes()
+    text = "café".to_upper()
+    payload = text.to_bytes()
     print(payload)
+    print("ok".to_bytes())
     return 0
 "#;
     let mir = lower_source_to_mir(source).expect("str.to_bytes source should lower to MIR");
@@ -9685,6 +9687,13 @@ def main() -> int32:
             .iter()
             .any(|symbol| symbol.contains("aura_host_str_to_bytes")),
         "str.to_bytes must call its own host builtin entry: {referenced:?}"
+    );
+    // A literal's bytes are copied from where the program keeps them.
+    assert!(
+        referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_string_to_bytes_view")),
+        "a literal's str.to_bytes copies its words: {referenced:?}"
     );
 
     let object = object::File::parse(bytes.as_slice())
