@@ -516,6 +516,110 @@ fn appended_local(instruction: &Instruction) -> Option<&str> {
     }
 }
 
+/// The `list[str]` locals of `function` that a literal of two or more `str`
+/// literals assigns once and that the function only reads elements and
+/// the length of, lends elements of to read, and releases. Such a local holds the program's one frozen copy of
+/// the literal (see `aura_direct_str_literal_list_cell`), made on first use,
+/// so a call builds no list and its release frees none.
+pub(super) fn str_literal_lists(function: &MirFunction) -> HashSet<String> {
+    let lists = function
+        .local_types
+        .iter()
+        .filter(|local| {
+            matches!(&local.ty, Type::Named(name, args)
+                if name == "list" && args.len() == 1 && is_str(&args[0]))
+                && !function.params.iter().any(|param| param.name == local.name)
+        })
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    if lists.is_empty() {
+        return HashSet::new();
+    }
+    let root = |place: &str| place.split('.').next().unwrap_or(place).to_string();
+    let mut literals = HashMap::<&str, usize>::new();
+    let mut refused = HashSet::<String>::new();
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VecLiteral { elements, .. },
+                } if lists.contains(target.as_str())
+                    && elements.len() >= 2
+                    && elements.iter().any(
+                        |element| matches!(element, Operand::String(text) if !text.is_empty()),
+                    )
+                    && elements
+                        .iter()
+                        .all(|element| matches!(element, Operand::String(_))) =>
+                {
+                    *literals.entry(target.as_str()).or_default() += 1;
+                    continue;
+                }
+                Instruction::BeginElementLoan {
+                    source,
+                    mutable: false,
+                    ..
+                } if lists.contains(source.as_str()) => {
+                    // The selector may not name the list itself.
+                    mentions.clear();
+                    instruction_place_mentions(instruction, &mut mentions);
+                    if mentions.iter().filter(|place| root(place) == *source).count() > 1 {
+                        refused.insert(source.clone());
+                    }
+                    continue;
+                }
+                Instruction::Release { place } if lists.contains(place.as_str()) => continue,
+                // A read of an element or of the length only reads the list.
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    op:
+                                        RuntimeOp::List(
+                                            ListOp::Index
+                                            | ListOp::IndexUnchecked
+                                            | ListOp::Len
+                                            | ListOp::IsEmpty,
+                                        ),
+                                    receiver: Some(Operand::Place(list)),
+                                    ..
+                                },
+                            args,
+                            ..
+                        },
+                    ..
+                } if lists.contains(list.as_str()) => {
+                    // An argument may not name the list itself.
+                    if args.iter().any(|arg| {
+                        matches!(&arg.value, Operand::Place(place) | Operand::MovePlace(place)
+                            if root(place) == *list)
+                    }) {
+                        refused.insert(list.clone());
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            mentions.clear();
+            instruction_place_mentions(instruction, &mut mentions);
+            refused.extend(mentions.iter().map(|place| root(place)));
+        }
+        refused.extend(
+            terminator_place_mentions(&block.terminator)
+                .into_iter()
+                .map(root),
+        );
+    }
+    literals
+        .into_iter()
+        .filter(|(list, count)| *count == 1 && !refused.contains(*list))
+        .map(|(list, _)| list.to_string())
+        .collect()
+}
+
 /// The temporaries of `function` that hold a copy of a `str` only for the
 /// next operation to append it to a list, as in
 /// `out.append(text.clone())`. Only the end of the loan the copy read may
@@ -1624,6 +1728,47 @@ impl FunctionCompiler<'_> {
             .call(self.runtime[RuntimeFn::StringByteLen], &[owner])
             .results[0];
         self.builder.jump(join_block, &[ptr, len, owner]);
+    }
+
+    /// Assigns `target` the program's frozen copy of the literal of `str`
+    /// literals `elements` (see `str_literal_lists`), which the first run
+    /// makes.
+    pub(super) fn compile_str_literal_list(
+        &mut self,
+        target: &str,
+        elements: &[Operand],
+    ) -> std::result::Result<(), String> {
+        let texts = elements
+            .iter()
+            .filter_map(|element| match element {
+                Operand::String(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let lens = texts
+            .iter()
+            .map(|text| u32::try_from(text.len()).map(u32::to_le_bytes))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| "a `str` literal is too long for a list literal".to_string())?;
+        let list_type = Type::Named("list".to_string(), vec![Type::named("str")]);
+        let encoded = crate::native_runtime::canonical_runtime_type_name(&list_type);
+        let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
+        let tag_cell = self.tag_cell(&encoded)?;
+        let (texts_ptr, _) = self.string_constant(texts.concat().as_bytes())?;
+        let (lens_ptr, _) = self.string_constant(&lens.concat())?;
+        let count = self.builder.iconst(types::I64, texts.len() as i64);
+        let cell = word_cell(
+            self.tag_cells,
+            &mut *self.builder,
+            &format!("\0str literal list {texts:?}"),
+        )?;
+        let call = self.builder.call(
+            self.runtime[RuntimeFn::StrLiteralListCell],
+            &[cell, tag_cell, type_ptr, type_len, texts_ptr, lens_ptr, count],
+        );
+        let value = self.owned_opaque_result(call.results, list_type);
+        self.mark_emptied_store_root(target);
+        self.store_place(target, value)
     }
 
     /// The words of the element the loan `selection` selects: borrowed

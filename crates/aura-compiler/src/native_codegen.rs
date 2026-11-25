@@ -3038,6 +3038,10 @@ impl<'a> NativeCodegen<'a> {
             view_twin_refs,
             str_slots,
             str_element_lists: str_elements.lists,
+            str_literal_lists: match self.freestanding {
+                Some(_) => HashSet::new(),
+                None => str_slots::str_literal_lists(function),
+            },
             clone_moves: match self.freestanding {
                 Some(_) => HashMap::new(),
                 None => str_slots::clone_moves(function),
@@ -4534,6 +4538,9 @@ struct FunctionCompiler<'a> {
     str_slots: HashMap<String, str_slots::StrSlot>,
     /// Each `str` local that holds a list element as words, with the list.
     str_element_lists: HashMap<String, String>,
+    /// The locals that hold the frozen copy of a literal of `str` literals
+    /// (see `str_slots::str_literal_lists`).
+    str_literal_lists: HashSet<String>,
     /// The copies of a `str` local that may move its reference instead,
     /// each with the local and the scrutinee it is a payload of (see
     /// `str_slots::clone_moves`).
@@ -6558,6 +6565,14 @@ impl<'a> FunctionCompiler<'a> {
             }
             // The tuple of a walk by entry is never made.
             Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
+            Instruction::Assign {
+                target,
+                value: Rvalue::VecLiteral { elements, .. },
+            } if self.str_literal_lists.contains(target) => {
+                self.compile_str_literal_list(target, elements)?;
+            }
+            // The frozen copy of a literal takes no reference.
+            Instruction::Release { place } if self.str_literal_lists.contains(place) => {}
             Instruction::Assign { target, value }
                 if self.compile_callable_element_read(target, value)? => {}
             // A callee read from a loan only to be called is called through
