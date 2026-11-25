@@ -186,63 +186,13 @@ thread_local! {
     /// generators are then discarded without running their bodies, whose
     /// values the same release covers.
     static DROP_CLOSE_SUSPENDED: Cell<usize> = const { Cell::new(0) };
-    /// Nonzero while an enclosing runtime boundary will inspect and propagate
-    /// failures recorded during [`GeneratorValue::drop`].
-    static GENERATOR_DROP_TRAP_CAPTURE_DEPTH: Cell<usize> = const { Cell::new(0) };
-    /// First trap or cancellation recorded while closing dropped generators
-    /// inside an active [`GeneratorDropTrapScope`].
-    static PENDING_GENERATOR_DROP_EXIT: RefCell<Option<PendingGeneratorDropExit>> =
-        const { RefCell::new(None) };
 }
 
-pub(crate) struct GeneratorDropTrapScope;
-
-impl GeneratorDropTrapScope {
-    pub(crate) fn enter() -> Self {
-        GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|depth| depth.set(depth.get() + 1));
-        Self
-    }
-}
-
-impl Drop for GeneratorDropTrapScope {
-    fn drop(&mut self) {
-        GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
+/// Hands an exit to the enclosing runtime boundary of the running task,
+/// which propagates it once the boundary's work returns. Outside any
+/// boundary the exit is dropped, as before boundaries tracked it.
 fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
-    if GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(Cell::get) == 0 {
-        return;
-    }
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| {
-        let mut slot = slot.borrow_mut();
-        if slot.is_none() {
-            *slot = Some(exit);
-        }
-    });
-}
-
-pub(crate) fn take_pending_generator_drop_exit() -> Option<PendingGeneratorDropExit> {
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| slot.borrow_mut().take())
-}
-
-pub(crate) fn clear_pending_generator_drop_exit() {
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-}
-
-pub(crate) fn swap_generator_drop_trap_state(
-    depth: &mut usize,
-    pending: &mut Option<PendingGeneratorDropExit>,
-) {
-    GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|cell| {
-        let previous = cell.replace(*depth);
-        *depth = previous;
-    });
-    PENDING_GENERATOR_DROP_EXIT.with(|cell| {
-        std::mem::swap(&mut *cell.borrow_mut(), pending);
-    });
+    crate::native_runtime::record_generator_drop_exit(exit);
 }
 
 /// Runs `work` with dropped generators discarded instead of closed.

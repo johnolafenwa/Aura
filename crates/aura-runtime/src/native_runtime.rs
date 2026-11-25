@@ -551,6 +551,9 @@ struct DirectTaskRuntimeState {
     /// trap or cancellation can abandon this task's native frames.
     foreign_callback_cleanup_base: Option<usize>,
     foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
+    /// First trap or cancellation recorded while closing dropped generators
+    /// inside a runtime boundary, for that boundary to propagate.
+    generator_drop_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
     cleanup_draining: bool,
@@ -569,10 +572,6 @@ struct DirectTaskRuntimeState {
     /// Set while this state belongs to a call that `control.recover` runs
     /// in generated code: where a trap goes back to, and the caller's state.
     recovered_call: Option<DirectRecoveredCall>,
-    /// Number of active Rust `task_runtime_boundary` frames on this task's
-    /// stack within this runtime state. Prevents `_longjmp` or forced task
-    /// exits from bypassing enclosing Rust destructors.
-    rust_boundary_depth: usize,
 }
 
 /// A `control.recover` call that runs its function on the caller's stack
@@ -713,6 +712,7 @@ impl Default for DirectTaskRuntimeState {
             runtime_error_capture: false,
             foreign_callback_cleanup_base: None,
             foreign_callback_failure: None,
+            generator_drop_exit: None,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
             cleanup_draining: false,
@@ -726,7 +726,6 @@ impl Default for DirectTaskRuntimeState {
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
             recovered_call: None,
-            rust_boundary_depth: 0,
         }
     }
 }
@@ -5551,7 +5550,7 @@ fn leaf_trap(build: impl FnOnce() -> Diagnostic) -> ! {
     let direct_recovery = recovered_call_takes_exit()
         && with_direct_task_runtime_state(|state| {
             state.foreign_callback_cleanup_base.is_none()
-                && state.rust_boundary_depth == 0
+                && state.rust_boundary_depth() == 0
                 && !state.cleanup_draining
         });
     if direct_recovery {
@@ -5633,25 +5632,81 @@ fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
     f()
 }
 
+/// Counts one active `task_runtime_boundary` on the task's frame stack. The
+/// stack is found through the task's native slot, so the common case reads
+/// no task state.
 struct RustBoundaryDepthGuard {
-    key: u64,
+    stack: *mut DirectFrameStack,
 }
 
+// The boundary guards are plain loads and stores: debug builds of the
+// runtime run generated code too, and every runtime operation enters one.
 impl RustBoundaryDepthGuard {
+    #[inline]
     fn enter() -> Self {
-        let key = direct_task_runtime_key();
-        with_direct_task_runtime_state_for_key(key, |state| {
-            state.rust_boundary_depth = state.rust_boundary_depth.saturating_add(1);
-        });
-        Self { key }
+        let stack = aura_direct_frame_stack();
+        // SAFETY: every task has a frame stack, which lives as long as the
+        // task's runtime state, and only this task's thread touches it
+        // while the task runs. A depth never nears `usize::MAX`.
+        unsafe { (*stack).rust_boundary_depth += 1 };
+        Self { stack }
     }
 }
 
 impl Drop for RustBoundaryDepthGuard {
+    #[inline]
     fn drop(&mut self) {
-        with_direct_task_runtime_state_for_key(self.key, |state| {
-            state.rust_boundary_depth = state.rust_boundary_depth.saturating_sub(1);
-        });
+        // SAFETY: as in `enter`; a task never moves to another state.
+        let depth = unsafe { &mut (*self.stack).rust_boundary_depth };
+        if *depth > 0 {
+            *depth -= 1;
+        }
+    }
+}
+
+/// Keeps the first exit a dropped generator raised inside a runtime
+/// boundary of the running task, for that boundary to propagate.
+pub(crate) fn record_generator_drop_exit(exit: crate::runtime_value::PendingGeneratorDropExit) {
+    let Some(stack) = current_direct_frame_stack() else {
+        return;
+    };
+    // SAFETY: the stack belongs to the running task, and nothing else uses
+    // it while that task runs.
+    let stack = unsafe { &mut *stack.as_ptr() };
+    if stack.rust_boundary_depth == 0 || stack.generator_drop_exit_armed {
+        return;
+    }
+    stack.generator_drop_exit_armed = true;
+    with_direct_task_runtime_state(|state| state.generator_drop_exit = Some(exit));
+}
+
+/// Takes the exit `record_generator_drop_exit` kept, if any.
+fn take_generator_drop_exit() -> Option<crate::runtime_value::PendingGeneratorDropExit> {
+    let stack = current_direct_frame_stack()?;
+    // SAFETY: as in `record_generator_drop_exit`.
+    let armed = unsafe { &mut (*stack.as_ptr()).generator_drop_exit_armed };
+    if !std::mem::replace(armed, false) {
+        return None;
+    }
+    with_direct_task_runtime_state(|state| state.generator_drop_exit.take())
+}
+
+/// The runtime boundaries active on the current task's machine stack.
+fn current_rust_boundary_depth() -> usize {
+    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
+    unsafe { (*aura_direct_frame_stack()).rust_boundary_depth }
+}
+
+impl DirectTaskRuntimeState {
+    fn rust_boundary_depth(&self) -> usize {
+        // SAFETY: the state owns its frame stack.
+        unsafe { self.frames.as_ref().rust_boundary_depth }
+    }
+
+    fn rust_boundary_depth_mut(&mut self) -> &mut usize {
+        // SAFETY: the state owns its frame stack, and `&mut self` excludes
+        // other users on this thread.
+        unsafe { &mut (*self.frames.as_ptr()).rust_boundary_depth }
     }
 }
 
@@ -5671,20 +5726,26 @@ fn finish_task_boundary_failure(mut diagnostic: Diagnostic) -> Diagnostic {
 
 #[track_caller]
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
-    let outcome = {
-        let _depth_guard = RustBoundaryDepthGuard::enter();
-        let _drop_trap_guard = crate::runtime_value::GeneratorDropTrapScope::enter();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+    let (outcome, drop_exit_armed) = {
+        let depth_guard = RustBoundaryDepthGuard::enter();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+        // SAFETY: as in `RustBoundaryDepthGuard::enter`.
+        let armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
+        (outcome, armed)
     };
-    let (enclosing_rust_boundary, in_foreign_callback) = with_direct_task_runtime_state(|state| {
-        (
-            state.rust_boundary_depth > 0,
-            state.foreign_callback_cleanup_base.is_some(),
-        )
-    });
+    // Read only on the failure paths: a boundary that returns normally must
+    // stay cheap, because generated code calls one per runtime operation.
+    let enclosing_rust_boundary = || current_rust_boundary_depth() > 0;
+    let in_foreign_callback =
+        || with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_some());
     match outcome {
         Ok(value) => {
-            if let Some(exit) = crate::runtime_value::take_pending_generator_drop_exit() {
+            if !drop_exit_armed {
+                return value;
+            }
+            if let Some(exit) = take_generator_drop_exit() {
+                let (enclosing_rust_boundary, in_foreign_callback) =
+                    (enclosing_rust_boundary(), in_foreign_callback());
                 match exit {
                     crate::runtime_value::PendingGeneratorDropExit::Trap(diagnostic) => {
                         if direct_cleanup_is_draining() {
@@ -5718,16 +5779,16 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
         }
         // The callback guard is the nearest boundary. A forced task exit
         // here would bypass C's cleanup and the entry's argument releases.
-        Err(payload) if in_foreign_callback => {
-            crate::runtime_value::clear_pending_generator_drop_exit();
+        Err(payload) if in_foreign_callback() => {
+            drop(take_generator_drop_exit());
             if payload.is::<TaskCancelledSignal>() {
                 drain_direct_cleanup_stack();
             }
             std::panic::resume_unwind(payload)
         }
         Err(payload) if payload.is::<TaskCancelledSignal>() => {
-            crate::runtime_value::clear_pending_generator_drop_exit();
-            if enclosing_rust_boundary {
+            drop(take_generator_drop_exit());
+            if enclosing_rust_boundary() {
                 std::panic::resume_unwind(payload)
             }
             if let Some(diagnostic) = drain_cleanups_for_task_exit() {
@@ -5737,20 +5798,20 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
         }
         Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
-                crate::runtime_value::clear_pending_generator_drop_exit();
+                drop(take_generator_drop_exit());
                 // Free the `Box<LightweightTaskFailureSignal>` before any
                 // non-local exit or recovery jump.
                 // `identity` moves the box into a temporary that drops at
                 // the end of this statement.
                 let diagnostic = std::convert::identity(signal).0;
-                if enclosing_rust_boundary {
+                if enclosing_rust_boundary() {
                     std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
                 }
                 let diagnostic = finish_task_boundary_failure(diagnostic);
                 fail_current_lightweight_task(diagnostic)
             }
             Err(payload) => {
-                crate::runtime_value::clear_pending_generator_drop_exit();
+                drop(take_generator_drop_exit());
                 std::panic::resume_unwind(payload)
             }
         },
@@ -17608,7 +17669,6 @@ struct DirectGeneratorFrames {
     foreign_callback_cleanup_base: Option<usize>,
     foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
     boundary_depth: usize,
-    drop_trap_depth: usize,
     drop_trap_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
     body_box: Option<Arc<AtomicUsize>>,
 }
@@ -17646,7 +17706,11 @@ impl DirectGeneratorFrames {
                 &mut state.foreign_callback_failure,
                 &mut self.foreign_callback_failure,
             );
-            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
+            mem::swap(state.rust_boundary_depth_mut(), &mut self.boundary_depth);
+            mem::swap(&mut state.generator_drop_exit, &mut self.drop_trap_exit);
+            let armed = state.generator_drop_exit.is_some();
+            // SAFETY: the state owns its frame stack.
+            unsafe { (*state.frames.as_ptr()).generator_drop_exit_armed = armed };
             state.refresh_frame_flags();
             state.refresh_stack_limit();
         });
@@ -17672,10 +17736,6 @@ impl Drop for DirectGeneratorFrames {
 impl GeneratorHooks for DirectGeneratorFrames {
     fn before_resume(&mut self) {
         self.swap_task_state();
-        crate::runtime_value::swap_generator_drop_trap_state(
-            &mut self.drop_trap_depth,
-            &mut self.drop_trap_exit,
-        );
         let Some(stack) = current_direct_frame_stack() else {
             return;
         };
@@ -17692,10 +17752,6 @@ impl GeneratorHooks for DirectGeneratorFrames {
             let stack = unsafe { &mut *stack.as_ptr() };
             self.saved = stack.take_entries_from(self.base);
         }
-        crate::runtime_value::swap_generator_drop_trap_state(
-            &mut self.drop_trap_depth,
-            &mut self.drop_trap_exit,
-        );
         self.swap_task_state();
     }
 }
@@ -23575,7 +23631,8 @@ fn recycle_recovered_state(mut state: Box<DirectTaskRuntimeState>) {
         && state.pending_mutable_sinks.is_none()
         && state.mutable_sinks.is_empty()
         && state.manager_exit_failures.is_empty()
-        && state.rust_boundary_depth == 0;
+        && state.rust_boundary_depth() == 0
+        && state.generator_drop_exit.is_none();
     if !clean {
         release_direct_task_runtime_state(state);
         return;
