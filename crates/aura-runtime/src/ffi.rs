@@ -1630,7 +1630,9 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
         })
         .unwrap_or_default();
     versioned.sort_by(|(left_ver, left_path), (right_ver, right_path)| {
-        right_ver.cmp(left_ver).then_with(|| left_path.cmp(right_path))
+        right_ver
+            .cmp(left_ver)
+            .then_with(|| left_path.cmp(right_path))
     });
     versioned.into_iter().map(|(_, path)| path).collect()
 }
@@ -1813,14 +1815,9 @@ pub fn load_libraries(
                 library_candidates(name, &canonical_paths),
             )
         })
-        .chain(frameworks.map(|name| {
-            (
-                KIND_FRAMEWORK,
-                name,
-                Vec::new(),
-                framework_candidates(name),
-            )
-        }));
+        .chain(
+            frameworks.map(|name| (KIND_FRAMEWORK, name, Vec::new(), framework_candidates(name))),
+        );
     let mut loaded = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -3572,7 +3569,9 @@ mod tests {
     #[test]
     fn versioned_library_files_sort_numerically_descending() {
         let directory = scratch_directory("version-order");
-        for suffix in ["0", "1", "2", "10", "1.2", "1.10", "bak", "disabled", "1.bak"] {
+        for suffix in [
+            "0", "1", "2", "10", "1.2", "1.10", "bak", "disabled", "1.bak",
+        ] {
             std::fs::write(directory.join(format!("libver.so.{suffix}")), b"")
                 .expect("touch versioned file");
         }
@@ -3808,14 +3807,20 @@ mod tests {
         std::os::unix::fs::symlink(&dir_a, &link).expect("symlink to dir_a");
         let names = ["aura_ffi_symlink_target".to_owned()];
         load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_a");
-        assert_eq!(call_fixture("aura_ffi_symlink_sym_a"), Ok(FfiValue::I32(101)));
+        assert_eq!(
+            call_fixture("aura_ffi_symlink_sym_a"),
+            Ok(FfiValue::I32(101))
+        );
 
         // Repointing the symlink to a different canonical target must not hit
         // a stale raw-path cache entry.
         std::fs::remove_file(&link).expect("remove old symlink");
         std::os::unix::fs::symlink(&dir_b, &link).expect("symlink to dir_b");
         load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_b");
-        assert_eq!(call_fixture("aura_ffi_symlink_sym_b"), Ok(FfiValue::I32(202)));
+        assert_eq!(
+            call_fixture("aura_ffi_symlink_sym_b"),
+            Ok(FfiValue::I32(202))
+        );
 
         // A bare request (empty search_paths) must not reuse a library that
         // was only loaded from a private search_path.
