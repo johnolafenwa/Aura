@@ -2359,6 +2359,8 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
         let no_unwind =
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("nounwind"), 0);
+        let no_red_zone =
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("noredzone"), 0);
         let no_builtins = context.create_string_attribute("no-builtins", "");
         let mut bodies = Vec::new();
         let functions = object
@@ -2394,6 +2396,9 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                         function.add_attribute(AttributeLoc::Function, probe_stack);
                     } else {
                         function.add_attribute(AttributeLoc::Function, no_unwind);
+                        if object.freestanding == Some(super::FreestandingTarget::X86_64) {
+                            function.add_attribute(AttributeLoc::Function, no_red_zone);
+                        }
                     }
                     bodies.push(index);
                 }
