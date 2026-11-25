@@ -161,6 +161,7 @@
         "aura.verifyOnSave": {
           "type": "boolean",
           "default": true,
+          "scope": "machine",
           "markdownDescription": "Run `aura verify` when an Aura file opens or is saved, and show each check it cannot prove as a diagnostic and each line whose checks it proves with a `✓` hint. Needs an SMT solver (`z3` or `cvc5`) on `PATH`; without one nothing is shown."
         },
         "aura.lldbDapPath": {

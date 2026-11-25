@@ -282,3 +282,52 @@ test("wordAt finds the identifier under or just after the cursor", () => {
   assert.equal(wordAt("", 4, 0), null);
   assert.equal(wordAt(null, 0, 0), null);
 });
+
+test("workspace scanning enforces directory, depth, per-file byte, and total byte caps", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-workspace-caps-"));
+  try {
+    const deepDir = path.join(root, "a", "b", "c", "d");
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.writeFileSync(path.join(root, "a", "shallow.au"), "def shallow():\n    pass\n");
+    fs.writeFileSync(path.join(deepDir, "deep.au"), "def deep():\n    pass\n");
+    fs.mkdirSync(path.join(root, "dir1"));
+    fs.mkdirSync(path.join(root, "dir2"));
+    fs.mkdirSync(path.join(root, "dir3"));
+    fs.writeFileSync(path.join(root, "dir1", "one.au"), "def one():\n    pass\n");
+    fs.writeFileSync(path.join(root, "dir2", "two.au"), "def two():\n    pass\n");
+    fs.writeFileSync(path.join(root, "dir3", "three.au"), "def three():\n    pass\n");
+
+    const shallowOnly = workspaceAuraFiles([root], 100, { maxDepth: 1 });
+    assert.ok(shallowOnly.some((file) => file.endsWith("shallow.au")));
+    assert.ok(!shallowOnly.some((file) => file.endsWith("deep.au")));
+
+    const dirCapped = workspaceAuraFiles([root], 100, { maxDirs: 2 });
+    assert.ok(dirCapped.length < 5);
+
+    const bigRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-workspace-bytes-"));
+    try {
+      fs.writeFileSync(path.join(bigRoot, "a_small.au"), "def a():\n    pass\n");
+      fs.writeFileSync(path.join(bigRoot, "b_small.au"), "def b():\n    pass\n");
+      fs.writeFileSync(path.join(bigRoot, "c_huge.au"), `${"x".repeat(200)}\n`);
+
+      const perFileCapped = workspaceSources([bigRoot], [], { maxFileBytes: 100, maxTotalBytes: 1000 });
+      assert.equal(perFileCapped.size, 2);
+
+      const totalCapped = workspaceSources([bigRoot], [], { maxFileBytes: 100, maxTotalBytes: 25 });
+      assert.equal(totalCapped.size, 1);
+    } finally {
+      fs.rmSync(bigRoot, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("workspaceSymbols traverses deeply nested declarations without recursion overflow", () => {
+  const deep = Array.from({ length: 6000 }, (_, index) => `${" ".repeat(index)}class Deep${index}:`).join("\n");
+  const sources = new Map([["file:///work/deep.au", deep]]);
+  const matches = workspaceSymbols("Deep5999", sources);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].name, "Deep5999");
+});
+
