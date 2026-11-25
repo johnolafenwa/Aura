@@ -31,6 +31,10 @@ use crate::mir::{
 
 use super::*;
 
+/// The most bytes an extend from words copies in place (see
+/// `emit_short_bytes_extend`); longer text takes the runtime's copy.
+const SHORT_BYTES_IN_PLACE: i64 = 32;
+
 /// How generated code reads the `str` receiver of a runtime operation from
 /// its bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2450,12 +2454,84 @@ impl FunctionCompiler<'_> {
         let Some(words) = self.deferred_str_copies.remove(place.as_str()) else {
             return false;
         };
-        self.builder.call(
-            self.runtime[RuntimeFn::VecExtendUtf8],
-            &[list, words.ptr, words.len],
-        );
+        self.emit_short_bytes_extend(list, words.ptr, words.len);
         self.release_view_arguments(words.released.into_iter().collect());
         true
+    }
+
+    /// Appends the `len` bytes at `ptr` to the `list[uint8]` `list`. A few
+    /// bytes that fit the room of a list that keeps its bytes in place are
+    /// copied there, as an append of one byte stores it (see
+    /// `emit_scalar_list_push`), so `out.extend("&amp;".to_bytes())` calls
+    /// nothing. Any other list or text takes `aura_direct_vec_extend_utf8`.
+    fn emit_short_bytes_extend(&mut self, list: Val, ptr: Val, len: Val) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, _) = scalar_list_slot(ScalarElement::Uint8);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let room_block = self.builder.create_block();
+        let copy_block = self.builder.create_block();
+        let byte_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(slow_block);
+        self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let flags = MemFlags::trusted();
+        let length = self
+            .builder
+            .load(types::I64, flags, list, layout.len_offset);
+        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let short =
+            self.builder
+                .icmp_imm(IntCC::UnsignedLessThanOrEqual, len, SHORT_BYTES_IN_PLACE);
+        let end = self.builder.iadd(length, len);
+        let fits = self
+            .builder
+            .icmp(IntCC::UnsignedLessThanOrEqual, end, capacity);
+        let in_place = self.builder.band(short, fits);
+        self.builder
+            .brif(in_place, room_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(room_block);
+        self.builder.seal_block(room_block);
+        let elements = self
+            .builder
+            .load(types::I64, flags, list, layout.elements_offset);
+        let target = self.builder.element_address(elements, length);
+        let first = self.builder.iconst(types::I64, 0);
+        self.builder.jump(copy_block, &[first]);
+
+        self.builder.switch_to_block(copy_block);
+        let index = self.builder.append_block_param(copy_block, types::I64);
+        let more = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
+        self.builder.brif(more, byte_block, &[], done_block, &[]);
+
+        self.builder.switch_to_block(byte_block);
+        self.builder.seal_block(byte_block);
+        let from = self.builder.iadd(ptr, index);
+        let byte = self.builder.uload8(types::I64, flags, from, 0);
+        let byte = self.builder.ireduce(types::I8, byte);
+        let to = self.builder.element_address(target, index);
+        self.builder.store(flags, byte, to, 0);
+        let next = self.builder.iadd_imm(index, 1);
+        self.builder.jump(copy_block, &[next]);
+        self.builder.seal_block(copy_block);
+
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        self.builder.store(flags, end, list, layout.len_offset);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        self.builder
+            .call(self.runtime[RuntimeFn::VecExtendUtf8], &[list, ptr, len]);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
     }
 
     /// Drops the element slots another way of holding the local or of

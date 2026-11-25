@@ -1,0 +1,33 @@
+# `out.extend(text.to_bytes())` copies a few bytes into the list's room in
+# place. An empty list, a full one, and text longer than the in-place limit
+# take the runtime's copy; every way leaves the same bytes.
+def add_text(out: mut list[uint8], text: str):
+    out.extend(text.to_bytes())
+
+
+def escape(out: mut list[uint8], data: list[uint8]):
+    for c in data:
+        if c == 38:
+            add_text(out, "&amp;")
+        elif c == 60:
+            add_text(out, "&lt;")
+        elif c == 62:
+            add_text(out, "&gt;")
+        else:
+            out.append(c)
+
+
+def main():
+    mut out: list[uint8] = []
+    add_text(out, "")
+    print(out.len())
+    add_text(out, "<p>")
+    escape(out, "a<b & c>d".to_bytes())
+    add_text(out, "</p>")
+    add_text(out, "this text is longer than thirty-two bytes, so it is copied by the runtime")
+    for i in range(50):
+        add_text(out, f"[{i}]")
+    mut total = 0
+    for b in out:
+        total = (total * 31 + (b as int64)) % 1000000007
+    print(f"{out.len()} {total} {out[0]} {out[3]} {out[out.len() - 1]}")
