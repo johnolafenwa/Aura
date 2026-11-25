@@ -6754,7 +6754,7 @@ struct LightweightTaskScheduler {
     next_wait_epoch: u64,
     spawn_requests: Rc<RefCell<VecDeque<PreparedLightweightTask>>>,
     ready: VecDeque<(u64, RuntimeSchedulerWakeReason)>,
-    waiting: BTreeMap<u64, LightweightTaskWait>,
+    waiting: IdHashMap<u64, LightweightTaskWait>,
     tasks: BTreeMap<u64, LightweightTaskRecord>,
     reactor: RuntimeReactor,
     reactor_failure: Option<Diagnostic>,
@@ -9998,7 +9998,7 @@ impl LightweightTaskScheduler {
             next_wait_epoch: 1,
             spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
             ready: VecDeque::new(),
-            waiting: BTreeMap::new(),
+            waiting: IdHashMap::default(),
             tasks: BTreeMap::new(),
             reactor: RuntimeReactor::new()
                 .expect("the Aura lightweight-task reactor must initialize"),
@@ -10032,7 +10032,7 @@ impl LightweightTaskScheduler {
             next_wait_epoch: 1,
             spawn_requests: Rc::new(RefCell::new(VecDeque::new())),
             ready: VecDeque::new(),
-            waiting: BTreeMap::new(),
+            waiting: IdHashMap::default(),
             tasks: BTreeMap::new(),
             reactor,
             reactor_failure: None,
@@ -10634,7 +10634,9 @@ impl LightweightTaskScheduler {
     }
 
     fn retire_all_tasks(&mut self) {
-        let task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        // In task order, as the tasks retire below.
+        let mut task_ids: Vec<_> = self.waiting.keys().copied().collect();
+        task_ids.sort_unstable();
         for task_id in task_ids {
             self.disarm_wait(task_id);
         }
