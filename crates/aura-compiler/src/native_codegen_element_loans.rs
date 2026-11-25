@@ -1128,16 +1128,20 @@ impl FunctionCompiler<'_> {
         if lent || map.contains('.') {
             return Ok(None);
         }
+        // An `int64` key is looked up as a word, any other as a box of
+        // the dict's key type.
+        let key_ty = match self.variable_types.get(map.as_str()) {
+            Some(DirectType::Opaque(Type::Named(_, types))) if *op != DictOp::ContainsKeyInt64 => {
+                types.first().cloned()
+            }
+            _ => None,
+        };
         if self.local_type(&loan)? != DirectType::Scalar(ScalarKind::Int64)
             || !matches!(self.loan_list(map, "dict")?, Some(LoanList::Local(_)))
+            || (key_ty.is_none() && *op != DictOp::ContainsKeyInt64)
         {
             return Ok(None);
         }
-        let key_ty = match self.variable_types.get(map.as_str()) {
-            _ if *op == DictOp::ContainsKeyInt64 => None,
-            Some(DirectType::Opaque(Type::Named(_, types))) => Some(types[0].clone()),
-            _ => return Ok(None),
-        };
         let map_box = self.load_root(map)?.values[0];
         let mutable = self.builder.iconst(types::I64, i64::from(mutable));
         // A `str` key held as words is looked up from its bytes.
