@@ -1,0 +1,6 @@
+error[AU4003]: list index `7` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/deferred_frames_name_every_caller.au:6:19
+  |
+6 |     return values[at]
+  |                   ^
+  = note: Aura call chain (innermost first): pick at 5:1 -> worth at 8:1 -> outer at 15:1 -> main at 19:1

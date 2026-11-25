@@ -333,6 +333,8 @@ impl ModuleBackend for LlvmModule {
         let mut builder = LlvmFunction {
             module: self,
             ir: FunctionIr::new(signature.clone()),
+            deferred_frame: None,
+            frame_branches: Vec::new(),
         };
         // The body's own error comes first. The definition is checked only
         // once the body is built.
@@ -471,10 +473,9 @@ impl LlvmModule {
             }
         }
         for (index, decl) in self.functions.iter_mut().enumerate() {
-            let small = decl
-                .body
-                .as_ref()
-                .is_some_and(|body| body.insts.len() <= COPIED_CALL_INLINE_WEIGHT);
+            let small = decl.body.as_ref().is_some_and(|body| {
+                body.insts.len() - body.frame_insts.len() <= COPIED_CALL_INLINE_WEIGHT
+            });
             if decl.linkage == Linkage::Local
                 && small
                 && copies[index] > 0
@@ -960,6 +961,10 @@ struct FunctionIr {
     /// The callee of each direct call `version_blocks` copied, once per
     /// copy.
     copied_calls: Vec<FuncRef>,
+    /// The instructions that test and push a deferred frame record before
+    /// calls (see `defer_frame`), which weigh nothing for inlining or for
+    /// splitting the module.
+    frame_insts: HashSet<u32>,
     /// The copies `version_blocks` made of each select while it was not
     /// settled, by the select's result, so a later call for blocks that
     /// were already copied settles those copies too.
@@ -1112,6 +1117,7 @@ impl FunctionIr {
             data_refs: Vec::new(),
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
+            frame_insts: HashSet::new(),
             select_copies: HashMap::new(),
             select_roots: HashMap::new(),
             settled_selects: HashMap::new(),
@@ -1577,9 +1583,41 @@ impl FunctionIr {
 struct LlvmFunction<'a> {
     module: &'a mut LlvmModule,
     ir: FunctionIr,
+    /// See [`FunctionBackend::defer_frame`]: the variable, the descriptor,
+    /// the callee that pushes it, and the callees that need no frame.
+    deferred_frame: Option<(Var, Val, FuncRef, Vec<FuncRef>)>,
+    /// Each `frame_branch`, as its instruction and `then` block.
+    frame_branches: Vec<(u32, Blk)>,
 }
 
 impl LlvmFunction<'_> {
+    /// Pushes the deferred frame record before a call of `callee`, or of
+    /// an indirect callee, that needs it, unless an earlier call did.
+    fn frame_for_call(&mut self, callee: Option<FuncRef>) {
+        let Some((framed, descriptor, enter, free)) = self.deferred_frame.take() else {
+            return;
+        };
+        if !callee.is_some_and(|callee| free.contains(&callee)) {
+            let before = self.ir.insts.len();
+            let pushed = self.use_var(framed);
+            let push = self.create_block();
+            let after = self.create_block();
+            self.set_cold_block(push);
+            self.frame_branch(pushed, after, push);
+            self.switch_to_block(push);
+            self.seal_block(push);
+            self.call(enter, &[descriptor]);
+            let one = self.iconst(ScalarType::I64, 1);
+            self.def_var(framed, one);
+            self.jump(after, &[]);
+            self.switch_to_block(after);
+            self.seal_block(after);
+            let guard = before as u32..self.ir.insts.len() as u32;
+            self.ir.frame_insts.extend(guard);
+        }
+        self.deferred_frame = Some((framed, descriptor, enter, free));
+    }
+
     fn unary(&mut self, op: UnaryOp, ty: ScalarType, operand: Val) -> Val {
         self.ir.push_value(Op::Unary(op, operand), ty)
     }
@@ -1648,6 +1686,51 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn seal_block(&mut self, block: Blk) {
         self.ir.blocks[block.0 as usize].sealed = true;
+    }
+
+    fn defer_frame(&mut self, framed: Var, descriptor: Val, enter: FuncRef, free: &[FuncRef]) {
+        let mut free = free.to_vec();
+        free.push(enter);
+        self.deferred_frame = Some((framed, descriptor, enter, free));
+    }
+
+    fn calls_when_warm(&self, free: &[FuncRef]) -> bool {
+        let ir = &self.ir;
+        let mut warm = ir.layout.first().copied().into_iter().collect::<Vec<_>>();
+        let mut seen = warm.iter().copied().collect::<HashSet<_>>();
+        let mut index = 0;
+        while let Some(block) = warm.get(index).copied() {
+            index += 1;
+            let entry = &ir.blocks[block as usize];
+            for inst in &entry.insts {
+                let targets = match &ir.insts[*inst as usize].op {
+                    Op::Call(callee, _) if !free.contains(callee) => return true,
+                    Op::CallIndirect(..) => return true,
+                    Op::Jump(target, _) => vec![target.0],
+                    Op::Brif(_, then_block, _, else_block, _) => vec![then_block.0, else_block.0],
+                    _ => Vec::new(),
+                };
+                for target in targets {
+                    if !ir.blocks[target as usize].cold && seen.insert(target) {
+                        warm.push(target);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn frame_branch(&mut self, condition: Val, then_block: Blk, else_block: Blk) {
+        self.brif(condition, then_block, &[], else_block, &[]);
+        let block = &self.ir.blocks[self.ir.current.expect("a branch's block") as usize];
+        let inst = *block.insts.last().expect("the branch");
+        self.frame_branches.push((inst, then_block));
+    }
+
+    fn settle_frame(&mut self) {
+        for (inst, then_block) in std::mem::take(&mut self.frame_branches) {
+            self.ir.insts[inst as usize].op = Op::Jump(then_block, Vec::new());
+        }
     }
 
     fn note_complete(&mut self, block: Blk) {
@@ -1757,6 +1840,7 @@ impl FunctionBackend for LlvmFunction<'_> {
     }
 
     fn call(&mut self, callee: FuncRef, args: &[Val]) -> Call {
+        self.frame_for_call(Some(callee));
         let function = self.ir.func_refs[callee.0 as usize];
         let returns = self.module.functions[function.0 as usize]
             .signature
@@ -1773,6 +1857,7 @@ impl FunctionBackend for LlvmFunction<'_> {
     }
 
     fn call_indirect(&mut self, signature: SigRef, callee: Val, args: &[Val]) -> Call {
+        self.frame_for_call(None);
         let returns = self.ir.sig_refs[signature.0 as usize].returns.clone();
         self.ir
             .call_results(Op::CallIndirect(signature, callee, args.to_vec()), &returns)

@@ -796,6 +796,21 @@ pub(crate) trait FunctionBackend {
     /// Whether `block` is the current block and each call in it so far
     /// calls one of `allowed`.
     fn only_calls_in(&self, block: Blk, allowed: &[FuncRef]) -> bool;
+    /// From here on, runs `enter` with `descriptor` in a cold block before
+    /// each call of a callee not in `free`, unless the variable `framed`
+    /// is set, and then sets it: the function pushes its frame record only
+    /// on the ways that call out.
+    fn defer_frame(&mut self, framed: Var, descriptor: Val, enter: FuncRef, free: &[FuncRef]);
+    /// Whether a block the entry reaches without crossing a cold block
+    /// calls a callee not in `free`.
+    fn calls_when_warm(&self, free: &[FuncRef]) -> bool;
+    /// Branches on `condition` to `then_block` or `else_block`, until
+    /// `settle_frame`, which makes the branch a jump to `then_block`.
+    fn frame_branch(&mut self, condition: Val, then_block: Blk, else_block: Blk);
+    /// Pushes the deferred frame record as any function does after all:
+    /// each `frame_branch`, and each test before a call, takes its `then`
+    /// block.
+    fn settle_frame(&mut self);
     /// Notes that `block` has every predecessor it will get, though it is
     /// not sealed, for `holds_since`.
     fn note_complete(&mut self, block: Blk);

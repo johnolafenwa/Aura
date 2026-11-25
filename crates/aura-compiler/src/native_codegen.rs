@@ -1738,7 +1738,21 @@ impl<'a> NativeCodegen<'a> {
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
             || calls_total_leaves;
-        let (mut body, entered_in_runtime) = if frameless {
+        // Any other function on no call cycle with no `mut` parameter,
+        // cleanup, or second frame pushes its record where it first calls
+        // out (see `defer_frame`), unless a way that is not cold does.
+        let defers_frame = !frameless
+            && forwarding_frame.is_none()
+            && function.name != "main"
+            && !takes_mutable(function)
+            && !self.recursive_functions.contains(&function.name)
+            && !function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+            });
+        let (mut body, entered_in_runtime) = if frameless || defers_frame {
             (entry, builder.iconst(types::I64, 0))
         } else {
             emit_frame_push(builder, &runtime_refs, descriptor)
@@ -2016,6 +2030,39 @@ impl<'a> NativeCodegen<'a> {
             builder.seal_block(ready);
             blocks.insert(function.entry.clone(), ready);
         }
+        let deferred_frame = defers_frame.then(|| {
+            let framed = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(framed, types::I64);
+            // Once the body shows a way that is not cold calls out, the
+            // record is pushed here, as for any function.
+            let deferred = builder.iconst(types::I64, 0);
+            let push = builder.create_block();
+            let skip = builder.create_block();
+            let start = builder.create_block();
+            builder.frame_branch(deferred, push, skip);
+            builder.switch_to_block(push);
+            builder.seal_block(push);
+            emit_frame_push(builder, &runtime_refs, descriptor);
+            let one = builder.iconst(types::I64, 1);
+            builder.def_var(framed, one);
+            builder.jump(start, &[]);
+            builder.switch_to_block(skip);
+            builder.seal_block(skip);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.jump(start, &[]);
+            builder.switch_to_block(start);
+            builder.seal_block(start);
+            blocks.insert(function.entry.clone(), start);
+            builder.defer_frame(
+                framed,
+                descriptor,
+                runtime_refs[RuntimeFn::EnterCall],
+                &frame_calls(&runtime_refs),
+            );
+            framed
+        });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             let receiver_ty = receiver_type(function, &self.classes)?;
             writeback_locals.push(("self".to_string(), receiver_ty));
@@ -2729,6 +2776,7 @@ impl<'a> NativeCodegen<'a> {
             freestanding: self.freestanding,
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
+            deferred_frame,
             forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
@@ -2869,6 +2917,13 @@ impl<'a> NativeCodegen<'a> {
             .unwrap_or_default();
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
+        if compiler.deferred_frame.is_some()
+            && compiler
+                .builder
+                .calls_when_warm(&frame_calls(&compiler.runtime))
+        {
+            compiler.builder.settle_frame();
+        }
 
         compiler.builder.seal_all_blocks();
         try_or_string_error!(
@@ -4163,6 +4218,9 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The variable that is set once the function has pushed the frame
+    /// record it defers (see `defers_frame`).
+    deferred_frame: Option<Var>,
     /// The source frame of a closure implemented by its forwarded method.
     forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
@@ -6842,7 +6900,18 @@ impl<'a> FunctionCompiler<'a> {
             self.release_root_words(root)?;
         }
         self.release_boxed_copy_roots()?;
-        if self.frameless_descriptor.is_none() {
+        if let Some(framed) = self.deferred_frame {
+            let pushed = self.builder.use_var(framed);
+            let pop = self.builder.create_block();
+            let done = self.builder.create_block();
+            self.builder.frame_branch(pushed, pop, done);
+            self.builder.switch_to_block(pop);
+            self.builder.seal_block(pop);
+            emit_frame_pop(self.builder, &self.runtime);
+            self.builder.jump(done, &[]);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
+        } else if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
         }
         if self.checked_scalar_body.is_some() {
@@ -20745,6 +20814,15 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// Pops the innermost call's frame record: count one entry fewer, unless
 /// the stack's flags ask for the runtime or no call is above its floor.
 /// Then `aura_direct_exit_call` does the whole pop.
+/// The calls that push, find, and pop frame records, which need none.
+fn frame_calls(runtime: &RuntimeTable<FuncRef>) -> [FuncRef; 3] {
+    [
+        runtime[RuntimeFn::FrameStack],
+        runtime[RuntimeFn::EnterCall],
+        runtime[RuntimeFn::ExitCall],
+    ]
+}
+
 fn emit_frame_pop(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) {
     let layout = frame_stack_layout();
     let header = MemFlags::trusted_in(AliasClass::FrameHeader);

@@ -302,5 +302,7 @@ fn called_functions(body: &super::FunctionIr) -> BTreeSet<usize> {
 }
 
 fn function_weight(decl: &super::FunctionDecl) -> usize {
-    decl.body.as_ref().map_or(0, |body| body.insts.len())
+    decl.body
+        .as_ref()
+        .map_or(0, |body| body.insts.len() - body.frame_insts.len())
 }
