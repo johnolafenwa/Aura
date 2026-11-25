@@ -915,19 +915,92 @@ fn read_cached_kernel_image(file: &std::path::Path) -> Option<Vec<u8>> {
     Some(image)
 }
 
+fn random_hex_suffix() -> Option<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes).ok()?;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    Some(out)
+}
+
 /// Keeps `image` in `file`. The cache only saves time, so a failure to
-/// write it is not an error. The image is written beside the file and
-/// renamed, so another process never reads half of it.
+/// write it is not an error. The image is written to a private temporary
+/// file in the verified cache directory and renamed atomically.
 fn keep_kernel_image(file: &std::path::Path, image: &[u8]) {
-    let Some(directory) = file.parent() else {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let (Some(directory), Some(file_name)) = (file.parent(), file.file_name()) else {
         return;
     };
-    if ensure_private_cache_dir(directory).is_none() {
+    let Some(dir) = ensure_private_cache_dir(directory) else {
+        return;
+    };
+    let Ok(target_name) = CString::new(file_name.as_bytes()) else {
+        return;
+    };
+    let mut created = None;
+    for _ in 0..16 {
+        let Some(suffix) = random_hex_suffix() else {
+            return;
+        };
+        let Ok(temp_name) = CString::new(format!(".{suffix}.partial")) else {
+            return;
+        };
+        // SAFETY: `dir` is a verified directory fd and `temp_name` is a single
+        // NUL-terminated filename; `O_CREAT | O_EXCL | O_NOFOLLOW` guarantees a
+        // fresh regular file with mode 0600.
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                temp_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: `fd` is a newly created owned descriptor.
+            let handle = unsafe { std::fs::File::from_raw_fd(fd) };
+            created = Some((temp_name, handle));
+            break;
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+            return;
+        }
+    }
+    let Some((temp_name, mut handle)) = created else {
+        return;
+    };
+    let write_ok = handle
+        .write_all(image)
+        .and_then(|()| handle.flush())
+        .is_ok();
+    drop(handle);
+    if !write_ok {
+        // SAFETY: `dir` is open and `temp_name` is NUL-terminated.
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), temp_name.as_ptr(), 0);
+        }
         return;
     }
-    let partial = file.with_extension(format!("{}.partial", std::process::id()));
-    if std::fs::write(&partial, image).is_err() || std::fs::rename(&partial, file).is_err() {
-        let _ = std::fs::remove_file(&partial);
+    // SAFETY: `dir` is open and both names are NUL-terminated entries in `dir`.
+    let renamed = unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            temp_name.as_ptr(),
+            dir.as_raw_fd(),
+            target_name.as_ptr(),
+        )
+    };
+    if renamed != 0 {
+        // SAFETY: `dir` is open and `temp_name` is NUL-terminated.
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), temp_name.as_ptr(), 0);
+        }
     }
 }
 
@@ -1962,6 +2035,34 @@ mod tests {
             .code,
             "AU4007"
         );
+    }
+
+    #[test]
+    fn keep_kernel_image_does_not_clobber_predictable_partial_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root =
+            std::env::temp_dir().join(format!("aura-kernels-partial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache_dir = root.join("cuda-kernels");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let sentinel = root.join("sentinel.txt");
+        std::fs::write(&sentinel, b"original-sentinel").unwrap();
+
+        let file = cache_dir.join("abcd.ptx");
+        let predictable = file.with_extension(format!("{}.partial", std::process::id()));
+        symlink(&sentinel, &predictable).unwrap();
+
+        keep_kernel_image(&file, b".version 8.0\n\0");
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original-sentinel");
+        assert_eq!(std::fs::read(&file).unwrap(), b".version 8.0\n\0");
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
 
