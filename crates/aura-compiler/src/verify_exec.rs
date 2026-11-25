@@ -2517,7 +2517,12 @@ impl<'a> Exec<'a> {
                 ..
             } => {
                 let collection = self.read_place(state, source);
-                let selector = self.operand(state, selector, Some(IntTy::INT64));
+                let selector_hint = match &collection {
+                    Val::Map { key, .. } => IntTy::of(key),
+                    _ => Some(IntTy::INT64),
+                };
+                let selector = self.operand(state, selector, selector_hint);
+                let pc = state.pc.clone();
                 let value = match (&collection, &selector) {
                     (Val::List { len, .. }, Val::Int(index, _)) => {
                         if *checked {
@@ -2531,8 +2536,64 @@ impl<'a> Exec<'a> {
                             projection: projection.clone(),
                         }
                     }
-                    (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
-                    _ => Loan::Unknown(roots_of_place(&state.loans, source)),
+                    (Val::Map { keys, .. }, selector) => {
+                        if *checked {
+                            if let Some(k) = key_term(selector) {
+                                let present = format!("(select {keys} {k})");
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    *span,
+                                    "key is in the dict",
+                                    &pc,
+                                    Goal::Holds(present.clone()),
+                                );
+                                self.assume(&pc, present);
+                            } else {
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    *span,
+                                    "key is in the dict",
+                                    &pc,
+                                    Goal::Unsupported("this dict key is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        Loan::Inside(source.clone())
+                    }
+                    (Val::List { .. }, _) => {
+                        if *checked {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                *span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list index is not modeled yet".into()),
+                            );
+                        }
+                        Loan::Inside(source.clone())
+                    }
+                    _ => {
+                        if *checked {
+                            let is_dict = self
+                                .place_type(source)
+                                .is_some_and(|ty| matches!(ty, Type::Named(name, _) if name == "dict"));
+                            let (kind, message) = if is_dict {
+                                (ObligationKind::KeyPresent, "key is in the dict")
+                            } else {
+                                (ObligationKind::IndexInRange, "element index in range")
+                            };
+                            self.oblige(
+                                kind,
+                                *span,
+                                message,
+                                &pc,
+                                Goal::Unsupported(
+                                    "indexing this collection is not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        Loan::Unknown(roots_of_place(&state.loans, source))
+                    }
                 };
                 state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
@@ -2575,10 +2636,15 @@ impl<'a> Exec<'a> {
                 span,
                 ..
             } => {
+                let pc = state.pc.clone();
                 let value = match state.loans.get(parent).cloned() {
                     Some(Loan::Place(place)) => {
                         let collection = self.read_place(state, &place);
-                        let selector = self.operand(state, selector, Some(IntTy::INT64));
+                        let selector_hint = match &collection {
+                            Val::Map { key, .. } => IntTy::of(key),
+                            _ => Some(IntTy::INT64),
+                        };
+                        let selector = self.operand(state, selector, selector_hint);
                         match (&collection, &selector) {
                             (Val::List { len, .. }, Val::Int(index, _)) => {
                                 self.oblige_index(state, *span, len, index);
@@ -2588,17 +2654,103 @@ impl<'a> Exec<'a> {
                                     projection: projection.clone(),
                                 }
                             }
-                            (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(place),
-                            _ => Loan::Unknown(roots_of_place(&state.loans, &place)),
+                            (Val::Map { keys, .. }, selector) => {
+                                if let Some(k) = key_term(selector) {
+                                    let present = format!("(select {keys} {k})");
+                                    self.oblige(
+                                        ObligationKind::KeyPresent,
+                                        *span,
+                                        "key is in the dict",
+                                        &pc,
+                                        Goal::Holds(present.clone()),
+                                    );
+                                    self.assume(&pc, present);
+                                } else {
+                                    self.oblige(
+                                        ObligationKind::KeyPresent,
+                                        *span,
+                                        "key is in the dict",
+                                        &pc,
+                                        Goal::Unsupported(
+                                            "this dict key is not modeled yet".into(),
+                                        ),
+                                    );
+                                }
+                                Loan::Inside(place)
+                            }
+                            (Val::List { .. }, _) => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    *span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("this list index is not modeled yet".into()),
+                                );
+                                Loan::Inside(place)
+                            }
+                            _ => {
+                                let is_dict = self.place_type(&place).is_some_and(
+                                    |ty| matches!(ty, Type::Named(name, _) if name == "dict"),
+                                );
+                                let (kind, message) = if is_dict {
+                                    (ObligationKind::KeyPresent, "key is in the dict")
+                                } else {
+                                    (ObligationKind::IndexInRange, "element index in range")
+                                };
+                                self.oblige(
+                                    kind,
+                                    *span,
+                                    message,
+                                    &pc,
+                                    Goal::Unsupported(
+                                        "indexing this collection is not modeled yet".into(),
+                                    ),
+                                );
+                                Loan::Unknown(roots_of_place(&state.loans, &place))
+                            }
                         }
                     }
                     // An element of an element is still inside the
                     // collection the first one came from.
                     Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
                         Loan::Inside(list)
                     }
-                    Some(Loan::Unknown(roots)) => Loan::Unknown(roots),
-                    None => Loan::Unknown(roots_of_place(&state.loans, parent)),
+                    Some(Loan::Unknown(roots)) => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
+                        Loan::Unknown(roots)
+                    }
+                    None => {
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            *span,
+                            "element index in range",
+                            &pc,
+                            Goal::Unsupported(
+                                "reborrowing an element through this loan is not modeled yet"
+                                    .into(),
+                            ),
+                        );
+                        Loan::Unknown(roots_of_place(&state.loans, parent))
+                    }
                 };
                 state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
@@ -3132,7 +3284,7 @@ impl<'a> Exec<'a> {
                         Val::Int(result, ty)
                     }
                     _ => {
-                        if *trap == ArithmeticTrap::Runtime {
+                        if trap.checks_overflow() || *trap == ArithmeticTrap::Runtime {
                             self.oblige(
                                 ObligationKind::Overflow,
                                 *span,
@@ -3169,7 +3321,24 @@ impl<'a> Exec<'a> {
                             );
                             Val::Float(result, to)
                         }
-                        _ => fresh_target(self),
+                        _ => {
+                            let from_float = self
+                                .operand_type(value)
+                                .as_ref()
+                                .is_some_and(|from| FloatTy::of(from).is_some());
+                            if !from_float {
+                                self.oblige(
+                                    ObligationKind::Overflow,
+                                    *span,
+                                    "integer converts to a float exactly",
+                                    &state.pc.clone(),
+                                    Goal::Unsupported(
+                                        "this conversion operand is not modeled yet".into(),
+                                    ),
+                                );
+                            }
+                            fresh_target(self)
+                        }
                     };
                 }
                 if let (Val::Float(term, _), Some(int)) = (&operand, IntTy::of(ty)) {
@@ -3733,15 +3902,47 @@ impl<'a> Exec<'a> {
                         });
                     }
                 }
-                let numeric = |ty: Option<Type>| {
-                    ty.as_ref().is_some_and(|ty| {
+                let numeric = |ty: Option<&Type>| {
+                    ty.is_some_and(|ty| {
                         IntTy::of(ty).is_some()
                             || matches!(ty, Type::Named(name, args) if args.is_empty() && (name == "float64" || name == "float32"))
                     })
                 };
-                let left_numeric = numeric(self.operand_type(left));
+                let is_array_or_duration = |ty: Option<&Type>| {
+                    ty.is_some_and(|ty| {
+                        matches!(ty, Type::Named(name, _) if name == "Array" || name == "Duration")
+                    })
+                };
+                let is_str = |ty: Option<&Type>| {
+                    ty.is_some_and(
+                        |ty| matches!(ty, Type::Named(name, args) if args.is_empty() && name == "str"),
+                    )
+                };
+                let left_ty = self.operand_type(left);
+                let right_ty = self.operand_type(right);
                 let divides = matches!(op, BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod);
-                if left_numeric && (trap.checks_divisor() || trap == ArithmeticTrap::Runtime) {
+                let trapping_arith = matches!(
+                    op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::FloorDiv
+                        | BinaryOp::Mod
+                        | BinaryOp::Pow
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                );
+                let may_trap = (numeric(left_ty.as_ref())
+                    && (trap.checks_overflow()
+                        || trap.checks_divisor()
+                        || trap == ArithmeticTrap::Runtime))
+                    || (trapping_arith
+                        && (is_array_or_duration(left_ty.as_ref())
+                            || is_array_or_duration(right_ty.as_ref())
+                            || (op == BinaryOp::Mul
+                                && (is_str(left_ty.as_ref()) || is_str(right_ty.as_ref())))));
+                if may_trap {
                     let (kind, what) = if divides {
                         (ObligationKind::DivisionByZero, "divisor is not zero")
                     } else {
@@ -3752,7 +3953,7 @@ impl<'a> Exec<'a> {
                         span,
                         what,
                         &pc,
-                        Goal::Unsupported("floating-point operands are not modeled yet".into()),
+                        Goal::Unsupported("this binary operation is not modeled yet".into()),
                     );
                 }
                 fresh(self)
@@ -4446,6 +4647,82 @@ impl<'a> Exec<'a> {
         match op {
             RuntimeOp::List(list_op) => {
                 let Some(Val::List { len, data, elem }) = receiver else {
+                    match list_op {
+                        ListOp::Index | ListOp::IndexScalar(_) => {
+                            let span = span_of(self, 1);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
+                            let span = span_of(self, 2);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Set | ListOp::Pop | ListOp::Swap => {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                self.span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Slice => {
+                            let span = span_of(self, 4);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("this list is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::SliceStep => {
+                            let span = span_of(self, 5);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("stepped list slices are not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Remove | ListOp::IndexOf => {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                self.span,
+                                "value is in the list",
+                                &pc,
+                                Goal::Unsupported("list element search is not modeled yet".into()),
+                            );
+                        }
+                        ListOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let elem_int = IntTy::of(&elem);
@@ -4457,6 +4734,16 @@ impl<'a> Exec<'a> {
                     | ListOp::IndexUnchecked
                     | ListOp::IndexScalarUnchecked(_) => {
                         let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
+                                let span = span_of(self, 1);
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("this list index is not modeled yet".into()),
+                                );
+                            }
                             return None;
                         };
                         if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
@@ -4496,14 +4783,35 @@ impl<'a> Exec<'a> {
                             vec![vec![element], Vec::new()],
                         ))
                     }
-                    ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
+                    ListOp::SetIndex | ListOp::SetIndexScalar(_) | ListOp::Set => {
+                        let span = if list_op == ListOp::Set {
+                            self.span
+                        } else {
+                            span_of(self, 2)
+                        };
                         let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "list index in range",
+                                &pc,
+                                Goal::Unsupported("this list index is not modeled yet".into()),
+                            );
                             return None;
                         };
                         let value = arg(self, state, 1, elem_int);
-                        let span = span_of(self, 2);
                         self.oblige_index(state, span, &len, &index);
                         let index = self.normalize_index(&len, &index);
+                        let previous = if list_op == ListOp::Set {
+                            let list = Val::List {
+                                len: len.clone(),
+                                data: data.clone(),
+                                elem: elem.clone(),
+                            };
+                            Some(self.element(&list, &index, target.unwrap_or("element")))
+                        } else {
+                            None
+                        };
                         let data = match data {
                             Some(data) => self.put_or_fresh(&data, &elem, &index, &value, "store"),
                             None => None,
@@ -4511,7 +4819,7 @@ impl<'a> Exec<'a> {
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
                         }
-                        Some(Val::Unit)
+                        Some(previous.unwrap_or(Val::Unit))
                     }
                     ListOp::Push | ListOp::PushScalar(_) => {
                         let value = arg(self, state, 0, elem_int);
@@ -4580,7 +4888,7 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
-                    ListOp::Reverse | ListOp::Sort | ListOp::Swap => {
+                    ListOp::Reverse | ListOp::Sort => {
                         let what = format!(
                             "the order of the elements after `{}`",
                             op.name().trim_start_matches("__")
@@ -4591,11 +4899,164 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
+                    ListOp::Swap => {
+                        let first = arg(self, state, 0, Some(IntTy::INT64));
+                        let second = arg(self, state, 1, Some(IntTy::INT64));
+                        match (first, second) {
+                            (Val::Int(i, _), Val::Int(j, _)) => {
+                                let span = self.span;
+                                self.oblige_index(state, span, &len, &i);
+                                self.oblige_index(state, span, &len, &j);
+                            }
+                            _ => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    self.span,
+                                    "list index in range",
+                                    &pc,
+                                    Goal::Unsupported("list swap index is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        let data = self
+                            .unmodeled("the order of the elements after `swap`", |exec| {
+                                exec.fresh_store(&elem, "permuted")
+                            });
+                        if let Some(place) = receiver_place {
+                            self.write_place(state, place, Val::List { len, data, elem });
+                        }
+                        Some(Val::Unit)
+                    }
+                    ListOp::Slice => {
+                        let span = span_of(self, 4);
+                        let start = scalar_term(&arg(self, state, 0, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let has_start = scalar_term(&arg(self, state, 1, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let end = scalar_term(&arg(self, state, 2, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let has_end = scalar_term(&arg(self, state, 3, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        match (start, has_start, end, has_end) {
+                            (Some(start), Some(has_start), Some(end), Some(has_end)) => {
+                                let low = self.define(
+                                    "Int",
+                                    "low",
+                                    format!(
+                                        "(ite (= {has_start} 0) 0 (ite (< {start} 0) (+ {start} {len}) {start}))"
+                                    ),
+                                );
+                                let high = self.define(
+                                    "Int",
+                                    "high",
+                                    format!(
+                                        "(ite (= {has_end} 0) {len} (ite (< {end} 0) (+ {end} {len}) {end}))"
+                                    ),
+                                );
+                                let in_range = format!(
+                                    "(and (<= 0 {low}) (<= {low} {high}) (<= {high} {len}))"
+                                );
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "slice range in bounds",
+                                    &pc,
+                                    Goal::Holds(in_range.clone()),
+                                );
+                                self.assume(&pc, in_range);
+                            }
+                            _ => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "slice range in bounds",
+                                    &pc,
+                                    Goal::Unsupported("this slice bound is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        None
+                    }
+                    ListOp::SliceStep => {
+                        let span = span_of(self, 5);
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            span,
+                            "slice range in bounds",
+                            &pc,
+                            Goal::Unsupported("stepped list slices are not modeled yet".into()),
+                        );
+                        None
+                    }
+                    ListOp::Remove | ListOp::IndexOf => {
+                        self.oblige(
+                            ObligationKind::KeyPresent,
+                            self.span,
+                            "value is in the list",
+                            &pc,
+                            Goal::Unsupported("list element search is not modeled yet".into()),
+                        );
+                        None
+                    }
+                    ListOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
+                        Some(Val::Unit)
+                    }
                     _ => None,
                 }
             }
             RuntimeOp::Str(str_op) => {
                 let Some(Val::Str(text)) = receiver else {
+                    match str_op {
+                        StrOp::Slice => {
+                            let span = span_of(self, 4);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported("this string is not modeled yet".into()),
+                            );
+                        }
+                        StrOp::SliceStep => {
+                            let span = span_of(self, 5);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "slice range in bounds",
+                                &pc,
+                                Goal::Unsupported(
+                                    "stepped string slices are not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        StrOp::Repeat => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(count, _) => Goal::Holds(format!("(<= 0 {count})")),
+                                _ => {
+                                    Goal::Unsupported("this repeat count is not modeled yet".into())
+                                }
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "repeat count is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let other = |exec: &mut Self, state: &mut State| match arg(exec, state, 0, None) {
@@ -4620,6 +5081,82 @@ impl<'a> Exec<'a> {
                         let other = other(self, state)?;
                         Some(Val::Bool(format!("(str.suffixof {other} {text})")))
                     }
+                    StrOp::Slice => {
+                        let span = span_of(self, 4);
+                        let len = format!("(str.len {text})");
+                        let start = scalar_term(&arg(self, state, 0, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let has_start = scalar_term(&arg(self, state, 1, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let end = scalar_term(&arg(self, state, 2, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        let has_end = scalar_term(&arg(self, state, 3, Some(IntTy::INT64)))
+                            .map(str::to_string);
+                        match (start, has_start, end, has_end) {
+                            (Some(start), Some(has_start), Some(end), Some(has_end)) => {
+                                let low = self.define(
+                                    "Int",
+                                    "low",
+                                    format!(
+                                        "(ite (= {has_start} 0) 0 (ite (< {start} 0) (+ {start} {len}) {start}))"
+                                    ),
+                                );
+                                let high = self.define(
+                                    "Int",
+                                    "high",
+                                    format!(
+                                        "(ite (= {has_end} 0) {len} (ite (< {end} 0) (+ {end} {len}) {end}))"
+                                    ),
+                                );
+                                let in_range = format!(
+                                    "(and (<= 0 {low}) (<= {low} {high}) (<= {high} {len}))"
+                                );
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "slice range in bounds",
+                                    &pc,
+                                    Goal::Holds(in_range.clone()),
+                                );
+                                self.assume(&pc, in_range);
+                            }
+                            _ => {
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "slice range in bounds",
+                                    &pc,
+                                    Goal::Unsupported("this slice bound is not modeled yet".into()),
+                                );
+                            }
+                        }
+                        None
+                    }
+                    StrOp::SliceStep => {
+                        let span = span_of(self, 5);
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            span,
+                            "slice range in bounds",
+                            &pc,
+                            Goal::Unsupported("stepped string slices are not modeled yet".into()),
+                        );
+                        None
+                    }
+                    StrOp::Repeat => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(count, _) => Goal::Holds(format!("(<= 0 {count})")),
+                            _ => Goal::Unsupported("this repeat count is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "repeat count is not negative",
+                            &pc,
+                            goal,
+                        );
+                        None
+                    }
                     _ => None,
                 }
             }
@@ -4632,6 +5169,34 @@ impl<'a> Exec<'a> {
                     value,
                 }) = receiver
                 else {
+                    match dict_op {
+                        DictOp::Index => {
+                            let span = span_of(self, 1);
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                span,
+                                "key is in the dict",
+                                &pc,
+                                Goal::Unsupported("keys of this dict are not modeled yet".into()),
+                            );
+                        }
+                        DictOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let sort = key_sort(&key).expect("a modeled dict has a modeled key");
@@ -4646,8 +5211,17 @@ impl<'a> Exec<'a> {
                         Some(Val::Bool(format!("(select {keys} {k})")))
                     }
                     DictOp::Index => {
-                        let k = key_arg(self, state)?;
                         let span = span_of(self, 1);
+                        let Some(k) = key_arg(self, state) else {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                span,
+                                "key is in the dict",
+                                &pc,
+                                Goal::Unsupported("this dict key is not modeled yet".into()),
+                            );
+                            return None;
+                        };
                         let present = format!("(select {keys} {k})");
                         self.oblige(
                             ObligationKind::KeyPresent,
@@ -4797,11 +5371,54 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
+                    DictOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
+                        Some(Val::Unit)
+                    }
                     _ => None,
                 }
             }
             RuntimeOp::Set(set_op) => {
                 let Some(Val::Set { len, members, elem }) = receiver else {
+                    match set_op {
+                        SetOp::Remove => {
+                            self.oblige(
+                                ObligationKind::KeyPresent,
+                                self.span,
+                                "element is in the set",
+                                &pc,
+                                Goal::Unsupported(
+                                    "elements of this set are not modeled yet".into(),
+                                ),
+                            );
+                        }
+                        SetOp::Reserve => {
+                            let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                                Val::Int(additional, _) => {
+                                    Goal::Holds(format!("(<= 0 {additional})"))
+                                }
+                                _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                            };
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "capacity is not negative",
+                                &pc,
+                                goal,
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 let sort = key_sort(&elem).expect("a modeled set has a modeled element");
@@ -4817,7 +5434,18 @@ impl<'a> Exec<'a> {
                         Some(Val::Bool(format!("(select {members} {k})")))
                     }
                     SetOp::Add | SetOp::AddInt64 | SetOp::Remove | SetOp::Discard => {
-                        let k = member(self, state)?;
+                        let Some(k) = member(self, state) else {
+                            if set_op == SetOp::Remove {
+                                self.oblige(
+                                    ObligationKind::KeyPresent,
+                                    self.span,
+                                    "element is in the set",
+                                    &pc,
+                                    Goal::Unsupported("this set element is not modeled yet".into()),
+                                );
+                            }
+                            return None;
+                        };
                         let present = format!("(select {members} {k})");
                         let (len, members) = if matches!(set_op, SetOp::Add | SetOp::AddInt64) {
                             let len = self.len_after_add(&len, &members, &k);
@@ -4893,6 +5521,20 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
+                    SetOp::Reserve => {
+                        let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                            Val::Int(additional, _) => Goal::Holds(format!("(<= 0 {additional})")),
+                            _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                        };
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "capacity is not negative",
+                            &pc,
+                            goal,
+                        );
+                        Some(Val::Unit)
+                    }
                     _ => None,
                 }
             }
@@ -4901,6 +5543,29 @@ impl<'a> Exec<'a> {
                     len: base, elem, ..
                 }) = receiver
                 else {
+                    match span_op {
+                        SpanOp::Start => {
+                            let span = span_of(self, 6);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span range in bounds",
+                                &pc,
+                                Goal::Unsupported("this span is not modeled yet".into()),
+                            );
+                        }
+                        SpanOp::Index => {
+                            let span = span_of(self, 3);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span index in range",
+                                &pc,
+                                Goal::Unsupported("this span is not modeled yet".into()),
+                            );
+                        }
+                        _ => {}
+                    }
                     return None;
                 };
                 // Every range operand is an `int64` word.
@@ -4911,12 +5576,34 @@ impl<'a> Exec<'a> {
                     SpanOp::Start | SpanOp::Stop => {
                         // `base[start:end]` inside the outer range, whose
                         // endpoints count from its end when negative.
-                        let outer_start = int(self, state, 0)?;
-                        let outer_len = int(self, state, 1)?;
-                        let start = int(self, state, 2)?;
-                        let has_start = int(self, state, 3)?;
-                        let end = int(self, state, 4)?;
-                        let has_end = int(self, state, 5)?;
+                        let (
+                            Some(outer_start),
+                            Some(outer_len),
+                            Some(start),
+                            Some(has_start),
+                            Some(end),
+                            Some(has_end),
+                        ) = (
+                            int(self, state, 0),
+                            int(self, state, 1),
+                            int(self, state, 2),
+                            int(self, state, 3),
+                            int(self, state, 4),
+                            int(self, state, 5),
+                        )
+                        else {
+                            if span_op == SpanOp::Start {
+                                let span = span_of(self, 6);
+                                self.oblige(
+                                    ObligationKind::IndexInRange,
+                                    span,
+                                    "span range in bounds",
+                                    &pc,
+                                    Goal::Unsupported("this span bound is not modeled yet".into()),
+                                );
+                            }
+                            return None;
+                        };
                         self.assume(&pc, span_in_list(&outer_start, &outer_len, &base));
                         let low = self.define(
                             "Int",
@@ -4954,9 +5641,21 @@ impl<'a> Exec<'a> {
                         ))
                     }
                     SpanOp::Index => {
-                        let start = int(self, state, 0)?;
-                        let len = int(self, state, 1)?;
-                        let index = int(self, state, 2)?;
+                        let (Some(start), Some(len), Some(index)) = (
+                            int(self, state, 0),
+                            int(self, state, 1),
+                            int(self, state, 2),
+                        ) else {
+                            let span = span_of(self, 3);
+                            self.oblige(
+                                ObligationKind::IndexInRange,
+                                span,
+                                "span index in range",
+                                &pc,
+                                Goal::Unsupported("this span index is not modeled yet".into()),
+                            );
+                            return None;
+                        };
                         self.assume(&pc, span_in_list(&start, &len, &base));
                         let in_range = format!("(and (<= (- {len}) {index}) (< {index} {len}))");
                         let span = span_of(self, 3);
@@ -5074,6 +5773,50 @@ impl<'a> Exec<'a> {
                     | ArrayOp::Assign
                     | ArrayOp::AssignWords
                     | ArrayOp::UpdateWords => (None, args.len()),
+                    ArrayOp::Min | ArrayOp::Max | ArrayOp::Mean | ArrayOp::FastMean => {
+                        let goal = match parts {
+                            Some((len, ..)) => Goal::Holds(format!("(> {len} 0)")),
+                            None => {
+                                Goal::Unsupported("this Array reduction is not modeled yet".into())
+                            }
+                        };
+                        self.oblige(
+                            ObligationKind::IndexInRange,
+                            self.span,
+                            "array is not empty",
+                            &pc,
+                            goal,
+                        );
+                        return None;
+                    }
+                    ArrayOp::Dot
+                    | ArrayOp::Matmul
+                    | ArrayOp::Reshape
+                    | ArrayOp::Permute
+                    | ArrayOp::ReduceAxis
+                    | ArrayOp::MeanAxis
+                    | ArrayOp::Pairwise
+                    | ArrayOp::Choose
+                    | ArrayOp::CastInt32
+                    | ArrayOp::CastInt64
+                    | ArrayOp::CastFloat32
+                    | ArrayOp::CastFloat64
+                    | ArrayOp::UnaryInt64
+                    | ArrayOp::WrappingAdd
+                    | ArrayOp::WrappingSub
+                    | ArrayOp::WrappingMul
+                    | ArrayOp::SaturatingAdd
+                    | ArrayOp::SaturatingSub
+                    | ArrayOp::SaturatingMul => {
+                        self.oblige(
+                            ObligationKind::Overflow,
+                            self.span,
+                            "array operation preconditions hold",
+                            &pc,
+                            Goal::Unsupported("this Array operation is not modeled yet".into()),
+                        );
+                        return None;
+                    }
                     _ => return None,
                 };
                 // Every coordinate is an `int64` word.
@@ -5115,6 +5858,50 @@ impl<'a> Exec<'a> {
                 if let Some(term) = in_range {
                     self.assume(&pc, term);
                 }
+                None
+            }
+            RuntimeOp::Function(
+                function @ (FunctionOp::DurationMilliseconds
+                | FunctionOp::DurationSeconds
+                | FunctionOp::DurationMinutes),
+            ) => {
+                let max = match function {
+                    FunctionOp::DurationMilliseconds => i64::MAX,
+                    FunctionOp::DurationSeconds => i64::MAX / 1_000,
+                    FunctionOp::DurationMinutes => i64::MAX / 60_000,
+                    _ => unreachable!("matched above"),
+                };
+                let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                    Val::Int(amount, _) => {
+                        Goal::Holds(format!("(and (<= 0 {amount}) (<= {amount} {max}))"))
+                    }
+                    _ => Goal::Unsupported("this duration operand is not modeled yet".into()),
+                };
+                self.oblige(
+                    ObligationKind::Overflow,
+                    self.span,
+                    "duration value in range",
+                    &pc,
+                    goal,
+                );
+                None
+            }
+            RuntimeOp::Function(
+                FunctionOp::ListWithCapacity
+                | FunctionOp::DictWithCapacity
+                | FunctionOp::SetWithCapacity,
+            ) => {
+                let goal = match arg(self, state, 0, Some(IntTy::INT64)) {
+                    Val::Int(capacity, _) => Goal::Holds(format!("(<= 0 {capacity})")),
+                    _ => Goal::Unsupported("this capacity is not modeled yet".into()),
+                };
+                self.oblige(
+                    ObligationKind::Overflow,
+                    self.span,
+                    "capacity is not negative",
+                    &pc,
+                    goal,
+                );
                 None
             }
             RuntimeOp::Function(
@@ -5163,6 +5950,23 @@ impl<'a> Exec<'a> {
                         let span = self.span;
                         self.oblige_range_at(&pc, span, &result, ty);
                         Some(Val::Int(result, ty))
+                    }
+                    (FunctionOp::Abs, _) => {
+                        let is_float = args
+                            .first()
+                            .and_then(|arg| self.operand_type(&arg.value))
+                            .as_ref()
+                            .is_some_and(|ty| FloatTy::of(ty).is_some());
+                        if !is_float {
+                            self.oblige(
+                                ObligationKind::Overflow,
+                                self.span,
+                                "integer result in range",
+                                &pc,
+                                Goal::Unsupported("this `abs` operand is not modeled yet".into()),
+                            );
+                        }
+                        None
                     }
                     (FunctionOp::Min | FunctionOp::Max, [Val::Int(a, aty), Val::Int(b, bty)]) => {
                         let op = if function == FunctionOp::Min {

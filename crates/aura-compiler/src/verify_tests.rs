@@ -5321,3 +5321,270 @@ def main():
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn trapping_swap_and_opaque_collection_or_arithmetic_ops_emit_obligations() {
+    let cases: [(&str, &str); 17] = [
+        (
+            "ListOp::Swap out of bounds",
+            r#"
+def f(xs: mut list[int64]) -> None:
+    xs.swap(999, 999)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "dict[bool, int64] index on opaque dict",
+            r#"
+def f(d: dict[bool, int64]) -> int64:
+    return d[true]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "set[bool] remove on opaque set",
+            r#"
+def f(s: mut set[bool]) -> None:
+    s.remove(true)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested list index on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> int64:
+    return a.b.c.d.xs[999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested list pop on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: mut A) -> int64:
+    return a.b.c.d.xs.pop()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested BeginElementLoan on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> bool:
+    view v = a.b.c.d.xs[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ReborrowElement on Val::Opaque list",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> bool:
+    view xs_ref = a.b.c.d.xs
+    view v = xs_ref[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "BeginElementLoan on modeled dict missing key",
+            r#"
+def f(d: dict[int64, int64]) -> bool:
+    view v = d[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Remove",
+            r#"
+def f(xs: mut list[int64]) -> None:
+    xs.remove(999)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Set out of bounds",
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    return xs.set(999, 1)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Slice out of bounds",
+            r#"
+def f(xs: list[int64]) -> list[int64]:
+    return xs[0:999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "StrOp::Slice out of bounds",
+            r#"
+def f(s: str) -> str:
+    return s[0:999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Array division by zero",
+            r#"
+def f(arr: Array[float64]) -> Array[float64]:
+    return arr / 0.0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Array reshape unmodeled precondition",
+            r#"
+def f(arr: Array[float64]) -> Array[float64]:
+    return arr.reshape([999])
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Duration negative constructor",
+            r#"
+def f(n: int64) -> Duration:
+    return Duration.ms(n)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested integer overflow on Val::Opaque",
+            r#"
+class D:
+    x: int64
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> int64:
+    return a.b.c.d.x + 1
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested integer unary neg and int-to-float cast on Val::Opaque",
+            r#"
+class D:
+    x: int64
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> float32:
+    y = -a.b.c.d.x
+    return y as float32
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        assert!(
+            !report.is_proved(),
+            "`{label}` must emit an open obligation and not report proved: {report:#?}"
+        );
+    }
+
+    assert_proved(
+        r#"
+def safe_swap(xs: mut list[int64]) -> None:
+    requires len(xs) >= 2
+    xs.swap(0, 1)
+
+def safe_dict_loan(d: dict[int64, int64], k: int64) -> bool:
+    requires k in d
+    view v = d[k]
+    return v == 0
+
+def safe_array_mean(a: Array[float64]) -> float64:
+    requires len(a) > 0
+    return a.mean()
+
+def safe_duration() -> Duration:
+    return Duration.ms(10)
+
+def main():
+    pass
+"#,
+    );
+}
