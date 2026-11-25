@@ -451,9 +451,7 @@ impl FunctionCompiler<'_> {
                 SlotKind::Handle => {
                     let boxed = self.ensure_opaque(loaded)?;
                     let boxed = self.transfer_owned_opaque_value(&boxed);
-                    let address = self
-                        .builder
-                        .stack_addr(types::I64, boxes, (8 * position) as i32);
+                    let address = self.builder.stack_addr(types::I64, boxes, 8 * position);
                     self.builder.store(MemFlags::trusted(), boxed, address, 0);
                     position += 1;
                 }
