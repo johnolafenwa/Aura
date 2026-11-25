@@ -1372,6 +1372,66 @@ fn units_reach_each_other_through_hidden_symbols_and_copy_small_code() {
 }
 
 #[test]
+fn a_function_nothing_reaches_weighs_nothing_in_the_split() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let chain = |length: usize| {
+        move |builder: &mut dyn FunctionBackend| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let mut value = builder.block_params(entry)[0];
+            for _ in 0..length {
+                value = builder.iadd_imm(value, 1);
+            }
+            builder.return_(&[value]);
+        }
+    };
+    let callee = module
+        .declare_function("callee", Linkage::Local, &unary)
+        .expect("the callee should declare");
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let callee = builder.import_function(callee);
+            let value = builder.block_params(entry)[0];
+            let result = builder.call(callee, &[value]).results[0];
+            builder.return_(&[result]);
+        },
+    );
+    // A body every caller left for its twin sits between the two.
+    define(
+        &mut module,
+        "unreached",
+        Linkage::Local,
+        &unary,
+        chain(super::units::UNIT_WEIGHT * 3),
+    );
+    module
+        .define_function(
+            callee,
+            &unary,
+            Box::new(move |builder| {
+                chain(10)(builder);
+                builder.verify()
+            }),
+        )
+        .expect("the callee should define");
+    let partition = Partition::split(&module);
+    assert_eq!(partition.units(), 1);
+    assert_eq!(
+        defining_unit(&partition, &module, "caller"),
+        defining_unit(&partition, &module, "callee")
+    );
+}
+
+#[test]
 fn an_import_without_a_call_ties_no_units_together() {
     let LargeModule { mut module, count } = large_module(40, 250);
     let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
