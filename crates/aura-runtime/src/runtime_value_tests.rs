@@ -21781,9 +21781,9 @@ fn a_websocket_listener_goes_on_past_a_failed_handshake() {
 
 #[test]
 fn a_websocket_url_must_use_a_websocket_scheme() {
-    let error = super::WebSocketValue::connect("http://127.0.0.1:1/", None)
-        .err()
-        .expect("an http URL is refused");
+    let Err(error) = super::WebSocketValue::connect("http://127.0.0.1:1/", None) else {
+        panic!("an http URL is refused");
+    };
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     assert!(error.to_string().contains("`ws` or `wss`"), "{error}");
 }

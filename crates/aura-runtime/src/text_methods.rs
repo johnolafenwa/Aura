@@ -286,7 +286,7 @@ pub fn change_case_checked(text: &str, upper: bool) -> Result<String> {
     });
     // `str::to_lowercase` maps a final sigma by its context, which keeps
     // its length, so the count above is exact.
-    if !len.is_some_and(|len| len <= MAX_STRING_BYTES) {
+    if len.is_none_or(|len| len > MAX_STRING_BYTES) {
         return Err(string_too_long());
     }
     Ok(if upper {

@@ -14655,6 +14655,7 @@ impl ChunkedBodyDecoder {
     }
 }
 
+#[cfg(test)]
 fn try_decode_chunked_http_body_with_limit(
     buffer: &[u8],
     start: usize,
