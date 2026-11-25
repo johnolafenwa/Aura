@@ -7527,7 +7527,11 @@ pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_value(value: *mut
             1 => {
                 header.ref_count.store(0, Ordering::Relaxed);
                 // SAFETY: the ledger held the last reference.
-                unsafe { free_direct_value(value) };
+                unsafe {
+                    if !keep_spare_list(value) {
+                        free_direct_value(value);
+                    }
+                }
             }
             count => header.ref_count.store(count - 1, Ordering::Relaxed),
         }
@@ -9232,6 +9236,127 @@ pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     })
 }
 
+/// The most elements a spare list keeps room for (see [`SpareList`]).
+const SPARE_LIST_MAX_ROOM: usize = 4096;
+
+/// The box of the last confined list of unboxed scalars this thread freed,
+/// emptied but keeping its storage, or null. A loop that builds a fresh
+/// list each pass and drops the last one (`following = []` ...
+/// `current = following`) then takes the same box and storage again
+/// instead of allocating a box, and its first appends go in place.
+struct SpareList(std::cell::Cell<*mut OpaqueValue>);
+
+impl Drop for SpareList {
+    fn drop(&mut self) {
+        let spare = self.0.replace(std::ptr::null_mut());
+        if !spare.is_null() {
+            // SAFETY: the slot owns the box, which `keep_spare_list` counted
+            // as freed already.
+            drop(unsafe { Box::from_raw(spare) });
+        }
+    }
+}
+
+thread_local! {
+    static SPARE_LIST: SpareList = const { SpareList(std::cell::Cell::new(std::ptr::null_mut())) };
+}
+
+/// Keeps `value`, a list box whose last reference was just dropped, as the
+/// thread's spare list instead of freeing it, when it is a confined list
+/// whose unshared storage holds unboxed scalars, freeing the spare it
+/// replaces. `false`, with the box untouched, for any other value; the
+/// caller frees it.
+///
+/// # Safety
+///
+/// `value` is live and confined to this thread, its count has reached
+/// zero, and no ledger links it.
+#[inline]
+unsafe fn keep_spare_list(value: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller's contract.
+    let header = unsafe { &*value };
+    let access = header.list_access.load(Ordering::Relaxed);
+    if !(crate::list_elements::ListForm::Int64.access()
+        ..=crate::list_elements::ListForm::Float32.access())
+        .contains(&access)
+        || !header.shared_lock.load(Ordering::Relaxed).is_null()
+    {
+        return false;
+    }
+    SPARE_LIST
+        .try_with(|spare| {
+            // SAFETY: the caller holds the only reference.
+            let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+                return false;
+            };
+            // Room means the storage is unshared. Any form the list holds
+            // is one an empty list of its type may hold too: popping every
+            // element leaves it so.
+            let (_, _, _, room) = vector.elements.view();
+            if room == 0 || room > SPARE_LIST_MAX_ROOM {
+                return false;
+            }
+            // Elements generated code appended in place past the stored
+            // length are scalars too, so dropping the length forgets them.
+            vector.elements.truncate(0);
+            if !vector.str_view.is_empty() {
+                vector.str_view = Default::default();
+            }
+            // The newest list wins: a loop's lists are freed last.
+            let older = spare.0.replace(value);
+            if !older.is_null() {
+                // SAFETY: the slot owned the older spare, counted as freed.
+                drop(unsafe { Box::from_raw(older) });
+            }
+            crate::runtime_value::representation_stats::note_box_freed();
+            #[cfg(coverage)]
+            DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+            true
+        })
+        .unwrap_or(false)
+}
+
+/// The thread's spare list (see [`SpareList`]) as a new empty list of the
+/// type `tag` names, registered as `boxed_value_with_type` registers a new
+/// box, or `None` when there is no spare of that type.
+fn take_spare_list(tag: &RuntimeTypeTag) -> Option<*mut OpaqueValue> {
+    let element_type = tag.list_element.as_ref()?;
+    SPARE_LIST
+        .try_with(|spare| {
+            let boxed = spare.0.get();
+            if boxed.is_null() {
+                return None;
+            }
+            // SAFETY: the slot owns the box, and nothing else reaches it.
+            let header = unsafe { &*boxed };
+            let Value::Vec(vector) = (unsafe { &*header.value.get() }) else {
+                return None;
+            };
+            if !std::ptr::eq::<Type>(&*vector.element_type, &**element_type)
+                || !unsafe { &*header.runtime_type_name.get() }
+                    .as_ref()
+                    .is_some_and(|name| {
+                        std::ptr::eq(name.as_str(), tag.name.as_str()) || *name == tag.name
+                    })
+            {
+                return None;
+            }
+            spare.0.set(std::ptr::null_mut());
+            header.ref_count.store(1, Ordering::Relaxed);
+            header.refresh_list_view();
+            header
+                .shape_tag
+                .store(std::ptr::from_ref(tag).cast_mut(), Ordering::Relaxed);
+            #[cfg(coverage)]
+            DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+            crate::runtime_value::representation_stats::note_opaque_box();
+            register_direct_owned_value(boxed);
+            Some(boxed)
+        })
+        .ok()
+        .flatten()
+}
+
 /// An empty list of the list type the tag in `cell` names, as
 /// `aura_direct_vec_empty` and then `aura_direct_tag_value_type_cell` with
 /// the same cell would make it, in one call and with one copy of the
@@ -9247,6 +9372,9 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             runtime_error("direct runtime received a null type tag cell");
         };
         let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
+        if let Some(boxed) = take_spare_list(tag) {
+            return boxed;
+        }
         let Some(element_type) = tag.list_element.clone() else {
             runtime_error(format!("an empty list cannot take the type `{}`", tag.name));
         };

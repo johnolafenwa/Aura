@@ -1,0 +1,52 @@
+# A loop that builds a fresh list each pass and keeps the last one gets the
+# box and storage of the list it dropped, emptied, so nothing of the old
+# list shows in the new one.
+
+
+def step(current: list[int64], limit: int64) -> list[int64]:
+    mut following: list[int64] = []
+    for value in current:
+        if value + 1 < limit:
+            following.append(value + 1)
+        following.append(value * 2 % limit)
+    return following
+
+
+def total(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+
+def main():
+    mut current: list[int64] = [1, 2, 3]
+    mut sums: list[int64] = []
+    for _ in range(6):
+        current = step(current, 11)
+        sums.append(total(current))
+    print(f"{current.len()} {sums}")
+
+    # A list kept past the loop is not reused while it lives.
+    mut kept: list[list[int64]] = []
+    mut previous: list[int64] = []
+    for round in range(4):
+        mut fresh: list[int64] = []
+        for i in range(round + 1):
+            fresh.append(i * 10 + round)
+        kept.append(previous.copy())
+        previous = fresh
+    print(f"{kept} {previous}")
+
+    # Lists of other element types each take their own boxes.
+    mut floats: list[float64] = []
+    mut flags: list[bool] = []
+    for round in range(3):
+        mut next_floats: list[float64] = []
+        mut next_flags: list[bool] = []
+        for i in range(round + 2):
+            next_floats.append(i as float64 / 2.0)
+            next_flags.append(i % 2 == 0)
+        floats = next_floats
+        flags = next_flags
+    print(f"{floats} {flags}")

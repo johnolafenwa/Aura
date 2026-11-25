@@ -1802,6 +1802,12 @@ pub struct StrView {
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 
 impl StrViewCache {
+    /// Whether no view was ever made.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed).is_null()
+    }
+
     /// The view, made empty on first use.
     ///
     /// # Safety

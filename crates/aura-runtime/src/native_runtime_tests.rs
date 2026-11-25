@@ -27983,6 +27983,75 @@ fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
 }
 
 #[test]
+fn a_freed_scalar_list_is_the_next_empty_list_of_its_type() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let ints = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let floats = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+            let list_of = |element: &str| {
+                super::canonical_runtime_type_name(&Type::Named(
+                    "list".to_string(),
+                    vec![Type::named(element)],
+                ))
+            };
+            let (int_list, float_list) = (list_of("int64"), list_of("float64"));
+            let empty = |cell: &std::sync::atomic::AtomicPtr<std::ffi::c_void>, name: &str| {
+                super::aura_direct_vec_empty_tagged(cell, name.as_ptr(), name.len())
+            };
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let int64 = super::DirectScalarKind::Int64 as i64;
+
+            let first = empty(&ints, &int_list);
+            for bits in 0..3 {
+                super::aura_direct_vec_push_scalar(first, bits, int64);
+            }
+            unsafe { super::aura_direct_release_last_owned_value(first) };
+            assert!(entries().is_empty());
+            // A list of another type makes a box of its own.
+            let other = empty(&floats, &float_list);
+            assert_ne!(other, first);
+            unsafe { super::aura_direct_release_last_owned_value(other) };
+            // `other` was freed last, so it is the spare now, and `first`
+            // is freed.
+            let again = empty(&floats, &float_list);
+            assert_eq!(again, other);
+            unsafe { super::aura_direct_release_last_owned_value(again) };
+
+            // The spare comes back empty, owned by the ledger, with the
+            // shape of its tag and room for the elements it held.
+            // The float spare is not taken for an int list.
+            let list = empty(&ints, &int_list);
+            assert_ne!(list, other);
+            for bits in 0..3 {
+                super::aura_direct_vec_push_scalar(list, bits, int64);
+            }
+            unsafe { super::aura_direct_release_last_owned_value(list) };
+            let reused = empty(&ints, &int_list);
+            assert_eq!(reused, list);
+            // Room shows until the next runtime access takes it back.
+            assert!(list_view_capacity(reused) >= 3);
+            assert_eq!(super::aura_direct_vec_len(reused), 0);
+            assert_eq!(entries(), [(reused as usize, 1)]);
+            assert_eq!(
+                unsafe { &*reused }.shape_tag.load(Ordering::Relaxed).cast::<std::ffi::c_void>(),
+                ints.load(Ordering::Relaxed)
+            );
+            super::aura_direct_vec_push_scalar(reused, 7, int64);
+            assert_eq!(super::aura_direct_vec_len(reused), 1);
+
+            // A list whose storage another list shares is freed, not kept.
+            let copy = super::aura_direct_clone_value(reused);
+            unsafe { super::aura_direct_release_last_owned_value(reused) };
+            assert!(super::SPARE_LIST.with(|spare| spare.0.get().is_null()));
+            unsafe { super::aura_direct_release_value(copy) };
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
 fn a_list_made_with_room_takes_its_literal_in_place() {
     let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
     let descriptor = super::canonical_runtime_type_name(&Type::Named(
