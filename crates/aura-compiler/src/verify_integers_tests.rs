@@ -1363,7 +1363,8 @@ def main():
 fn a_cast_in_a_contract_has_the_run_time_checks() {
     // The caller must show each cast in a `requires` is one the run time
     // accepts: 128 is not an `int8`, a float outside `int64` has no
-    // integer value, and 2^53 + 1 is not a `float64`.
+    // integer value, 2^53 + 1 is not a `float64`, and an `int128` past
+    // the `int64` range has no `int64` value.
     assert_open(
         r#"
 def narrow(x: int64) -> int8:
@@ -1409,8 +1410,22 @@ def main():
             "8 requires failed",
             "16 requires failed",
             "27 requires failed",
-            "30 overflow unsupported",
         ],
+    );
+    assert_open(
+        r#"
+def wide(x: int128) -> int64:
+    requires x as int64 > 0
+    return 1
+
+def use_wide(x: int128) -> int64:
+    requires x > 9223372036854775807 or x == 5
+    return wide(x)
+
+def main():
+    print(use_wide(5 as int128))
+"#,
+        &["8 requires failed"],
     );
 }
 

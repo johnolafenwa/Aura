@@ -206,11 +206,11 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 1077072,
-      "reference_agent": 2580760,
-      "json": 1838368,
-      "tls": 3671424,
-      "websocket": 3953416
+      "hello_world": 1163776,
+      "reference_agent": 2714904,
+      "json": 2022744,
+      "tls": 3857512,
+      "websocket": 4159808
     },
     "darwin-arm64": {
       "hello_world": 1157192,
