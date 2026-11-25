@@ -12,6 +12,8 @@
 //! unknown (the solver gave up), or unsupported (the step is outside the
 //! subset the encoding models). Only proved obligations count as proof.
 
+#[path = "verify_cache.rs"]
+mod cache;
 #[path = "verify_closures.rs"]
 mod closures;
 #[path = "verify_collections.rs"]
@@ -1269,6 +1271,10 @@ pub fn verify_module(
     let mut merged: BTreeMap<(String, (usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
+    let proof_cache = options
+        .cache_dir
+        .as_deref()
+        .and_then(cache::ProofCache::open);
     let mut erased_open = options.prove_sites && options.function_filter.is_some();
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
@@ -1396,11 +1402,13 @@ pub fn verify_module(
         if is_erased_only && !exec.obligations.iter().any(|ob| ob.erased) {
             continue;
         }
-        let cache = options
-            .cache_dir
-            .as_deref()
-            .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
-        let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
+        let cache = proof_cache
+            .as_ref()
+            .map(|proof_cache| (proof_cache, cache_key(&version, options, &exec)));
+        let statuses = match cache
+            .as_ref()
+            .and_then(|(proof_cache, key)| proof_cache.read(key, exec.obligations.len()))
+        {
             Some(statuses) => {
                 if is_primary && !is_copy {
                     report.cached += 1;
@@ -1426,8 +1434,12 @@ pub fn verify_module(
                 };
                 let statuses = solve(main_lane, rough, sample, &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
-                if let Some(path) = &cache {
-                    write_cache(path, &statuses);
+                // An answer the solver gave up on depends on the machine's
+                // speed, so it is solved again next time.
+                if let Some((proof_cache, key)) = &cache {
+                    if !statuses.contains(&Status::Unknown) {
+                        proof_cache.write(key, &statuses);
+                    }
                 }
                 statuses
             }
@@ -1513,7 +1525,7 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
         hasher.update(text.len().to_le_bytes());
         hasher.update(text.as_bytes());
     };
-    part("aura-verify-cache-2");
+    part("aura-verify-cache-3");
     part(version);
     part(&options.timeout_ms.to_string());
     for decl in &exec.decls {
@@ -1552,30 +1564,6 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
-}
-
-/// The cached statuses at `path`, when there is one for every obligation.
-fn read_cache(path: &std::path::Path, exec: &exec::Exec<'_>) -> Option<Vec<Status>> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let statuses: Vec<Status> = serde_json::from_str(&text).ok()?;
-    (statuses.len() == exec.obligations.len()).then_some(statuses)
-}
-
-/// Records decided statuses. An answer the solver gave up on depends on the
-/// machine's speed, so it is solved again next time. Failing to write only
-/// loses the cache entry.
-fn write_cache(path: &std::path::Path, statuses: &[Status]) {
-    if statuses.contains(&Status::Unknown) {
-        return;
-    }
-    let text = serde_json::to_string(statuses).expect("statuses serialize");
-    let temp = path.with_extension(format!("tmp{}", std::process::id()));
-    let written = std::fs::create_dir_all(path.parent().expect("a cache file has a directory"))
-        .and_then(|()| std::fs::write(&temp, text))
-        .and_then(|()| std::fs::rename(&temp, path));
-    if written.is_err() {
-        let _ = std::fs::remove_file(&temp);
-    }
 }
 
 /// The time limit of the first, weaker query of a check that reads a float
