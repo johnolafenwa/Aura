@@ -29350,6 +29350,8 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
         .flat_map(|len| len.to_le_bytes())
         .collect::<Vec<_>>();
     super::aura_direct_vec_push_str_literals(list, texts.as_ptr(), lens.as_ptr(), 4);
+    // Their view is ready for the reads that follow.
+    assert_eq!(list_view_access(list), super::DirectListAccess::Str as u32);
     match unsafe { value_ref(list) } {
         Value::Vec(vector) => assert_eq!(
             vector.elements.to_vec(),

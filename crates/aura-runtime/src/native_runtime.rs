@@ -1708,6 +1708,45 @@ impl OpaqueValue {
         }
     }
 
+    /// Records where every element of a confined `list[str]` lies and
+    /// switches the view to [`DirectListAccess::Str`] now, as
+    /// [`Self::note_str_view_miss`] does once reads have missed the view
+    /// often enough: for a list of literals, which a program builds to read.
+    fn build_str_view(&self) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32 {
+            return;
+        }
+        let _access = self.access(false);
+        if self.shared_lock().is_some() {
+            return;
+        }
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let ListElements::Values(values) = &vector.elements else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses = 0;
+        view.entries.clear();
+        for element in values.iter() {
+            let Value::String(text) = element else {
+                view.entries.clear();
+                return;
+            };
+            view.entries.push(DirectStrViewEntry {
+                ptr: text.as_ptr() as usize,
+                len: text.len(),
+            });
+        }
+        self.list_elements.set(view.entries.as_ptr() as usize);
+        self.list_access
+            .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+    }
+
     /// Counts one element read of a confined `list[str]` that missed the
     /// list view. Once the misses since the last build reach an eighth of
     /// the length, it records where every element lies and switches the
@@ -9454,6 +9493,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literals(
         with_vector_mut(vec, |vector| {
             vector.elements.append(ListElements::from(values))
         });
+        // SAFETY: generated code passes a live list box.
+        if let Some(header) = unsafe { vec.as_ref() } {
+            header.build_str_view();
+        }
     })
 }
 
