@@ -669,11 +669,10 @@ Sometimes the check cannot fail and the verifier still reports it, because
 it lacks a fact. It proves each function from the contracts of the
 functions it calls, never from their bodies, and it proves a loop from its
 `invariant` clauses. So the fix is to state the fact where it becomes true:
-an `ensures` on the callee, or an `invariant` on the loop. A value that
-came from a library call the verifier does not model, such as `str.split`
-or anything read from a file, is unknown to it, and a check that depends on
-one is reported under this code too. Test the value in your own code before
-you use it, and the proof goes through.
+an `ensures` on the callee, or an `invariant` on the loop. A check that
+fails only because of a value the verifier does not model, such as anything
+read from a file, is reported as `AU5104` instead, naming that step. Test
+the value in your own code before you use it, and the proof goes through.
 
 ### `AU5102`: the solver gave up
 
@@ -704,32 +703,41 @@ solver too.
 ### `AU5104`: outside what the verifier models
 
 ```aura
-def flag(bit: int64) -> int64:
-    requires 0 <= bit and bit < 16
-    return 1 << bit
+def total(xs: list[int64]) -> int64:
+    requires all([x >= 0 for x in xs])
+    ensures result >= 0
+    return sum(xs)
 
 
 def main():
-    print(flag(3))
+    print(total([1, 2, 3]))
 ```
 
 ```console
-$ aura verify flags.au
-error[AU5104]: cannot check operation outside the verified subset: `Shl` is not modeled yet
- --> flags.au:3:12
+$ aura verify total.au
+error[AU5104]: cannot check `ensures` clause `result >= 0`: it depends on a comprehension or built-in loop at line 4, which the verifier does not model
+ --> total.au:3:13
   |
-3 |     return 1 << bit
+3 |     ensures result >= 0
+  |             ^
+  = note: in `total` (ensures check)
+error[AU5104]: cannot check integer result in range: it depends on a comprehension or built-in loop at line 4, which the verifier does not model
+ --> total.au:4:12
+  |
+4 |     return sum(xs)
   |            ^
-  = note: in `flag` (overflow check)
-verified flags.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+  = note: in `total` (overflow check)
+verified total.au: 1 of 3 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 0 failed, 2 not modeled, 0 undecided
 ```
 
-The check depends on an operation the verifier does not reason about, here
-a left shift. This is not a claim that the code is wrong. The check is
-neither proved nor refuted, it stays in the program as a run-time check,
-and `aura run flags.au` prints `8`. You can leave it, or rewrite the step
-with operations the verifier models, such as a multiplication for a shift.
+The checks depend on a step the verifier does not reason about, here what
+`sum` adds up to, and the message names it and its line. This is not a
+claim that the code is wrong. The checks are neither proved nor refuted,
+they stay in the program as run-time checks, and `aura run total.au` prints
+`6`. You can leave them, or write the step as a loop with an `invariant`,
+which the verifier does follow.
 The same code is reported for a contract clause the verifier cannot read,
-such as one that uses an `as` cast. The
+such as a call of a library function. The
 [Verification](/manual/verification) page of the Manual lists what is
 modeled.
