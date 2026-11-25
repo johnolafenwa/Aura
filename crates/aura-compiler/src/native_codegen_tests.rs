@@ -15704,8 +15704,9 @@ fn direct_queue_receives_and_discarded_puts_build_no_variant() {
     let mir = lower_source_to_mir(QUEUE_SLOT_SOURCE).expect("the queue program should lower");
     let object = emit_host_object(&mir).expect("the queue program should compile directly");
     let referenced = exact_referenced_symbols(&object);
+    // A discarded put of an `int64` passes the integer, with no box.
     for required in [
-        "aura_direct_channel_send_discarded",
+        "aura_direct_channel_send_discarded_i64",
         "aura_direct_channel_recv_item",
         "aura_direct_channel_recv_in_task_group_item",
     ] {
