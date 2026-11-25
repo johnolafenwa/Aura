@@ -9001,7 +9001,7 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         1
     );
     assert_eq!(super::aura_direct_vec_swap_in_place(vec, 0, 1), 1);
-    expect_unit(super::aura_direct_vec_reverse_in_place(vec));
+    assert_eq!(super::aura_direct_vec_reverse_in_place(vec), 1);
     assert_eq!(expect_int(super::aura_direct_vec_index(vec, 0, 1, 1)), 5);
     assert_eq!(
         expect_lookup_found_int(super::aura_direct_vec_index_option(vec, 1)),
@@ -9014,15 +9014,15 @@ fn direct_runtime_vec_helpers_cover_collection_surface() {
         1,
         1,
     ));
-    expect_unit(super::aura_direct_vec_extend_in_place(
-        vec,
-        int_vec(&[7, 9]),
-    ));
+    assert_eq!(
+        super::aura_direct_vec_extend_in_place(vec, int_vec(&[7, 9])),
+        1
+    );
     assert_eq!(
         expect_vec_ints(super::aura_direct_clone_value(vec)),
         vec![5, 42, 7, 9]
     );
-    expect_unit(super::aura_direct_vec_clear_in_place(vec));
+    assert_eq!(super::aura_direct_vec_clear_in_place(vec), 1);
     assert_eq!(super::aura_direct_vec_len(vec), 0);
     expect_lookup_missing(super::aura_direct_vec_index_option(vec, 0));
 
@@ -16927,6 +16927,14 @@ fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
         assert!(!unsafe { super::DirectFrameStack::generated_push(stack, callee as *const _) });
         unsafe { super::aura_direct_enter_frame(callee as *const _) };
         assert_eq!(super::aura_direct_current_mutable_sink(0), 7);
+        // Its own callees hold nothing, so they come and go in generated
+        // code and read no sink.
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
+        assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
+        assert_eq!(super::aura_direct_current_mutable_sink(0), 0);
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+        assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
+        assert_eq!(super::aura_direct_current_mutable_sink(0), 7);
         assert!(
             !unsafe { super::DirectFrameStack::generated_pop(stack) },
             "a call holding sinks leaves through the runtime"
@@ -17231,13 +17239,21 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
         "plain calls must not store returned-view records"
     );
 
+    assert_eq!(views.pop_guard(), 0);
+
     // A callee's returned projection reaches its caller once.
     views.enter(1, Vec::new());
     views.enter(2, Vec::new());
     let callee = views.current_mut(2);
     callee.returned = Some("items[*]".to_string());
     callee.returned_selectors.push(9);
+    assert_eq!(views.pop_guard(), 2, "the callee's own exit has work");
     views.exit(2);
+    assert_eq!(
+        views.pop_guard(),
+        2,
+        "the next exit at depth 2 replaces the handed-over view"
+    );
     assert_eq!(
         views
             .current(1)
@@ -17246,6 +17262,7 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
     );
     assert_eq!(views.take_pending_child(1).as_deref(), Some("items[*]"));
     assert_eq!(views.take_pending_child(1), None);
+    assert_eq!(views.pop_guard(), 2, "the selectors are still handed over");
 
     // A later child that returns no view clears the caller's earlier one.
     views.enter(2, Vec::new());
@@ -17261,6 +17278,7 @@ fn native_runtime_returned_views_store_only_calls_that_use_them() {
 
     // Mutable sinks belong to the call that received them.
     views.enter(1, vec![5]);
+    assert_eq!(views.pop_guard(), 1);
     views.enter(2, Vec::new());
     assert!(views.current(2).is_none());
     views.exit(2);
@@ -26228,7 +26246,7 @@ fn direct_span_operations_check_every_range_against_the_base_list() {
     )));
 
     let extracted = span(base, EXTRACT, [1, 3, 0, 0, 0, 0, 0, 0], null);
-    expect_unit(super::aura_direct_vec_reverse_in_place(extracted));
+    assert_eq!(super::aura_direct_vec_reverse_in_place(extracted), 1);
     expect_unit(span(base, RESTORE, [1, 0, 0, 0, 0, 0, 0, 0], extracted));
     expect_unit(span(base, FILL, [3, 2, 0, 0, 0, 0, 0, 0], int_value(0)));
     assert_eq!(
@@ -27968,7 +27986,7 @@ fn list_view_follows_every_write() {
     assert_eq!(list_view_len(list), 39);
     assert_eq!(read_list_view_word(copy, 39, int64), 99);
     assert_eq!(read_list_view_word(list, 38, int64), 38);
-    expect_unit(super::aura_direct_vec_clear_in_place(list));
+    assert_eq!(super::aura_direct_vec_clear_in_place(list), 1);
     assert_eq!(list_view_len(list), 0);
     // A write that unwinds still refreshes the view.
     let result = std::panic::catch_unwind(|| unsafe {
@@ -29260,6 +29278,34 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
                 Value::String("let".into()),
                 Value::String("a much longer literal than fits inline".into())
             ]
+        ),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
+    // A literal of `str` literals joins in one call, from one table of
+    // length-prefixed texts, to an empty list or after other elements.
+    let mut table = Vec::new();
+    let words = ["0", "", "a much longer literal than fits inline", "f"];
+    for word in words {
+        table.extend_from_slice(&(word.len() as u32).to_le_bytes());
+        table.extend_from_slice(word.as_bytes());
+    }
+    let expected: Vec<Value> = words
+        .iter()
+        .map(|word| Value::String((*word).into()))
+        .collect();
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    super::aura_direct_vec_push_str_literals(list, table.as_ptr(), table.len(), 4);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(vector.elements.to_vec(), expected),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    super::aura_direct_vec_push_str_literals(list, table.as_ptr(), table.len(), 4);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(
+            vector.elements.to_vec(),
+            [expected.clone(), expected].concat()
         ),
         other => panic!("expected a list, found {other:?}"),
     }

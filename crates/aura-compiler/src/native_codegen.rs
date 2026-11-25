@@ -8192,6 +8192,33 @@ impl<'a> FunctionCompiler<'a> {
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        // A literal that spells only `str` literals joins them in one call,
+        // from one table of length-prefixed texts.
+        if resolved_is_str && !wildcard && elements.len() > 1 {
+            let texts: Option<Vec<&str>> = elements
+                .iter()
+                .map(|element| match element {
+                    Operand::String(text) if u32::try_from(text.len()).is_ok() => {
+                        Some(text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if let Some(texts) = texts {
+                let mut table = Vec::new();
+                for text in &texts {
+                    table.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                    table.extend_from_slice(text.as_bytes());
+                }
+                let (ptr, len) = self.string_constant(&table)?;
+                let count = self.builder.iconst(types::I64, texts.len() as i64);
+                self.builder.call(
+                    self.runtime[RuntimeFn::VecPushStrLiterals],
+                    &[vector.values[0], ptr, len, count],
+                );
+                return Ok(vector);
+            }
+        }
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
         let record = self.plain_record(&element_direct_ty)?;
@@ -18929,14 +18956,13 @@ impl<'a> FunctionCompiler<'a> {
                 let loaded = self.load_operand(&args[0].value)?;
                 let other = self.ensure_opaque(loaded)?;
                 let other = self.transfer_owned_opaque_value(&other);
-                let results = self.runtime_call_results(function, &[list, other]);
-                self.release_opaque_handle(results[0]);
+                // The call returns 1, not a box of `None`.
+                self.builder.call(function, &[list, other]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             ListOp::Clear | ListOp::Reverse => {
-                let results = self.runtime_call_results(function, &[list]);
-                self.release_opaque_handle(results[0]);
+                self.builder.call(function, &[list]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

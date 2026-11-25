@@ -1,0 +1,10 @@
+400c,6012,8018,a01e,c024,e02a
+36 6 ada!
+400c,6012
+40 8 ada!!
+4 ff a much longer literal than fits inline
+[only]
+[a, b, c, d, e]
+[] 0
+[1, 2, 3, 9, 8]
+0

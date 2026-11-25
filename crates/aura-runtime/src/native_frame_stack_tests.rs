@@ -189,17 +189,58 @@ fn runtime_flags_send_pushes_and_pops_to_the_runtime() {
     let mut stack = OwnedStack::new();
     let leaf = descriptor(b"leaf");
     assert!(stack.generated_push(leaf));
-    for flag in [
-        DIRECT_FRAME_FLAG_PENDING_SINKS,
-        DIRECT_FRAME_FLAG_RETURNED_VIEWS,
-    ] {
-        stack.get().set_runtime_flags(flag);
-        assert_eq!(stack.get().flags(), flag);
-        assert!(!stack.generated_push(leaf));
-        assert!(!stack.generated_pop());
-        stack.get().set_runtime_flags(0);
-        assert_eq!(stack.get().flags(), 0);
-    }
+    stack
+        .get()
+        .set_runtime_flags(DIRECT_FRAME_FLAG_PENDING_SINKS, 0);
+    assert_eq!(stack.get().flags(), DIRECT_FRAME_FLAG_PENDING_SINKS);
+    assert!(!stack.generated_push(leaf));
+    assert!(!stack.generated_pop());
+    stack.get().set_runtime_flags(0, 0);
+    assert_eq!(stack.get().flags(), 0);
+    assert!(stack.generated_pop());
+}
+
+#[test]
+fn a_returned_view_record_keeps_only_the_pops_at_or_below_its_guard_in_the_runtime() {
+    let mut stack = OwnedStack::new();
+    let leaf = descriptor(b"leaf");
+    assert!(stack.generated_push(leaf));
+    // The call at depth 1 holds a record: calls below it push and pop in
+    // generated code, and only its own pop goes to the runtime.
+    stack
+        .get()
+        .set_runtime_flags(DIRECT_FRAME_FLAG_RETURNED_VIEWS, 1);
+    assert_eq!(stack.get().flags(), DIRECT_FRAME_FLAG_RETURNED_VIEWS);
+    assert!(stack.generated_push(leaf));
+    assert!(stack.generated_push(leaf));
+    assert!(stack.generated_pop());
+    assert!(stack.generated_pop());
+    assert!(
+        !stack.generated_pop(),
+        "the record's own pop needs the runtime"
+    );
+    // A guard one deeper also keeps the pop of the call above the record.
+    stack
+        .get()
+        .set_runtime_flags(DIRECT_FRAME_FLAG_RETURNED_VIEWS, 2);
+    assert!(stack.generated_push(leaf));
+    assert!(!stack.generated_pop());
+    assert!(stack.get().pop_call());
+    // The guard counts from the floor.
+    stack.get().set_depth(0);
+    assert!(stack.generated_push(leaf));
+    assert!(stack.generated_push(leaf));
+    assert!(stack.generated_push(leaf));
+    assert!(stack.generated_pop());
+    assert!(!stack.generated_pop());
+    // Any other flag still sends both to the runtime.
+    stack.get().set_runtime_flags(
+        DIRECT_FRAME_FLAG_RETURNED_VIEWS | DIRECT_FRAME_FLAG_PENDING_SINKS,
+        1,
+    );
+    assert!(!stack.generated_push(leaf));
+    assert!(!stack.generated_pop());
+    stack.get().set_runtime_flags(0, 0);
     assert!(stack.generated_pop());
 }
 

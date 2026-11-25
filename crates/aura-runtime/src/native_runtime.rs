@@ -682,6 +682,23 @@ impl DirectReturnedViewStack {
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// The deepest depth whose exit changes a record: the innermost
+    /// record's own depth, or the depth of its child while it holds a view
+    /// a child handed over, which the next exit there replaces. An exit
+    /// deeper than that finds no record of its own and hands its parent
+    /// nothing, so it has no work here. Zero when no record is held.
+    fn pop_guard(&self) -> usize {
+        match self.entries.last() {
+            Some((depth, frame))
+                if frame.pending_child.is_some() || !frame.pending_child_selectors.is_empty() =>
+            {
+                depth + 1
+            }
+            Some((depth, _)) => *depth,
+            None => 0,
+        }
+    }
 }
 
 enum DirectPendingMutableSinks {
@@ -787,7 +804,8 @@ impl DirectTaskRuntimeState {
         if !self.returned_views.is_empty() {
             flags |= DIRECT_FRAME_FLAG_RETURNED_VIEWS;
         }
-        self.frames_mut().set_runtime_flags(flags);
+        let pop_guard = self.returned_views.pop_guard();
+        self.frames_mut().set_runtime_flags(flags, pop_guard);
     }
 }
 
@@ -9429,6 +9447,37 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
     })
 }
 
+/// Appends the `count` `str` literals of a list literal that spells only
+/// `str` literals, in one call. `table` holds each literal as its byte
+/// length, four bytes little-endian, then its bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_literals(
+    vec: *mut OpaqueValue,
+    table: *const u8,
+    table_len: usize,
+    count: usize,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: generated code passes its own constant table.
+        let mut rest = unsafe { slice::from_raw_parts(table, table_len) };
+        let mut values = Vec::with_capacity(count);
+        while let Some((len, tail)) = rest.split_first_chunk::<4>() {
+            let (text, tail) = tail.split_at(u32::from_le_bytes(*len) as usize);
+            values.push(Value::String(utf8_text(text).into()));
+            rest = tail;
+        }
+        with_vector_mut(vec, |vector| {
+            if vector.elements.is_empty() && matches!(vector.elements, ListElements::Values(_)) {
+                vector.elements = values.into();
+            } else {
+                for value in values {
+                    vector.elements.push(value);
+                }
+            }
+        });
+    })
+}
+
 /// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
 /// `append` of a copy in a box does, with no box made for the copy.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -9872,21 +9921,22 @@ pub extern "C-unwind" fn aura_direct_vec_insert_in_place(
     })
 }
 
+/// `list.clear()`. It returns 1 rather than a box of `None`, which
+/// generated code would only free.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> *mut OpaqueValue {
+pub extern "C-unwind" fn aura_direct_vec_clear_in_place(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         with_vector_mut(vec, |vector| vector.elements.clear());
-        boxed_value(Value::Unit)
+        1
     })
 }
 
+/// `list.reverse()`, which returns 1 as `clear` does.
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(
-    vec: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+pub extern "C-unwind" fn aura_direct_vec_reverse_in_place(vec: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| {
         with_vector_mut(vec, |vector| vector.elements.reverse());
-        boxed_value(Value::Unit)
+        1
     })
 }
 
@@ -10102,18 +10152,20 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
     })
 }
 
+/// `list.extend(other)`, which consumes `other` and returns 1 as `clear`
+/// does.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     vec: *mut OpaqueValue,
     other: *mut OpaqueValue,
-) -> *mut OpaqueValue {
+) -> i64 {
     task_runtime_boundary(|| {
         let other = unsafe { consume_owned_value(other) };
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `list[T]` value");
         };
         with_vector_mut(vec, |vector| vector.elements.append(other.elements));
-        boxed_value(Value::Unit)
+        1
     })
 }
 

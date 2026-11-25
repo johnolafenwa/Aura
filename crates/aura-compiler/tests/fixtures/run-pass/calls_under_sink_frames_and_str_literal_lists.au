@@ -1,0 +1,82 @@
+# Calls made below a frame that holds mutable sinks or a returned view, list
+# literals spelled with `str` literals, and in-place list methods.
+class Counter:
+    total: int64
+
+    def bump(mut self, by: int64) -> int64:
+        self.total += by
+        return self.total
+
+
+class Profile:
+    name: str
+    visits: int64
+
+
+def visits_of(profile: mut Profile) -> view mut int64 from profile:
+    return view mut profile.visits
+
+
+def digit(value: int64) -> str:
+    digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    return digits[value % 16].clone()
+
+
+def hex(value: int64) -> str:
+    if value == 0:
+        return "0"
+    mut rest = value
+    mut text = ""
+    while rest > 0:
+        text = digit(rest) + text
+        rest = rest // 16
+    return text
+
+
+def leaf(value: int64) -> int64:
+    return value * 2 + 1
+
+
+def deep(value: int64, depth: int64) -> int64:
+    if depth == 0:
+        return leaf(value)
+    return deep(value, depth - 1) + 1
+
+
+def fill(counter: mut Counter, profile: mut Profile, rounds: int64) -> str:
+    # Both parameters reach this call as sinks, so its frame holds a record
+    # while every call below it runs.
+    mut words: list[str] = []
+    for i in range(rounds):
+        _ = counter.bump(leaf(i))
+        words.append(hex(deep(i, 3) * 4099))
+        view mut visits = visits_of(profile)
+        visits += 1
+    profile.name = profile.name + "!"
+    return ",".join(words)
+
+
+def main():
+    mut counter = Counter(total=0)
+    mut profile = Profile(name="ada", visits=0)
+    print(fill(counter, profile, 6))
+    print(f"{counter.total} {profile.visits} {profile.name}")
+    print(fill(counter, profile, 2))
+    print(f"{counter.total} {profile.visits} {profile.name}")
+
+    mixed = ["x", hex(255), "", "a much longer literal than fits inline"]
+    print(f"{mixed.len()} {mixed[1]} {mixed[3]}")
+    single = ["only"]
+    print(single)
+    mut parts = ["c", "b", "a"]
+    parts.reverse()
+    parts.extend(["d", "e"])
+    print(parts)
+    parts.clear()
+    print(f"{parts} {parts.len()}")
+    mut bytes: list[uint8] = [3, 2, 1]
+    bytes.reverse()
+    bytes.extend([9, 8])
+    print(bytes)
+    bytes.clear()
+    print(bytes.len())

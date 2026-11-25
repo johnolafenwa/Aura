@@ -63,8 +63,11 @@ const DIRECT_FRAME_FLAG_OWNED_FRAMES: u64 = 1 << 2;
 /// to `len`, when `len < limit`. It pops a call by subtracting one from
 /// `len`, when `len > pop_floor`. While `flags` is nonzero, `limit` is 0
 /// and `pop_floor` is `usize::MAX`, so each check sends the call to the
-/// runtime with one compare. Every other push and pop goes through the
-/// runtime, which keeps the header true for both rules.
+/// runtime with one compare. The one exception is a returned-view record
+/// alone: it keeps `limit` and raises `pop_floor` by `pop_guard`, so only
+/// the pops at or below the record's depth go to the runtime. Every other
+/// push and pop goes through the runtime, which keeps the header true for
+/// both rules.
 /// The program validates every descriptor at startup, so an inline push
 /// stores only validated ones.
 #[repr(C)]
@@ -73,7 +76,8 @@ pub struct DirectFrameStack {
     len: usize,
     /// The capacity, or 0 while `flags` is nonzero.
     limit: usize,
-    /// `floor`, or `usize::MAX` while `flags` is nonzero.
+    /// `floor`, or `usize::MAX` while `flags` is nonzero (`floor +
+    /// pop_guard` while the flag is a returned-view record alone).
     pop_floor: usize,
     /// Nonzero while a push or pop has runtime work to do.
     flags: u64,
@@ -100,6 +104,10 @@ pub struct DirectFrameStack {
     /// stack, so generated code compares the value's owner with the
     /// address it already holds.
     pub(super) owned_values: DirectOwnedValues,
+    /// While [`DIRECT_FRAME_FLAG_RETURNED_VIEWS`] is the only flag, the
+    /// deepest depth whose pop has runtime work to do. A pop above it
+    /// changes no record, so generated code makes it.
+    pop_guard: usize,
 }
 
 impl DirectFrameStack {
@@ -121,6 +129,7 @@ impl DirectFrameStack {
             spill: ptr::null_mut(),
             inline: [0; DIRECT_FRAME_STACK_INLINE_ENTRIES],
             owned_values: DirectOwnedValues::new(),
+            pop_guard: 0,
         })));
         // SAFETY: the box was just leaked, so nothing else refers to it.
         let header = unsafe { &mut *stack.as_ptr() };
@@ -268,9 +277,12 @@ impl DirectFrameStack {
     }
 
     /// Sets the runtime's own flag bits, which send every push and pop of
-    /// generated code to the runtime while any is set.
-    pub(super) fn set_runtime_flags(&mut self, flags: u64) {
+    /// generated code to the runtime while any is set, except that a
+    /// returned-view record alone sends only the pops at depths up to
+    /// `pop_guard`.
+    pub(super) fn set_runtime_flags(&mut self, flags: u64, pop_guard: usize) {
         self.runtime_flags = flags;
+        self.pop_guard = pop_guard;
         self.update_flags();
     }
 
@@ -317,6 +329,9 @@ impl DirectFrameStack {
         if self.flags == 0 {
             self.limit = self.capacity;
             self.pop_floor = self.floor;
+        } else if self.flags == DIRECT_FRAME_FLAG_RETURNED_VIEWS {
+            self.limit = self.capacity;
+            self.pop_floor = self.floor.saturating_add(self.pop_guard);
         } else {
             self.limit = 0;
             self.pop_floor = usize::MAX;
