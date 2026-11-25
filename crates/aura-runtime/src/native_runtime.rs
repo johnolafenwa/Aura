@@ -10607,6 +10607,17 @@ pub unsafe extern "C-unwind" fn aura_direct_string_to_bytes_view(
             // SAFETY: the caller's contract.
             _ => unsafe { slice::from_raw_parts(ptr, len) },
         };
+        // A list of the size any codec may make takes the bytes in one
+        // copy, with the program's one copy of its element type.
+        if bytes.len() <= crate::bytes_codec::MAX_CODEC_OUTPUT_LEN {
+            static UINT8: OnceLock<SharedType> = OnceLock::new();
+            let element_type = UINT8.get_or_init(|| SharedType::from(Type::named("uint8")));
+            return boxed_value(Value::Vec(VecValue {
+                element_type: element_type.clone(),
+                elements: ListElements::from_uint8(bytes.to_vec()),
+                str_view: Default::default(),
+            }));
+        }
         // SAFETY: the bytes of a `str` are UTF-8.
         let text = unsafe { str::from_utf8_unchecked(bytes) };
         match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {

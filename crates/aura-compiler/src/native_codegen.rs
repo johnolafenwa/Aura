@@ -2135,7 +2135,13 @@ impl<'a> NativeCodegen<'a> {
         let mut mutable_sink_vars = HashMap::new();
         let mut sink_slots = mutable_param_indices.values().copied().collect::<Vec<_>>();
         sink_slots.sort_unstable();
+        let mut sinks_entered = None;
         if !sink_slots.is_empty() {
+            let entered = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(entered, types::I64);
+            builder.def_var(entered, entered_in_runtime);
+            sinks_entered = Some(entered);
             for slot in &sink_slots {
                 let variable = Var(variable_index as u32);
                 variable_index += 1;
@@ -3074,6 +3080,7 @@ impl<'a> NativeCodegen<'a> {
             writeback_locals,
             mutable_param_indices,
             mutable_sink_vars,
+            sinks_entered,
             classes: self.classes.clone(),
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
@@ -3171,6 +3178,9 @@ impl<'a> NativeCodegen<'a> {
             reusable_array_temporaries: reusable_array_temporaries(function),
             array_binary_reuse: 0,
             shaped_boxes: HashSet::new(),
+            checked_variant: None,
+            variant_read_place: None,
+            tested_variant: None,
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
             class_check_snapshot: None,
@@ -4593,6 +4603,9 @@ struct FunctionCompiler<'a> {
     /// The variable that holds each mutable parameter's write-through sink,
     /// by call slot (see `current_mutable_sink`).
     mutable_sink_vars: HashMap<usize, Var>,
+    /// Whether the runtime entered the call, as 1 or 0, when the function
+    /// has mutable parameters: only such a call has sinks.
+    sinks_entered: Option<Var>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
@@ -4883,6 +4896,16 @@ struct FunctionCompiler<'a> {
     /// what it returns, or a variant that keeps its payloads in place.
     /// Coercing one to that type tags nothing.
     shaped_boxes: HashSet<Val>,
+    /// The scrutinee local, variant and flag of the last payload read in
+    /// place: the flag is 1 where that read found the box in its layout
+    /// and of that variant. A read from the same local right after it
+    /// takes the flag instead of checking again. Cleared by anything else.
+    checked_variant: Option<(String, usize, Val)>,
+    /// The scrutinee local of the payload read being compiled, if any.
+    variant_read_place: Option<String>,
+    /// The variant and flag of the last `typed_variant_test` that checked
+    /// the box's layout: as `checked_variant`, for a match to hand on.
+    tested_variant: Option<(usize, Val)>,
     /// The `str` boxes this instruction loaded as fresh copies through an
     /// element path, which no other place holds, so a clone of one is the
     /// box itself.
@@ -5661,6 +5684,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.enter_method_snapshot(function)?;
 
+        let mut checked_at_exit = HashMap::new();
         for label in order {
             let block = block_by_label.get(label.as_str()).ok_or_else(|| {
                 format!(
@@ -5687,8 +5711,19 @@ impl<'a> FunctionCompiler<'a> {
             if entered.all(|from| compiled.contains(*from)) {
                 self.builder.note_complete(self.blocks[label.as_str()]);
             }
+            // A payload read's check holds in a block that only one block
+            // reaches, by its `Goto` or `Match`.
+            self.checked_variant = match predecessors.get(label.as_str()).map(Vec::as_slice) {
+                Some([from]) => checked_at_exit.get(*from).cloned(),
+                _ => None,
+            };
             let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
+            if let (Some(checked), Terminator::Goto(_) | Terminator::Match { .. }) =
+                (self.checked_variant.take(), &block.terminator)
+            {
+                checked_at_exit.insert(label.clone(), checked);
+            }
             let own = self.compiled_block_id(&label)?;
             self.note_snapshot_blocks(&label, own, first_block);
             compiled.insert(label.clone());
@@ -5828,6 +5863,18 @@ impl<'a> FunctionCompiler<'a> {
             // retain before it stays for the read that follows.
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
+            }
+            if !matches!(
+                instruction,
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(place),
+                        ..
+                    },
+                } if target != place
+            ) {
+                self.checked_variant = None;
             }
             self.current_snapshot_instruction = instruction_index;
             if self.compile_union_buffer_read(block, instruction_index)? {
@@ -7224,6 +7271,21 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.node_read_targets.contains(place.as_str())
                 );
+                // A match of one variant of a local hands its check on to
+                // the payload reads of its arm (see `checked_variant`).
+                let tested_place = match (scrutinee, arms.as_slice()) {
+                    (Operand::Place(place), [arm])
+                        if !arm.wildcard
+                            && !recovery_slot
+                            && !lookup_slot
+                            && !lent
+                            && !node_read =>
+                    {
+                        Some(place.clone())
+                    }
+                    _ => None,
+                };
+                self.tested_variant = None;
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -7317,6 +7379,11 @@ impl<'a> FunctionCompiler<'a> {
                     self.layout_scratch = pending_owned;
                 }
                 self.release_all_temporary_owned();
+                if let (Some(place), Some((index, typed))) =
+                    (tested_place, self.tested_variant.take())
+                {
+                    self.checked_variant = Some((place, index, typed));
+                }
                 if self.closed_matches.contains(block_label) {
                     self.builder.trap(TrapCode::User(2));
                 } else {
@@ -8117,6 +8184,10 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
+                let read_place = match scrutinee {
+                    Operand::Place(place) => Some(place.clone()),
+                    _ => None,
+                };
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 if !lent {
                     let any = DirectType::Opaque(Type::named("Unknown"));
@@ -8127,13 +8198,16 @@ impl<'a> FunctionCompiler<'a> {
                     };
                     let index = *index;
                     let slow_scrutinee = scrutinee.clone();
-                    if let Some(payload) = self.typed_variant_payload(
+                    self.variant_read_place = read_place;
+                    let read = self.typed_variant_payload(
                         &scrutinee,
                         variant_name,
                         index,
                         read_as,
                         |this| this.compile_variant_payload(slow_scrutinee, index),
-                    )? {
+                    );
+                    self.variant_read_place = None;
+                    if let Some(payload) = read? {
                         return Ok(payload);
                     }
                 }
@@ -9809,9 +9883,12 @@ impl<'a> FunctionCompiler<'a> {
         let remainder_nonzero = self
             .builder
             .icmp(IntCC::NotEqual, truncating_remainder, zero);
-        let left_negative = self.builder.icmp(IntCC::SignedLessThan, left, zero);
-        let right_negative = self.builder.icmp(IntCC::SignedLessThan, right, zero);
-        let signs_differ = self.builder.bxor(left_negative, right_negative);
+        // A remainder that is not zero has the sign of `left`, so the
+        // signs differ when its sign is not the divisor's. Tested on the
+        // remainder, a positive constant divisor leaves `remainder < 0`,
+        // and LLVM knows the floor remainder lies in `0..right`.
+        let signs = self.builder.bxor(truncating_remainder, right);
+        let signs_differ = self.builder.icmp(IntCC::SignedLessThan, signs, zero);
         let adjust = self.builder.band(remainder_nonzero, signs_differ);
 
         if quotient {
@@ -16585,11 +16662,13 @@ impl<'a> FunctionCompiler<'a> {
         };
         if !lent {
             let slow_scrutinee = scrutinee.clone();
-            if let Some(scalar) =
+            self.variant_read_place = Some(place.clone());
+            let read =
                 self.typed_variant_payload(&scrutinee, variant_name, index, &target_ty, |this| {
                     runtime_read(this, &slow_scrutinee)
-                })?
-            {
+                });
+            self.variant_read_place = None;
+            if let Some(scalar) = read? {
                 return Ok(Some(scalar));
             }
         }
@@ -17516,6 +17595,17 @@ impl<'a> FunctionCompiler<'a> {
     /// slot `index`, or 0, as the function's entry read it.
     fn current_mutable_sink(&mut self, index: usize) -> Val {
         self.builder.use_var(self.mutable_sink_vars[&index])
+    }
+
+    /// Whether the mutable parameter in call slot `index` has no sink, as
+    /// a condition. A call the runtime did not enter has none, and one
+    /// test of that covers every parameter.
+    fn mutable_sink_absent(&mut self, index: usize) -> Val {
+        let tested = match self.sinks_entered {
+            Some(entered) => self.builder.use_var(entered),
+            None => self.current_mutable_sink(index),
+        };
+        self.builder.icmp_imm(IntCC::Equal, tested, 0)
     }
 
     fn publish_mutable_root_write_through(

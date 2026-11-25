@@ -516,7 +516,9 @@ fn a_literal_of_str_literals_that_is_only_read_is_kept_frozen() {
     );
     // A list that is changed, handed on, spelled with another value, has
     // one element or only empty ones, or is assigned twice stays a list.
-    for name in ["grows", "passes", "mixed", "single", "blank", "again", "main"] {
+    for name in [
+        "grows", "passes", "mixed", "single", "blank", "again", "main",
+    ] {
         assert!(frozen(name).is_empty(), "{name}");
     }
 }

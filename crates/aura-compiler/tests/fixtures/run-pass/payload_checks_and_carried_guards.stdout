@@ -1,0 +1,14 @@
+2
+16
+list index `4` is out of bounds for length `4`
+-3 2
+-3 -2
+2 -1
+-2 0
+-2 0
+0 0
+795
+828
+5.0 4.0 2.0 -1.0 0.0
+1.5
+list index `3` is out of bounds for length `3`

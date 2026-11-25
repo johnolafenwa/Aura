@@ -27263,7 +27263,10 @@ fn a_literal_list_cell_makes_one_frozen_list_with_its_str_view() {
         Value::Vec(vector) => {
             assert_eq!(*vector.element_type, Type::named("str"));
             assert_eq!(vector.elements.len(), 3);
-            assert_eq!(vector.elements.value_at(2), Some(&Value::String("yz".into())));
+            assert_eq!(
+                vector.elements.value_at(2),
+                Some(&Value::String("yz".into()))
+            );
         }
         other => panic!("expected a list, found {other:?}"),
     }

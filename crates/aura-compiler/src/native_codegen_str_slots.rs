@@ -565,7 +565,12 @@ pub(super) fn str_literal_lists(function: &MirFunction) -> HashSet<String> {
                     // The selector may not name the list itself.
                     mentions.clear();
                     instruction_place_mentions(instruction, &mut mentions);
-                    if mentions.iter().filter(|place| root(place) == *source).count() > 1 {
+                    if mentions
+                        .iter()
+                        .filter(|place| root(place) == *source)
+                        .count()
+                        > 1
+                    {
                         refused.insert(source.clone());
                     }
                     continue;
@@ -1764,7 +1769,9 @@ impl FunctionCompiler<'_> {
         )?;
         let call = self.builder.call(
             self.runtime[RuntimeFn::StrLiteralListCell],
-            &[cell, tag_cell, type_ptr, type_len, texts_ptr, lens_ptr, count],
+            &[
+                cell, tag_cell, type_ptr, type_len, texts_ptr, lens_ptr, count,
+            ],
         );
         let value = self.owned_opaque_result(call.results, list_type);
         self.mark_emptied_store_root(target);
@@ -2167,8 +2174,8 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
-    /// The result of `text.to_bytes()` made from the words of `text`, when
-    /// it is a literal or this body has it as words.
+    /// The result of `text.to_bytes()` made from the words of `text`: a
+    /// literal, a `str` this body has as words, or one in its box.
     pub(super) fn str_to_bytes_from_words(
         &mut self,
         text: &Operand,
@@ -2180,7 +2187,28 @@ impl FunctionCompiler<'_> {
             }
             operand => match self.load_place_words(operand)? {
                 Some(words) => (words.ptr, words.len, words.released),
-                None => return Ok(None),
+                None => {
+                    // A `str` in its box is read where the box keeps it.
+                    let Operand::Place(place) = operand else {
+                        return Ok(None);
+                    };
+                    let DirectType::Opaque(ty) = self.type_of_place(place)? else {
+                        return Ok(None);
+                    };
+                    if !is_str(&ty) {
+                        return Ok(None);
+                    }
+                    let owner = self.load_place(place)?.values[0];
+                    let ptr = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::StringBytes], &[owner])
+                        .results[0];
+                    let len = self
+                        .builder
+                        .call(self.runtime[RuntimeFn::StringByteLen], &[owner])
+                        .results[0];
+                    (ptr, len, None)
+                }
             },
         };
         let made = self
