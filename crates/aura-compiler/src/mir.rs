@@ -22394,6 +22394,7 @@ impl<'a> Lowerer<'a> {
             });
             self.lower_vec_key_collection_loop(
                 source.clone(),
+                &receiver_place,
                 &element_ty,
                 callback,
                 &keys,
@@ -23435,15 +23436,30 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn lower_vec_key_collection_loop(
         &mut self,
         source: Operand,
+        receiver_place: &str,
         element_ty: &Type,
         callback: CallTarget,
         keys: &str,
         key_ty: &Type,
         span: Span,
     ) {
+        let root = receiver_place.split('.').next().unwrap_or(receiver_place);
+        if matches!(callback, CallTarget::Name(_)) && !self.view_sources.contains_key(root) {
+            self.lower_lent_vec_key_collection_loop(
+                source,
+                receiver_place,
+                element_ty,
+                callback,
+                keys,
+                key_ty,
+                span,
+            );
+            return;
+        }
         let index = self.new_typed_temp(Type::named("int64"));
         let next = self.new_typed_temp(lookup_type(element_ty.clone()));
         let element = self.new_typed_temp(element_ty.clone());
@@ -23500,6 +23516,99 @@ impl<'a> Lowerer<'a> {
                 type_args: Default::default(),
             },
         });
+        self.emit_vec_push(
+            Operand::Place(keys.to_string()),
+            keys,
+            self.move_place_for_type(key, key_ty),
+        );
+        self.emit_vec_index_increment(&index, span);
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+        self.switch_to(done);
+    }
+
+    /// [`Self::lower_vec_key_collection_loop`] for a key function that
+    /// borrows its one parameter: each element is lent to it in place
+    /// instead of copied out of the list. The loop reads the length once;
+    /// the list cannot change while its elements are lent.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_lent_vec_key_collection_loop(
+        &mut self,
+        source: Operand,
+        receiver_place: &str,
+        element_ty: &Type,
+        callback: CallTarget,
+        keys: &str,
+        key_ty: &Type,
+        span: Span,
+    ) {
+        let int64 = Type::named("int64");
+        let length = self.new_typed_temp(int64.clone());
+        self.emit(Instruction::Assign {
+            target: length.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: source,
+                    field: "len".to_string(),
+                    receiver_place: Some(receiver_place.to_string()),
+                    dispatch: None,
+                },
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        });
+        let index = self.new_typed_temp(int64);
+        self.emit(Instruction::Assign {
+            target: index.clone(),
+            value: Rvalue::Use(Operand::Int(0)),
+        });
+        let dispatch = self.new_block("vec_key_dispatch");
+        let body = self.new_block("vec_key_body");
+        let done = self.new_block("vec_key_done");
+        self.terminate(Terminator::Goto(self.label(dispatch)));
+
+        self.switch_to(dispatch);
+        let more = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: more.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(index.clone()),
+                right: Operand::Place(length),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(more),
+            then_label: self.label(body),
+            else_label: self.label(done),
+        });
+
+        self.switch_to(body);
+        let element = self.new_typed_temp(element_ty.clone());
+        self.emit(Instruction::BeginElementLoan {
+            loan: element.clone(),
+            source: receiver_place.to_string(),
+            selector: Operand::Place(index.clone()),
+            projection: String::new(),
+            mutable: false,
+            span,
+            checked: true,
+        });
+        let key = self.new_typed_temp(key_ty.clone());
+        self.emit(Instruction::Assign {
+            target: key.clone(),
+            value: Rvalue::Call {
+                callee: callback,
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place(element.clone()),
+                    writeback_place: None,
+                }],
+                type_args: Default::default(),
+            },
+        });
+        self.emit(Instruction::EndLoan { loan: element });
         self.emit_vec_push(
             Operand::Place(keys.to_string()),
             keys,

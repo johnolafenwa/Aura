@@ -1,0 +1,58 @@
+# A key sort whose key function borrows its parameter lends each element to
+# it in place; the order and the elements are the same as a copy would give.
+
+
+class Person:
+    name: str
+    age: int64
+    tags: list[str]
+
+
+class Team:
+    people: list[Person]
+
+    def sort_by_age(mut self):
+        self.people.sort(key=age_of)
+
+
+def age_of(person: Person) -> int64:
+    return person.age
+
+
+def name_of(person: Person) -> str:
+    return person.name.clone()
+
+
+def tag_count(person: Person) -> int64:
+    return person.tags.len()
+
+
+def show(people: list[Person]) -> str:
+    mut parts: list[str] = []
+    for person in people:
+        parts.append(f"{person.name}:{person.age}:{person.tags.len()}")
+    return " ".join(parts)
+
+
+def main():
+    mut people: list[Person] = []
+    names = ["eve", "bob", "dan", "amy", "cal"]
+    for i in range(5):
+        mut tags: list[str] = []
+        for t in range(i % 3):
+            tags.append(f"t{t}")
+        people.append(Person(name=names[i].clone(), age=(i * 7) % 5 + 20, tags=tags))
+    people.sort(key=age_of)
+    print(show(people))
+    people.sort(key=name_of, reverse=true)
+    print(show(people))
+    people.sort(key=tag_count)
+    print(show(people))
+    people.sort(key=lambda person: 0 - person.age)
+    print(show(people))
+    mut team = Team(people=people)
+    team.sort_by_age()
+    print(show(team.people))
+    mut empty: list[Person] = []
+    empty.sort(key=age_of)
+    print(empty.len())
