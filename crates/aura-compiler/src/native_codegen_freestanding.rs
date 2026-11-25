@@ -149,7 +149,9 @@ pub(super) fn trap_path(path: &str, program_path: &str, module_name: Option<&str
             return format!("{pkg_name}/{relative}");
         }
     }
-    if resolved.is_absolute() || std::path::Path::new(path).is_absolute() {
+    // `has_root` also covers `/x` on Windows, which has no drive and so is
+    // not absolute there but still names a host directory.
+    if resolved.has_root() || std::path::Path::new(path).has_root() {
         if let Some(name) = module_name.filter(|name| !synthetic_module(name)) {
             return format!("{}.au", name.replace('.', "/"));
         }
