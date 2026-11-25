@@ -832,13 +832,14 @@ pub(super) fn element_slots<'f>(
 
 /// The `str` copies of `function` that may take the reference they copy
 /// instead: each maps the local a `clone()` of a `str` local assigns to
-/// that local, and to the scrutinee it was read from as a payload when the
-/// block releases that too. Nothing but releases, the copied local's among
-/// them, follows the copy in its block, and the terminator names neither,
-/// so the copied local is not read again. Every assignment of the copied
-/// local makes a new value (a call, an f-string or a binary operation), or
-/// it is that one payload read, so it holds no place another value owns.
-pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Option<String>)> {
+/// that local, to the scrutinee it was read from as a payload, and to
+/// whether the block releases that scrutinee too. Nothing but releases, the
+/// copied local's among them, and moves of the copy follows the copy in
+/// its block, and the terminator names neither, so the copied local is not
+/// read again. Every assignment of the copied local makes a new value (a
+/// call, an f-string or a binary operation), or it is that one payload
+/// read, so it holds no place another value owns.
+pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, CloneMove> {
     let strs = function
         .local_types
         .iter()
@@ -904,6 +905,12 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
             };
             let Some(released) = block.instructions[index + 1..]
                 .iter()
+                .filter(|later| {
+                    !matches!(later, Instruction::Assign {
+                        value: Rvalue::Use(Operand::MovePlace(moved)),
+                        ..
+                    } if moved == target)
+                })
                 .map(|later| match later {
                     Instruction::Release { place } => Some(place.as_str()),
                     _ => None,
@@ -912,11 +919,7 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
             else {
                 continue;
             };
-            let scrutinee = payloads
-                .get(copied)
-                .copied()
-                .flatten()
-                .filter(|scrutinee| released.contains(scrutinee));
+            let scrutinee = payloads.get(copied).copied().flatten();
             let named = terminator_place_mentions(&block.terminator)
                 .into_iter()
                 .any(|place| {
@@ -931,15 +934,18 @@ pub(super) fn clone_moves(function: &MirFunction) -> HashMap<String, (String, Op
                 && released.contains(copied)
                 && !named
             {
-                moves.insert(
-                    target.to_string(),
-                    (copied.to_string(), scrutinee.map(str::to_string)),
-                );
+                let scrutinee = scrutinee
+                    .map(|scrutinee| (scrutinee.to_string(), released.contains(scrutinee)));
+                moves.insert(target.to_string(), (copied.to_string(), scrutinee));
             }
         }
     }
     moves
 }
+
+/// A copy [`clone_moves`] finds: the copied local, and the scrutinee it
+/// was read from as a payload with whether the copy's block releases it.
+pub(super) type CloneMove = (String, Option<(String, bool)>);
 
 /// The signature of a view twin: `signature`, the function's own, then
 /// `ptr` and `len` for each of its `count` view parameters.
@@ -1865,16 +1871,25 @@ impl FunctionCompiler<'_> {
 
     /// Compiles the copy `target` of a `str` local as a move of the local's
     /// reference, when the copy is the local's last read (see
-    /// [`clone_moves`]) and the local owns a counted reference: its own, or
-    /// one a lookup slot's payload read took. The local then releases
-    /// nothing. A payload a lookup lends keeps its copy.
+    /// [`clone_moves`]) and the local owns a counted reference: its own,
+    /// one a lookup slot's payload read took when the copy's block releases
+    /// the slot, or one a payload read of any other variant took. The local
+    /// then releases nothing. A payload a lookup or a result slot lends
+    /// keeps its copy.
     pub(super) fn compile_clone_move(&mut self, target: &str) -> std::result::Result<bool, String> {
         let Some((copied, scrutinee)) = self.clone_moves.get(target).cloned() else {
             return Ok(false);
         };
+        let counted_payload = |this: &Self, (scrutinee, released): (String, bool)| {
+            if this.lookup_slots.contains(&scrutinee) {
+                released
+            } else {
+                !this.result_slots.contains_key(&scrutinee)
+            }
+        };
         if self.lent_elements.contains_key(&copied)
             || !self.owns_counted_str(&copied)
-            || !scrutinee.is_none_or(|scrutinee| self.lookup_slots.contains(&scrutinee))
+            || !scrutinee.is_none_or(|scrutinee| counted_payload(self, scrutinee))
         {
             return Ok(false);
         }

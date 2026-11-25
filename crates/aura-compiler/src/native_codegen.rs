@@ -4223,9 +4223,9 @@ struct FunctionCompiler<'a> {
     /// Each `str` local that holds a list element as words, with the list.
     str_element_lists: HashMap<String, String>,
     /// The copies of a `str` local that may move its reference instead,
-    /// each with the local and the lookup it is a payload of (see
+    /// each with the local and the scrutinee it is a payload of (see
     /// `str_slots::clone_moves`).
-    clone_moves: HashMap<String, (String, Option<String>)>,
+    clone_moves: HashMap<String, str_slots::CloneMove>,
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
     appended_copies: HashMap<String, String>,

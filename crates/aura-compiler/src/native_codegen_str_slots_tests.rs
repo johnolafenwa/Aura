@@ -292,9 +292,24 @@ def plain(text: str) -> str:
     upper = text.to_upper()
     return upper.clone()
 
+enum Cell:
+    Int(value: int64)
+    Text(value: str)
+
+def named(cells: list[Cell]) -> str:
+    view cell = cells[0]
+    mut name = ""
+    match cell:
+        case Cell.Text(text):
+            name = text.clone()
+        case Cell.Int(value):
+            name = f"{value}"
+    return name
+
 def main():
     row = {"a": "b"}
     print(lookup("a", row) + shouted("a", row) + plain("c"))
+    print(named([Cell.Text(value="t")]))
 "#;
 
 #[test]
@@ -311,7 +326,16 @@ fn a_copy_that_is_the_last_read_of_a_str_local_may_move_its_reference() {
     // The found payload is released with its lookup.
     let moves = clone_moves(function("lookup"));
     assert_eq!(moves.len(), 1, "{moves:?}");
-    assert!(moves.values().all(|(_, scrutinee)| scrutinee.is_some()));
+    assert!(moves
+        .values()
+        .all(|(_, scrutinee)| matches!(scrutinee, Some((_, true)))));
+    // The payload of a lent element's variant is moved on, and the lent
+    // element outlives the copy's block.
+    let moves = clone_moves(function("named"));
+    assert_eq!(moves.len(), 1, "{moves:?}");
+    assert!(moves
+        .values()
+        .all(|(_, scrutinee)| matches!(scrutinee, Some((_, false)))));
     let moves = clone_moves(function("plain"));
     assert_eq!(moves.len(), 1, "{moves:?}");
     assert!(moves.values().all(|(_, scrutinee)| scrutinee.is_none()));

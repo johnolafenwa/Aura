@@ -1,0 +1,45 @@
+# A `str` payload read from a lent element and copied once takes the
+# payload's reference instead of a new copy. The copy still behaves as
+# its own value: growing it leaves the element's text as it was.
+
+enum Cell:
+    Int(value: int64)
+    Text(value: str)
+
+
+def label(cells: list[Cell], at: int64) -> str:
+    view cell = cells[at]
+    mut name = ""
+    match cell:
+        case Cell.Text(text):
+            name = text.clone()
+        case Cell.Int(value):
+            name = f"{value}"
+    return name
+
+
+def main():
+    cells = [
+        Cell.Text(value="short"),
+        Cell.Int(value=7),
+        Cell.Text(value="a text long enough to live outside its box"),
+    ]
+    mut total = 0
+    mut names: list[str] = []
+    for round in range(3):
+        for at in range(cells.len()):
+            mut name = label(cells, at)
+            if round == 1:
+                name += "!"
+            total += name.len()
+            names.append(name)
+    print(total)
+    print(names[3])
+    print(names[5])
+    print(label(cells, 0))
+    print(label(cells, 2))
+    match cells[2]:
+        case Cell.Text(text):
+            print(text.len())
+        case Cell.Int(value):
+            print(value)
