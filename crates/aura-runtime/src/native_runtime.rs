@@ -16327,6 +16327,76 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed_boxes(
     })
 }
 
+/// As [`aura_direct_release_last_owned_value`], for a box generated code
+/// knows holds a variant of an enum the program defines: a variant that
+/// keeps its payloads in its layout is freed with [`free_typed_variant`].
+///
+/// # Safety
+///
+/// As for [`aura_direct_release_last_owned_value`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_variant(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        let removed = current_direct_frame_stack().is_some_and(|stack| {
+            // SAFETY: the stack belongs to the running task, and the caller
+            // passes a live box.
+            unsafe {
+                (*stack.as_ptr())
+                    .owned_values
+                    .remove_last(stack.as_ptr(), value)
+            }
+        });
+        if !removed {
+            // SAFETY: the caller's contract.
+            unsafe { release_direct_value(value) };
+            return;
+        }
+        // SAFETY: a value the ledger linked is live and confined to this
+        // thread, so no other thread changes its count.
+        let header = unsafe { &*value };
+        match header.ref_count.load(Ordering::Relaxed) {
+            0 => runtime_error("attempted to release an already-released direct runtime value"),
+            1 => {
+                header.ref_count.store(0, Ordering::Relaxed);
+                // SAFETY: the ledger held the last reference.
+                unsafe { free_typed_variant(value) };
+            }
+            count => header.ref_count.store(count - 1, Ordering::Relaxed),
+        }
+    })
+}
+
+/// Frees a value whose count reached zero, as [`free_direct_value`] does.
+/// A variant that keeps its payloads in its layout first releases each
+/// payload box itself, freeing in the same way a payload whose count
+/// reaches zero, so a tree of variants is freed without dropping each
+/// variant's payloads through its value.
+///
+/// # Safety
+///
+/// As for [`free_direct_value`].
+unsafe fn free_typed_variant(value: *mut OpaqueValue) {
+    // SAFETY: the caller dropped the last reference, so nothing else reads
+    // the value.
+    if let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(payloads),
+        ..
+    }) = unsafe { &mut *(*value).value.get() }
+    {
+        payloads.release_boxes(|boxed| {
+            // SAFETY: the variant's block held a reference to the box.
+            let header = unsafe { &*boxed };
+            if release_ref_count(&header.ref_count).unwrap_or_else(|message| runtime_error(message))
+            {
+                // SAFETY: the count reached zero.
+                unsafe { free_typed_variant(boxed) };
+            }
+        });
+    }
+    // SAFETY: the caller's contract.
+    unsafe { free_direct_value(value) };
+}
+
 /// The frozen box of variant `variant`, which takes no payloads, of the
 /// enum whose layout `cell` holds, as [`aura_direct_enum_new_typed`]
 /// builds it, kept in `slot`, a word of the program's data for that

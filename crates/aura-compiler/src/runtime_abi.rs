@@ -357,6 +357,7 @@ runtime_functions! {
     RetainValue => ("aura_direct_retain_value", [I64], Some(I64)),
     ReleaseValue => ("aura_direct_release_value", [I64], None),
     ReleaseLastOwnedValue => ("aura_direct_release_last_owned_value", [I64], None),
+    ReleaseLastOwnedVariant => ("aura_direct_release_last_owned_variant", [I64], None),
     CloneValue => ("aura_direct_clone_value", [I64], Some(I64)),
     UnboxI64 => ("aura_direct_unbox_i64", [I64], Some(I64)),
     UnboxInt64 => ("aura_direct_unbox_int64", [I64], Some(I64)),

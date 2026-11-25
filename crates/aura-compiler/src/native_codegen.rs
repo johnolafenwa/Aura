@@ -800,6 +800,11 @@ struct OwnershipFastPaths {
     runtime_retain: FuncHandle,
     runtime_release: FuncHandle,
     release_last: FuncHandle,
+    /// The release of a box that holds a variant of an enum the program
+    /// defines, which frees a variant kept in its layout with its payload
+    /// boxes in one walk.
+    release_variant: FuncHandle,
+    release_last_variant: FuncHandle,
 }
 
 macro_rules! try_or_string_error {
@@ -1372,7 +1377,16 @@ impl<'a> NativeCodegen<'a> {
             &ownership_fast_path_signature(false),
             "the release fast path",
             |_, builder| {
-                emit_release_fast_path(builder, frame_stack, paths);
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last);
+                Ok(())
+            },
+        )?;
+        self.define_body(
+            paths.release_variant,
+            &ownership_fast_path_signature(false),
+            "the variant release fast path",
+            |_, builder| {
+                emit_release_fast_path(builder, frame_stack, paths, paths.release_last_variant);
                 Ok(())
             },
         )
@@ -2706,6 +2720,7 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_copies: HashMap::new(),
             retain_calls: HashMap::new(),
             retain_releases: HashMap::new(),
+            variant_handles: HashSet::new(),
             consumed_retains: HashSet::new(),
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
@@ -4294,6 +4309,9 @@ struct FunctionCompiler<'a> {
     /// took. A handle no consumer took was only read: its retain and its
     /// releases cancel at the end of the instruction.
     retain_releases: HashMap<Val, Vec<Inst>>,
+    /// The boxes this function holds that are variants of an enum the
+    /// program defines (see `note_variant_handle`).
+    variant_handles: HashSet<Val>,
     consumed_retains: HashSet<Val>,
     /// The retain adapter call of each callable a `Retain` made, by its
     /// first word, with the drop calls that release it. A consumer that
@@ -4422,6 +4440,17 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_temporary_opaque_owned(&mut self, value: &ValueRef) {
         if self.is_opaque_value(value) {
             self.layout_scratch.insert(value.values[0]);
+            self.note_variant_handle(&value.ty, value.values[0]);
+        }
+    }
+
+    /// Records that `word`, of direct type `ty`, is a box that holds a
+    /// variant of an enum the program defines when it is one, so its
+    /// release frees it as a variant (see
+    /// `aura_direct_release_last_owned_variant`).
+    fn note_variant_handle(&mut self, ty: &DirectType, word: Val) {
+        if matches!(ty, DirectType::Opaque(Type::Named(name, _)) if self.enums.contains_key(name)) {
+            self.variant_handles.insert(word);
         }
     }
 
@@ -4442,9 +4471,12 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn release_opaque_handle(&mut self, value: Val) {
-        let call = self
-            .builder
-            .call(self.runtime[RuntimeFn::ReleaseValue], &[value]);
+        let release = if self.variant_handles.contains(&value) {
+            RuntimeFn::ReleaseLastOwnedVariant
+        } else {
+            RuntimeFn::ReleaseValue
+        };
+        let call = self.builder.call(self.runtime[release], &[value]);
         if self.retain_calls.contains_key(&value) {
             self.retain_releases
                 .entry(value)
@@ -4767,7 +4799,10 @@ impl<'a> FunctionCompiler<'a> {
                 let owned = self.builder.select(lent, null, words[0]);
                 self.release_opaque_handle(owned);
             }
-            _ => self.release_opaque_handle(words[0]),
+            _ => {
+                self.note_variant_handle(&ty, words[0]);
+                self.release_opaque_handle(words[0]);
+            }
         }
         Ok(())
     }
@@ -13404,6 +13439,7 @@ impl<'a> FunctionCompiler<'a> {
             &[
                 self.runtime[RuntimeFn::RetainValue],
                 self.runtime[RuntimeFn::ReleaseValue],
+                self.runtime[RuntimeFn::ReleaseLastOwnedVariant],
                 self.runtime[RuntimeFn::FormatBegin],
                 self.runtime[RuntimeFn::StringLiteral],
                 self.runtime[RuntimeFn::StringLiteralCell],
@@ -20361,14 +20397,25 @@ fn declare_ownership_fast_paths(
         ),
         "failed to declare the release fast path: {}"
     );
+    let release_variant = try_or_string_error!(
+        module.declare_function(
+            "aura_owned_release_variant",
+            Linkage::Local,
+            &ownership_fast_path_signature(false),
+        ),
+        "failed to declare the variant release fast path: {}"
+    );
     module.mark_inline(retain);
     module.mark_inline(release);
+    module.mark_inline(release_variant);
     Ok(OwnershipFastPaths {
         retain,
         release,
         runtime_retain: runtime.replace(RuntimeFn::RetainValue, retain),
         runtime_release: runtime.replace(RuntimeFn::ReleaseValue, release),
         release_last: runtime[RuntimeFn::ReleaseLastOwnedValue],
+        release_variant,
+        release_last_variant: runtime.replace(RuntimeFn::ReleaseLastOwnedVariant, release_variant),
     })
 }
 
@@ -20640,6 +20687,7 @@ fn emit_release_fast_path(
     builder: &mut dyn FunctionBackend,
     frame_stack: FuncHandle,
     paths: OwnershipFastPaths,
+    release_last: FuncHandle,
 ) {
     let layout = ownership_layout();
     let trusted = MemFlags::trusted();
@@ -20665,7 +20713,7 @@ fn emit_release_fast_path(
     builder.jump(blocks.done, &[]);
 
     builder.switch_to_block(last_block);
-    let last_ref = builder.import_function(paths.release_last);
+    let last_ref = builder.import_function(release_last);
     builder.call(last_ref, &[blocks.value]);
     builder.jump(blocks.done, &[]);
 

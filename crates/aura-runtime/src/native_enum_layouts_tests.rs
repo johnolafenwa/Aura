@@ -18,12 +18,13 @@ use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
     aura_direct_enum_new_typed, aura_direct_enum_new_typed_boxes, aura_direct_enum_unit_cell,
-    aura_direct_instance_put_field, aura_direct_register_enum_layouts, aura_direct_release_value,
+    aura_direct_instance_put_field, aura_direct_register_enum_layouts,
+    aura_direct_release_last_owned_variant, aura_direct_release_value, aura_direct_retain_value,
     aura_direct_variant_matches, aura_direct_variant_payload, aura_direct_variant_payload_int64,
     aura_direct_variant_take_payload, aura_direct_vec_push_in_place, boxed_value,
-    empty_unit_variant_cells, list_view_of, share_direct_value, value_mut, value_ref,
-    with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
-    ElementBox, UNREGISTERED_PLAIN_ACCESS,
+    empty_unit_variant_cells, list_view_of, release_untracked_value, retain_untracked_value,
+    share_direct_value, value_mut, value_ref, with_direct_task_runtime_scope,
+    with_task_runtime_error_capture, DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, EnumVariantValue, RuntimeName, Value, VariantPayloads,
@@ -1714,4 +1715,91 @@ fn a_variant_takes_its_payload_boxes_as_it_is_built() {
         unsafe { aura_direct_enum_new_typed_boxes(cell, 3, boxes.as_ptr(), 2) };
     });
     assert!(failure.contains("null field value"), "{failure}");
+}
+
+#[test]
+fn a_released_variant_frees_its_payload_boxes_with_it() {
+    in_task(|| {
+        let prefix = "Freed";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 87);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        let circle = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        let inner =
+            unsafe { aura_direct_enum_new_typed_boxes(cell, 3, [point, circle].as_ptr(), 2) };
+        let named = boxed_value(typed(
+            prefix,
+            FIRST_TEST_ACCESS + 87,
+            "Named",
+            vec![text("kept"), int32(4)],
+        ));
+        // Another reference keeps one payload alive after its tree goes.
+        unsafe { retain_untracked_value(named) };
+        let outer =
+            unsafe { aura_direct_enum_new_typed_boxes(cell, 3, [inner, named].as_ptr(), 2) };
+        unsafe { aura_direct_release_last_owned_variant(outer) };
+        assert_eq!(unsafe { &*named }.ref_count.load(Ordering::Relaxed), 1);
+        assert!(unsafe { &*point }.is_frozen());
+        unsafe { release_untracked_value(named) };
+        // A box the ledger owns twice only loses a reference, and a shared
+        // one takes the whole release.
+        let twice = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        unsafe { aura_direct_retain_value(twice) };
+        unsafe { aura_direct_release_last_owned_variant(twice) };
+        assert_eq!(unsafe { &*twice }.ref_count.load(Ordering::Relaxed), 1);
+        unsafe { aura_direct_release_last_owned_variant(twice) };
+        let shared = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        unsafe { share_direct_value(shared) };
+        unsafe { aura_direct_release_last_owned_variant(shared) };
+        // A box that holds something else is freed as any box is.
+        unsafe { aura_direct_release_last_owned_variant(boxed_value(int64(3))) };
+    });
+    let failure = runtime_failure(|| {
+        let released = boxed_value(int64(5));
+        unsafe { &*released }.ref_count.store(0, Ordering::Relaxed);
+        unsafe { aura_direct_release_last_owned_variant(released) };
+    });
+    assert!(failure.contains("already-released"), "{failure}");
+}
+
+#[test]
+fn a_variant_that_drops_a_payload_in_place_keeps_its_boxes_to_its_drop() {
+    // `Outer.Wrap` keeps an `Inner`, which holds a string, in its block.
+    let inner = EnumDefinition {
+        type_params: Vec::new(),
+        variants: vec![
+            ("Nothing".to_string(), Vec::new()),
+            ("Some".to_string(), vec![Type::named("str")]),
+        ],
+    };
+    let outer = EnumDefinition {
+        type_params: Vec::new(),
+        variants: vec![(
+            "Wrap".to_string(),
+            vec![Type::named("DropInner"), Type::named("str")],
+        )],
+    };
+    let env = LayoutEnv {
+        classes: Default::default(),
+        enums: [
+            ("DropInner".to_string(), inner),
+            ("DropOuter".to_string(), outer),
+        ]
+        .into(),
+    };
+    let mut builder = LayoutBuilder::new(&env);
+    let root = builder
+        .boxed_enum_layout(
+            &Type::named("DropOuter"),
+            |ty| matches!(ty, Type::Named(name, _) if name == "DropInner"),
+        )
+        .expect("a layout")
+        .expect("an enum");
+    let descriptor = encode_layouts(builder.table(), root);
+    let layout =
+        register_enum_layout(&descriptor, FIRST_TEST_ACCESS + 88).expect("the enum is laid out");
+    let mut payloads = TypedPayloads::new(layout, 0);
+    assert!(!payloads.release_boxes(|_| panic!("the variant keeps its boxes")));
 }
