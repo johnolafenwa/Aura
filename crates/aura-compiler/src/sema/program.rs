@@ -35,6 +35,7 @@ pub struct Program {
     /// initialization. The file loader replaces the local-only seed with the
     /// complete transitive plan for an entry program.
     pub constant_init_plan: Vec<ConstantInfo>,
+    pub frozen_constants: BTreeMap<String, crate::const_eval::FrozenValue>,
     /// The native libraries the program's packages name under `[ffi]`. The
     /// file loader fills it in for an entry program in a package.
     pub foreign_link: crate::package::ForeignLinkPlan,
@@ -2345,6 +2346,13 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         };
         if let Some(expected) = &expected {
             if &inferred != expected {
+                if constant.name == crate::parser::CONDITION_RESULT {
+                    return Err(Diagnostic::coded_at(
+                        "AU2071",
+                        constant.span,
+                        "a compile-time condition must have type bool",
+                    ));
+                }
                 return Err(Diagnostic::coded_at(
                     "AU2002",
                     constant.value.span,
@@ -2414,6 +2422,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         functions,
         constants,
         constant_init_plan,
+        frozen_constants: BTreeMap::new(),
         foreign_link: Default::default(),
         extern_functions,
         opaque_handles,

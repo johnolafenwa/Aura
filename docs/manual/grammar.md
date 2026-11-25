@@ -245,10 +245,18 @@ module = [ docstring ], { module-element }, EOF ;
 
 docstring = TRIPLE_STRING, NEWLINE ;
 
-module-element = import-declaration | module-constant | module-asm | item | statement ;
+module-element = import-declaration | module-constant | module-asm | item
+               | conditional-module-suite | statement ;
+
+conditional-module-suite
+    = "if", expression, ":", module-suite,
+      { "elif", expression, ":", module-suite },
+      [ "else", ":", module-suite ] ;
+
+module-suite = NEWLINE, INDENT, module-element, { module-element }, DEDENT ;
 
 module-constant
-    = [ "public" ], [ "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
+    = [ "public" ], [ "const" | "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -530,8 +538,16 @@ class-declaration
       | class-member, { class-member } ),
       DEDENT ;
 
+conditional-class-suite
+    = "if", expression, ":", member-suite,
+      { "elif", expression, ":", member-suite },
+      [ "else", ":", member-suite ] ;
+
+member-suite = NEWLINE, INDENT, class-member, { class-member }, DEDENT ;
+
 class-member
-    = "pass", NEWLINE
+    = conditional-class-suite
+    | "pass", NEWLINE
     | [ "public" ], field-declaration
     | [ "public" ], method-declaration
     | "@", "property", NEWLINE, [ "public" ], method-declaration
@@ -1299,8 +1315,11 @@ them must be rejected cleanly.
 
 ## Syntax Not In Aura
 
+Conditional declarations use the same indented suites as ordinary control flow. [Compile-Time Evaluation](/manual/compile-time) defines which conditions select declarations.
+
 The grammar intentionally excludes:
 
+- macros, preprocessor directives such as `#ifdef`, and function-local `const` bindings
 - task-local declaration syntax, pointer dereference operators and lexical `unsafe` blocks
 - variable-length inline arrays, zero-width C bit-fields and anonymous C bit-fields
 - semicolons and multiple statements on one physical line

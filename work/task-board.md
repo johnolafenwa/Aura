@@ -2,6 +2,10 @@
 
 Last updated: 2026-11-24
 
+## Compile-Time Evaluation And Conditional Compilation
+
+Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)
+
 ## Freestanding machine code
 
 The three freestanding targets support typed assembly, interrupt entries

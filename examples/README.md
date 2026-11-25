@@ -244,7 +244,7 @@ standalone entrypoints.
 
 | Directory | Shows | Prints |
 | --- | --- | --- |
-| `kernel/` | A program for a machine with no operating system: `export "C" def` entry points, serial output and a spin lock through the `mem` module, and an `aura_trap` hook written in Aura. `run.sh riscv64` or `run.sh aarch64` builds it with `aura build --freestanding` and boots it under QEMU. | `p=168`, `c=111`, `r=1000`, `n=100`, `trap 1 main.au:154:13` |
+| `kernel/` | A program for a machine with no operating system: `export "C" def` entry points, serial output and a spin lock through the `mem` module, and an `aura_trap` hook written in Aura. `run.sh riscv64` or `run.sh aarch64` builds it with `aura build --freestanding` and boots it under QEMU. | `p=168`, `c=111`, `r=1000`, `n=100`, `trap 1 main.au:179:13` |
 
 ### `packages/`
 
@@ -257,7 +257,7 @@ package authorization.
 | --- | --- | --- |
 | `local_path_dependencies/app/` | `Aura.toml`, `src/`, a sibling path dependency, and a package-local helper module | `12` |
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
-| `ffi_getpid/` | An FFI package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
+| `ffi_getpid/` | Selects the Windows `_getpid` or Unix `getpid` C function | `true` on both backends |
 | `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
 | `raylib/` | A binding of the raylib graphics library, generated from raylib's API description: structs by value, `cstr` text, `mut` struct and scalar parameters, and constants. Three programs use it: a brick game with keyboard and mouse input, a 3D scene with a camera and a model, and a picture written to a PNG with no window | `picture.au` prints the size of its image and two colors |
 
@@ -267,7 +267,7 @@ Run commands:
   `cargo run -p aura -- run examples/packages/local_path_dependencies/app/src/main.au`
 - `workspace/app/`:
   `cargo run -p aura -- run examples/packages/workspace/app/src/main.au`
-- `ffi_getpid/`, on a Unix-family host, through both backends:
+- `ffi_getpid/` through both backends:
   - `cargo run -p aura -- run --backend mir examples/packages/ffi_getpid/src/main.au`
   - `cargo run -p aura -- run --backend direct examples/packages/ffi_getpid/src/main.au`
 - `sqlite_notes/`, on a host with the SQLite library and its linker file
@@ -308,7 +308,7 @@ compiler, CLI, and language-server regression tests cover them instead.
 | `read_lines.au` | `fs.File.read_lines(...)`, `read_line()`, and `read_chunk(...)` read a file in pieces from one position | `4 lines, 9 words`, `the quick brown fox`, `24`, `3`, `true` |
 | `sign_and_compress.au` | `gzip.compress(...)`, bounded `gzip.decompress(...)`, `bytes.hmac_sha256(...)`, and `bytes.constant_time_eq(...)` | `true`, `64`, `true`, `bad signature`, `more than 4096 bytes`, `not gzip` |
 | `image_thumbnail.au` | `image.write(...)` and `image.read(...)` as PNG, JPEG, and PGM, `resize(...)`, `to_gray()`, `image.info(...)`, `to_planes()`, and the `image.Error` variants | `64x48 channels=3`, `true`, `true`, `16x12 channels=1`, `true`, `true`, `[3, 48, 64]`, `0.5019608`, `true`, `the data is not a PNG, JPEG or Netpbm image`, `JPEG has no alpha`, `more than 1000 pixels` |
-| `process_run.au` | Shell-free `process.run(..., group=true)`, UTF-8 and raw captured stdout and stderr, and `process.Completed.check()` | `aura process`, `13`, `0`, `ExitStatus.Exited(0)` |
+| `process_run.au` | Selects an echo command for the target, captures its output and checks its exit status | `aura process`, the byte count (`14` on Windows, `13` on Unix), `0`, `ExitStatus.Exited(0)` |
 | `process_pipes.au` | Interactive `process.start(..., group=true)`, `process.Pipe`, and child waiting with a timeout | `ping`, `ExitStatus.Exited(0)` |
 | `process_supervisor.au` | `process.supervisor()`, restart policies, restart backoff, and group-aware supervisor shutdown | `SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)`, `SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)`, `true`, `false`, `true` |
 | `tcp_echo.au` | Builtin `net.listen(...)`, `net.connect(...)`, `TcpListener.accept()`, `TcpStream.read_line()`, `TcpStream.write_all(...)`, and `with` cleanup on network resources | `echo:ping` |

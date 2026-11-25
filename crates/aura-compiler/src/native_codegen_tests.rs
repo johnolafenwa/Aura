@@ -660,6 +660,7 @@ def main() -> int32:
         unions: Vec::new(),
         enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
+            frozen: None,
             state: None,
             key: "<test>::answer".to_string(),
             initializer: initializer.name.clone(),
@@ -16271,7 +16272,12 @@ def main():
 #[test]
 fn native_module_constant_reads_find_their_frozen_value_untagged() {
     let source = r#"
+def configured_names() -> list[str]:
+    print("loading names")
+    return ["alpha", "beta"]
+
 NAMES: list[str] = ["alpha", "beta"]
+DYNAMIC_NAMES = configured_names()
 LIMITS: dict[str, int64] = {"alpha": 1}
 
 def count() -> int64:
@@ -18363,6 +18369,69 @@ def main():
         .unwrap();
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
+}
+
+#[test]
+fn compiled_constant_data_has_no_initializer_call_at_entry() {
+    let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
+    let mir = lower_source_to_mir(source).expect("constant should lower");
+    let bytes = emit_host_object(&mir).expect("constant should emit");
+    let initializer = mir
+        .constants
+        .iter()
+        .find(|value| value.key.ends_with("::values"))
+        .unwrap();
+    let symbol = mangle_symbol(&initializer.initializer);
+    let object = object::File::parse(&*bytes).unwrap();
+    assert!(object
+        .symbols()
+        .all(|entry| !entry.name().unwrap_or("").ends_with(&symbol)));
+    assert!(!object_referenced_symbols(&bytes)
+        .iter()
+        .any(|symbol| symbol.ends_with("aura_direct_module_constant")));
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_emits_a_typed_function() {
+    let mir = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/conditional_trait_dependency.au"
+    ))
+    .expect("the exhaustive match should lower");
+    let select = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "select_layout")
+        .expect("select_layout should be present");
+    assert!(select
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::Return(Operand::Unit))));
+    emit_host_object(&mir).expect("the record-returning function should emit");
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_with_postconditions_emits() {
+    let source = r#"
+class Pair:
+    value: int64
+
+enum Side:
+    Left
+    Right
+
+def choose(side: Side) -> Pair:
+    ensures result.value > 0
+    match side:
+        case Side.Left:
+            return Pair(value=11)
+        case Side.Right:
+            return Pair(value=22)
+
+def main():
+    print(choose(Side.Left).value)
+"#;
+    let mir = lower_source_to_mir(source).expect("the contracted function should lower");
+    emit_host_object(&mir).expect("the contracted record return should emit");
 }
 
 #[test]

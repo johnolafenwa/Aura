@@ -31811,6 +31811,9 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     assert_eq!(out, [-1, 0]);
 }
 
+#[path = "native_frozen_value_tests.rs"]
+mod compile_time_transport;
+
 #[test]
 fn direct_bit_methods_check_arguments_and_preserve_wide_values() {
     use aura_core::integer_bits::BitMethod;

@@ -66,6 +66,8 @@ cargo run -p aura -- check examples/collections/list_basics.au
 
 Use `check` before `run` when you edit a package or diagnose type errors.
 
+Use `aura check --all-targets main.au` to check target-dependent declarations across supported hosted and freestanding configurations. This command needs no cross linker. Pass `--cfg name` or `--cfg name=value` to `build`, `run`, `check` and `test`. Each configuration has its own native cache identity. [Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
+
 ## Running
 
 `run` executes a source file through the MIR runtime:

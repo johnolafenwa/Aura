@@ -1715,6 +1715,7 @@ maintained surface by area and states how it may change.
 - [Complete Grammar](/manual/grammar): the normative Extended Backus-Naur Form
   (EBNF) grammar, precedence, associativity, contextual syntax, layout, and
   unsupported forms.
+- [Compile-Time Evaluation And Conditional Compilation](/manual/compile-time) covers constant bindings, target properties and conditional suites.
 - [Names And Scopes](/manual/names-and-scopes): modules, imports, visibility,
   bindings, block scope, the no-shadowing rule, and member lookup.
 - [Types](/manual/types): primitive types, tuples, `None`, `Duration`, generic
@@ -3950,6 +3951,8 @@ cargo run -p aura -- check examples/collections/list_basics.au
 ```
 
 Use `check` before `run` when you edit a package or diagnose type errors.
+
+Use `aura check --all-targets main.au` to check target-dependent declarations across supported hosted and freestanding configurations. This command needs no cross linker. Pass `--cfg name` or `--cfg name=value` to `build`, `run`, `check` and `test`. Each configuration has its own native cache identity. [Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
 
 ## Running
 
@@ -6332,6 +6335,85 @@ Ranges include the lower bound and exclude the upper bound. Equal or reversed
 bounds give an empty list. Lookup, insertion and removal take logarithmic time.
 A `for` loop consumes the map or set and visits every entry in ascending order.
 
+## Source: docs/manual/compile-time.md
+
+# Compile-Time Evaluation And Conditional Compilation
+
+Use `const` on a module binding when its value must be ready at build time. Use an `if` over that value or the builtin `build` module to select code for the target.
+
+```aura
+import build
+
+def square(value: int64) -> int64:
+    return value * value
+
+const block_size = square(8)
+
+if build.freestanding:
+    export "C" def block_bytes() -> int64:
+        return block_size
+else:
+    def main():
+        print(block_size)
+```
+
+## Module Bindings
+
+The compiler evaluates pure module initializers, including ordinary bindings without the marker. An initializer can read earlier bindings and call pure Aura functions. It can construct a scalar, string, byte string, tuple, list, dictionary, set, class or enum. Iteration order and type information survive evaluation. `public const` makes a required binding available to importers.
+
+A pure computation can update its own local variables and collections. Reading the environment or mutable module storage, performing I/O, consulting the clock, starting a task, running machine assembly or calling foreign code requires runtime execution. An ordinary binding with such an initializer runs during module initialization. Writing `const` there produces `AU3025`. Move the effect into a runtime function, or use an ordinary binding if the effect belongs at startup.
+
+A local value can run a pure `__drop__` hook within the initializer’s budget. A result that still owns a drop hook needs runtime initialization. This includes a hook owned by an item in a returned collection.
+
+Integer operations obey Aura's target widths. Floating-point values round to their declared precision. A trap in a pure initializer is a compile error, even on an ordinary binding. The diagnostic names the binding and includes its Aura call frames.
+
+| Limit per initializer | Diagnostic | What to change |
+| --- | --- | --- |
+| 100,000 MIR steps including nested calls | `AU3027` | Reduce iteration or recursion. |
+| 8 MiB of cumulative logical storage | `AU3028` | Reduce temporary data and allocation. |
+
+Frozen bindings have no startup call. Native code uses scalar immediates or read-only data. A hosted program attaches a shared runtime box to an aggregate on first use. Freestanding objects can read a computed table without linking the Aura runtime.
+
+## Target Properties
+
+`import build` gives the program the following constants. Cross-compilation uses the destination machine's properties.
+
+| Member | Type | Values |
+| --- | --- | --- |
+| `os` | `str` | `"linux"`, `"macos"`, `"windows"`, or `"none"` on a freestanding target |
+| `arch` | `str` | Architecture name, such as `"x86_64"`, `"aarch64"` or `"riscv64"` |
+| `pointer_width` | `int64` | Pointer size in bits |
+| `endianness` | `str` | `"little"` or `"big"` |
+| `freestanding`, `hosted` | `bool` | The selected execution environment |
+| `debug`, `release` | `bool` | The selected build profile |
+| `cfg` | `dict[str, str]` | Features from the entry manifest and command line |
+
+Use membership when a feature might be absent. A bare `--cfg tracing` sets its value to the string `"true"`. An empty value is legal. The first equals sign separates the name from its value.
+
+```aura
+import build
+
+def main():
+    if "tracing" in build.cfg:
+        print(build.cfg["tracing"])
+    else:
+        print("tracing off")
+```
+
+```sh
+aura run --cfg tracing=verbose main.au
+```
+
+## Conditional Suites
+
+An ordinary `if` can select code when its condition uses only build properties, marked constants, literals and operators on them. The compiler parses all arms. It resolves imports, checks types and lowers code only in the selected arm. The other arm may reference a module, foreign symbol or function unavailable on this target. A spelling or indentation error that prevents parsing still needs a fix.
+
+At module scope, conditional suites can enclose imports, functions, classes, implementations and foreign declarations. A class can select fields or methods. In a function, a condition that reads a parameter or local value remains a runtime branch with the usual checks on both suites.
+
+`aura check --all-targets` repeats checking for the supported targets with the selected cfg values and profile. It names the target in a diagnostic. Formatting preserves every arm. Documentation and verification use the current configuration. The language server dims inactive source and can navigate to identifiable declarations inside it.
+
+[Build flags and package defaults](/manual/packages#build-configuration) · [Freestanding builds](/manual/freestanding)
+
 ## Source: docs/manual/concurrency.md
 
 # Concurrency
@@ -8445,6 +8527,14 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
 
+### Compile-Time Evaluation
+
+- Each initializer has 100,000 MIR steps and 8 MiB of cumulative logical allocation, shared with its callees.
+- A conditional declaration needs a boolean made from target properties and marked module constants. All arms must parse.
+- `check --all-targets` varies the target and keeps the chosen cfg values and profile. Supply different feature values to check other feature selections.
+
+[Compile-Time Evaluation And Conditional Compilation](/manual/compile-time)
+
 ### Numbers And Durations
 
 - Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
@@ -8888,6 +8978,8 @@ String and format-specification diagnostics are described under
 | `AU2064` | invalid property setter | A setter is duplicated, lacks a matching getter, or has the wrong name, receiver, parameter, or result. | Pair it with the same-name getter and write `def name(mut self, value: T):` for a getter returning `T`. |
 | `AU2065` | invalid drop hook declaration | The hook is on a Copy class or has an invalid signature or precondition. | Use `def __drop__(mut self):` in an ordinary class. |
 | `AU2066` | explicit drop hook reference | A program calls or binds the automatic hook. | Let the owner release it, or put an explicit operation in another method. |
+| `AU2070` | invalid build configuration | A cfg name is invalid, an option is incomplete, or a manifest value has an unsupported type. | Use an identifier and a string or boolean manifest value. |
+| `AU2071` | invalid compile-time condition | A declaration guard depends on a runtime value or its result is not boolean. | Write a boolean condition over build properties or marked constants. |
 | `AU2080` | invalid static storage initializer | A module cell has a runtime initializer. | Supply a literal or supported structural initializer. |
 | `AU2081` | invalid fixed array type | An inline array has an invalid length or element representation. | Choose an inline type and a positive length within the size limits. |
 | `AU2082` | invalid fixed array initializer | The literal or repeat length differs from the destination array. | Supply exactly the declared number of elements. |
@@ -9265,6 +9357,17 @@ owner's region.
 | `AU3002` | A non-repeatable Task does not arrive through owned access. `select` consumes all such observation rights at entry and abandons the losers. |
 | `AU2004` | A call-shape error, such as an empty call or a named source. |
 | `AU2002` | An invalid source kind, or an inconsistent Queue/Task category type. |
+
+### Compile-Time Evaluation Codes
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `AU3025` | A required initializer cannot produce a build-time value. | Remove the runtime dependency, or use an ordinary binding for startup initialization. |
+| `AU3026` | A pure initializer traps. | Follow the Aura call frames and fix the failing operation. |
+| `AU3027` | An initializer exceeds the evaluation step limit. | Reduce iteration or recursion. |
+| `AU3028` | An initializer exceeds the evaluation memory limit. | Reduce allocation and intermediate data. |
+
+[Compile-time evaluation limits](/manual/compile-time#module-bindings)
 
 ### Runtime Codes
 
@@ -14344,7 +14447,7 @@ Scalar and aggregate values live in registers, stack frames or static storage. A
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
-| Module constants and mutable module cells with static initializers | Module storage computed when the program starts |
+| Pure module constants, including computed read-only tables, and mutable module cells with static initializers | Module bindings that require runtime initialization |
 | `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
 
 `aura check --freestanding` and the build report each construct outside the
@@ -14357,6 +14460,8 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+The compiler can build a collection in a pure helper on the build machine, then emit its values in the destination object's read-only data. Read the computed table from an export, using a runtime index if needed. The kernel uses this for its decimal digits. [Compile-Time Evaluation](/manual/compile-time)
 
 ## Module Storage
 
@@ -14386,6 +14491,7 @@ void aura_trap(uint32_t code, const char *file, size_t file_length,
 | 7 | A foreign `bool` that is neither 0 nor 1 |
 | 8 | Unreachable code was reached |
 | 9 | Fixed-array index out of bounds |
+| 10 | A frozen sequence index is out of range or a frozen dictionary key is absent |
 
 - `file` is the source file's path relative to the directory of the file
   that was built. It is not NUL-terminated. `file_length` is its length in
@@ -16919,10 +17025,18 @@ module = [ docstring ], { module-element }, EOF ;
 
 docstring = TRIPLE_STRING, NEWLINE ;
 
-module-element = import-declaration | module-constant | module-asm | item | statement ;
+module-element = import-declaration | module-constant | module-asm | item
+               | conditional-module-suite | statement ;
+
+conditional-module-suite
+    = "if", expression, ":", module-suite,
+      { "elif", expression, ":", module-suite },
+      [ "else", ":", module-suite ] ;
+
+module-suite = NEWLINE, INDENT, module-element, { module-element }, DEDENT ;
 
 module-constant
-    = [ "public" ], [ "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
+    = [ "public" ], [ "const" | "mut" ], IDENT, [ ":", type ], "=", expression, NEWLINE ;
 
 import-declaration
     = "import", identifier-path, [ "as", import-alias ], NEWLINE
@@ -17204,8 +17318,16 @@ class-declaration
       | class-member, { class-member } ),
       DEDENT ;
 
+conditional-class-suite
+    = "if", expression, ":", member-suite,
+      { "elif", expression, ":", member-suite },
+      [ "else", ":", member-suite ] ;
+
+member-suite = NEWLINE, INDENT, class-member, { class-member }, DEDENT ;
+
 class-member
-    = "pass", NEWLINE
+    = conditional-class-suite
+    | "pass", NEWLINE
     | [ "public" ], field-declaration
     | [ "public" ], method-declaration
     | "@", "property", NEWLINE, [ "public" ], method-declaration
@@ -17973,8 +18095,11 @@ them must be rejected cleanly.
 
 ## Syntax Not In Aura
 
+Conditional declarations use the same indented suites as ordinary control flow. [Compile-Time Evaluation](/manual/compile-time) defines which conditions select declarations.
+
 The grammar intentionally excludes:
 
+- macros, preprocessor directives such as `#ifdef`, and function-local `const` bindings
 - task-local declaration syntax, pointer dereference operators and lexical `unsafe` blocks
 - variable-length inline arrays, zero-width C bit-fields and anonymous C bit-fields
 - semicolons and multiple statements on one physical line
@@ -20669,6 +20794,8 @@ A bare binding at module level declares an immutable module constant. The initia
 
 Constants become available in declaration order. An initializer may read an earlier constant in the same module. Reading itself or a later constant is `AU2001`, use before initialization. Functions and types are available to every initializer, wherever they appear in the file.
 
+Write `const` before the name to require build-time evaluation. A marked binding follows the same visibility, declaration order and borrowing rules as an ordinary module constant. Both forms can hold computed values. [Compile-Time Evaluation](/manual/compile-time)
+
 **Initialization order.** Aura initializes every reachable module before the entry runs:
 
 - dependencies initialize before the modules that import them
@@ -23000,6 +23127,18 @@ rejected.
 | `name` | Must match `[A-Za-z_][A-Za-z0-9_]*`. It is also the dependency import identifier. Hyphenated names are invalid, even though `version` allows `-`. |
 | `version` | Must begin with an ASCII digit. The rest may contain only ASCII letters, digits, `.`, `-`, or `+`. |
 | `edition` | Must be exactly `"2026"` in Aura 0.17. |
+
+### Build Configuration
+
+Set feature defaults in the entry package's manifest. Its imports and dependencies see the same settings.
+
+```toml
+[build.cfg]
+board = "virt"
+tracing = true
+```
+
+A string keeps its contents. A boolean becomes `"true"` or `"false"`. An explicit `--cfg` overrides the corresponding manifest entry. Repeated command-line names take their last value. [Reading features in Aura](/manual/compile-time#target-properties)
 
 ### FFI Opt-In
 
@@ -39614,6 +39753,29 @@ error[AU2001]: module constant `full_width` is used before initialization
 
 Swap the two lines and it compiles, with `full_width` usable inside
 `settings.au` but invisible outside it.
+
+### Choosing the width at build time
+
+Suppose a small terminal needs half the usual bar width. We can build two
+versions of the same program from one settings file. The `const` marker
+asks the compiler to calculate the normal width before the program runs.
+The `if` gives each build one public name for the width it should use.
+
+```aura
+import build
+
+const normal_width = 4 * 5
+
+if "compact" in build.cfg:
+    public const bar_width = normal_width // 2
+else:
+    public const bar_width = normal_width
+```
+
+Run the tracker with `aura run --cfg compact src/main.au` to get a width
+of ten. Omit the flag and the width is twenty. The progress bar can keep
+reading `settings.bar_width` in both builds. The [manual](/manual/compile-time)
+lists the OS, architecture and other properties you can use in a condition.
 
 ### Constants really are constant
 
@@ -62784,19 +62946,32 @@ The verifier cannot tell you that an address is right, and a write that
 lands on memory an Aura value occupies is outside anything a proof covers.
 Arithmetic on a value after you have read it is checked like any other.
 
-There are no strings in a freestanding program, so printing a number means
-producing its digits ourselves:
+We can build a table of the powers of ten while compiling the kernel.
+The serial output routine indexes that table to print each decimal digit.
+An unsigned 64-bit number fits in 20 digits, so we store the powers from
+10⁰ to 10¹⁹.
 
 ```aura fragment
+def decimal_divisors() -> list[uint64]:
+    mut power: uint64 = 1
+    mut powers: list[uint64] = [power]
+    for i in range(19):
+        power = power * 10
+        powers.append(power)
+    return powers
+
+const decimal_powers = decimal_divisors()
+
 def put_number(uart: uint64, value: uint64) -> None:
-    mut divisor: uint64 = 1
-    while value // divisor >= 10:
-        divisor = divisor * 10
+    mut place: int64 = 19
+    while place > 0 and decimal_powers[place] > value:
+        place = place - 1
     mut rest = value
-    while divisor > 0:
+    while place >= 0:
+        divisor = decimal_powers[place]
         put(uart, (48 + rest // divisor) as uint8)
         rest = rest % divisor
-        divisor = divisor // 10
+        place = place - 1
 ```
 
 ## Booting it
@@ -62817,7 +62992,7 @@ c=111
 r=1000
 n=100
 s=42
-trap 1 main.au:160:13
+trap 1 main.au:185:13
 ```
 
 The first five lines are computed results. The last is our `aura_trap`

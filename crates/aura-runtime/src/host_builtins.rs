@@ -87,13 +87,13 @@ pub(crate) fn math_unary(function: MathFunction, value: f64) -> Result<f64> {
         return Err(domain_error());
     }
     let result = match function {
-        Exp => value.exp(),
-        Log => value.ln(),
-        Log2 => value.log2(),
-        Log10 => value.log10(),
-        Sin => value.sin(),
-        Cos => value.cos(),
-        _ => value.tan(),
+        Exp => libm::exp(value),
+        Log => libm::log(value),
+        Log2 => libm::log2(value),
+        Log10 => libm::log10(value),
+        Sin => libm::sin(value),
+        Cos => libm::cos(value),
+        _ => libm::tan(value),
     };
     if function == Exp && value.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
@@ -231,18 +231,18 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
     }
     let result = match name {
         "math.sqrt" => value.sqrt(),
-        "math.cbrt" => value.cbrt(),
-        "math.asin" => value.asin(),
-        "math.acos" => value.acos(),
-        "math.atan" => value.atan(),
-        "math.sinh" => value.sinh(),
-        "math.cosh" => value.cosh(),
-        "math.tanh" => value.tanh(),
-        "math.asinh" => value.asinh(),
-        "math.acosh" => value.acosh(),
-        "math.atanh" => value.atanh(),
-        "math.expm1" => value.exp_m1(),
-        "math.log1p" => value.ln_1p(),
+        "math.cbrt" => libm::cbrt(value),
+        "math.asin" => libm::asin(value),
+        "math.acos" => libm::acos(value),
+        "math.atan" => libm::atan(value),
+        "math.sinh" => libm::sinh(value),
+        "math.cosh" => libm::cosh(value),
+        "math.tanh" => libm::tanh(value),
+        "math.asinh" => libm::asinh(value),
+        "math.acosh" => libm::acosh(value),
+        "math.atanh" => libm::atanh(value),
+        "math.expm1" => libm::expm1(value),
+        "math.log1p" => libm::log1p(value),
         "math.degrees" => value.to_degrees(),
         _ => value.to_radians(),
     };
@@ -255,8 +255,8 @@ pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
 /// A `math` function of two `float64` values.
 pub(crate) fn math_binary(name: &str, left: f64, right: f64) -> Result<f64> {
     let result = match name {
-        "math.atan2" => left.atan2(right),
-        "math.hypot" => left.hypot(right),
+        "math.atan2" => libm::atan2(left, right),
+        "math.hypot" => libm::hypot(left, right),
         _ => left.copysign(right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
@@ -1360,6 +1360,9 @@ pub fn host_gzip_compress(args: Vec<Value>, _program_args: Option<&[String]>) ->
             format!("`gzip.compress` requires a level from 0 to 9, found `{level}`"),
         ));
     };
+    // The deflate bound covers stored blocks and the gzip framing.
+    let input_len = data.len() as u64;
+    crate::builtin_limit::check(input_len + input_len.div_ceil(16_384) * 5 + 32)?;
     let packed = crate::gzip_codec::gzip_compress(&data, level)
         .map_err(|error| Diagnostic::coded("AU4005", format!("`gzip.compress` failed: {error}")))?;
     host_bytes_value(packed, name)
@@ -1383,8 +1386,14 @@ pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) 
             ),
         ));
     };
-    let error = match crate::gzip_codec::gzip_decompress(&data, limit) {
+    let available = crate::builtin_limit::allowance()
+        .unwrap_or(limit)
+        .min(limit);
+    let error = match crate::gzip_codec::gzip_decompress(&data, available) {
         Ok(bytes) => return host_bytes_value(bytes, name).map(result_ok),
+        Err(GzipError::OutputTooLarge { .. }) if available < limit => {
+            return Err(crate::builtin_limit::exhausted());
+        }
         Err(error) => error,
     };
     let (variant_name, payload) = match error {

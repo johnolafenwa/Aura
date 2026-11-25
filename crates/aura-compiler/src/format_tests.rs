@@ -542,3 +542,11 @@ fn byte_strings_keep_their_spelling() {
         "def main():\n    data = b\"a\\x00 b\" + b'c\"'\n    b = 1\n    print(b)\n",
     );
 }
+
+#[test]
+fn formatting_preserves_both_conditional_declaration_suites() {
+    assert_formats(
+        "import build\nif build.os==\"none\":\n  import board\nelse:\n  const number:int64= 2+3\n",
+        "import build\nif build.os == \"none\":\n    import board\nelse:\n    const number: int64 = 2 + 3\n",
+    );
+}

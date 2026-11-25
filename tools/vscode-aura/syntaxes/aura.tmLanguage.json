@@ -721,6 +721,10 @@
     "keywords": {
       "patterns": [
         {
+          "name": "storage.modifier.const.aura",
+          "match": "\\bconst(?=\\s+[A-Za-z_][A-Za-z0-9_]*\\s*[:=])"
+        },
+        {
           "name": "keyword.declaration.ffi.aura",
           "match": "\\b(extern|opaque)\\b"
         },

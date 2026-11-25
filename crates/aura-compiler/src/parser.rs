@@ -1,3 +1,6 @@
+mod conditional;
+pub(crate) use conditional::root_imports;
+pub(crate) const CONDITION_RESULT: &str = "conditional predicate";
 mod module_state;
 mod property_setters;
 
@@ -323,11 +326,52 @@ pub fn parse(source: &str) -> Result<Module> {
 }
 
 pub(crate) fn parse_with_module_scope(source: &str, declaration_module: bool) -> Result<Module> {
+    parse_configured(
+        source,
+        declaration_module,
+        Some(conditional::Resolver::new(None)),
+    )
+}
+
+/// Validate every suite without resolving a build configuration or a package.
+pub fn parse_all_syntax(source: &str) -> Result<Module> {
+    parse_all_syntax_with_module_scope(source, false)
+}
+
+pub(crate) fn parse_all_syntax_with_module_scope(
+    source: &str,
+    declaration_module: bool,
+) -> Result<Module> {
+    parse_configured(source, declaration_module, None)
+}
+
+pub(crate) fn parse_for_path(
+    source: &str,
+    loader: &mut crate::ModuleLoader,
+    path: &std::path::Path,
+    declaration_module: bool,
+) -> Result<Module> {
+    parse_configured(
+        source,
+        declaration_module,
+        Some(conditional::Resolver::new(Some((loader, path)))),
+    )
+}
+
+fn parse_configured(
+    source: &str,
+    declaration_module: bool,
+    resolver: Option<conditional::Resolver<'_>>,
+) -> Result<Module> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
     parser.module_storage = declaration_module || parser.has_explicit_entry();
     parser.source_lines = source.lines().map(str::to_owned).collect();
-    let mut module = parser.parse_module()?;
+    let mut module = parser.parse_with_possible_entry()?;
+    if let Some(mut resolver) = resolver {
+        parser.select_conditionals(&mut module, &mut resolver, declaration_module)?;
+        parser.finish_naked_functions(&mut module)?;
+    }
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
     Ok(module)
@@ -447,6 +491,9 @@ mod layout_controls;
 
 struct Parser {
     tokens: Vec<Token>,
+    declaration_ifs: Vec<conditional::Suite>,
+    projected: bool,
+    in_declaration_arm: bool,
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
@@ -459,7 +506,8 @@ struct Parser {
     c_bit_widths: std::collections::BTreeMap<String, u8>,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
-    asm_span: Option<Span>,
+    asm_spans: Vec<Span>,
+    deferred_naked: bool,
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
@@ -478,12 +526,16 @@ impl Parser {
     fn with_recursion_depth(tokens: Vec<Token>, recursion_depth: usize) -> Self {
         Self {
             tokens,
+            declaration_ifs: Vec::new(),
+            projected: false,
+            in_declaration_arm: false,
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
-            asm_span: None,
+            asm_spans: Vec::new(),
+            deferred_naked: false,
             c_bit_widths: Default::default(),
             generated_items: Vec::new(),
             module_storage: false,
@@ -527,6 +579,10 @@ impl Parser {
     }
 
     fn parse_module(&mut self) -> Result<Module> {
+        self.parse_module_suite(false)
+    }
+
+    fn parse_module_suite(&mut self, nested: bool) -> Result<Module> {
         let mut imports = Vec::new();
         let mut constants = Vec::new();
         let mut items = Vec::new();
@@ -537,16 +593,29 @@ impl Parser {
         // immutable script local, so a script reads top to bottom.
         let mut seen_statement = false;
         self.skip_newlines();
-        let doc = self.take_docstring()?;
+        let doc = if nested { None } else { self.take_docstring()? };
         self.skip_newlines();
 
-        while !self.at_eof() {
-            if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "module_asm")
+        while !(self.at_eof() || nested && self.at_simple(&TokenKind::Dedent)) {
+            let suite = (self.at_simple(&TokenKind::KwIf) && !self.projected)
+                .then(|| self.declaration_kind(&imports, &constants, seen_statement))
+                .flatten();
+            if let Some(required) = suite {
+                for mut branch in
+                    self.parse_declaration_arms(required, |parser| parser.parse_module_suite(true))?
+                {
+                    imports.append(&mut branch.imports);
+                    constants.append(&mut branch.constants);
+                    items.append(&mut branch.items);
+                    top_level_stmts.append(&mut branch.top_level_stmts);
+                    module_asm.append(&mut branch.module_asm);
+                }
+            } else if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "module_asm")
                 && matches!(self.peek_kind(1), Some(TokenKind::LParen))
             {
                 let expr = self.parse_expr()?;
                 module_asm.push(crate::inline_asm::module_template(&expr)?.to_string());
-                self.asm_span.get_or_insert(expr.span);
+                self.asm_spans.push(expr.span);
                 self.expect_statement_terminator()?;
             } else if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
@@ -599,10 +668,13 @@ impl Parser {
             self.skip_newlines();
         }
 
-        items.append(&mut self.generated_items);
+        if !nested {
+            items.append(&mut self.generated_items);
+        }
         Ok(Module {
+            inactive_lines: Vec::new(),
             module_asm,
-            asm_span: self.asm_span,
+            asm_span: self.asm_spans.first().copied(),
             doc,
             imports,
             constants,
@@ -611,7 +683,15 @@ impl Parser {
         })
     }
 
+    fn at_const_marker(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "const")
+            && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+    }
+
     fn at_module_constant_start(&self) -> bool {
+        if self.at_const_marker() {
+            return true;
+        }
         match self.current_kind() {
             TokenKind::KwMut => self.module_storage,
             TokenKind::KwPublic if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) => true,
@@ -637,6 +717,10 @@ impl Parser {
 
     fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let required = self.at_const_marker();
+        if required {
+            self.bump();
+        }
         let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let (name, span) = self.expect_identifier_with_span()?;
         let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
@@ -648,6 +732,7 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            required,
             placement: None,
             mutable,
             public,
@@ -1140,7 +1225,56 @@ impl Parser {
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
+        self.parse_class_members(&mut fields, &mut methods, &mut invariants)?;
+        self.expect_simple(TokenKind::Dedent)?;
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                method.span,
+                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
+            ));
+        }
+        if let Some(first) = invariants.first() {
+            methods.push(class_invariant_method(public, first.span, invariants));
+        }
+
+        Ok(ClassDecl {
+            public,
+            copy,
+            name,
+            type_params,
+            type_param_bounds,
+            fields,
+            methods,
+            span,
+            doc,
+            c_layout: false,
+            c_arrays: std::collections::BTreeMap::new(),
+            layout_controls: Default::default(),
+            c_union: None,
+        })
+    }
+
+    fn parse_class_members(
+        &mut self,
+        fields: &mut Vec<FieldDecl>,
+        methods: &mut Vec<FunctionDecl>,
+        invariants: &mut Vec<ContractClause>,
+    ) -> Result<()> {
+        let mut members_are_selected = !self.in_declaration_arm;
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::KwIf) {
+                // The syntax pass combines alternatives. Only the projected
+                // pass knows which preceding methods can name a setter.
+                members_are_selected = false;
+                self.parse_declaration_arms(true, |parser| {
+                    parser.parse_class_members(fields, methods, invariants)
+                })?;
+                continue;
+            }
             if self.at_lemma_def_start() {
                 return Err(Diagnostic::coded_at(
                     "AU2048",
@@ -1206,8 +1340,10 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
-            if self.at_property_setter(&methods) {
-                methods.push(self.parse_property_setter(&methods)?);
+            let preceding: &[FunctionDecl] = if members_are_selected { methods } else { &[] };
+            if self.at_property_setter(preceding) {
+                let setter = self.parse_property_setter(preceding)?;
+                methods.push(setter);
                 continue;
             }
             if self.at_simple(&TokenKind::At)
@@ -1234,36 +1370,7 @@ impl Parser {
             }
         }
 
-        self.expect_simple(TokenKind::Dedent)?;
-        if let Some(method) = methods
-            .iter()
-            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
-        {
-            return Err(Diagnostic::coded_at(
-                "AU2048",
-                method.span,
-                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
-            ));
-        }
-        if let Some(first) = invariants.first() {
-            methods.push(class_invariant_method(public, first.span, invariants));
-        }
-
-        Ok(ClassDecl {
-            public,
-            copy,
-            name,
-            type_params,
-            type_param_bounds,
-            fields,
-            methods,
-            span,
-            doc,
-            c_layout: false,
-            c_arrays: std::collections::BTreeMap::new(),
-            layout_controls: Default::default(),
-            c_union: None,
-        })
+        Ok(())
     }
 
     /// Parses the class of an `extern "C" class` declaration: a `copy`
@@ -1274,8 +1381,8 @@ impl Parser {
         self.extern_fields = outer;
         let mut class = class?;
         class.layout_controls.bit_widths = std::mem::take(&mut self.c_bit_widths);
-        class.layout_controls.microsoft_bit_fields =
-            cfg!(windows) && !class.layout_controls.bit_widths.is_empty();
+        class.layout_controls.microsoft_bit_fields = !class.layout_controls.bit_widths.is_empty()
+            && crate::current_build_config().os == "windows";
         let name = &class.name;
         let rejected = if !class.type_params.is_empty() {
             Some((
@@ -1639,7 +1746,7 @@ impl Parser {
         } else {
             return Err(misplaced_decorator_error(first));
         };
-        crate::machine_attributes::attach(&mut function, decorators)?;
+        self.attach_machine_attributes(&mut function, decorators)?;
         items.push(Item::Function(function));
         Ok(())
     }
@@ -2320,7 +2427,7 @@ impl Parser {
         self.exit_recursion();
         if let Ok(Stmt::Expr(stmt)) = &result {
             if crate::inline_asm::is_asm(&stmt.expr) {
-                self.asm_span.get_or_insert(stmt.span);
+                self.asm_spans.push(stmt.span);
             }
         }
         result

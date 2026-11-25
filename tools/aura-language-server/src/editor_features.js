@@ -302,7 +302,7 @@ function fuzzyMatches(name, query) {
   return true;
 }
 
-const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12, variable: 13 };
+const SYMBOL_KIND = { class: 5, method: 6, enum: 10, trait: 11, function: 12, variable: 13, constant: 14 };
 
 function workspaceSymbols(query, sources) {
   const results = [];

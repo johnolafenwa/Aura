@@ -109,6 +109,8 @@ String and format-specification diagnostics are described under
 | `AU2064` | invalid property setter | A setter is duplicated, lacks a matching getter, or has the wrong name, receiver, parameter, or result. | Pair it with the same-name getter and write `def name(mut self, value: T):` for a getter returning `T`. |
 | `AU2065` | invalid drop hook declaration | The hook is on a Copy class or has an invalid signature or precondition. | Use `def __drop__(mut self):` in an ordinary class. |
 | `AU2066` | explicit drop hook reference | A program calls or binds the automatic hook. | Let the owner release it, or put an explicit operation in another method. |
+| `AU2070` | invalid build configuration | A cfg name is invalid, an option is incomplete, or a manifest value has an unsupported type. | Use an identifier and a string or boolean manifest value. |
+| `AU2071` | invalid compile-time condition | A declaration guard depends on a runtime value or its result is not boolean. | Write a boolean condition over build properties or marked constants. |
 | `AU2080` | invalid static storage initializer | A module cell has a runtime initializer. | Supply a literal or supported structural initializer. |
 | `AU2081` | invalid fixed array type | An inline array has an invalid length or element representation. | Choose an inline type and a positive length within the size limits. |
 | `AU2082` | invalid fixed array initializer | The literal or repeat length differs from the destination array. | Supply exactly the declared number of elements. |
@@ -486,6 +488,17 @@ owner's region.
 | `AU3002` | A non-repeatable Task does not arrive through owned access. `select` consumes all such observation rights at entry and abandons the losers. |
 | `AU2004` | A call-shape error, such as an empty call or a named source. |
 | `AU2002` | An invalid source kind, or an inconsistent Queue/Task category type. |
+
+### Compile-Time Evaluation Codes
+
+| Code | Cause | Fix |
+| --- | --- | --- |
+| `AU3025` | A required initializer cannot produce a build-time value. | Remove the runtime dependency, or use an ordinary binding for startup initialization. |
+| `AU3026` | A pure initializer traps. | Follow the Aura call frames and fix the failing operation. |
+| `AU3027` | An initializer exceeds the evaluation step limit. | Reduce iteration or recursion. |
+| `AU3028` | An initializer exceeds the evaluation memory limit. | Reduce allocation and intermediate data. |
+
+[Compile-time evaluation limits](/manual/compile-time#module-bindings)
 
 ### Runtime Codes
 

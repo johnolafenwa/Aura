@@ -91,6 +91,10 @@ macro_rules! io_timeout_or_return {
     };
 }
 
+mod const_eval;
+mod const_memory;
+pub(crate) use const_eval::evaluate_constants;
+
 pub type StdoutSink = Arc<dyn Fn(&str) + Send + Sync + 'static>;
 
 pub fn run(module: &MirModule) -> Result<RunOutput> {
@@ -869,6 +873,7 @@ struct MirRuntime {
     task_ancestry: Vec<RuntimeTaskFrame>,
     return_type_stack: Vec<Type>,
     constant_states: Arc<Mutex<HashMap<String, MirConstantState>>>,
+    eval_budget: Option<const_eval::Budget>,
     /// Projection returned by the most recently completed child call and
     /// awaiting BeginReturnedLoan in the current frame.
     pending_returned_view_projection: Option<String>,
@@ -2443,6 +2448,12 @@ fn evaluate_json_mir_host_call(
                 Ok(bound) => bound,
                 Err(error) => return Some(Err(error)),
             };
+            if aura_runtime::builtin_limit::active() {
+                return Some(
+                    borrow_mir_string(&bound[0].value, env, name)
+                        .and_then(aura_runtime::runtime_value::json_parse_on_caller),
+                );
+            }
             let prepared = prepare_json_codec_source(|| {
                 borrow_mir_string(&bound[0].value, env, name).and_then(clone_json_codec_source)
             });
@@ -2754,6 +2765,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: Vec::new(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::new(Mutex::new(HashMap::new())),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
@@ -2823,6 +2835,20 @@ impl MirRuntime {
                 None => {}
             }
         }
+        if let Some(frozen) = self
+            .module
+            .constants
+            .iter()
+            .find(|constant| constant.key == key)
+            .and_then(|constant| constant.frozen.as_ref())
+        {
+            let value = Arc::new(frozen.thaw());
+            self.constant_states
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key.to_string(), MirConstantState::Ready(value.clone()));
+            return Ok(value);
+        }
         self.constant_states
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -2866,7 +2892,11 @@ impl MirRuntime {
                 "mutable module storage requires freestanding execution",
             ));
         }
-        for constant in self.module.constants.clone() {
+        let module = Arc::clone(&self.module);
+        for constant in &module.constants {
+            if constant.frozen.is_some() {
+                continue;
+            }
             let _ = self.read_module_constant(&constant.key, &constant.initializer)?;
         }
         Ok(())
@@ -3625,6 +3655,9 @@ impl MirRuntime {
         receiver_type: Option<&Type>,
         registered_exit: bool,
     ) -> Result<CallOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            budget.check_memory((self.call_depth + 1).saturating_mul(128 * 1024))?;
+        }
         let borrowed_cells = std::mem::take(&mut self.borrowed_raw_cells);
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
@@ -4081,6 +4114,9 @@ impl MirRuntime {
         cleanup_stack: &mut CleanupStack,
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.instruction(instruction, env, self.call_depth)?;
+        }
         match instruction {
             // The interpreter's values own themselves, so a retain has
             // nothing to do; releasing a sole-owned generator closes it at
@@ -4370,6 +4406,9 @@ impl MirRuntime {
         loop_state: &mut HashMap<String, i128>,
         _cleanup_stack: &mut CleanupStack,
     ) -> Result<BlockOutcome> {
+        if let Some(budget) = &mut self.eval_budget {
+            budget.step()?;
+        }
         match terminator {
             Terminator::Return(value) => Ok(BlockOutcome::Return(
                 self.evaluate_owned_operand(value, env)?,
@@ -4796,6 +4835,20 @@ impl MirRuntime {
     }
 
     fn evaluate_rvalue_for_target(
+        &mut self,
+        value: &Rvalue,
+        env: &mut Env,
+        expected_type: Option<&Type>,
+    ) -> Result<RvalueOutcome> {
+        if let Some(budget) = &self.eval_budget {
+            return aura_runtime::builtin_limit::with_allowance(budget.output_allowance(), || {
+                self.evaluate_rvalue_body(value, env, expected_type)
+            });
+        }
+        self.evaluate_rvalue_body(value, env, expected_type)
+    }
+
+    fn evaluate_rvalue_body(
         &mut self,
         value: &Rvalue,
         env: &mut Env,
@@ -5433,6 +5486,33 @@ impl MirRuntime {
         env: &mut Env,
         expected_return_type: Option<&Type>,
     ) -> Result<Value> {
+        if let Some(budget) = &self.eval_budget {
+            // The source wrappers use lists for their portable fallback. Choosing
+            // it keeps their normal class fields usable on the target without
+            // transporting opaque runtime collection storage.
+            if name == "collections::__aura_supported" {
+                return Ok(Value::Bool(false));
+            }
+            let available = budget.output_allowance();
+            if const_memory::host_output_bound(name, args, env) > available {
+                return Err(const_eval::Budget::memory_error());
+            }
+            let value = aura_runtime::builtin_limit::with_allowance(available, || {
+                self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+            })?;
+            self.eval_budget.as_mut().unwrap().builtin_result(&value)?;
+            return Ok(value);
+        }
+        self.evaluate_named_builtin_body(name, args, env, expected_return_type)
+    }
+
+    fn evaluate_named_builtin_body(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+        env: &mut Env,
+        expected_return_type: Option<&Type>,
+    ) -> Result<Value> {
         if let Some(operation) = name.strip_prefix("iter::__aura_generator_") {
             return self.evaluate_generator_builtin(operation, args, env);
         }
@@ -5966,6 +6046,11 @@ impl MirRuntime {
                 .collect::<Vec<_>>();
             let values = evaluate_named_args(args, env)?;
             let bound = bind_builtin_args(&arg_names, values)?;
+            if let Some(budget) = &self.eval_budget {
+                if name.starts_with("path::") {
+                    return budget.path_builtin(name, &bound);
+                }
+            }
             return evaluate_host_builtin_with_program_args(
                 &metadata.qualified_name,
                 bound.into_iter().map(|argument| argument.value).collect(),
@@ -7122,6 +7207,7 @@ impl MirRuntime {
             call_stack: Vec::new(),
             task_ancestry: self.task_ancestry.clone(),
             return_type_stack: Vec::new(),
+            eval_budget: None,
             constant_states: Arc::clone(&self.constant_states),
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,

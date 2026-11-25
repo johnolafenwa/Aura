@@ -11672,65 +11672,90 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
 mod systems_data_tests;
 
 #[test]
-fn assembly_visits_operand_expressions_without_resolving_clause_names() {
-    let project = TempDir::new("assembly-operand-analysis");
-    let path = project.path().join("src/main.au");
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(
-        project.path().join("Aura.toml"),
-        "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
-    )
-    .unwrap();
-    let source = concat!(
-        "def input(value: uint64) -> uint64:\n",
-        "    return value\n",
-        "export \"C\" def copy_word(word: uint64) -> uint64:\n",
-        "    mut result: uint64 = 0\n",
-        "    asm(\"movq $1, $0 # word\", output(\"reg\", result), input(\"reg\", input(word)))\n",
-        "    return result\n",
-    );
-    fs::write(&path, source).unwrap();
-    let analysis = crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
-        analyze_path_source(&path, source)
-    });
+fn editor_analysis_reports_only_discarded_suites() {
+    let program = "import build\nif build.hosted:\n    def answer() -> int64:\n        return 3\nelse:\n    def answer() -> int64:\n        return unavailable()\ndef main():\n    print(answer())\n";
+    let analysis = analyze_source(program);
     assert!(
         analysis.diagnostics.is_empty(),
         "{:?}",
         analysis.diagnostics
     );
-    let assembly = source.lines().nth(4).unwrap();
-    let bound_to = |column| {
-        analysis
-            .occurrences
-            .iter()
-            .find(|item| item.line == 4 && item.start_character == column)
-            .and_then(|item| item.definition.as_ref())
-            .map(|definition| definition.line)
-    };
-    assert_eq!(bound_to(assembly.find("input").unwrap()), None);
-    assert_eq!(bound_to(assembly.rfind("input").unwrap()), Some(0));
-    assert_eq!(bound_to(assembly.find("word").unwrap()), None);
-    assert_eq!(bound_to(assembly.rfind("word").unwrap()), Some(2));
-    assert_eq!(bound_to(assembly.find("result").unwrap()), Some(3));
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    let suggestions = complete_source(program, 0, 0, None).expect("top-level completions");
+    assert!(suggestions.iter().any(|item| item.name == "const"));
 }
 
 #[test]
-fn assembly_form_completion_uses_statement_scope_and_target() {
-    let source = "export \"C\" def entry() -> None:\n    pass\n";
-    let offers = |line, column, name| {
-        complete_source(source, line, column, None)
-            .unwrap()
-            .iter()
-            .any(|item| item.name == name)
-    };
-    assert!(!offers(0, 0, "module_asm"));
-    crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
-        assert!(offers(0, 0, "module_asm"));
-        assert!(!offers(0, 0, "asm"));
-        assert!(offers(1, 4, "asm"));
-        assert!(!offers(1, 4, "module_asm"));
-        assert!(!offers(1, 6, "asm"));
-    });
+fn editor_sees_package_cfg_when_parsing_unsaved_source() {
+    let package = TempDir::new("editor-build-config");
+    let main = package.path().join("src/main.au");
+    fs::create_dir_all(main.parent().unwrap()).unwrap();
+    fs::write(&main, "def main():\n    pass\n").unwrap();
+    fs::write(
+        package.path().join("Aura.toml"),
+        "[package]\nname = \"editor_cfg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[build.cfg]\nmode = \"fixed\"\n",
+    )
+    .unwrap();
+    let source = "import build\nif build.cfg[\"mode\"] == \"fixed\":\n    def fixed() -> int64:\n        return 1\nelse:\n    def other() -> int64:\n        return absent()\n";
+    let analysis = analyze_path_source(&main, source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    assert!(analysis.symbols.iter().any(|symbol| symbol.name == "fixed"));
+    assert!(!analysis.symbols.iter().any(|symbol| symbol.name == "other"));
+    assert!(complete_path_source(&main, source, 0, 0, None)
+        .unwrap()
+        .iter()
+        .any(|item| item.name == "fixed"));
+}
+
+#[test]
+fn editor_preserves_active_outline_and_dimmed_ranges_after_a_type_error() {
+    let source = "import build\nif build.hosted:\n    def visible(code: MissingType):\n        pass\nelse:\n    def hidden():\n        absent()\n";
+    let analysis = analyze_source(source);
+    assert!(!analysis.diagnostics.is_empty());
+    assert_eq!(analysis.inactive_lines.len(), 1);
+    assert_eq!(analysis.inactive_lines[0], 5..7);
+    assert!(analysis
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "visible"));
+    assert!(!analysis
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "hidden"));
+}
+
+#[test]
+fn conditional_outline_keeps_source_decorators_and_only_active_members() {
+    let source = format!(
+        "import build\nclass Platform:\n    if build.hosted:\n        def id(self) -> int64:\n            return 1\n    else:\n        def unused(self) -> int64:\n            return absent()\n{}",
+        include_str!("../tests/fixtures/run-pass/decorators.au")
+    );
+    let analysis = analyze_source(&source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let class = analysis
+        .symbols
+        .iter()
+        .find(|s| s.name == "Platform")
+        .unwrap();
+    assert_eq!(class.children.len(), 1);
+    assert_eq!(class.children[0].name, "id");
+    let fact = analysis.symbols.iter().find(|s| s.name == "fact").unwrap();
+    assert_eq!(fact.kind, "function");
+    assert!(analysis
+        .symbols
+        .iter()
+        .all(|s| !s.name.starts_with("__aura_")));
 }
 
 #[test]
@@ -11809,4 +11834,66 @@ fn delegated_field_hover_and_definitions_point_to_authored_source() {
         .find(|occurrence| occurrence.line == 11 && occurrence.hover.contains("method name(self)"))
         .unwrap();
     assert_eq!(method.definition.as_ref().unwrap().line, 1);
+}
+
+#[test]
+fn assembly_visits_operand_expressions_without_resolving_clause_names() {
+    let project = TempDir::new("assembly-operand-analysis");
+    let path = project.path().join("src/main.au");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        project.path().join("Aura.toml"),
+        "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    let source = concat!(
+        "def input(value: uint64) -> uint64:\n",
+        "    return value\n",
+        "export \"C\" def copy_word(word: uint64) -> uint64:\n",
+        "    mut result: uint64 = 0\n",
+        "    asm(\"movq $1, $0 # word\", output(\"reg\", result), input(\"reg\", input(word)))\n",
+        "    return result\n",
+    );
+    fs::write(&path, source).unwrap();
+    let analysis = crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
+        analyze_path_source(&path, source)
+    });
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let assembly = source.lines().nth(4).unwrap();
+    let bound_to = |column| {
+        analysis
+            .occurrences
+            .iter()
+            .find(|item| item.line == 4 && item.start_character == column)
+            .and_then(|item| item.definition.as_ref())
+            .map(|definition| definition.line)
+    };
+    assert_eq!(bound_to(assembly.find("input").unwrap()), None);
+    assert_eq!(bound_to(assembly.rfind("input").unwrap()), Some(0));
+    assert_eq!(bound_to(assembly.find("word").unwrap()), None);
+    assert_eq!(bound_to(assembly.rfind("word").unwrap()), Some(2));
+    assert_eq!(bound_to(assembly.find("result").unwrap()), Some(3));
+}
+
+#[test]
+fn assembly_form_completion_uses_statement_scope_and_target() {
+    let source = "export \"C\" def entry() -> None:\n    pass\n";
+    let offers = |line, column, name| {
+        complete_source(source, line, column, None)
+            .unwrap()
+            .iter()
+            .any(|item| item.name == name)
+    };
+    assert!(!offers(0, 0, "module_asm"));
+    crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
+        assert!(offers(0, 0, "module_asm"));
+        assert!(!offers(0, 0, "asm"));
+        assert!(offers(1, 4, "asm"));
+        assert!(!offers(1, 4, "module_asm"));
+        assert!(!offers(1, 6, "asm"));
+    });
 }

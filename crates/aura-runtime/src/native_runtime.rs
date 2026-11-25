@@ -23353,6 +23353,9 @@ mod tests;
 #[path = "native_union_injection_security_tests.rs"]
 mod union_injection_security_tests;
 
+#[path = "native_frozen.rs"]
+mod frozen;
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_integer_bits(
     value: *mut OpaqueValue,

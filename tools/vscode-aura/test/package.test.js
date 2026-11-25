@@ -884,6 +884,12 @@ test("local function capture lists have a declaration scope", () => {
   assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });
 
+test("syntax grammar identifies the const marker on module bindings", async () => {
+  const tokens = await tokenizeAura("public const width: int64 = 64\nconstant = 1");
+  assert.ok(scopesAt(tokens, 0, "const").includes("storage.modifier.const.aura"));
+  assert.ok(!scopesAt(tokens, 1, "constant").includes("storage.modifier.const.aura"));
+});
+
 test("machine attributes and assembly clauses have contextual scopes", async () => {
   const tokenized = await tokenizeAura([
     '@machine.section(".irq")',

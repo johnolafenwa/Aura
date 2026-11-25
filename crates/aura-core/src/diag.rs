@@ -310,6 +310,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "explicit drop hook reference",
     },
     DiagnosticCodeInfo {
+        code: "AU2070",
+        band: "names/types",
+        title: "invalid build configuration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2071",
+        band: "names/types",
+        title: "invalid compile-time condition",
+    },
+    DiagnosticCodeInfo {
         code: "AU2080",
         band: "names/types",
         title: "invalid static storage initializer",
@@ -463,6 +473,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU3020",
         band: "ownership",
         title: "partial move from a class with a drop hook",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3025",
+        band: "ownership",
+        title: "required compile-time evaluation",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3026",
+        band: "ownership",
+        title: "compile-time evaluation trap",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3027",
+        band: "ownership",
+        title: "compile-time evaluation step limit",
+    },
+    DiagnosticCodeInfo {
+        code: "AU3028",
+        band: "ownership",
+        title: "compile-time evaluation memory limit",
     },
     DiagnosticCodeInfo {
         code: "AU3030",

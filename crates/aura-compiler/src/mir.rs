@@ -738,6 +738,8 @@ impl MirOwnership {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirConstant {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<crate::const_eval::FrozenValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::sema::StateImage>,
     pub key: String,
     pub initializer: String,
@@ -1626,7 +1628,7 @@ pub enum Operand {
     },
     Int(u128),
     Duration(i128),
-    Float(f64),
+    Float(#[serde(with = "crate::const_eval::float_operand")] f64),
     Bool(bool),
     String(String),
     Unit,
@@ -8385,9 +8387,7 @@ fn validate_loan_terminator(
     match terminator {
         Terminator::Return(value) => {
             validate_loan_operand(function, value, context, state)?;
-            // Lowering leaves a synthetic `Return(Unit)` in the dead
-            // fallthrough block after an exhaustive match; only a value that
-            // could carry a callable is checked against the return contract.
+            // Only a value that could carry a callable needs the return-contract check.
             if matches!(
                 value,
                 Operand::Place(_) | Operand::MovePlace(_) | Operand::Function { .. }
@@ -10914,7 +10914,14 @@ fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
 /// every access, and decides ownership itself, so it gains nothing from
 /// them.
 pub fn lower_implicit(program: &Program) -> MirModule {
-    let mut module = lower_unresolved(program);
+    lower_implicit_with_constants(program, program.constant_init_plan.iter())
+}
+
+pub(crate) fn lower_implicit_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
+    let mut module = lower_unresolved_with_constants(program, constants);
     resolve_runtime_ops_and_unions(program, &mut module);
     module
 }
@@ -11019,11 +11026,18 @@ fn drop_measure_checks_outside_cycles(functions: &mut [MirFunction], calls: Meas
 }
 
 fn lower_unresolved(program: &Program) -> MirModule {
+    lower_unresolved_with_constants(program, program.constant_init_plan.iter())
+}
+
+fn lower_unresolved_with_constants<'a>(
+    program: &Program,
+    constants: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let measured = program_has_function_measures(program);
     if measured {
         MEASURE_CALLS.with(|calls| *calls.borrow_mut() = Some(MeasureCalls::default()));
     }
-    let mut module = lower_unresolved_functions(program);
+    let mut module = lower_unresolved_functions(program, constants);
     if measured {
         if let Some(calls) = MEASURE_CALLS.with(|calls| calls.borrow_mut().take()) {
             drop_measure_checks_outside_cycles(&mut module.functions, calls);
@@ -11033,7 +11047,10 @@ fn lower_unresolved(program: &Program) -> MirModule {
     module
 }
 
-fn lower_unresolved_functions(program: &Program) -> MirModule {
+fn lower_unresolved_functions<'a>(
+    program: &Program,
+    constant_plan: impl Iterator<Item = &'a crate::sema::ConstantInfo>,
+) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -11161,7 +11178,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
 
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
-    for constant in &program.constant_init_plan {
+    for constant in constant_plan {
         let key = format!("{}::{}", constant.module_name, constant.decl.name);
         if !seen_constants.insert(key.clone()) {
             continue;
@@ -11173,11 +11190,13 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
                 initializer: String::new(),
                 ty: constant.ty.clone(),
                 state: Some(state.as_ref().clone()),
+                frozen: None,
             });
             continue;
         }
         functions.extend(lower_constant_initializer(program, &initializer, constant));
         constants.push(MirConstant {
+            frozen: program.frozen_constants.get(&key).cloned(),
             state: None,
             key,
             initializer,
@@ -14257,6 +14276,20 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
+        let key = format!("{}::{}", constant.module_name, constant.decl.name);
+        if let Some(expr) = self
+            .program
+            .frozen_constants
+            .get(&key)
+            .and_then(|value| crate::const_eval::scalar_expr(value, constant.decl.value.span))
+        {
+            let value = self.lower_expr_with_expected(&expr, Some(&constant.ty));
+            self.emit(Instruction::Assign {
+                target: temp.clone(),
+                value: Rvalue::Use(value),
+            });
+            return Operand::Place(temp);
+        }
         if is_scalar_literal_constant(constant)
             || constant.ty.as_fixed_array().is_some()
                 && fixed_arrays::constant_initializer(&constant.decl.value)
@@ -14270,7 +14303,6 @@ impl<'a> Lowerer<'a> {
             });
             return Operand::Place(temp);
         }
-        let key = format!("{}::{}", constant.module_name, constant.decl.name);
         self.emit(Instruction::Assign {
             target: temp.clone(),
             value: Rvalue::ModuleConstant {
@@ -14367,7 +14399,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn finish(mut self, spec: MirFunctionSpec) -> MirFunction {
-        if self.blocks[self.current_block].terminator.is_none() {
+        // The checker requires every live path of a value-returning function
+        // to return. A join with no value (e.g. after an exhaustive match)
+        // stays unterminated here and becomes Unreachable below.
+        if self.blocks[self.current_block].terminator.is_none()
+            && (spec.return_type == Type::Unit || spec.default_return != Operand::Unit)
+        {
             self.end_owners_from(0);
             self.blocks[self.current_block].terminator =
                 Some(Terminator::Return(spec.default_return));
@@ -15263,12 +15300,16 @@ impl<'a> Lowerer<'a> {
         self.lower_stmts(&function.body);
         self.return_redirects.pop();
         if !self.current_terminated() {
-            // Falling off the end returns `None`.
-            self.emit(Instruction::Assign {
-                target: return_place.clone(),
-                value: Rvalue::Use(default_return_operand(&return_type)),
-            });
-            self.terminate(Terminator::Goto(self.label(exit)));
+            if return_type == Type::Unit {
+                self.emit(Instruction::Assign {
+                    target: return_place.clone(),
+                    value: Rvalue::Use(Operand::Unit),
+                });
+                self.terminate(Terminator::Goto(self.label(exit)));
+            } else {
+                // All live paths already sent their result to the postcondition.
+                self.terminate(Terminator::Unreachable);
+            }
         }
         self.switch_to(exit);
         self.scoped_names.push(std::collections::HashMap::from([(
@@ -17733,10 +17774,6 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_if(&mut self, if_stmt: &IfStmt, needed_after: &BTreeSet<String>) {
-        let after_block = self.new_block("if_end");
-        let mut next_condition_block = self.current_block;
-        let mut else_block_to_lower = None;
-        let mut false_cleanup_block = None;
         let ending_loans = self
             .view_sources
             .keys()
@@ -17761,6 +17798,18 @@ impl<'a> Lowerer<'a> {
             .cloned()
             .collect::<BTreeSet<_>>();
 
+        if if_stmt.branches.is_empty() {
+            if let Some(body) = &if_stmt.else_body {
+                self.scoped_names.push(std::collections::HashMap::new());
+                self.lower_stmts_with_inherited_endings(body, ending_loans);
+                self.pop_scoped_names();
+            }
+            return;
+        }
+        let after_block = self.new_block("if_end");
+        let mut next_condition_block = self.current_block;
+        let mut else_block_to_lower = None;
+        let mut false_cleanup_block = None;
         for (index, branch) in if_stmt.branches.iter().enumerate() {
             self.switch_to(next_condition_block);
             let then_block = self.new_block("if_then");

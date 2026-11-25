@@ -122,6 +122,7 @@ fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, 
         | crate::mir::BoundaryError::Ownership(error)
         | crate::mir::BoundaryError::Checks(error) => error,
     })?;
+    frozen::omit_initializers(&mut module);
     Ok(module)
 }
 
@@ -2764,6 +2765,9 @@ impl<'a> NativeCodegen<'a> {
         if matches!(function.name.as_str(), "main" | "__script") {
             let module_constant = builder.import_function(self.runtime[RuntimeFn::ModuleConstant]);
             for constant in &self.module.constants {
+                if constant.frozen.is_some() {
+                    continue;
+                }
                 let initializer =
                     self.function_thunks
                         .get(&constant.initializer)
@@ -6979,6 +6983,15 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::ModuleStore { key, value } => self.store_state(key, value),
             Rvalue::ModuleAddress { key } => self.address_of_state(key),
             Rvalue::ModuleConstant { key, initializer } => {
+                if self.freestanding.is_some() && initializer.is_empty() {
+                    return self.frozen_table_address(key, target);
+                }
+                if let Some(constant) = self.module_constants.iter().find(|entry| entry.key == *key)
+                {
+                    if let Some(value) = &constant.frozen {
+                        return self.read_frozen_constant(constant, value, target);
+                    }
+                }
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
                         "direct backend cannot find module constant initializer `{initializer}`"
@@ -9251,6 +9264,12 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         match callee {
+            CallTarget::Name(name)
+                if self.freestanding.is_some()
+                    && freestanding::frozen_tables::is_projection(name) =>
+            {
+                self.frozen_table_projection(name, args, target)
+            }
             CallTarget::Name(op) if crate::mir::fixed_arrays::is_operation(op) => {
                 self.compile_fixed(op, args, type_args)
             }
@@ -22708,6 +22727,9 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
                 && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }
+
+#[path = "native_codegen_frozen.rs"]
+mod frozen;
 
 #[path = "native_integer_bits.rs"]
 mod integer_bits;

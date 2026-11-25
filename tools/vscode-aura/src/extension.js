@@ -44,7 +44,7 @@ function createClient(context) {
       { language: "aura", scheme: "untitled" }
     ],
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.au")
+      fileEvents: vscode.workspace.createFileSystemWatcher("**/{*.au,Aura.toml}")
     }
   };
 

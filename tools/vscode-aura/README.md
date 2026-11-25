@@ -22,6 +22,8 @@ files. It provides:
 - semantic highlighting, inferred-type inlay hints for unannotated locals,
   highlighting of the other uses of the name under the cursor, and quick
   fixes for compiler suggestions and unused locals
+- dimming of inactive compile-time branches, with hover and definition lookup
+  for identifiable declarations in their source
 - workspace symbol search and go-to-implementation for traits and types
 - proof results inline: when a file opens or is saved, the extension runs
   `aura verify` and shows each check it cannot prove as a diagnostic, with

@@ -211,3 +211,46 @@ fn systems_data_editor_shows_writable_union_members() {
         .hover
         .contains("property bits"));
 }
+
+#[test]
+fn editor_profiles_select_matching_build_guards_and_restore_configuration() {
+    let dir = TempDir::new("systems-data-editor-guards");
+    let path = dir.path().join("kernel.au");
+    let source = concat!(
+        "import build\n",
+        "if build.freestanding:\n",
+        "    mut ticks: uint64 = 0\n",
+        "    export \"C\" def count() -> uint64:\n",
+        "        return ticks\n",
+        "else:\n",
+        "    def count() -> uint64:\n",
+        "        return 1\n",
+    );
+    fs::write(&path, source).unwrap();
+    let mut initial = crate::BuildConfig::default();
+    initial.apply_option("editor=true").unwrap();
+    let _scope = initial.clone().enter();
+    with_freestanding_analysis(true, || {
+        let bare = crate::current_build_config();
+        assert!(bare.freestanding);
+        assert_eq!(bare.cfg, initial.cfg);
+        let analysis = analyze_path_source(&path, source);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        assert_eq!(analysis.inactive_lines.len(), 1);
+        assert_eq!(analysis.inactive_lines[0].start, 6);
+        assert!(analysis.symbols.iter().any(|s| s.name == "ticks"));
+        with_freestanding_analysis(false, || {
+            assert_eq!(crate::current_build_config(), initial);
+            let hosted = analyze_path_source(&path, source);
+            assert!(hosted.diagnostics.is_empty(), "{:?}", hosted.diagnostics);
+            assert_eq!(hosted.inactive_lines[0].start, 2);
+            assert!(hosted.symbols.iter().all(|s| s.name != "ticks"));
+        });
+        assert_eq!(crate::current_build_config(), bare);
+    });
+    assert_eq!(crate::current_build_config(), initial);
+}

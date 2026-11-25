@@ -17,6 +17,9 @@
 //!   does not define.
 
 use super::*;
+
+#[path = "native_frozen_tables.rs"]
+pub(super) mod frozen_tables;
 use crate::diag::Diagnostic;
 use crate::ffi::CCallback;
 use crate::native_backend::MemoryAccess;
@@ -605,8 +608,10 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
     if !problems.is_empty() {
         return Err(problems);
     }
+    frozen_tables::detach_initializers(&mut module);
     super::wide_numbers::install_layouts(&mut module);
     keep_reached_functions(&mut module);
+    frozen_tables::lower_reads(&mut module, &mut problems);
     for function in &mut module.functions {
         strip_assertion_text(function);
     }
@@ -948,6 +953,7 @@ fn check_function(
                 Rvalue::Call { callee, args, .. } => {
                     check_call(callee, args, classes, functions)
                 }
+                Rvalue::ModuleConstant { initializer, .. } if initializer.is_empty() => None,
                 Rvalue::CPointerAccess { .. } => None,
                 Rvalue::CFieldAddress { .. } => None,
                 Rvalue::ModuleLoad {..} | Rvalue::ModuleAddress {..} | Rvalue::ModuleStore {..} => None,
@@ -1102,6 +1108,7 @@ fn check_call(
     functions: &HashSet<&str>,
 ) -> Option<(String, &'static str)> {
     match callee {
+        CallTarget::Name(name) if frozen_tables::is_projection(name) => None,
         CallTarget::Name(name) if crate::mir::fixed_arrays::is_operation(name) => None,
         CallTarget::Name(name) if functions.contains(name.as_str()) => None,
         CallTarget::Name(name) => {

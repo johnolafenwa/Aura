@@ -43,6 +43,9 @@ use crate::sema::{lookup_type, optional_type, poll_type};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AnalysisOutput {
     pub diagnostics: Vec<AnalysisDiagnostic>,
+    /// Half-open ranges of zero-based source lines discarded by build-time selection.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub inactive_lines: Vec<std::ops::Range<usize>>,
     pub symbols: Vec<AnalysisSymbol>,
     pub occurrences: Vec<AnalysisOccurrence>,
     /// Source files read for the modules the analyzed file imports, directly
@@ -166,6 +169,7 @@ struct ResolvedMember {
 
 pub fn analyze_source(source: &str) -> AnalysisOutput {
     analyze_with_checker(
+        None,
         source,
         |error| error.render_path.is_none(),
         crate::check_source,
@@ -181,7 +185,7 @@ pub fn analyze_path_source(path: &Path, source: &str) -> AnalysisOutput {
             .is_none_or(|rendered| crate::absolutize(Path::new(rendered)) == analyzed)
     };
     let (mut output, reads) = crate::with_source_reads(|| {
-        analyze_with_checker(source, is_local, |candidate| {
+        analyze_with_checker(Some(path), source, is_local, |candidate| {
             profile::check(path, candidate)
         })
     });
@@ -244,7 +248,12 @@ pub fn complete_source(
     )
 }
 
-fn analyze_with_checker<L, F>(source: &str, is_local: L, mut check_program: F) -> AnalysisOutput
+fn analyze_with_checker<L, F>(
+    path: Option<&Path>,
+    source: &str,
+    is_local: L,
+    mut check_program: F,
+) -> AnalysisOutput
 where
     L: Fn(&Diagnostic) -> bool,
     F: FnMut(&str) -> Result<Program>,
@@ -269,16 +278,24 @@ where
             } else {
                 AnalysisOutput {
                     diagnostics: vec![analysis_diagnostic(&error)],
+                    inactive_lines: Vec::new(),
                     symbols: Vec::new(),
                     occurrences: Vec::new(),
                     dependencies: Vec::new(),
                 }
             }
         }
-        Ok(module) => {
-            let symbols = symbols_from_module(&module, source);
+        Ok(syntax) => {
             match check_program(source) {
                 Err(error) => {
+                    // A bad active declaration can prevent checking, but the selected
+                    // outline and inactive suites still belong to this configuration.
+                    let module = match path {
+                        Some(path) => crate::parse_path_with_source(path, source),
+                        None => parser::parse(source),
+                    }
+                    .unwrap_or(syntax);
+                    let symbols = symbols_from_module(&module, source);
                     // Keep hover, definitions, and references alive in the
                     // rest of the file while one statement is wrong.
                     if let Some((program, later)) =
@@ -293,12 +310,29 @@ where
                     }
                     AnalysisOutput {
                         diagnostics: vec![analysis_diagnostic(&error)],
+                        inactive_lines: module.inactive_lines,
                         symbols,
                         occurrences: Vec::new(),
                         dependencies: Vec::new(),
                     }
                 }
                 Ok(program) => {
+                    // The checked module contains generated declarations for decorators.
+                    // Show the user's source declarations that survived branch selection.
+                    let mut symbols = symbols_from_module(&syntax, source);
+                    if !program.module.inactive_lines.is_empty() {
+                        let active = |symbol: &AnalysisSymbol| {
+                            !program
+                                .module
+                                .inactive_lines
+                                .iter()
+                                .any(|lines| lines.contains(&symbol.line))
+                        };
+                        symbols.retain(&active);
+                        for symbol in &mut symbols {
+                            symbol.children.retain(&active);
+                        }
+                    }
                     let mut output = AnalysisBuilder::new(source, &program, symbols).build();
                     output.diagnostics.extend(
                         profile::diagnostics(&program)
@@ -459,6 +493,7 @@ impl<'a> AnalysisBuilder<'a> {
             module_sources: Default::default(),
             output: AnalysisOutput {
                 diagnostics: Vec::new(),
+                inactive_lines: program.module.inactive_lines.clone(),
                 symbols,
                 occurrences: Vec::new(),
                 dependencies: Vec::new(),
@@ -2501,7 +2536,7 @@ impl<'a> AnalysisBuilder<'a> {
         }
         let doc = crate::read_source_file(Path::new(&source_path))
             .ok()
-            .and_then(|source| parser::parse(&source).ok())
+            .and_then(|source| parser::parse_all_syntax(&source).ok())
             .and_then(|module| module.doc);
         self.module_docs
             .borrow_mut()
@@ -7072,7 +7107,7 @@ fn base_type_name(ty: &Type) -> &str {
     }
 }
 
-fn expression_start_span(expr: &Expr) -> Span {
+pub(crate) fn expression_start_span(expr: &Expr) -> Span {
     let leftmost_child = match &expr.kind {
         ExprKind::Membership { value, .. } => Some(value.as_ref()),
         ExprKind::CompareChain { first, .. } => Some(first.as_ref()),
@@ -7843,7 +7878,7 @@ fn format_enum_variant_payload(payload: &crate::sema::EnumPayloadFieldInfo) -> S
 const KEYWORDS: &[&str] = &[
     "class", "enum", "trait", "def", "if", "elif", "else", "while", "for", "in", "match", "case",
     "with", "return", "assert", "try", "lambda", "public", "mut", "own", "indirect", "copy",
-    "break", "continue", "pass", "yield",
+    "break", "continue", "pass", "yield", "const",
 ];
 
 struct CompletionMeta {

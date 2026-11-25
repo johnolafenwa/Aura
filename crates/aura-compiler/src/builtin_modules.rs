@@ -11,6 +11,9 @@ use crate::sema::{
     FunctionInfo, FunctionParamContract, FunctionSignature, ImportedBinding, ModuleNamespace, Type,
 };
 
+#[path = "builtin_modules_build.rs"]
+mod build;
+
 fn builtin_span() -> Span {
     Span::new(1, 1)
 }
@@ -212,6 +215,7 @@ fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::se
         state: None,
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            required: false,
             placement: None,
             mutable: false,
             public: true,
@@ -3556,6 +3560,7 @@ fn numbers_namespace() -> ModuleNamespace {
 
 fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
     match name {
+        "build" => Some(build::namespace()),
         "io" => Some(io_namespace()),
         "fs" => Some(fs_namespace()),
         "net" => Some(net_namespace()),
@@ -3707,7 +3712,7 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
     static METADATA: OnceLock<BTreeMap<String, HostBuiltinMetadata>> = OnceLock::new();
     METADATA
         .get_or_init(|| {
-            builtin_module_registry()
+            builtin_registry_for_imports(false)
                 .into_values()
                 .flat_map(|namespace| namespace.functions.into_values())
                 .map(|function| {
@@ -3724,7 +3729,9 @@ pub(crate) fn builtin_module_function_metadata(name: &str) -> Option<&'static Ho
 pub(crate) fn is_builtin_root_module(name: &str) -> bool {
     matches!(
         name,
-        "io" | "fs"
+        "build"
+            | "io"
+            | "fs"
             | "net"
             | "process"
             | "random"
@@ -3762,6 +3769,12 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 }
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
+    builtin_registry_for_imports(true)
+}
+
+pub(crate) fn builtin_registry_for_imports(
+    imports_build: bool,
+) -> BTreeMap<String, ModuleNamespace> {
     [
         "io",
         "fs",
@@ -3793,6 +3806,7 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
         "sync",
     ]
     .into_iter()
+    .chain(imports_build.then_some("build"))
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
     .collect()
 }

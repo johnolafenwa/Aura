@@ -47,6 +47,8 @@ A bare binding at module level declares an immutable module constant. The initia
 
 Constants become available in declaration order. An initializer may read an earlier constant in the same module. Reading itself or a later constant is `AU2001`, use before initialization. Functions and types are available to every initializer, wherever they appear in the file.
 
+Write `const` before the name to require build-time evaluation. A marked binding follows the same visibility, declaration order and borrowing rules as an ordinary module constant. Both forms can hold computed values. [Compile-Time Evaluation](/manual/compile-time)
+
 **Initialization order.** Aura initializes every reachable module before the entry runs:
 
 - dependencies initialize before the modules that import them

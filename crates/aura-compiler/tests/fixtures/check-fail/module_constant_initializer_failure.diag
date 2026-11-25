@@ -1,0 +1,6 @@
+error[AU3026]: while evaluating module constant `value`: division by zero
+ --> crates/aura-compiler/tests/fixtures/check-fail/module_constant_initializer_failure.au:1:9
+  |
+1 | value = 1 // 0
+  |         ^
+  = note: Aura call chain (innermost first): const value at 1:1

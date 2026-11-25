@@ -270,6 +270,10 @@ connection.onDocumentSymbol(async (params) => {
   );
 });
 
+function inactiveSuiteAtLine(analysis, line) {
+  return analysis?.inactive_lines?.find(({ start, end }) => start <= line && line < end);
+}
+
 connection.onHover(async (params) => {
   const document = documents.get(params.textDocument.uri);
   if (!document) {
@@ -279,7 +283,8 @@ connection.onHover(async (params) => {
   const syntax = machineHover(document.getText(), params.position.line, params.position.character);
   if (syntax) return { contents: { kind: MarkupKind.Markdown, value: syntax.value }, range: syntax.range };
   const state = await getDocumentState(document);
-  if (state.compilerAnalysis) {
+  const inactiveSuite = inactiveSuiteAtLine(state.compilerAnalysis, params.position.line);
+  if (state.compilerAnalysis && !inactiveSuite) {
     const compilerHover = compilerHoverAtPosition(
       state.compilerAnalysis,
       params.position.line,
@@ -300,7 +305,8 @@ connection.onHover(async (params) => {
   const hover = hoverForPosition(
     document.getText(),
     params.position.line,
-    params.position.character
+    params.position.character,
+    inactiveSuite
   );
   if (!hover) {
     return null;
@@ -322,7 +328,8 @@ connection.onDefinition(async (params) => {
   }
 
   const state = await getDocumentState(document);
-  if (state.compilerAnalysis) {
+  const inactiveSuite = inactiveSuiteAtLine(state.compilerAnalysis, params.position.line);
+  if (state.compilerAnalysis && !inactiveSuite) {
     const location = compilerDefinitionAtPosition(
       params.textDocument.uri,
       state.compilerAnalysis,
@@ -338,7 +345,8 @@ connection.onDefinition(async (params) => {
   const definition = definitionForPosition(
     document.getText(),
     params.position.line,
-    params.position.character
+    params.position.character,
+    inactiveSuite
   );
   if (!definition) {
     return null;
@@ -383,11 +391,16 @@ documents.onDidClose((event) => {
 // A document whose analysis failed or is in flight may not know every file it
 // imports yet, so it is checked again too.
 connection.onDidChangeWatchedFiles((params) => {
-  const affected = documentStateCache.invalidateWhere(
-    (state) =>
-      !state || !state.compilerAnalysis || (state.compilerAnalysis.diagnostics || []).length > 0
-  );
-  for (const change of params.changes || []) {
+  const changes = params.changes || [];
+  // A new or removed manifest can change which package owns an open file.
+  const manifestChanged = changes.some(({ uri }) => uri.endsWith("/Aura.toml"));
+  const affected = manifestChanged
+    ? documentStateCache.invalidateAll()
+    : documentStateCache.invalidateWhere(
+        (state) =>
+          !state || !state.compilerAnalysis || (state.compilerAnalysis.diagnostics || []).length > 0
+      );
+  for (const change of changes) {
     for (const uri of invalidateDocument(change.uri)) {
       affected.add(uri);
     }
@@ -466,7 +479,7 @@ function validateDocument(document) {
       return;
     }
     const diagnostics = state.compilerAnalysis
-      ? compilerDiagnosticsToLsp(state.compilerAnalysis, document.uri)
+      ? compilerDiagnosticsToLsp(state.compilerAnalysis, document.uri, document.getText())
       : diagnosticsForDocument(document.getText()).map((diagnostic) => ({
           severity: mapSeverity(diagnostic.severity),
           range: {
@@ -582,6 +595,8 @@ function symbolKind(kind) {
       return SymbolKind.Field;
     case "trait":
       return SymbolKind.Interface;
+    case "constant":
+      return SymbolKind.Constant;
     default:
       return SymbolKind.Variable;
   }

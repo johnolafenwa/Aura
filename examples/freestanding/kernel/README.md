@@ -31,7 +31,7 @@ c=111
 r=1000
 n=100
 s=42
-trap 1 main.au:160:13
+trap 1 main.au:185:13
 ```
 
 - `p` is the number of primes below 1000 and `c` the Collatz steps from 27.
@@ -41,6 +41,9 @@ trap 1 main.au:160:13
 - `s` reads back the second sample after a typed pointer writes it in module storage.
 - The last line is the `aura_trap` hook reporting a `uint8` overflow the
   program makes on purpose: code 1, then the file, line, and column.
+
+The compiler selects the QEMU serial register from the target architecture
+and computes the decimal lookup table used by the serial output routine.
 
 On the virt boards, startup sets the stack pointer, enables floating-point
 registers and supplies the board's power-off routine.

@@ -1,5 +1,7 @@
 pub mod analysis;
 pub mod ast;
+pub mod build_config;
+pub use build_config::{current_build_config, with_build_config, BuildConfig};
 mod builtin_modules;
 mod builtin_sources;
 pub(crate) use aura_runtime::bytes_codec;
@@ -55,6 +57,7 @@ pub use diag::{
 };
 pub use freestanding_mode::{
     enter_freestanding_target, freestanding_check_target, with_freestanding_target,
+    FreestandingScope,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
@@ -234,6 +237,8 @@ pub mod native_runtime_coverage {
     };
 }
 
+pub mod const_eval;
+
 pub fn parse_source(source: &str) -> Result<ast::Module> {
     parser::parse(source)
 }
@@ -381,7 +386,7 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
         &builtin_sources::imported_source_parts(&module),
         BTreeMap::new(),
     );
-    sema::check_with_context(
+    let mut program = sema::check_with_context(
         module,
         ModuleContext {
             module_name: "<main>".to_string(),
@@ -389,7 +394,9 @@ fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
             module_registry,
             is_entry_module: true,
         },
-    )
+    )?;
+    const_eval::evaluate(&mut program)?;
+    Ok(program)
 }
 
 pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirModule> {
@@ -419,6 +426,7 @@ fn verify_file(
 ) -> Result<verify::Report> {
     let mut loader = ModuleLoader::new_with_source(path, source)?;
     loader.verifying = true;
+    let _config = loader.package_config();
     let program = loader.load_program_internal(path, source)?;
     loader.write_lockfile()?;
     verify_program(&program, options)
@@ -465,6 +473,16 @@ pub fn verify_program(program: &Program, options: &verify::Options) -> Result<ve
     verify::verify_module(program, &module, options)
 }
 
+/// Parse a file's selected declarations, resolving only imports needed by its guards.
+pub fn parse_path_with_source(path: &Path, source: &str) -> Result<ast::Module> {
+    let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
+    let _config = loader.package_config();
+    let path = absolutize(path);
+    loader.stack.push(path.clone());
+    let declaration_module = loader.freestanding;
+    parser::parse_for_path(source, &mut loader, &path, declaration_module)
+}
+
 pub fn check_path(path: &Path) -> Result<Program> {
     let mut loader = ModuleLoader::new(path)?;
     let program = loader.load_program(path)?;
@@ -477,7 +495,11 @@ pub fn check_path_with_source(path: &Path, source: &str) -> Result<Program> {
 }
 
 fn check_path_with_source_without_lockfile(path: &Path, source: &str) -> Result<Program> {
-    check_path_with_source_without_lockfile_profile(path, source, false)
+    check_path_with_source_without_lockfile_profile(
+        path,
+        source,
+        current_build_config().freestanding,
+    )
 }
 
 pub(crate) fn check_path_with_source_without_lockfile_profile(
@@ -485,15 +507,38 @@ pub(crate) fn check_path_with_source_without_lockfile_profile(
     source: &str,
     freestanding: bool,
 ) -> Result<Program> {
+    let _target = if freestanding {
+        enter_freestanding_build_config()
+    } else {
+        None
+    };
     let mut loader = ModuleLoader::new_with_source(path, Some(source))?;
     loader.freestanding = freestanding;
     loader.load_program_with_source(path, source)
 }
 
+/// Use the active freestanding target, or the bare triple for the selected architecture.
+pub(crate) fn enter_freestanding_build_config() -> Option<build_config::BuildConfigGuard> {
+    let current = current_build_config();
+    let target = freestanding_check_target().or_else(|| {
+        FreestandingTarget::ALL
+            .into_iter()
+            .find(|target| target.arch() == current.arch)
+    })?;
+    if current.target == target.name() {
+        return None;
+    }
+    let mut bare = BuildConfig::for_target(target.name(), current.debug)?;
+    bare.cfg = current.cfg;
+    Some(bare.enter())
+}
+
 /// Loads a freestanding program with the same package and FFI checks as a hosted build.
 pub fn check_freestanding_path(path: &Path, source: Option<&str>) -> Result<Program> {
+    let _target = enter_freestanding_build_config();
     let mut loader = ModuleLoader::new_with_source(path, source)?;
     loader.freestanding = true;
+    let _config = loader.package_config();
     let program = loader.load_program_internal(path, source)?;
     loader.write_lockfile()?;
     Ok(program)
@@ -549,13 +594,17 @@ pub(crate) fn with_source_reads<T>(operation: impl FnOnce() -> T) -> (T, BTreeSe
     (result, reads.unwrap_or_default())
 }
 
-/// Reads a source file, preferring an active overlay for the same file.
-pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+fn record_source_read(path: &Path) {
     SOURCE_READS.with(|reads| {
         if let Some(reads) = reads.borrow_mut().as_mut() {
             reads.insert(absolutize(path));
         }
     });
+}
+
+/// Reads a source file, preferring an active overlay for the same file.
+pub(crate) fn read_source_file(path: &Path) -> std::io::Result<String> {
+    record_source_read(path);
     let overlay = SOURCE_OVERLAYS.with(|overlays| {
         let overlays = overlays.borrow();
         if overlays.is_empty() {
@@ -701,7 +750,7 @@ impl ModuleLoader {
         };
         Ok(Self {
             verifying: false,
-            freestanding: false,
+            freestanding: current_build_config().freestanding,
             package_root,
             package_graph,
             cache: HashMap::new(),
@@ -710,11 +759,21 @@ impl ModuleLoader {
         })
     }
 
+    fn package_config(&self) -> Option<build_config::BuildConfigGuard> {
+        if !self.stack.is_empty() {
+            return None;
+        }
+        let defaults = self.package_graph.as_ref()?.entry_cfg();
+        (!defaults.is_empty()).then(|| current_build_config().with_manifest(defaults).enter())
+    }
+
     fn load_program(&mut self, path: &Path) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, None)
     }
 
     fn load_program_with_source(&mut self, path: &Path, source: &str) -> Result<Program> {
+        let _config = self.package_config();
         self.load_program_internal(path, Some(source))
     }
 
@@ -745,9 +804,15 @@ impl ModuleLoader {
             })?
         };
         let display_path = path.display().to_string();
+        let declaration_module = self.freestanding || !is_entry_module;
         let module =
-            parser::parse_with_module_scope(&source, self.freestanding || !is_entry_module)
-                .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
+            parser::parse_for_path(&source, self, &path, declaration_module).map_err(|error| {
+                if error.render_path.is_some() {
+                    error
+                } else {
+                    error.with_render_context(display_path.clone(), source.clone())
+                }
+            })?;
         if self.verifying {
             if let Some(span) = module.asm_span {
                 return Err(
@@ -812,6 +877,7 @@ impl ModuleLoader {
                         inline_asm::append_module(dependency, &mut program.foreign_link);
                     }
                 })?;
+            const_eval::evaluate(&mut program)?;
             self.cache.insert(
                 path.clone(),
                 LoadedModule {
@@ -912,7 +978,7 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        if builtin_sources::has_source_part(module_path) {
+                        if builtin_sources::needs_registry_entry(module_path) {
                             self.source_parts.insert(module_path[0].clone());
                         }
                         for imported_name in names {
@@ -968,7 +1034,7 @@ impl ModuleLoader {
                 }
                 ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_sources::importable_builtin_namespace(path) {
-                        if builtin_sources::has_source_part(path) {
+                        if builtin_sources::needs_registry_entry(path) {
                             self.source_parts.insert(path[0].clone());
                         }
                         if let Some(alias) = alias {
@@ -1129,21 +1195,12 @@ fn absolutize(path: &Path) -> PathBuf {
 fn infer_package_root(entry_path: &Path, source_override: Option<&str>) -> Result<PathBuf> {
     let entry_dir = entry_path.parent().unwrap_or(Path::new("."));
 
-    let parsed_entry = source_override
+    let import_paths = source_override
         .map(str::to_string)
         .or_else(|| fs::read_to_string(entry_path).ok())
-        .and_then(|source| parse_source(&source).ok());
+        .and_then(|source| parser::root_imports(&source).ok());
 
-    if let Some(module) = parsed_entry {
-        let import_paths = module
-            .imports
-            .iter()
-            .map(|import| match &import.kind {
-                ImportKind::From { module_path, .. } => module_path.clone(),
-                ImportKind::Module { path, .. } => path.clone(),
-            })
-            .collect::<Vec<_>>();
-
+    if let Some(import_paths) = import_paths {
         if !import_paths.is_empty() {
             for candidate in entry_dir.ancestors() {
                 if import_paths
@@ -2251,6 +2308,9 @@ mod tests;
 
 #[cfg(test)]
 use aura_runtime::array_kernel_corpus;
+
+#[cfg(test)]
+mod conditional_tests;
 
 #[cfg(test)]
 mod inline_asm_tests;

@@ -737,6 +737,111 @@ fn the_bare_metal_example_builds_for_its_boards() {
 }
 
 #[test]
+fn a_cross_target_selects_its_architecture_and_frozen_table() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "table.au",
+        r#"import build
+if build.arch == "riscv64" and build.freestanding:
+    def make() -> list[int64]:
+        return [3 * 7, 6 * 7]
+    const table = make()
+    export "C" def lookup(index: int64) -> int64:
+        return table[index]
+else:
+    import missing_on_riscv
+"#,
+    );
+    let output = workspace.aura(&[
+        "build",
+        "--freestanding",
+        "--target",
+        "riscv64gc-unknown-none-elf",
+        "-o",
+        "table.o",
+        "table.au",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let object = fs::read(workspace.path.join("table.o")).unwrap();
+    assert_eq!(u16::from_le_bytes([object[18], object[19]]), 243);
+}
+
+#[test]
+fn target_selects_declarations_before_checking_and_building() {
+    let workspace = Workspace::new();
+    workspace.write(
+        "main.au",
+        "import build\nif build.arch == \"riscv64\":\n    export \"C\" def answer() -> int64:\n        return 42\nelse:\n    import unavailable_elsewhere\n",
+    );
+    let build = workspace.aura(&[
+        "build",
+        "main.au",
+        "--freestanding",
+        "--target",
+        "riscv64gc-unknown-none-elf",
+        "-o",
+        "target.o",
+    ]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let check = workspace.aura(&["check", "--all-targets", "main.au"]);
+    assert!(!check.status.success());
+    let diagnostic = stderr(&check);
+    assert!(diagnostic.contains("unavailable_elsewhere"), "{diagnostic}");
+    assert!(diagnostic.contains("x86_64"), "{diagnostic}");
+}
+
+#[test]
+fn linked_frozen_collections_use_aura_indexing_and_lookup_rules() {
+    let Some(compiler) = c_compiler() else { return };
+    let workspace = Workspace::new();
+    workspace.write(
+        "table.au",
+        include_str!(
+            "../../aura-compiler/tests/fixtures/check-pass/compile_time_frozen_projections.au"
+        ),
+    );
+    let build = workspace.aura(&["build", "--freestanding", "-o", "table.o", "table.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    workspace.write(
+        "harness.c",
+        r#"
+#include <stdint.h>
+#include <stdlib.h>
+int64_t total(int64_t i, int64_t key);
+int64_t nested(int64_t i);
+int64_t details(int64_t i);
+int64_t title_len(void);
+uint64_t wide_words(int64_t i);
+int64_t wide_keys(int64_t i);
+void aura_trap(uint32_t code, const char *file, size_t len, uint32_t line, uint32_t col) {
+    exit(code);
+}
+int main(int argc, char **argv) {
+    if (argc > 1) { total(-3, 10); return 1; }
+    return (total(-1, 40) == 126 && total(0, 30) == 111
+        && nested(0) == 47 && nested(1) == 52
+        && details(0) == 15 && title_len() == 5
+        && wide_words(0) == 18 && wide_words(1) == 30
+        && wide_keys(5) == 3 && wide_keys(0) == 7 && wide_keys(2) == -1) ? 0 : 1;
+}
+"#,
+    );
+    let path = workspace.path.join("lookup");
+    let link = Command::new(compiler)
+        .current_dir(&workspace.path)
+        .args(["harness.c", "table.o", "-o"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(link.status.success(), "{}", stderr(&link));
+    assert_eq!(Command::new(&path).status().unwrap().code(), Some(0));
+    assert_eq!(
+        Command::new(&path).arg("trap").status().unwrap().code(),
+        Some(10)
+    );
+}
+
+#[test]
 fn kernel_profile_emits_integer_register_float_code() {
     let workspace = Workspace::new();
     workspace.write(

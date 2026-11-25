@@ -208,6 +208,35 @@ test("recovery locates an extern declaration named C after the ABI string", () =
   }
 });
 
+test("navigation in a discarded suite prefers its own declarations and avoids ambiguous names", () => {
+  const text = [
+    "const shared = 9",
+    "if build.hosted:",
+    "    def implementation():",
+    "        pass",
+    "else:",
+    "    def implementation():",
+    "        pass",
+    "    def caller():",
+    "        print(implementation(), shared)",
+    "    class First:",
+    "        def work(self):",
+    "            pass",
+    "    class Second:",
+    "        def work(self):",
+    "            pass",
+    "    def ambiguous():",
+    "        work()"
+  ].join("\n");
+  const scope = { start: 5, end: 17 };
+  assert.deepEqual(definitionForPosition(text, 8, 16, scope), {
+    line: 5, startCharacter: 8, endCharacter: 22
+  });
+  assert.equal(hoverForPosition(text, 8, 33, scope)?.value, "constant shared");
+  assert.equal(hoverForPosition(text, 16, 9, scope), null);
+  assert.ok(completionsForDocument(text, 0, 0).some((item) => item.name === "const"));
+});
+
 test("assembly templates stay opaque to recovery symbols, navigation and completion", () => {
   const text = [
     'module_asm("""',

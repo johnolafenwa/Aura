@@ -8043,7 +8043,7 @@ fn help_flags_exit_successfully() {
         );
         assert!(
             stdout.contains(
-                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]"
+                "aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]"
             ),
             "help must advertise every maintained test-runner option, stdout was:\n{}",
             stdout
@@ -17997,6 +17997,89 @@ fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
         !String::from_utf8_lossy(&bin_bytes).contains("native-rpath-probe"),
         "--no-rpath binary must not embed build-host library_paths in rpath"
     );
+}
+
+#[test]
+fn native_run_selects_constants_before_consulting_the_program_cache() {
+    let cache = TempDir::new("aura-cfg-cache");
+    let (_temp, path) = write_temp_source(
+        "aura-cfg-cache-source",
+        "import build\nconst answer = 6 * 7\nif \"trace\" in build.cfg:\n    def main():\n        print(answer)\nelse:\n    def main():\n        print(0)\n",
+    );
+    for (flags, expected) in [
+        (vec![], "0\n"),
+        (vec!["--cfg", "trace"], "42\n"),
+        (vec![], "0\n"),
+    ] {
+        let run = Command::new(aura_bin())
+            .env("AURA_CACHE_DIR", cache.path())
+            .args(["run", "--backend", "direct"])
+            .args(flags)
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    }
+}
+
+#[test]
+fn verify_proves_only_obligations_in_selected_suites() {
+    if !smt_solver_available() {
+        return;
+    }
+    let temp = TempDir::new("aura-verify-conditional");
+    let path = temp.path().join("api.au");
+    fs::write(
+        &path,
+        include_str!("../../aura-compiler/tests/fixtures/check-pass/conditional_tooling.au"),
+    )
+    .unwrap();
+    let output = Command::new(aura_bin())
+        .args(["verify", "--no-cache", "--format", "json"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["proved"], 1);
+    assert_eq!(report["obligations"][0]["function"], "native_name");
+}
+
+#[cfg(windows)]
+#[test]
+fn native_windows_process_examples_use_the_platform_command_and_c_symbol() {
+    for (example, expected) in [
+        ("examples/packages/ffi_getpid/src/main.au", "true\n"),
+        (
+            "examples/io/process_run.au",
+            "aura process\n14\n0\nExitStatus.Exited(0)\n",
+        ),
+    ] {
+        let output = Command::new(aura_bin())
+            .args(["run", "--backend", "direct"])
+            .arg(repo_root().join(example))
+            .output()
+            .expect("run the maintained Windows example");
+        assert!(
+            output.status.success(),
+            "{example}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            expected,
+            "{example}"
+        );
+    }
 }
 
 #[cfg(all(target_os = "windows", target_env = "msvc", target_arch = "x86_64"))]

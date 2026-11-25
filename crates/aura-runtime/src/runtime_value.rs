@@ -3088,34 +3088,41 @@ impl ArrayValue {
     }
 
     pub fn render(&self) -> String {
-        // Rendering has no way to report a failed allocation, and a view
-        // too large to pack is too large to print.
-        let elements = self.elements().unwrap_or_else(|_| {
-            Cow::Owned(array_storage_map!(&self.base, |values| values.window(0, 0)))
-        });
-        let values = match &*elements {
-            ArrayStorage::Int32(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Int64(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
-            }
-            ArrayStorage::Float32(values) => {
-                values.iter().map(|value| render_float32(*value)).collect()
-            }
-            ArrayStorage::Float64(values) => {
-                values.iter().map(|value| render_float(*value)).collect()
-            }
-            ArrayStorage::Bool(values) => {
-                values.iter().map(ToString::to_string).collect::<Vec<_>>()
+        use std::fmt::Write;
+
+        let mut text = format!(
+            "Array[{}](shape={:?}, values=[",
+            self.dtype().runtime_type_name(),
+            self.shape
+        );
+        let mut separator = "";
+        let mut append = |position: usize| {
+            text.push_str(separator);
+            separator = ", ";
+            match &self.base {
+                ArrayStorage::Int32(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Int64(values) => write!(text, "{}", values[position]).unwrap(),
+                ArrayStorage::Float32(values) => text.push_str(&render_float32(values[position])),
+                ArrayStorage::Float64(values) => text.push_str(&render_float(values[position])),
+                ArrayStorage::Bool(values) => {
+                    text.push_str(if values[position] { "true" } else { "false" })
+                }
             }
         };
-        format!(
-            "Array[{}](shape={:?}, values=[{}])",
-            self.dtype().runtime_type_name(),
-            self.shape,
-            values.join(", ")
-        )
+        if let Some(layout) = &self.strided {
+            array_layout::walk_runs(&self.shape, [layout], |[start], [step], count| {
+                for index in 0..count as isize {
+                    append((start as isize + index * step) as usize);
+                }
+                true
+            });
+        } else {
+            for position in 0..self.base.len() {
+                append(position);
+            }
+        }
+        text.push_str("])");
+        text
     }
 
     /// Where the element at `coordinates` lies in the storage window.
@@ -3292,6 +3299,7 @@ pub fn with_array_allocation_budget<T>(
 }
 
 pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
+    crate::builtin_limit::check((len as u64).saturating_mul(std::mem::size_of::<T>() as u64))?;
     #[cfg(any(test, feature = "test-support"))]
     {
         let injected_failure = ARRAY_ALLOCATION_BUDGET.with(|budget| match budget.get() {
@@ -11856,6 +11864,7 @@ fn append_string_with_limit(output: &mut String, text: &str, limit: usize) -> Re
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > limit {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -11885,6 +11894,7 @@ pub fn append_text_checked_with(output: &mut Text, text: &str, ascii: bool) -> R
         .len()
         .checked_add(text.len())
         .ok_or_else(|| Diagnostic::coded("AU4005", "string allocation size overflow"))?;
+    crate::builtin_limit::check(required as u64)?;
     if required > MAX_STRING_BYTES {
         return Err(Diagnostic::coded(
             "AU4005",
@@ -12555,8 +12565,8 @@ pub fn float_power(left: f64, right: f64, width: FloatPowerWidth) -> Result<f64>
     }
 
     let result = match width {
-        FloatPowerWidth::Float32 => (left as f32).powf(right as f32) as f64,
-        FloatPowerWidth::Float64 => left.powf(right),
+        FloatPowerWidth::Float32 => libm::powf(left as f32, right as f32) as f64,
+        FloatPowerWidth::Float64 => libm::pow(left, right),
     };
     if left.is_finite() && right.is_finite() && result.is_infinite() {
         return Err(Diagnostic::coded("AU4002", "floating power overflow"));
@@ -20127,6 +20137,14 @@ fn json_parse_success_value(value: ParsedJson) -> Result<Value> {
 fn json_parse_failure_value(error: JsonCodecError) -> Result<Value> {
     let error = json_parse_error_value(error)?;
     json_runtime_enum_value("Result", "Err", json_runtime_single_payload(error)?)
+}
+
+/// Parses on the caller's stack, preserving its resource budget. The compiler
+/// provides a dedicated bounded-evaluation stack for this entry point.
+pub fn json_parse_on_caller(source: &str) -> Result<Value> {
+    json_parse_outcome_to_runtime(
+        json_parse_runtime(source, false).map_err(JsonCodecServiceError::Codec),
+    )
 }
 
 pub fn json_parse_owned_to_runtime(
