@@ -21348,6 +21348,25 @@ fn leaf_body_calling(
             }),
         _ => false,
     };
+    // An integer local or literal: an integer division checks its divisor
+    // (and the one quotient that overflows) inline, and each failure path
+    // pushes the frame record the function skipped.
+    let integer_operand = |operand: &Operand| match operand {
+        Operand::Int(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .map(|local| (&local.name, &local.ty))
+            .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+            .any(|(name, ty)| {
+                name == place
+                    && matches!(ty, Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(),
+                            "int8" | "int16" | "int32" | "int64"
+                                | "uint8" | "uint16" | "uint32" | "uint64"))
+            }),
+        _ => false,
+    };
     function.blocks.iter().all(|block| {
         let instructions = block
             .instructions
@@ -21367,7 +21386,10 @@ fn leaf_body_calling(
                     } => {
                         let total = match op {
                             BinaryOp::Div => float_operand(left) && float_operand(right),
-                            BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow => false,
+                            BinaryOp::FloorDiv | BinaryOp::Mod => {
+                                integer_operand(left) && integer_operand(right)
+                            }
+                            BinaryOp::Pow => false,
                             _ => true,
                         };
                         total && plain_operand(left) && plain_operand(right)

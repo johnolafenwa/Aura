@@ -1,0 +1,14 @@
+class Rng:
+    state: int64
+    modulus: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % self.modulus
+        return self.state
+
+
+def main():
+    mut rng = Rng(state=7, modulus=2147483647)
+    print(rng.next())
+    rng.modulus = 0
+    print(rng.next())
