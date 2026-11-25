@@ -1341,7 +1341,8 @@ impl FunctionCompiler<'_> {
         self.builder.seal_block(join_block);
         let mut flag = self.builder.block_params(join_block)[0];
         if let Some(slot) = self.list_snapshots[index].sink {
-            let direct = self.mutable_sink_absent(slot);
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
             let direct = self.builder.uextend(types::I64, direct);
             flag = self.builder.band(flag, direct);
         }
@@ -1549,7 +1550,8 @@ impl FunctionCompiler<'_> {
             qualifies = self.builder.band(qualifies, alone);
         }
         if let Some(slot) = snapshot.sink {
-            let direct = self.mutable_sink_absent(slot);
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
             let direct = self.builder.uextend(types::I64, direct);
             qualifies = self.builder.band(qualifies, direct);
         }
@@ -1726,7 +1728,8 @@ impl FunctionCompiler<'_> {
         if let Some(slot) = sink {
             // A caller that asked for each write to be handed back takes
             // a reference to the list with it, so the storage is shared.
-            let direct = self.mutable_sink_absent(slot);
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
             qualifies = self.builder.band(qualifies, direct);
         }
         // The carried length is the one the other loop's guards found long

@@ -2135,13 +2135,7 @@ impl<'a> NativeCodegen<'a> {
         let mut mutable_sink_vars = HashMap::new();
         let mut sink_slots = mutable_param_indices.values().copied().collect::<Vec<_>>();
         sink_slots.sort_unstable();
-        let mut sinks_entered = None;
         if !sink_slots.is_empty() {
-            let entered = Var(variable_index as u32);
-            variable_index += 1;
-            builder.declare_var(entered, types::I64);
-            builder.def_var(entered, entered_in_runtime);
-            sinks_entered = Some(entered);
             for slot in &sink_slots {
                 let variable = Var(variable_index as u32);
                 variable_index += 1;
@@ -3080,7 +3074,6 @@ impl<'a> NativeCodegen<'a> {
             writeback_locals,
             mutable_param_indices,
             mutable_sink_vars,
-            sinks_entered,
             classes: self.classes.clone(),
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
@@ -4603,9 +4596,6 @@ struct FunctionCompiler<'a> {
     /// The variable that holds each mutable parameter's write-through sink,
     /// by call slot (see `current_mutable_sink`).
     mutable_sink_vars: HashMap<usize, Var>,
-    /// Whether the runtime entered the call, as 1 or 0, when the function
-    /// has mutable parameters: only such a call has sinks.
-    sinks_entered: Option<Var>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
@@ -17595,17 +17585,6 @@ impl<'a> FunctionCompiler<'a> {
     /// slot `index`, or 0, as the function's entry read it.
     fn current_mutable_sink(&mut self, index: usize) -> Val {
         self.builder.use_var(self.mutable_sink_vars[&index])
-    }
-
-    /// Whether the mutable parameter in call slot `index` has no sink, as
-    /// a condition. A call the runtime did not enter has none, and one
-    /// test of that covers every parameter.
-    fn mutable_sink_absent(&mut self, index: usize) -> Val {
-        let tested = match self.sinks_entered {
-            Some(entered) => self.builder.use_var(entered),
-            None => self.current_mutable_sink(index),
-        };
-        self.builder.icmp_imm(IntCC::Equal, tested, 0)
     }
 
     fn publish_mutable_root_write_through(
