@@ -487,6 +487,9 @@ impl TensorValue {
     }
 
     pub fn len(&self) -> usize {
+        if self.0.shape.contains(&0) {
+            return 0;
+        }
         self.0.shape.iter().product()
     }
 
@@ -868,6 +871,44 @@ fn defers(device: TensorDevice) -> bool {
     device.is_gpu() || DEFER_ON_CPU.with(std::cell::Cell::get)
 }
 
+/// Validates that `shape` and `dtype` have a non-overflowing element count and
+/// byte size within host allocation bounds, returning `(count, bytes)`.
+pub(crate) fn checked_tensor_byte_len(
+    shape: &[usize],
+    dtype: ArrayDType,
+) -> Result<(usize, usize)> {
+    let count = checked_array_element_count(shape)?;
+    let width = tensor_codegen::element_bytes(dtype);
+    let mut non_zero_bytes = width;
+    for &dimension in shape {
+        if dimension != 0 {
+            non_zero_bytes = non_zero_bytes
+                .checked_mul(dimension)
+                .filter(|&bytes| bytes <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "tensor byte size overflows host allocation bounds for shape {shape:?} and dtype `{}`",
+                            dtype.runtime_type_name()
+                        ),
+                    )
+                })?;
+        }
+    }
+    let bytes = if count == 0 { 0 } else { non_zero_bytes };
+    Ok((count, bytes))
+}
+
+pub(crate) fn checked_concat_axis(left: usize, right: usize) -> Result<usize> {
+    left.checked_add(right).ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4005",
+            "tensor concatenation axis overflows host allocation bounds",
+        )
+    })
+}
+
 /// The dtype and shape of an operation a GPU library runs, or `None` for
 /// one it does not: an operand that is empty, a dtype or operation the
 /// library lacks or gives a different meaning, or operands the Array rules
@@ -876,10 +917,21 @@ fn defers(device: TensorDevice) -> bool {
 fn planned_result(
     operation: &Operation,
     inputs: &[&TensorValue],
-) -> Option<(ArrayDType, Box<[usize]>)> {
+) -> Result<Option<(ArrayDType, Box<[usize]>)>> {
+    let Some((dtype, shape)) = planned_result_candidate(operation, inputs)? else {
+        return Ok(None);
+    };
+    checked_tensor_byte_len(&shape, dtype)?;
+    Ok(Some((dtype, shape)))
+}
+
+fn planned_result_candidate(
+    operation: &Operation,
+    inputs: &[&TensorValue],
+) -> Result<Option<(ArrayDType, Box<[usize]>)>> {
     use ArrayDType::{Bool, Float32, Int32, Int64};
     if inputs.iter().any(|input| input.is_empty()) {
-        return None;
+        return Ok(None);
     }
     let dtype = inputs[0].dtype();
     let same_dtype = inputs.iter().all(|input| input.dtype() == dtype);
@@ -909,7 +961,7 @@ fn planned_result(
         let axis = if axis < 0 { axis + rank } else { axis };
         (0..rank).contains(&axis).then_some(axis as usize)
     };
-    match operation {
+    Ok(match operation {
         Operation::Binary(code) => {
             let supported = match *code {
                 0..=2 | 16 | 17 => number,
@@ -917,7 +969,8 @@ fn planned_result(
                 _ => false,
             };
             (supported && same_dtype)
-                .then(broadcast)?
+                .then(broadcast)
+                .flatten()
                 .map(|shape| (dtype, shape))
         }
         Operation::Unary(code) => {
@@ -930,24 +983,28 @@ fn planned_result(
             supported.then(|| (dtype, inputs[0].shape().into()))
         }
         Operation::Compare(code) => ((0..=5).contains(code) && number && same_dtype)
-            .then(broadcast)?
+            .then(broadcast)
+            .flatten()
             .map(|shape| (Bool, shape)),
         Operation::Where => {
             let value = inputs[1].dtype();
             (dtype == Bool
                 && inputs[2].dtype() == value
                 && (is_real(value) || matches!(value, Int32 | Int64)))
-            .then(broadcast)?
+            .then(broadcast)
+            .flatten()
             .map(|shape| (value, shape))
         }
         Operation::Reduce { reduction, axis } => {
             if !real || !(0..=3).contains(reduction) {
-                return None;
+                return Ok(None);
             }
             let shape: Vec<usize> = match axis {
                 None => vec![1],
                 Some(axis) => {
-                    let axis = normalize(*axis)?;
+                    let Some(axis) = normalize(*axis) else {
+                        return Ok(None);
+                    };
                     let mut shape = inputs[0].shape().to_vec();
                     shape.remove(axis);
                     if shape.is_empty() {
@@ -961,31 +1018,36 @@ fn planned_result(
         Operation::Matmul => {
             let (left, right) = (inputs[0].shape(), inputs[1].shape());
             if !real || !same_dtype || left.len() < 2 || right.len() < 2 {
-                return None;
+                return Ok(None);
             }
             let (left_lead, left_matrix) = left.split_at(left.len() - 2);
             let (right_lead, right_matrix) = right.split_at(right.len() - 2);
             if left_matrix[1] != right_matrix[0] {
-                return None;
+                return Ok(None);
             }
-            let mut shape = array_layout::broadcast_shape(left_lead, right_lead)?;
+            let Some(mut shape) = array_layout::broadcast_shape(left_lead, right_lead) else {
+                return Ok(None);
+            };
             shape.extend([left_matrix[0], right_matrix[1]]);
             Some((dtype, shape.into()))
         }
         Operation::Reshape(shape) => {
             let len = inputs[0].len();
-            let known: usize = shape
+            let Some(known) = shape
                 .iter()
                 .filter(|&&dimension| dimension != -1)
                 .try_fold(1_usize, |known, &dimension| {
                     known.checked_mul(usize::try_from(dimension).ok()?)
-                })?;
+                })
+            else {
+                return Ok(None);
+            };
             let inferred = shape.iter().filter(|&&dimension| dimension == -1).count();
             if shape.is_empty() || inferred > 1 || known == 0 || !len.is_multiple_of(known) {
-                return None;
+                return Ok(None);
             }
             if inferred == 0 && known != len {
-                return None;
+                return Ok(None);
             }
             let shape = shape
                 .iter()
@@ -1003,9 +1065,14 @@ fn planned_result(
             let axes: Vec<usize> = if axes.is_empty() {
                 (0..rank).rev().collect()
             } else {
-                axes.iter()
+                let Some(axes) = axes
+                    .iter()
                     .map(|&axis| normalize(axis))
-                    .collect::<Option<_>>()?
+                    .collect::<Option<_>>()
+                else {
+                    return Ok(None);
+                };
+                axes
             };
             let mut seen = vec![false; rank];
             if axes.len() != rank
@@ -1013,7 +1080,7 @@ fn planned_result(
                     .iter()
                     .any(|&axis| std::mem::replace(&mut seen[axis], true))
             {
-                return None;
+                return Ok(None);
             }
             Some((
                 dtype,
@@ -1021,7 +1088,9 @@ fn planned_result(
             ))
         }
         Operation::Cast(target) => {
-            let target = ArrayDType::from_code(*target)?;
+            let Some(target) = ArrayDType::from_code(*target) else {
+                return Ok(None);
+            };
             // A float to integer cast traps on a value out of range, which
             // a GPU cannot do, so it runs on the host.
             let exact = matches!((dtype, target), (Int32 | Int64, Float32) | (Int32, Int64))
@@ -1035,8 +1104,16 @@ fn planned_result(
         Operation::Slice { axis, length, .. } => indexed.then(|| resized(*axis, *length)),
         Operation::Unslice { axis, size, .. } => indexed.then(|| resized(*axis, *size)),
         Operation::Expand(shape) => indexed.then(|| (dtype, shape.clone().into())),
-        Operation::Concat { axis } => (indexed && same_dtype)
-            .then(|| resized(*axis, inputs[0].shape()[*axis] + inputs[1].shape()[*axis])),
+        Operation::Concat { axis } => {
+            if indexed && same_dtype {
+                Some(resized(
+                    *axis,
+                    checked_concat_axis(inputs[0].shape()[*axis], inputs[1].shape()[*axis])?,
+                ))
+            } else {
+                None
+            }
+        }
         Operation::Take { axis } => indexed.then(|| {
             (
                 dtype,
@@ -1059,11 +1136,13 @@ fn planned_result(
         Operation::ArgReduce { axis, .. } => (indexed && number)
             .then(|| (Int64, tensor_kernels::lane_shape(inputs[0].shape(), *axis))),
         Operation::Random { dtype, shape, .. } => {
-            let dtype = ArrayDType::from_code(*dtype)?;
+            let Some(dtype) = ArrayDType::from_code(*dtype) else {
+                return Ok(None);
+            };
             (indexed && !shape.contains(&0) && (dtype == Float32 || double))
                 .then(|| (dtype, shape.clone().into()))
         }
-    }
+    })
 }
 
 /// Integer tensors wrap on every device, because a GPU cannot trap. The
@@ -1363,7 +1442,7 @@ fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
 fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
     let device = inputs[0].device();
     if defers(device) {
-        if let Some((dtype, shape)) = planned_result(&operation, inputs) {
+        if let Some((dtype, shape)) = planned_result(&operation, inputs)? {
             if matches!(operation, Operation::Matmul) && device != TensorDevice::Metal {
                 start_operands(inputs, early_depth())?;
             }
@@ -1496,7 +1575,7 @@ fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
         // in host memory. A run copies the small leaves of its plan
         // together and keeps the copy, where a copy made here would
         // wait for the kernels launched so far.
-        let bytes = elements.len() * tensor_codegen::element_bytes(elements.dtype());
+        let (_, bytes) = checked_tensor_byte_len(&elements.shape, elements.dtype())?;
         if bytes <= SMALL_LEAF_BYTES {
             return Ok(Value::Tensor(TensorValue::host(device, elements)));
         }
@@ -1668,6 +1747,7 @@ pub fn host_tensor_full(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
     let dtype = ArrayDType::from_code(int_arg(&args, 2, name)?)
         .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
     let device = device_arg(&args, 3, name)?;
+    checked_tensor_byte_len(&shape, dtype)?;
     place(device, ArrayValue::full(dtype, shape, &args[1])?)
 }
 
@@ -2255,6 +2335,7 @@ pub fn host_tensor_filled(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     let dtype = ArrayDType::from_code(int_arg(&args, 3, name)?)
         .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
     let device = device_arg(&args, 4, name)?;
+    checked_tensor_byte_len(&shape, dtype)?;
     let float = matches!(dtype, ArrayDType::Float32 | ArrayDType::Float64);
     if fill == tensor_kernels::Fill::Count || !float {
         return place(

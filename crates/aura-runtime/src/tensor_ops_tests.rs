@@ -1218,7 +1218,7 @@ fn a_long_last_axis_is_reduced_by_a_group_of_threads_for_each_lane() {
             let rows = tensor(wide_rows(), TensorDevice::Cpu);
             let waiting = expression(&rows).unwrap();
             let (plan, storage) = Plan::collect(node(&waiting));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             let threads: Vec<usize> = program
                 .actions
                 .iter()
@@ -1254,7 +1254,7 @@ fn a_long_last_axis_is_reduced_by_a_group_of_threads_for_each_lane() {
                 let waiting =
                     reduce(&binary(&tall, &tall, 2).unwrap(), reduction, Some(axis)).unwrap();
                 let (plan, storage) = Plan::collect(node(&waiting));
-                let program = tensor_codegen::generate(&plan);
+                let program = tensor_codegen::generate(&plan).unwrap();
                 let threads: Vec<usize> = program
                     .actions
                     .iter()
@@ -1283,7 +1283,7 @@ fn a_long_last_axis_is_reduced_by_a_group_of_threads_for_each_lane() {
             ),
         ] {
             let (plan, _) = Plan::collect(node(&waiting));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             let Some(tensor_codegen::Action::Kernel { threads, .. }) = program.actions.last()
             else {
                 panic!("a reduction ends in a kernel");
@@ -1418,7 +1418,7 @@ fn a_product_reads_a_transpose_in_place_and_a_reshape_shares_memory() {
         for (tag, (name, expression, kernels, aliases)) in PRODUCTS.iter().enumerate() {
             let waiting = expression(&matrices(TensorDevice::Cpu)).unwrap();
             let (plan, storage) = Plan::collect(node(&waiting));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             let count = |wanted: fn(&tensor_codegen::Action) -> bool| {
                 program
                     .actions
@@ -1465,7 +1465,7 @@ fn a_reshape_that_shares_memory_can_be_a_result() {
         let total = reduce(&stack, 0, Some(2)).unwrap();
         let waiting = reshape(&total, &[3, 2]).unwrap();
         let (plan, storage) = Plan::collect(node(&waiting));
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         assert!(matches!(
             program.actions.last(),
             Some(tensor_codegen::Action::Alias { .. })
@@ -1500,7 +1500,7 @@ fn a_kernel_writes_the_kept_results_only_it_reads() {
     deferred(|| {
         let (average, second, weight) = averaged(&l);
         let (plan, storage) = Plan::collect_all(&[node(&average), node(&second), node(&weight)]);
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         let [tensor_codegen::Action::Kernel { more, inputs, .. }] = &program.actions[..] else {
             panic!("one kernel writes all three: {:?}", program.actions);
         };
@@ -1516,11 +1516,11 @@ fn a_kernel_writes_the_kept_results_only_it_reads() {
         let narrow = binary(&l.row, &l.row, 0).unwrap();
         let wide = binary(&l.a, &narrow, 2).unwrap();
         let (plan, _) = Plan::collect_all(&[node(&narrow), node(&wide)]);
-        assert_eq!(tensor_codegen::generate(&plan).actions.len(), 2);
+        assert_eq!(tensor_codegen::generate(&plan).unwrap().actions.len(), 2);
         let (average, _, weight) = averaged(&l);
         let total = reduce(&average, 0, None).unwrap();
         let (plan, storage) = Plan::collect_all(&[node(&average), node(&weight), node(&total)]);
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         assert!(program.actions.iter().all(|action| matches!(
             action,
             tensor_codegen::Action::Kernel { more, .. } if more.is_empty()
@@ -1586,7 +1586,7 @@ fn small_kernels_that_do_not_read_each_other_share_a_launch() {
         let kept = make(&l);
         let roots: Vec<&TensorValue> = kept.iter().map(node).collect();
         let (plan, storage) = Plan::collect_all(&roots);
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         let [tensor_codegen::Action::Kernel {
             name,
             more,
@@ -1611,7 +1611,7 @@ fn small_kernels_that_do_not_read_each_other_share_a_launch() {
         let total = reduce(&binary(&l.a, &l.b, 2).unwrap(), 0, Some(1)).unwrap();
         let second = binary(&l.row, &l.row, 0).unwrap();
         let (plan, storage) = Plan::collect_all(&[node(&first), node(&total), node(&second)]);
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         let [tensor_codegen::Action::Kernel { more: none, .. }, tensor_codegen::Action::Kernel { name, more, .. }] =
             &program.actions[..]
         else {
@@ -1627,7 +1627,7 @@ fn small_kernels_that_do_not_read_each_other_share_a_launch() {
         let sum = binary(&l.a, &l.b, 0).unwrap();
         let square = binary(&sum, &sum, 2).unwrap();
         let (plan, storage) = Plan::collect_all(&[node(&sum), node(&square)]);
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         let names: Vec<&str> = program
             .actions
             .iter()
@@ -1768,6 +1768,7 @@ fn wave(count: usize, shape: &[usize], device: TensorDevice) -> Value {
 fn large_shared_arithmetic_is_computed_again_by_each_reader() {
     let kernels = |plan: &Plan| {
         tensor_codegen::generate(plan)
+            .unwrap()
             .actions
             .iter()
             .filter(|action| matches!(action, tensor_codegen::Action::Kernel { .. }))
@@ -1936,6 +1937,7 @@ fn lane_norm_of(rows: usize, length: usize, device: TensorDevice) -> Value {
 fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
     let actions = |plan: &Plan| {
         tensor_codegen::generate(plan)
+            .unwrap()
             .actions
             .iter()
             .filter(|action| !matches!(action, tensor_codegen::Action::Alias { .. }))
@@ -1965,7 +1967,7 @@ fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
         assert_eq!(actions(&plan), 1);
         // The powers are written while they are summed and divided in
         // place, so each is computed once.
-        let source = tensor_codegen::generate(&plan).source;
+        let source = tensor_codegen::generate(&plan).unwrap().source;
         assert!(source.contains("out[start + k] = (out[start + k] / p"));
         if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2410) {
             close("softmax", &generated[0], &expected);
@@ -2013,7 +2015,7 @@ fn stacked_softmax_of(rows: usize, length: usize, device: TensorDevice) -> Value
 fn a_lane_kernel_reads_through_reshapes_and_feeds_products() {
     let count = |plan: &Plan| {
         let (mut kernels, mut products) = (0, 0);
-        for action in tensor_codegen::generate(plan).actions {
+        for action in tensor_codegen::generate(plan).unwrap().actions {
             match action {
                 tensor_codegen::Action::Kernel { .. } => kernels += 1,
                 tensor_codegen::Action::Matmul { .. } => products += 1,
@@ -2157,6 +2159,7 @@ fn a_reshape_with_two_readers_is_computed_again_by_each() {
         let result = gelu_between_products(TensorDevice::Cpu, false).1;
         let (plan, _) = Plan::collect_all(&[node(&result)]);
         let kernels = tensor_codegen::generate(&plan)
+            .unwrap()
             .actions
             .iter()
             .filter(|action| matches!(action, tensor_codegen::Action::Kernel { .. }))
@@ -2205,7 +2208,7 @@ fn stacked_products_write_their_merged_heads_in_place() {
     deferred(|| {
         let result = merged_heads(cpu);
         let (plan, storage) = Plan::collect_all(&[node(&result)]);
-        let actions = tensor_codegen::generate(&plan).actions;
+        let actions = tensor_codegen::generate(&plan).unwrap().actions;
         // No kernel moves the heads: the first product writes the rows
         // the second reads.
         assert!(actions
@@ -2235,6 +2238,7 @@ fn stacked_products_write_their_merged_heads_in_place() {
         let merged = reshape(&permute(&mixed, &[0, 2, 1, 3]).unwrap(), &[2, 8, 12]).unwrap();
         let (plan, _) = Plan::collect_all(&[node(&merged), node(&mixed)]);
         assert!(tensor_codegen::generate(&plan)
+            .unwrap()
             .actions
             .iter()
             .all(|action| !matches!(
@@ -2257,4 +2261,123 @@ fn a_gpu_device_agrees_on_merged_heads() {
         );
         println!("RAN: merged heads written in place on a GPU device");
     }
+}
+
+#[test]
+fn overflowing_tensor_shape_and_byte_size_are_rejected_before_planning() {
+    let assert_rejected = |label: &str, result: Result<Value>| {
+        let error = result.expect_err(&format!("{label} should fail"));
+        assert!(
+            matches!(error.code.as_str(), "AU4005" | "AU4007"),
+            "{label}: unexpected diagnostic code {}",
+            error.code
+        );
+    };
+
+    let l = leaves(TensorDevice::Cpu);
+    let idx = indices(&[0], &[1], &l.two);
+    let bool_one = compare(&l.two, &l.two, 4).unwrap();
+
+    // Deferred planning path (mirrors GPU planning).
+    deferred(|| {
+        // 2 * ((1 << 61) + 1) = (1 << 62) + 2 elements; * 4 bytes overflows usize.
+        let half_overflow_f32 = (1_i64 << 61) + 1;
+        let full_overflow_f32 = (1_i64 << 62) + 1;
+        assert_rejected(
+            "deferred expand byte overflow",
+            node_op(&l.two, 1, &[2, half_overflow_f32]),
+        );
+        assert_rejected(
+            "deferred expand product overflow",
+            node_op(&l.two, 1, &[1_i64 << 40, 1_i64 << 40]),
+        );
+        assert_rejected(
+            "deferred index_add byte overflow",
+            pair_op(&l.two, &idx, 2, &[0, full_overflow_f32]),
+        );
+        assert_rejected(
+            "deferred rand byte overflow",
+            random(0, 7, ArrayDType::Float32, &[2, half_overflow_f32], &l.two),
+        );
+        assert_rejected(
+            "deferred unslice byte overflow",
+            unslice(&l.two, 0, 0, 1, full_overflow_f32 as usize),
+        );
+
+        let half_max_f32 = node_op(&l.two, 1, &[1_i64 << 60]).unwrap();
+        assert_rejected(
+            "deferred cat byte overflow",
+            pair_op(&half_max_f32, &half_max_f32, 0, &[0]),
+        );
+
+        let half_max_bool = node_op(&bool_one, 1, &[(1_i64 << 62) + 1]).unwrap();
+        assert_rejected(
+            "deferred cat dim overflow",
+            pair_op(&half_max_bool, &half_max_bool, 0, &[0]),
+        );
+
+        let col = node_op(&l.two, 1, &[1_i64 << 31, 1]).unwrap();
+        let row = node_op(&l.two, 1, &[1, 1_i64 << 31]).unwrap();
+        let mask = compare(&col, &col, 4).unwrap();
+        assert_rejected(
+            "deferred binary broadcast byte overflow",
+            binary(&col, &row, 0),
+        );
+        assert_rejected(
+            "deferred where broadcast byte overflow",
+            choose(&mask, &col, &row),
+        );
+        assert_rejected("deferred matmul byte overflow", matmul(&col, &row));
+
+        let many_idx = node_op(&idx, 1, &[1_i64 << 31]).unwrap();
+        assert_rejected(
+            "deferred take byte overflow",
+            pair_op(&row, &many_idx, 1, &[0]),
+        );
+    });
+
+    // Eager CPU path should also reject without allocating.
+    assert_rejected(
+        "eager expand byte overflow",
+        node_op(&l.two, 1, &[2, (1_i64 << 61) + 1]),
+    );
+    assert_rejected(
+        "eager index_add byte overflow",
+        pair_op(&l.two, &idx, 2, &[0, (1_i64 << 62) + 1]),
+    );
+    assert_rejected(
+        "eager rand byte overflow",
+        random(0, 7, ArrayDType::Float32, &[2, (1_i64 << 61) + 1], &l.two),
+    );
+    assert_rejected(
+        "empty shape non-zero byte overflow",
+        host_tensor_full(
+            vec![
+                ints(&[0, 1_i64 << 62]),
+                Value::Float(0.0),
+                int(ArrayDType::Float32 as i64),
+                int(TensorDevice::Cpu as i64),
+            ],
+            None,
+        ),
+    );
+
+    // Direct codegen validation rejects overflowing plans as well.
+    let overflow_plan = Plan {
+        slots: vec![
+            Slot::Leaf {
+                dtype: ArrayDType::Float32 as i64,
+                shape: vec![1],
+            },
+            Slot::Step {
+                operation: Operation::Expand(vec![2, (1_usize << 61) + 1]),
+                inputs: vec![0],
+                dtype: ArrayDType::Float32 as i64,
+                shape: vec![2, (1_usize << 61) + 1],
+            },
+        ],
+        outputs: vec![1],
+    };
+    let error = tensor_codegen::generate(&overflow_plan).unwrap_err();
+    assert_eq!(error.code, "AU4005");
 }

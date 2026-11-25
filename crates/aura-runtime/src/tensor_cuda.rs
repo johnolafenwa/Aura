@@ -492,7 +492,7 @@ impl Drop for Buffer {
         // wait for the kernels launched so far, in the middle of the
         // program. The run the program next waits for trims the pool.
         let mut pool = runtime.pool();
-        pool.bytes += self.bytes;
+        pool.bytes = pool.bytes.saturating_add(self.bytes);
         pool.free.entry(self.bytes).or_default().push(self.pointer);
     }
 }
@@ -571,38 +571,48 @@ impl Buffer {
     /// An Array holding a copy of the buffer's elements.
     pub(crate) fn to_array(&self, dtype: ArrayDType, shape: &[usize]) -> Result<ArrayValue> {
         let runtime = started()?;
-        let len: usize = shape.iter().product();
-        assert_eq!(
-            len * tensor_codegen::element_bytes(dtype),
-            self.bytes,
-            "a tensor's buffer holds its shape"
-        );
+        let (len, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+        if expected_bytes != self.bytes {
+            return Err(cuda_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
         runtime.enter()?;
         fn read<T: Copy + Default>(
             runtime: &Runtime,
             buffer: &Buffer,
             len: usize,
+            expected_bytes: usize,
         ) -> Result<Box<[T]>> {
-            let mut values = vec![T::default(); len];
-            // SAFETY: the buffer holds `len` elements of `T`, and `values`
-            // has room for them.
+            let mut values = try_array_buffer(len, "CUDA tensor read")?;
+            values.resize(len, T::default());
+            // SAFETY: the buffer holds `expected_bytes` bytes for `len` elements
+            // of `T`, and `values` has room for them.
             let status = unsafe {
                 (runtime.api.cuMemcpyDtoH_v2)(
                     values.as_mut_ptr().cast(),
                     buffer.pointer,
-                    len * std::mem::size_of::<T>(),
+                    expected_bytes,
                 )
             };
             check(status, "copy elements from the device")?;
-            Ok(values.into())
+            Ok(values.into_boxed_slice())
         }
         let storage = match dtype {
-            ArrayDType::Int32 => ArrayStorage::Int32(read::<i32>(runtime, self, len)?.into()),
-            ArrayDType::Int64 => ArrayStorage::Int64(read::<i64>(runtime, self, len)?.into()),
-            ArrayDType::Float32 => ArrayStorage::Float32(read::<f32>(runtime, self, len)?.into()),
-            ArrayDType::Float64 => ArrayStorage::Float64(read::<f64>(runtime, self, len)?.into()),
+            ArrayDType::Int32 => {
+                ArrayStorage::Int32(read::<i32>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Int64 => {
+                ArrayStorage::Int64(read::<i64>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float32 => {
+                ArrayStorage::Float32(read::<f32>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float64 => {
+                ArrayStorage::Float64(read::<f64>(runtime, self, len, expected_bytes)?.into())
+            }
             ArrayDType::Bool => {
-                let flags: Box<[bool]> = read::<u8>(runtime, self, len)?
+                let flags: Box<[bool]> = read::<u8>(runtime, self, len, expected_bytes)?
                     .iter()
                     .map(|&byte| byte != 0)
                     .collect();
@@ -726,7 +736,7 @@ impl Compiled {
     }
 
     fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
-        let program = tensor_codegen::generate(plan);
+        let program = tensor_codegen::generate(plan)?;
         let api = &runtime.api;
         // A kernel compiled by an earlier run of any program is read from
         // the cache. A file the driver does not take is compiled again.

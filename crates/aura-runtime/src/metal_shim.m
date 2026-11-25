@@ -322,6 +322,9 @@ int32_t aura_metal_graph_run(void *handle, int32_t feeds, const int32_t *placeho
                     [(MPSGraphTensorData *)[aura_data_class alloc] initWithMTLBuffer:(__bridge id<MTLBuffer>)buffers[index]
                                                                               shape:tensor.shape
                                                                            dataType:tensor.dataType];
+                if (data == nil) {
+                    return -1;
+                }
                 [feed setObject:data forKey:tensor];
             }
             MPSGraphTensor *result = graph->tensors[(NSUInteger)target];
@@ -329,6 +332,9 @@ int32_t aura_metal_graph_run(void *handle, int32_t feeds, const int32_t *placeho
                 [(MPSGraphTensorData *)[aura_data_class alloc] initWithMTLBuffer:(__bridge id<MTLBuffer>)output
                                                                           shape:result.shape
                                                                        dataType:result.dataType];
+            if (written == nil) {
+                return -1;
+            }
             NSMutableDictionary<MPSGraphTensor *, MPSGraphTensorData *> *results = [aura_dictionary_class dictionary];
             [results setObject:written forKey:result];
             [graph->graph runWithMTLCommandQueue:aura_queue feeds:feed targetOperations:nil resultsDictionary:results];

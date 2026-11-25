@@ -99,25 +99,19 @@ fn pool() -> std::sync::MutexGuard<'static, Pool> {
 impl Drop for Buffer {
     fn drop(&mut self) {
         let mut pool = pool();
-        if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
-            pool.bytes += self.bytes;
-            pool.free
-                .entry(self.bytes)
-                .or_default()
-                .push(self.handle as usize);
-            return;
+        if let Some(total) = pool.bytes.checked_add(self.bytes) {
+            if total <= MAX_POOLED_BYTES {
+                pool.bytes = total;
+                pool.free
+                    .entry(self.bytes)
+                    .or_default()
+                    .push(self.handle as usize);
+                return;
+            }
         }
         drop(pool);
         // SAFETY: `handle` is the one reference this value owns.
         unsafe { aura_metal_buffer_release(self.handle) }
-    }
-}
-
-fn element_bytes(dtype: ArrayDType) -> usize {
-    match dtype {
-        ArrayDType::Bool => 1,
-        ArrayDType::Int32 | ArrayDType::Float32 => 4,
-        ArrayDType::Int64 | ArrayDType::Float64 => 8,
     }
 }
 
@@ -180,33 +174,46 @@ impl Buffer {
 
     /// An Array holding a copy of the buffer's elements.
     pub(crate) fn to_array(&self, dtype: ArrayDType, shape: &[usize]) -> Result<ArrayValue> {
-        let len: usize = shape.iter().product();
-        assert_eq!(
-            len * element_bytes(dtype),
-            self.bytes,
-            "a tensor's buffer holds its shape"
-        );
-        fn read<T: Copy + Default>(buffer: &Buffer, len: usize) -> Box<[T]> {
-            let mut values = vec![T::default(); len];
-            // SAFETY: the buffer holds `len` elements of `T`, and `values`
-            // is a separate allocation of the same size.
+        let (len, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+        if expected_bytes != self.bytes {
+            return Err(metal_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
+        fn read<T: Copy + Default>(
+            buffer: &Buffer,
+            len: usize,
+            expected_bytes: usize,
+        ) -> Result<Box<[T]>> {
+            let mut values = try_array_buffer(len, "Metal tensor read")?;
+            values.resize(len, T::default());
+            // SAFETY: the buffer holds `expected_bytes` bytes for `len` elements
+            // of `T`, and `values` is a separate allocation of the same size.
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     buffer.contents(),
                     values.as_mut_ptr().cast::<u8>(),
-                    len * std::mem::size_of::<T>(),
+                    expected_bytes,
                 );
             }
-            values.into()
+            Ok(values.into_boxed_slice())
         }
         let storage = match dtype {
-            ArrayDType::Int32 => ArrayStorage::Int32(read::<i32>(self, len).into()),
-            ArrayDType::Int64 => ArrayStorage::Int64(read::<i64>(self, len).into()),
-            ArrayDType::Float32 => ArrayStorage::Float32(read::<f32>(self, len).into()),
-            ArrayDType::Float64 => ArrayStorage::Float64(read::<f64>(self, len).into()),
+            ArrayDType::Int32 => {
+                ArrayStorage::Int32(read::<i32>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Int64 => {
+                ArrayStorage::Int64(read::<i64>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float32 => {
+                ArrayStorage::Float32(read::<f32>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float64 => {
+                ArrayStorage::Float64(read::<f64>(self, len, expected_bytes)?.into())
+            }
             ArrayDType::Bool => {
                 // A byte the GPU wrote may be any non-zero value for true.
-                let flags: Box<[bool]> = read::<u8>(self, len)
+                let flags: Box<[bool]> = read::<u8>(self, len, expected_bytes)?
                     .iter()
                     .map(|&byte| byte != 0)
                     .collect();
@@ -257,6 +264,12 @@ impl Graph {
         };
         let mut tensors: Vec<i32> = Vec::with_capacity(plan.slots.len());
         for slot in &plan.slots {
+            let (slot_dtype, slot_shape) = match slot {
+                Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
+            };
+            let slot_dtype = ArrayDType::from_code(slot_dtype)
+                .ok_or_else(|| metal_error("received an unknown dtype"))?;
+            super::checked_tensor_byte_len(slot_shape, slot_dtype)?;
             let tensor = match slot {
                 Slot::Leaf { dtype, shape } => {
                     let shape = shape_numbers(shape);
@@ -382,7 +395,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
             }
         }
     }
-    let output = Buffer::new(shape.iter().product::<usize>() * element_bytes(dtype))?;
+    let (_, output_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+    let output = Buffer::new(output_bytes)?;
     let mut compiled = COMPILED
         .get_or_init(Default::default)
         .lock()

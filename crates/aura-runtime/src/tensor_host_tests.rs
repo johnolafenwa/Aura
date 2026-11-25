@@ -876,7 +876,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
     /// Runs `plan` through its generated kernels on the CPU and gives each
     /// of its outputs.
     pub(super) fn run_all(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<Vec<ArrayValue>> {
-        let program = tensor_codegen::generate(plan);
+        let program = tensor_codegen::generate(plan).unwrap();
         let library = compile(&program.source, tag)?;
         // SAFETY: the harness defines `aura_thread` with this signature.
         let set_thread = unsafe {
@@ -1087,7 +1087,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             for (tag, reduction) in [0, 1, 2, 3].into_iter().enumerate() {
                 let waiting = reduce(&doubled, reduction, None).unwrap();
                 let (plan, storage) = Plan::collect(node(&waiting));
-                let program = tensor_codegen::generate(&plan);
+                let program = tensor_codegen::generate(&plan).unwrap();
                 let threads: Vec<usize> = program
                     .actions
                     .iter()
@@ -1119,7 +1119,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             )
             .unwrap();
             let (plan, _) = Plan::collect(node(&chain));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert_eq!(program.actions.len(), 1, "three steps are one kernel");
             assert_eq!(program.buffers, plan.slots.len(), "no scratch buffer");
             let Action::Kernel {
@@ -1135,7 +1135,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
             let total = reduce(&chain, 0, None).unwrap();
             let (plan, _) = Plan::collect(node(&total));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert_eq!(
                 program.actions.len(),
                 1,
@@ -1145,7 +1145,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
             let product = matmul(&chain, &l.tall).unwrap();
             let (plan, _) = Plan::collect(node(&product));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert!(matches!(
                 program.actions[..],
                 [

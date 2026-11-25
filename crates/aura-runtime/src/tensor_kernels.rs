@@ -47,7 +47,7 @@ fn index_map(
     shape: Box<[usize]>,
     map: impl Fn(usize) -> Option<(usize, usize)>,
 ) -> Result<ArrayValue> {
-    let count: usize = shape.iter().product();
+    let (count, _) = checked_tensor_byte_len(&shape, sources[0].dtype())?;
     let stores = sources
         .iter()
         .map(|source| source.elements())
@@ -138,7 +138,7 @@ pub(crate) fn concat(left: &ArrayValue, right: &ArrayValue, axis: usize) -> Resu
         Lanes::new(&right.shape, axis),
     );
     let mut shape = left.shape.clone();
-    shape[axis] += right.shape[axis];
+    shape[axis] = checked_concat_axis(shape[axis], right.shape[axis])?;
     let to = Lanes::new(&shape, axis);
     index_map(&[left, right], shape, |index| {
         let (outer, at, rest) = to.split(index);
@@ -221,10 +221,11 @@ pub(crate) fn index_add(
         .chain([size])
         .chain(updates.shape[axis + indices.shape.len()..].iter().copied())
         .collect();
-    let count: usize = shape.iter().product();
+    let (count, _) = checked_tensor_byte_len(&shape, updates.dtype())?;
     macro_rules! build {
         ($variant:ident, $values:expr, $zero:expr, $add:expr) => {{
-            let mut sums = vec![$zero; count];
+            let mut sums = try_array_buffer(count, "tensor::index_add result")?;
+            sums.resize(count, $zero);
             for (index, &value) in $values.iter().enumerate() {
                 let (outer, at, rest) = from.split(index);
                 let sum = &mut sums[to.join(outer, places[at], rest)];
@@ -394,7 +395,7 @@ pub(crate) fn filled(
     seed: u64,
     dtype: ArrayDType,
 ) -> Result<ArrayValue> {
-    let count = checked_array_element_count(&shape)?;
+    let (count, _) = checked_tensor_byte_len(&shape, dtype)?;
     let storage = match (dtype, fill) {
         (ArrayDType::Float32, Fill::Count) => ArrayStorage::Float32(
             (0..count)
