@@ -15551,6 +15551,40 @@ fn str_append_root_needs_the_ownership_pass_form() {
     );
 }
 
+#[test]
+fn owned_replace_receiver_needs_a_released_temporary_and_literals() {
+    let source = "def swap(text: str) -> str:\n    return text.replace(\"a\", \"b\").replace(\"c\", \"d\")\n\n\ndef main():\n    print(swap(\"ac\"))\n";
+    let mir = lower_source_to_mir(source).expect("the replace chain should lower");
+    let swap = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "swap")
+        .expect("swap");
+    let instructions = &swap.blocks[0].instructions;
+    // The first step reads the parameter, which the function does not own.
+    assert_eq!(super::owned_replace_receiver(instructions), None);
+    let second = &instructions[1..];
+    let receiver = super::owned_replace_receiver(second).expect("the second step");
+    assert!(receiver.starts_with('%'), "{receiver}");
+    // Without the release, something later may still read the temporary.
+    assert_eq!(super::owned_replace_receiver(&second[..1]), None);
+    let mut other_release = second.to_vec();
+    other_release[1] = Instruction::Release {
+        place: "text".to_string(),
+    };
+    assert_eq!(super::owned_replace_receiver(&other_release), None);
+    let mut computed = second.to_vec();
+    let Instruction::Assign {
+        value: Rvalue::Call { args, .. },
+        ..
+    } = &mut computed[0]
+    else {
+        panic!("the second step is a call");
+    };
+    args[0].value = Operand::Place("text".to_string());
+    assert_eq!(super::owned_replace_receiver(&computed), None);
+}
+
 /// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
 fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
     let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");
