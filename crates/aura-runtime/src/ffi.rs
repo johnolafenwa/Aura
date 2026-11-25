@@ -1257,7 +1257,6 @@ pub unsafe fn call_host_function(
 #[derive(Default)]
 struct LoadedLibraries {
     by_request: std::collections::BTreeSet<(u8, String, Vec<PathBuf>)>,
-    loaded_names: std::collections::BTreeSet<(u8, String)>,
     handles: Vec<usize>,
 }
 
@@ -1810,7 +1809,6 @@ pub fn load_libraries(
         }
     }
 
-    let raw_paths = search_paths.to_vec();
     let canonical_paths = search_paths
         .iter()
         .map(|path| aura_core::host_path::canonicalize(path).unwrap_or_else(|_| path.clone()))
@@ -1822,9 +1820,8 @@ pub fn load_libraries(
             (
                 KIND_LIBRARY,
                 name,
-                raw_paths.clone(),
                 canonical_paths.clone(),
-                library_candidates(name, search_paths),
+                library_candidates(name, &canonical_paths),
             )
         })
         .chain(frameworks.map(|name| {
@@ -1832,28 +1829,19 @@ pub fn load_libraries(
                 KIND_FRAMEWORK,
                 name,
                 Vec::new(),
-                Vec::new(),
                 framework_candidates(name),
             )
         }));
     let mut loaded = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (kind, name, req_raw, req_canon, candidates) in wanted {
-        let raw_key = (kind, name.clone(), req_raw);
+    for (kind, name, req_canon, candidates) in wanted {
         let canon_key = (kind, name.clone(), req_canon);
-        let bare_satisfied =
-            raw_key.2.is_empty() && loaded.loaded_names.contains(&(kind, name.clone()));
-        if !bare_satisfied
-            && !loaded.by_request.contains(&raw_key)
-            && !loaded.by_request.contains(&canon_key)
-        {
+        if !loaded.by_request.contains(&canon_key) {
             let handle = load_first(name, &candidates)?;
             if !loaded.handles.contains(&handle) {
                 loaded.handles.push(handle);
             }
-            loaded.loaded_names.insert((kind, name.clone()));
-            loaded.by_request.insert(raw_key);
             loaded.by_request.insert(canon_key);
         }
     }
@@ -3486,9 +3474,16 @@ mod tests {
             Ok(FfiValue::I32(41))
         );
 
-        // A loaded library is not searched for again.
+        // A library loaded from a search path is cached for that canonical search path
+        // without satisfying an unrelated bare lookup.
+        std::fs::remove_file(&file).expect("the fixture file should be removable");
+        load_libraries(&libraries, std::slice::from_ref(&directory), &[])
+            .expect("the library is already loaded for this search path");
+        assert!(matches!(
+            load_libraries(&libraries, &[], &[]),
+            Err(FfiError::LibraryNotFound { .. })
+        ));
         std::fs::remove_dir_all(&directory).expect("the scratch directory should be removable");
-        load_libraries(&libraries, &[], &[]).expect("the library is already loaded");
     }
 
     #[cfg(unix)]
@@ -3806,5 +3801,40 @@ mod tests {
                 "unexpected error: {err:?}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_cache_keys_strictly_by_canonical_search_paths() {
+        let root = scratch_directory("canon-cache");
+        let dir_a = root.join("dir_a");
+        let dir_b = root.join("dir_b");
+        std::fs::create_dir_all(&dir_a).expect("create dir_a");
+        std::fs::create_dir_all(&dir_b).expect("create dir_b");
+        let file_name = &library_file_names("aura_ffi_symlink_target")[0];
+        build_fixture_library(&dir_a.join(file_name), "aura_ffi_symlink_sym_a", 101);
+        build_fixture_library(&dir_b.join(file_name), "aura_ffi_symlink_sym_b", 202);
+
+        let link = root.join("current");
+        std::os::unix::fs::symlink(&dir_a, &link).expect("symlink to dir_a");
+        let names = ["aura_ffi_symlink_target".to_owned()];
+        load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_a");
+        assert_eq!(call_fixture("aura_ffi_symlink_sym_a"), Ok(FfiValue::I32(101)));
+
+        // Repointing the symlink to a different canonical target must not hit
+        // a stale raw-path cache entry.
+        std::fs::remove_file(&link).expect("remove old symlink");
+        std::os::unix::fs::symlink(&dir_b, &link).expect("symlink to dir_b");
+        load_libraries(&names, std::slice::from_ref(&link), &[]).expect("load via link -> dir_b");
+        assert_eq!(call_fixture("aura_ffi_symlink_sym_b"), Ok(FfiValue::I32(202)));
+
+        // A bare request (empty search_paths) must not reuse a library that
+        // was only loaded from a private search_path.
+        let bare = load_libraries(&names, &[], &[]);
+        std::fs::remove_dir_all(&root).expect("cleanup canon-cache");
+        assert!(
+            matches!(bare, Err(FfiError::LibraryNotFound { .. })),
+            "bare load_libraries must not hit cache populated from a private search_path: {bare:?}"
+        );
     }
 }
