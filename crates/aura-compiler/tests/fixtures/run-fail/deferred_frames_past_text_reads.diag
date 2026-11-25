@@ -1,0 +1,6 @@
+error[AU4003]: list index `9` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/deferred_frames_past_text_reads.au:9:18
+  |
+9 |     return cells[i]
+  |                  ^
+  = note: Aura call chain (innermost first): lookup at 8:1 -> check at 11:1 -> main at 20:1

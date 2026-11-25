@@ -22263,7 +22263,9 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// Then `aura_direct_exit_call` does the whole pop.
 /// The calls that push, find, and pop frame records, which need none.
 /// The runtime's reads of a variant or list box that generated code reads
-/// in place when the box is in its layout, and its releases.
+/// in place when the box is in its layout, a list element's loan or path
+/// in a list of another form, the words of a `str` box, a byte compare,
+/// and its releases.
 fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
     [
         RuntimeFn::VariantMatches,
@@ -22275,6 +22277,11 @@ fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
         RuntimeFn::VecLen,
         RuntimeFn::VecIndex,
         RuntimeFn::VecIndexScalar,
+        RuntimeFn::VecLend,
+        RuntimeFn::ElementPathLoad,
+        RuntimeFn::ElementPathPromote,
+        RuntimeFn::StringWords,
+        RuntimeFn::BytesEqual,
         RuntimeFn::TagValueType,
         RuntimeFn::ReleaseValue,
         RuntimeFn::ReleaseLastOwnedValue,
