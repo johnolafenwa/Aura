@@ -266,6 +266,14 @@ fn declared_symbols(module: &MirModule) -> HashSet<&str> {
                     ..
                 },
             ..
+        }
+        | Instruction::WriteLoan {
+            value:
+                Rvalue::Call {
+                    callee: CallTarget::Extern(call),
+                    ..
+                },
+            ..
         } = instruction
         {
             symbols.insert(call.symbol.as_str());

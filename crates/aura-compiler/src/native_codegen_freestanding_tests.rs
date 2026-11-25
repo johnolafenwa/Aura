@@ -869,3 +869,93 @@ fn an_emitter_fault_is_not_a_subset_report() {
         "`f` does x, which a freestanding build cannot compile"
     );
 }
+
+#[test]
+fn freestanding_write_loan_extern_call_passes_object_check() {
+    let source = r#"
+extern "C" def read_sensor() -> uint64
+
+export "C" def sample() -> uint64:
+    mut value: uint64 = 0
+    view mut slot = value
+    slot = read_sensor()
+    return value
+"#;
+    let mut module = lower(source);
+    // Ensure a direct WriteLoan -> CallTarget::Extern instruction is tested even
+    // if lowering introduces an intermediate temporary.
+    let has_direct_write_loan_extern = module
+        .functions
+        .iter()
+        .flat_map(|f| &f.blocks)
+        .flat_map(|b| &b.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                crate::mir::Instruction::WriteLoan {
+                    value: crate::mir::Rvalue::Call {
+                        callee: crate::mir::CallTarget::Extern(_),
+                        ..
+                    },
+                    ..
+                }
+            )
+        });
+    if !has_direct_write_loan_extern {
+        let entry = module
+            .functions
+            .iter_mut()
+            .find(|f| f.name == "sample")
+            .expect("sample function should exist");
+        let mut moved = false;
+        for block in &mut entry.blocks {
+            for idx in 0..block.instructions.len().saturating_sub(1) {
+                let is_extern_assign = matches!(
+                    &block.instructions[idx],
+                    crate::mir::Instruction::Assign {
+                        value: crate::mir::Rvalue::Call {
+                            callee: crate::mir::CallTarget::Extern(_),
+                            ..
+                        },
+                        ..
+                    }
+                );
+                if is_extern_assign {
+                    if let (
+                        crate::mir::Instruction::Assign { target, value },
+                        crate::mir::Instruction::WriteLoan {
+                            loan,
+                            value:
+                                crate::mir::Rvalue::Use(
+                                    crate::mir::Operand::MovePlace(src)
+                                    | crate::mir::Operand::Place(src),
+                                ),
+                        },
+                    ) = (&block.instructions[idx], &block.instructions[idx + 1])
+                    {
+                        if target == src {
+                            let new_inst = crate::mir::Instruction::WriteLoan {
+                                loan: loan.clone(),
+                                value: value.clone(),
+                            };
+                            block.instructions[idx] = new_inst;
+                            block.instructions.remove(idx + 1);
+                            moved = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if moved {
+                break;
+            }
+        }
+        assert!(moved, "expected a WriteLoan writing the extern call result");
+    }
+
+    let bytes = emit_freestanding_object(&module, "kernel.au", source, FreestandingTarget::X86_64)
+        .expect("freestanding object with WriteLoan extern call should pass check_object");
+    let (global, _, undefined) = symbols(&bytes);
+    assert_eq!(global, ["sample"]);
+    assert_eq!(undefined, ["read_sensor"]);
+}
