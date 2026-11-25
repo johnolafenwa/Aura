@@ -807,20 +807,27 @@ fn a_trap_names_its_file_relative_to_the_program() {
     std::fs::write(&program, "").expect("the file should be written");
     std::fs::write(&module, "").expect("the file should be written");
     let program = program.to_string_lossy().into_owned();
-    assert_eq!(freestanding::trap_path(&program, &program), "main.au");
     assert_eq!(
-        freestanding::trap_path(&module.to_string_lossy(), &program),
+        freestanding::trap_path(&program, &program, Some("main")),
+        "main.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&module.to_string_lossy(), &program, Some("drivers.uart")),
         "drivers/uart.au"
     );
-    // A file outside the program's directory keeps the path it has.
+    // A file outside the program's directory never embeds an absolute host path.
     assert_eq!(
-        freestanding::trap_path("/elsewhere/lib.au", &program),
-        "/elsewhere/lib.au"
+        freestanding::trap_path("/elsewhere/lib.au", &program, None),
+        "lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path("/elsewhere/lib.au", &program, Some("ext_pkg.lib")),
+        "ext_pkg/lib.au"
     );
     std::fs::remove_dir_all(&directory).expect("the directory should be removed");
     // A bare file name stands for a file in the working directory.
     assert_eq!(
-        freestanding::trap_path("kernel.au", "kernel.au"),
+        freestanding::trap_path("kernel.au", "kernel.au", Some("kernel")),
         "kernel.au"
     );
 }
@@ -969,4 +976,65 @@ export "C" def entry() -> None:
     log_line("hi\0there")
 "#;
     assert_problem(source, "interior NUL");
+}
+
+#[test]
+fn freestanding_dependency_trap_path_omits_host_filesystem_prefix() {
+    let marker = format!("aura-host-prefix-{}", std::process::id());
+    let root = std::env::temp_dir().join(&marker);
+    let _ = std::fs::remove_dir_all(&root);
+    let dep_dir = root.join("external_dep_checkout");
+    let app_dir = root.join("app_pkg");
+    std::fs::create_dir_all(dep_dir.join("src")).expect("dep src dir");
+    std::fs::create_dir_all(app_dir.join("src")).expect("app src dir");
+
+    std::fs::write(
+        dep_dir.join("Aura.toml"),
+        "[package]\nname = \"helper_dep\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("dep manifest");
+    std::fs::write(
+        dep_dir.join("src/lib.au"),
+        "public def checked_div(a: int32, b: int32) -> int32:\n    return a // b\n",
+    )
+    .expect("dep source");
+    std::fs::write(
+        app_dir.join("Aura.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\nhelper_dep = { path = \"../external_dep_checkout\" }\n",
+    )
+    .expect("app manifest");
+    let app_main_source = "import helper_dep.lib\n\nexport \"C\" def entry(a: int32, b: int32) -> int32:\n    return helper_dep.lib.checked_div(a, b)\n";
+    let app_main = app_dir.join("src/main.au");
+    std::fs::write(&app_main, app_main_source).expect("app source");
+
+    let program = crate::check_path(&app_main).expect("app with path dependency should check");
+    let mir = crate::mir::lower_with_source_locations(&program);
+    let bytes = emit_freestanding_object(
+        &mir,
+        &app_main.to_string_lossy(),
+        app_main_source,
+        FreestandingTarget::X86_64,
+    )
+    .expect("freestanding object should emit");
+    let _ = std::fs::remove_dir_all(&root);
+
+    let file = object::File::parse(&*bytes).expect("object should parse");
+    let rodata = file
+        .sections()
+        .filter(|section| section.name().is_ok_and(|name| name.starts_with(".rodata")))
+        .flat_map(|section| section.data().expect("section data").to_vec())
+        .collect::<Vec<_>>();
+    assert!(
+        !rodata
+            .windows(marker.len())
+            .any(|window| window == marker.as_bytes()),
+        "freestanding .rodata must not embed build-host path prefix `{marker}`"
+    );
+    let expected = b"helper_dep/src/lib.au";
+    assert!(
+        rodata
+            .windows(expected.len())
+            .any(|window| window == expected),
+        "freestanding .rodata should contain package-relative dependency path `helper_dep/src/lib.au`"
+    );
 }

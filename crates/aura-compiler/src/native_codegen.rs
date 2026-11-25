@@ -1993,7 +1993,11 @@ impl<'a> NativeCodegen<'a> {
             .clone()
             .unwrap_or_else(|| self.program_path.clone());
         let current_function_path = match self.freestanding {
-            Some(_) => freestanding::trap_path(&current_function_path, &self.program_path),
+            Some(_) => freestanding::trap_path(
+                &current_function_path,
+                &self.program_path,
+                Some(&function.module_name),
+            ),
             None => current_function_path,
         };
 
