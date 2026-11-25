@@ -553,6 +553,18 @@ impl Substitution<'_> {
         if before_union.members.len() != after_union.members.len() {
             return Err("a union type merges members".to_string());
         }
+        // A payload projection names its member by position, as in
+        // `u.__union_payload_0`, and places are not rewritten here, so a
+        // substitution that reorders the members cannot be copied.
+        if !self.erase
+            && before_union
+                .members
+                .iter()
+                .zip(&after_union.members)
+                .any(|(before, after)| self.ty(before) != *after)
+        {
+            return Err("a union type reorders its members".to_string());
+        }
         let member = before_union
             .members
             .get(*member_index)
