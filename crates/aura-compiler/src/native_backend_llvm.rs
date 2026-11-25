@@ -74,8 +74,10 @@ const UWTABLE_ASYNC: u64 = 2;
 /// the stack instead of faulting.
 const PROBE_STACK: (&str, &str) = ("probe-stack", "inline-asm");
 
-/// The LLVM `memory` attribute value that allows no memory access.
-const MEMORY_NONE: u64 = 0;
+/// The LLVM `memory` attribute value that allows reading any memory location
+/// (`MemoryEffectsBase::readOnly()`: `ModRefInfo::Ref` for all six
+/// `IRMemLocation` slots in LLVM 22).
+const MEMORY_READ: u64 = 0x555;
 
 /// The `branch_weights` of a branch to a cold block, against the other
 /// edge, as Clang weighs `__builtin_expect`.
@@ -113,7 +115,7 @@ struct FunctionDecl {
     linkage: Linkage,
     signature: Signature,
     body: Option<FunctionIr>,
-    task_invariant: bool,
+    read_only: bool,
     inline: bool,
     weak_routine: bool,
     source: Option<FunctionSource>,
@@ -238,7 +240,7 @@ impl ModuleBackend for LlvmModule {
                     linkage,
                     signature: signature.clone(),
                     body: None,
-                    task_invariant: false,
+                    read_only: false,
                     inline: false,
                     weak_routine: false,
                     source: None,
@@ -304,8 +306,8 @@ impl ModuleBackend for LlvmModule {
         Ok(())
     }
 
-    fn mark_task_invariant(&mut self, function: FuncHandle) {
-        self.functions[function.0 as usize].task_invariant = true;
+    fn mark_read_only(&mut self, function: FuncHandle) {
+        self.functions[function.0 as usize].read_only = true;
     }
 
     fn mark_inline(&mut self, function: FuncHandle) {
@@ -383,6 +385,14 @@ impl ModuleBackend for LlvmModule {
         let mut module = self;
         module.inline_calls_copied_with_their_loops();
         module.unit_objects(&Partition::split(&module), threads)
+    }
+
+    #[cfg(test)]
+    fn llvm_ir(self: Box<Self>) -> Result<String, String> {
+        let machine = self.target_machine()?;
+        let context = Context::create();
+        let lowered = self.lower(&context, &machine)?;
+        Ok(lowered.print_to_string().to_string())
     }
 }
 
@@ -2349,10 +2359,11 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
         let uwtable = context
             .create_enum_attribute(Attribute::get_named_enum_kind_id("uwtable"), UWTABLE_ASYNC);
         let probe_stack = context.create_string_attribute(PROBE_STACK.0, PROBE_STACK.1);
-        // A task-invariant helper reads and writes no memory LLVM can see,
-        // cannot unwind, and returns, so LLVM may merge its calls.
-        let task_invariant =
-            [("memory", MEMORY_NONE), ("nounwind", 0), ("willreturn", 0)].map(|(name, value)| {
+        // A read-only runtime helper only reads memory, cannot unwind, and
+        // returns, so LLVM may merge calls with no intervening writes while
+        // preserving ordering across side-effecting runtime boundaries.
+        let read_only =
+            [("memory", MEMORY_READ), ("nounwind", 0), ("willreturn", 0)].map(|(name, value)| {
                 context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), value)
             });
         let always_inline =
@@ -2422,8 +2433,8 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                         ),
                     );
                 }
-                if decl.task_invariant {
-                    for attribute in &task_invariant {
+                if decl.read_only {
+                    for attribute in &read_only {
                         function.add_attribute(AttributeLoc::Function, *attribute);
                     }
                 }

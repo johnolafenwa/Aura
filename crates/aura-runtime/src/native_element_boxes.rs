@@ -54,7 +54,17 @@ impl ElementBox {
     ///
     /// `ptr` is a live box, and the caller hands its only reference over.
     pub(super) unsafe fn from_raw(ptr: *mut OpaqueValue) -> Self {
-        Self(NonNull::new(ptr).expect("a held box is never null"))
+        let non_null = NonNull::new(ptr).expect("a held box is never null");
+        let header = unsafe { non_null.as_ref() };
+        debug_assert!(
+            header.is_frozen() || header.ref_count.load(Ordering::Acquire) == 1,
+            "ElementBox must hold the sole reference or a frozen box"
+        );
+        debug_assert!(
+            header.owner.get().is_null(),
+            "ElementBox must not be linked into a task ledger"
+        );
+        Self(non_null)
     }
 
     /// The box, which generated code reads the element through.

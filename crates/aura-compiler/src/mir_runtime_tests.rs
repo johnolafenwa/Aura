@@ -25692,3 +25692,103 @@ def main():
         assert!(error.message.contains(message), "{body}: {}", error.message);
     }
 }
+
+#[test]
+fn trapping_generators_in_wrappers_and_reassignments_propagate_traps_in_mir() {
+    let header = r#"from iter import Generator, Iterator
+from collections import Deque
+
+class TrappingGuard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        assert false, "generator exit trap"
+
+def trapping_stream() -> Generator[int64]:
+    with _g = TrappingGuard():
+        yield 1
+        yield 2
+
+def plain_stream() -> Generator[int64]:
+    yield 9
+"#;
+
+    let cases = [
+        (
+            "dict",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    mut d: dict[str, Generator[int64]] = {}
+    d["k"] = g
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "trait_object",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    boxed: dyn Iterator[int64] = g
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "closure",
+            r#"
+def consume_gen(g: own Generator[int64]) -> int64:
+    return 0
+
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    cb = lambda [own g]: consume_gen(g)
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "deque",
+            r#"
+def drop_holder() -> None:
+    mut g = trapping_stream()
+    _ = g.next()
+    mut q = Deque[Generator[int64]]()
+    q.push_back(g)
+
+def main():
+    drop_holder()
+"#,
+        ),
+        (
+            "reassign",
+            r#"
+def main():
+    mut g = trapping_stream()
+    _ = g.next()
+    g = plain_stream()
+"#,
+        ),
+    ];
+
+    for (label, body) in cases {
+        let source = format!("{header}{body}");
+        let err = crate::run_source(&source).expect_err(&format!(
+            "case `{label}` must propagate the suspended generator's __exit__ trap"
+        ));
+        assert_eq!(err.code, "AU4001", "case `{label}`: {err:?}");
+        assert!(
+            err.message.contains("generator exit trap"),
+            "case `{label}`: {err:?}"
+        );
+    }
+}
+

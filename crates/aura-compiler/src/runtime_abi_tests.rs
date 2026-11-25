@@ -367,12 +367,12 @@ fn private_receiver(op: crate::runtime_ops::RuntimeOp) -> &'static str {
 }
 
 #[test]
-fn only_the_frame_stack_accessor_is_task_invariant() {
-    let invariant = RuntimeFn::ALL
+fn only_the_frame_stack_accessor_is_read_only() {
+    let read_only = RuntimeFn::ALL
         .iter()
-        .filter(|function| function.is_task_invariant())
+        .filter(|function| function.is_read_only())
         .collect::<Vec<_>>();
-    assert_eq!(invariant, [&RuntimeFn::FrameStack]);
+    assert_eq!(read_only, [&RuntimeFn::FrameStack]);
     assert_eq!(RuntimeFn::FrameStack.params(), &[] as &[AbiType]);
     assert_eq!(RuntimeFn::FrameStack.result(), Some(AbiType::I64));
 }

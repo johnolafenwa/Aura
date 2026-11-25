@@ -21392,3 +21392,139 @@ fn first_stack_gives_the_arguments_after_the_program_name() {
     assert_eq!(args(&stack, 5), None);
     assert_eq!(unsafe { super::initial_stack_args(std::ptr::null()) }, None);
 }
+
+#[test]
+fn closure_environment_settle_blocks_concurrent_readers_until_captures_are_ready() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    static ENTERED: AtomicBool = AtomicBool::new(false);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    ENTERED.store(false, Ordering::SeqCst);
+    RELEASE.store(false, Ordering::SeqCst);
+
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn slow_box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        ENTERED.store(true, Ordering::SeqCst);
+        while !RELEASE.load(Ordering::SeqCst) {
+            std::thread::yield_now();
+        }
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(42)),
+            source_place: None,
+            mutable: false,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            7,
+            false,
+            1,
+            slow_box_captures,
+        )
+    });
+    let env = Arc::new(ClosureEnvironment::deferred(callable));
+
+    let env1 = Arc::clone(&env);
+    let t1 = std::thread::spawn(move || env1.arguments("worker").expect("settler succeeds"));
+
+    while !ENTERED.load(Ordering::SeqCst) {
+        std::thread::yield_now();
+    }
+
+    let env2 = Arc::clone(&env);
+    let t2 = std::thread::spawn(move || {
+        env2.arguments("worker")
+            .expect("concurrent reader succeeds")
+    });
+
+    // Give t2 time to enter `settle()` while `slow_box_captures` is still running.
+    std::thread::sleep(Duration::from_millis(25));
+    RELEASE.store(true, Ordering::SeqCst);
+
+    let first = t1.join().expect("settler thread should not panic");
+    let second = t2.join().expect("reader thread should not panic");
+    assert_eq!(first.len(), 1);
+    assert_eq!(second.len(), 1);
+    assert_eq!(first[0].value, Value::Int(IntegerValue::from_i64(42)));
+    assert_eq!(second[0].value, Value::Int(IntegerValue::from_i64(42)));
+}
+
+#[test]
+fn mutable_direct_callable_clone_settles_and_detaches() {
+    use super::DirectCallable;
+    unsafe extern "C-unwind" fn noop_drop(_words: *mut i64) {}
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: noop_drop,
+    };
+
+    fn box_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        vec![ClosureCaptureValue {
+            name: "count".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(9)),
+            source_place: None,
+            mutable: true,
+        }]
+    }
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            11,
+            true,
+            1,
+            box_captures,
+        )
+    });
+    let func = FunctionValue {
+        name: "mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: Some(Arc::new(ClosureEnvironment::deferred(Arc::clone(
+            &callable,
+        )))),
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+
+    let cloned = func.clone();
+    assert!(
+        cloned.direct_callable.is_none(),
+        "cloning a mutable FunctionValue must not share an unlocked DirectCallable"
+    );
+    assert!(
+        callable.words_for(11).is_none(),
+        "original mutable DirectCallable must be settled and released on clone"
+    );
+    let captures = cloned
+        .closure_environment
+        .as_ref()
+        .expect("environment preserved")
+        .arguments("mut_cb")
+        .expect("captures settled");
+    assert_eq!(captures.len(), 1);
+    assert_eq!(captures[0].value, Value::Int(IntegerValue::from_i64(9)));
+}

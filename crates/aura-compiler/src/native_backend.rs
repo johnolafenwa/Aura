@@ -676,10 +676,10 @@ pub(crate) trait ModuleBackend {
     /// debug build reads it.
     fn describe_function(&mut self, function: FuncHandle, source: FunctionSource);
 
-    /// Declares that `function`, an import, touches no memory its callers
-    /// see and returns the same value on every call from one task, so the
-    /// code generator may merge its calls.
-    fn mark_task_invariant(&mut self, function: FuncHandle);
+    /// Declares that `function`, an import, only reads memory, cannot unwind,
+    /// and returns, so the code generator may merge calls when nothing between
+    /// them can write memory.
+    fn mark_read_only(&mut self, function: FuncHandle);
 
     /// Asks the code generator to inline `function`, a small local
     /// function, into every caller.
@@ -707,6 +707,9 @@ pub(crate) trait ModuleBackend {
     /// objects, which the code generator writes in parallel; a small one
     /// writes the one object `finish` would.
     fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String>;
+
+    #[cfg(test)]
+    fn llvm_ir(self: Box<Self>) -> Result<String, String>;
 }
 
 /// An entry to blocks a backend copies: the pad that jumps into them, the

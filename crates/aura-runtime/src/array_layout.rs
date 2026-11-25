@@ -91,7 +91,9 @@ impl<T: Copy> ArrayBuf<T> {
     /// Whether this window and `other` are the only two holders of one
     /// buffer.
     pub fn is_shared_only_with(&self, other: &Self) -> bool {
-        self.shares_buffer_with(other) && self.holders() == 2
+        self.shares_buffer_with(other)
+            && self.holders() == 2
+            && Arc::strong_count(&self.owner) == 2
     }
 
     /// Copies `source`, the one other window of this buffer, over the
@@ -109,10 +111,19 @@ impl<T: Copy> ArrayBuf<T> {
             "an Array write stays inside its window"
         );
         drop(source);
-        let to = self.start + at;
-        let owner = Arc::get_mut(&mut self.owner).expect("the other holder was just dropped");
-        owner.elements.copy_within(from..from + len, to);
+        self.copy_within_or_detach(from, len, at);
         true
+    }
+
+    fn copy_within_or_detach(&mut self, from: usize, len: usize, at: usize) {
+        let to = self.start + at;
+        if let Some(owner) = Arc::get_mut(&mut self.owner) {
+            owner.elements.copy_within(from..from + len, to);
+        } else {
+            let mut copy = self.to_vec();
+            copy[at..at + len].copy_from_slice(&self.owner.elements[from..from + len]);
+            *self = Self::from(copy);
+        }
     }
 
     /// The window's elements for writing. A window whose buffer another

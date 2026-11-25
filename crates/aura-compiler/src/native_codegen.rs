@@ -1285,6 +1285,14 @@ impl<'a> NativeCodegen<'a> {
             .map_err(|error| format!("failed to emit direct backend object: {}", error))
     }
 
+    #[cfg(test)]
+    fn emit_ir(mut self) -> std::result::Result<String, String> {
+        self.define_program()?;
+        self.take_module_backend()?
+            .llvm_ir()
+            .map_err(|error| format!("failed to emit direct backend LLVM IR: {}", error))
+    }
+
     /// The program as the objects of its codegen units.
     fn emit_units(mut self) -> std::result::Result<Vec<Vec<u8>>, String> {
         self.define_program()?;
@@ -4737,10 +4745,9 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// Makes lent local `name` own its element: a box the list lends is
-    /// copied into a new box, so the list's box is never reached once the
-    /// list may change, and only the list ever holds a reference to it. A
-    /// lent payload's box is counted, so a payload takes a reference to it.
+    /// Makes lent local `name` own its element: a box the list or enum lends
+    /// is copied into a new box, so the container's `ElementBox` keeps sole
+    /// ownership and is never linked into a task ledger.
     fn own_lent_element(&mut self, name: &str) -> std::result::Result<(), String> {
         let flag_var = self.lent_elements[name];
         let flag = self.builder.use_var(flag_var);
@@ -4753,7 +4760,9 @@ impl<'a> FunctionCompiler<'a> {
         let word_var = self.local_vars(name)?[0];
         let word = self.builder.use_var(word_var);
         let copy = if self.lent_payloads.contains(name) {
-            self.retain_opaque_handle(word)
+            self.builder
+                .call(self.runtime[RuntimeFn::InstanceCopyField], &[word])
+                .results[0]
         } else {
             self.builder
                 .call(self.runtime[RuntimeFn::CloneValue], &[word])
@@ -9485,11 +9494,33 @@ impl<'a> FunctionCompiler<'a> {
                 let abi_key =
                     callables::contract_abi_key(&param_types, &mutable_params, &return_direct);
                 let through = self.in_place_callees.get(place).cloned();
-                let stored = self.stored_callable_in_place(
-                    through.as_deref().unwrap_or(place),
-                    signature,
-                    abi_key,
-                )?;
+                let target_place = through.as_deref().unwrap_or(place);
+                let aliases_arg = through.is_none()
+                    && self
+                        .stored_callable_plan(target_place)?
+                        .is_some_and(|plan| {
+                            let stored_root = plan
+                                .alternative
+                                .place
+                                .split('.')
+                                .next()
+                                .unwrap_or(&plan.alternative.place);
+                            args.iter().any(|arg| {
+                                matches!(
+                                    &arg.value,
+                                    Operand::Place(p) | Operand::MovePlace(p)
+                                        if p.split('.').next() == Some(stored_root)
+                                ) || arg
+                                    .writeback_place
+                                    .as_deref()
+                                    .is_some_and(|p| p.split('.').next() == Some(stored_root))
+                            })
+                        });
+                let stored = if aliases_arg {
+                    None
+                } else {
+                    self.stored_callable_in_place(target_place, signature, abi_key)?
+                };
                 if through.is_some() && stored.is_none() {
                     return Err(format!(
                         "direct backend left out the read of callee `{place}` and cannot call it in place"
@@ -13845,7 +13876,14 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.brif(holds, checked, &[], slow_block, &[]);
             self.builder.switch_to_block(checked);
             self.builder.seal_block(checked);
-            let mut count = self.builder.load(types::I64, flags, holders, 0);
+            let mut count = self
+                .builder
+                .memory_access(
+                    crate::native_backend::MemoryAccess::AtomicLoad,
+                    types::I64,
+                    &[holders],
+                )
+                .expect("atomic load returns a word");
             if let Some(index) = kept {
                 let alone = self.builder.iconst(types::I64, 1);
                 count = self.keep_in_copy(index, alone, count);
@@ -15101,7 +15139,18 @@ impl<'a> FunctionCompiler<'a> {
                 self.mark_temporary_opaque_owned(&boxed);
                 Ok(boxed)
             }
-            DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+            DirectType::Scalar(ScalarKind::Float32) => {
+                let inst = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::BoxF32], &[value.values[0]]);
+                let boxed = ValueRef {
+                    values: inst.results,
+                    ty: DirectType::Opaque(Type::named("float32")),
+                };
+                self.mark_temporary_opaque_owned(&boxed);
+                Ok(boxed)
+            }
+            DirectType::Scalar(ScalarKind::Float64) => {
                 let inst = self
                     .builder
                     .call(self.runtime[RuntimeFn::BoxF64], &[value.values[0]]);
@@ -19469,9 +19518,10 @@ impl<'a> FunctionCompiler<'a> {
             let value = self.coerce_value(loaded, expected)?;
             if matches!(value.ty, DirectType::Opaque(_)) {
                 let handle = self.transfer_opaque_arg(&value);
-                handles.push(handle);
                 if kept.get(index) == Some(&MirReceiverKind::Borrow) {
                     borrowed.push(handle);
+                } else {
+                    handles.push(handle);
                 }
                 words.push(handle);
             } else {
@@ -19480,6 +19530,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let (Some(callee), Some(slot)) = (checked_body, success_slot) {
             let call = self.builder.call(callee, &words);
+            for handle in borrowed {
+                self.release_opaque_handle(handle);
+            }
             self.builder.def_var(slot, call.results[0]);
             return Ok(Some(
                 self.owned_opaque_result(vec![call.results[1]], result_type.clone()),
@@ -19520,9 +19573,6 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
         let call = self.builder.call_indirect(signature, callee, &words);
-        for handle in borrowed {
-            self.release_opaque_handle(handle);
-        }
         let (returned, _) = self.split_call_results(name, call.results)?;
         // The box the function returned moves to this function's ledger
         // as the call ends, and the `Result` is built here like any other.
@@ -19533,6 +19583,9 @@ impl<'a> FunctionCompiler<'a> {
         };
         self.builder
             .call(self.runtime[RuntimeFn::RecoverEnd], &[moved]);
+        for handle in &borrowed {
+            self.release_opaque_handle(*handle);
+        }
         self.mark_temporary_opaque_owned(&returned);
         if let Some(slot) = success_slot {
             self.builder.def_var(slot, returned.values[0]);
@@ -19559,6 +19612,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(trap_block);
         self.builder.seal_block(trap_block);
         self.builder.set_cold_block(trap_block);
+        for handle in &borrowed {
+            self.release_opaque_handle(*handle);
+        }
         let err = self
             .builder
             .call(self.runtime[RuntimeFn::RecoverTrapped], &[]);
@@ -19702,22 +19758,16 @@ impl<'a> FunctionCompiler<'a> {
         vars: &[Var],
         value: &ValueRef,
     ) -> std::result::Result<(), String> {
-        if matches!(value.ty, DirectType::Opaque(_)) {
-            let stored = if self.temporary_owns_opaque(value) {
-                self.clear_temporary_opaque_owned(value);
-                value.values[0]
-            } else {
-                self.retain_opaque_handle(value.values[0])
-            };
-            let Some(var) = vars.first() else {
-                return Err("direct backend expected opaque temporary result storage".to_string());
-            };
-            self.builder.def_var(*var, stored);
-            return Ok(());
+        let transferred = self.transfer_values(value);
+        if vars.len() != transferred.len() {
+            return Err(format!(
+                "direct backend expected {} temporary result words, got {}",
+                vars.len(),
+                transferred.len()
+            ));
         }
-
-        for (var, compiled) in vars.iter().zip(value.values.iter()) {
-            self.builder.def_var(*var, *compiled);
+        for (var, compiled) in vars.iter().zip(transferred.into_iter()) {
+            self.builder.def_var(*var, compiled);
         }
         Ok(())
     }
@@ -19729,9 +19779,7 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         let values = vars.iter().map(|var| self.builder.use_var(*var)).collect();
         let value = ValueRef { values, ty };
-        if matches!(value.ty, DirectType::Opaque(_)) {
-            self.mark_temporary_opaque_owned(&value);
-        }
+        self.mark_call_result_owned(&value);
         Ok(value)
     }
 }
@@ -19788,8 +19836,8 @@ fn declare_runtime_helper(
         &params,
         function.result().map(abi_type),
     )?;
-    if function.is_task_invariant() {
-        module.mark_task_invariant(handle);
+    if function.is_read_only() {
+        module.mark_read_only(handle);
     }
     Ok(handle)
 }
@@ -22115,7 +22163,12 @@ fn box_thunk_value(
             let inst = builder.call(box_u64, &[values[0]]);
             Ok(inst.results[0])
         }
-        DirectType::Scalar(ScalarKind::Float32) | DirectType::Scalar(ScalarKind::Float64) => {
+        DirectType::Scalar(ScalarKind::Float32) => {
+            let box_f32 = builder.import_function(codegen.runtime[RuntimeFn::BoxF32]);
+            let inst = builder.call(box_f32, &[values[0]]);
+            Ok(inst.results[0])
+        }
+        DirectType::Scalar(ScalarKind::Float64) => {
             let box_f64 = builder.import_function(codegen.runtime[RuntimeFn::BoxF64]);
             let inst = builder.call(box_f64, &[values[0]]);
             Ok(inst.results[0])

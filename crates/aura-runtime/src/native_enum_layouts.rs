@@ -418,9 +418,21 @@ unsafe impl Sync for TypedPayloads {}
 ///
 /// # Safety
 ///
+/// `slot` is the address of a box slot in a live block, and nothing mutates
+/// the slot for as long as the result lives.
+unsafe fn payload_box_ref<'a>(slot: *const u8) -> &'a Option<ElementBox> {
+    // SAFETY: a box slot holds a pointer that is null or owns its box, and
+    // `ElementBox` is a transparent `NonNull`.
+    unsafe { &*slot.cast::<Option<ElementBox>>() }
+}
+
+/// The box a payload slot holds, mutably, null while its payload is moved out.
+///
+/// # Safety
+///
 /// `slot` is the address of a box slot in a live block, and nothing else
 /// borrows the slot for as long as the result lives.
-unsafe fn payload_box<'a>(slot: *mut u8) -> &'a mut Option<ElementBox> {
+unsafe fn payload_box_mut<'a>(slot: *mut u8) -> &'a mut Option<ElementBox> {
     // SAFETY: a box slot holds a pointer that is null or owns its box, and
     // `ElementBox` is a transparent `NonNull`.
     unsafe { &mut *slot.cast::<Option<ElementBox>>() }
@@ -462,13 +474,14 @@ impl TypedPayloads {
         if !fits {
             return Err(payloads);
         }
-        // Every place is written below, so the block needs no zeroing.
-        let mut typed = Self::uninit(layout, variant);
-        for (index, value) in payloads.into_iter().enumerate() {
-            // SAFETY: the place is dead, and the value fits it.
-            unsafe { typed.write_dead(index, value) };
+        // Every place is written below; track initialized count so an unwind
+        // drops only slots already written before freeing the block.
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
+        for value in payloads {
+            // SAFETY: each place is dead, and the value fits it.
+            unsafe { partial.write_next(value) };
         }
-        Ok(typed)
+        Ok(partial.finish())
     }
 
     /// [`Self::from_values`] for a variant that takes one payload, with no
@@ -489,10 +502,10 @@ impl TypedPayloads {
         if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
             return Err(payload);
         }
-        let mut typed = Self::uninit(layout, variant);
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
         // SAFETY: the place is dead, and the value fits it.
-        unsafe { typed.write_dead(0, payload) };
-        Ok(typed)
+        unsafe { partial.write_next(payload) };
+        Ok(partial.finish())
     }
 
     /// [`Self::from_value`] for the variant at index `variant`, which the
@@ -511,10 +524,10 @@ impl TypedPayloads {
         if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
             return Err(payload);
         }
-        let mut typed = Self::uninit(layout, variant);
+        let mut partial = PartialTypedPayloads::new(Self::uninit(layout, variant));
         // SAFETY: the place is dead, and the value fits it.
-        unsafe { typed.write_dead(0, payload) };
-        Ok(typed)
+        unsafe { partial.write_next(payload) };
+        Ok(partial.finish())
     }
 
     /// Variant `variant` with a block whose bytes are dead. The caller
@@ -558,7 +571,14 @@ impl TypedPayloads {
         self.layout.variants[self.variant()].inline
     }
 
-    fn block(&self) -> Option<*mut u8> {
+    fn block(&self) -> Option<*const u8> {
+        if self.is_inline() {
+            return Some(self.bits.get().cast_const().cast());
+        }
+        self.data.map(|data| data.as_ptr().cast_const())
+    }
+
+    fn block_mut(&mut self) -> Option<*mut u8> {
         if self.is_inline() {
             return Some(self.bits.get().cast());
         }
@@ -573,8 +593,16 @@ impl TypedPayloads {
         self.places().get(index).copied()
     }
 
-    fn address(&self, place: Place) -> *mut u8 {
+    fn address(&self, place: Place) -> *const u8 {
         let data = self.block().expect("a variant with payloads has a block");
+        // SAFETY: every place lies inside the block.
+        unsafe { data.add(place.offset) }
+    }
+
+    fn address_mut(&mut self, place: Place) -> *mut u8 {
+        let data = self
+            .block_mut()
+            .expect("a variant with payloads has a block");
         // SAFETY: every place lies inside the block.
         unsafe { data.add(place.offset) }
     }
@@ -586,7 +614,7 @@ impl TypedPayloads {
     /// The payload's bytes are dead, and `value` fits its place.
     unsafe fn write_dead(&mut self, index: usize, value: Value) {
         let place = self.places()[index];
-        let address = self.address(place);
+        let address = self.address_mut(place);
         if self.layout.is_box(place) {
             let boxed = (self.layout.ops.tagged_box)(value, self.layout.handle_tag(place));
             // SAFETY: the slot's pointer is dead.
@@ -614,7 +642,7 @@ impl TypedPayloads {
             return None;
         }
         // SAFETY: the slot holds a box pointer, and `&self` keeps the block.
-        unsafe { payload_box(self.address(place)) }.as_ref()
+        unsafe { payload_box_ref(self.address(place)) }.as_ref()
     }
 
     /// Whether `leaf` holds for the value of every payload box that is not
@@ -639,10 +667,10 @@ impl TypedPayloads {
     ///
     /// When `values` runs out before the boxes do.
     pub fn copy_with_boxes(&self, mut values: impl Iterator<Item = Value>) -> Self {
-        let copy = Self::new(self.layout, self.variant());
+        let mut copy = Self::new(self.layout, self.variant());
         let table = self.layout.table();
         for place in self.places() {
-            let (source, target) = (self.address(*place), copy.address(*place));
+            let (source, target) = (self.address(*place), copy.address_mut(*place));
             if !self.layout.is_box(*place) {
                 // SAFETY: the place holds a value of its layout, the copy's
                 // bytes are dead, and the two blocks are distinct.
@@ -650,9 +678,9 @@ impl TypedPayloads {
                 continue;
             }
             // SAFETY: both slots hold box pointers, and the copy's is null.
-            if let Some(boxed) = unsafe { payload_box(source) }.as_ref() {
+            if let Some(boxed) = unsafe { payload_box_ref(source) }.as_ref() {
                 let value = values.next().expect("one value for each payload box");
-                *unsafe { payload_box(target) } = Some(boxed.copy_with(value));
+                *unsafe { payload_box_mut(target) } = Some(boxed.copy_with(value));
             }
         }
         copy
@@ -666,7 +694,7 @@ impl TypedPayloads {
         let address = self.address(place);
         if self.layout.is_box(place) {
             // SAFETY: the slot holds a box pointer.
-            return Some(match unsafe { payload_box(address) }.as_ref() {
+            return Some(match unsafe { payload_box_ref(address) }.as_ref() {
                 Some(boxed) => Cow::Borrowed(boxed.value()),
                 None => Cow::Owned(Value::Unit),
             });
@@ -706,11 +734,11 @@ impl TypedPayloads {
     /// or zeroed bytes. A moved-out payload gives the unit value.
     pub fn take(&mut self, index: usize) -> Option<Value> {
         let place = self.place(index)?;
-        let address = self.address(place);
+        let address = self.address_mut(place);
         if self.layout.is_box(place) {
             // SAFETY: the slot holds a box pointer.
             return Some(
-                unsafe { payload_box(address) }
+                unsafe { payload_box_mut(address) }
                     .take()
                     .map_or(Value::Unit, ElementBox::into_value),
             );
@@ -735,7 +763,7 @@ impl TypedPayloads {
         }
         // SAFETY: the slot holds a box pointer, and `&mut self` keeps the
         // block.
-        unsafe { payload_box(self.address(place)) }.take()
+        unsafe { payload_box_mut(self.address_mut(place)) }.take()
     }
 
     /// The payloads as values, which [`Self::from_values`] turns back.
@@ -784,7 +812,7 @@ impl Clone for TypedPayloads {
                 bits: std::cell::UnsafeCell::new(unsafe { *self.bits.get() }),
             };
         }
-        let copy = Self::new(self.layout, self.variant());
+        let mut copy = Self::new(self.layout, self.variant());
         let table = self.layout.table();
         for place in self.places() {
             // SAFETY: each place of the block holds a value of its layout,
@@ -794,11 +822,74 @@ impl Clone for TypedPayloads {
                     table,
                     place.layout,
                     self.address(*place),
-                    copy.address(*place),
+                    copy.address_mut(*place),
                 )
             };
         }
         copy
+    }
+}
+
+/// Tracks how many leading payload slots have been initialized during
+/// [`TypedPayloads`] construction so an unwind drops only initialized slots
+/// before releasing the backing block.
+struct PartialTypedPayloads {
+    typed: std::mem::ManuallyDrop<TypedPayloads>,
+    initialized: usize,
+}
+
+impl PartialTypedPayloads {
+    fn new(typed: TypedPayloads) -> Self {
+        Self {
+            typed: std::mem::ManuallyDrop::new(typed),
+            initialized: 0,
+        }
+    }
+
+    /// Writes `value` into the next uninitialized slot and advances the
+    /// initialized count only after the write completes without unwinding.
+    ///
+    /// # Safety
+    ///
+    /// The next slot index is in bounds, its bytes are dead, and `value` fits.
+    unsafe fn write_next(&mut self, value: Value) {
+        let index = self.initialized;
+        // SAFETY: caller's contract.
+        unsafe { self.typed.write_dead(index, value) };
+        self.initialized = index + 1;
+    }
+
+    fn finish(mut self) -> TypedPayloads {
+        // SAFETY: all slots are initialized and `forget(self)` suppresses
+        // `PartialTypedPayloads::drop`.
+        let typed = unsafe { std::mem::ManuallyDrop::take(&mut self.typed) };
+        std::mem::forget(self);
+        typed
+    }
+}
+
+impl Drop for PartialTypedPayloads {
+    fn drop(&mut self) {
+        let plan = &self.typed.layout.variants[self.typed.variant()];
+        let (Some(data), Some(block)) = (self.typed.data, plan.block) else {
+            return;
+        };
+        if !plan.bytes_only {
+            let table = self.typed.layout.table();
+            for index in 0..self.initialized {
+                let place = self.typed.places()[index];
+                // SAFETY: slots `0..self.initialized` were written and are live.
+                unsafe {
+                    (self.typed.layout.ops.drop)(
+                        table,
+                        place.layout,
+                        self.typed.address_mut(place),
+                    );
+                }
+            }
+        }
+        // SAFETY: initialized slots were dropped above and the block came from the pool.
+        unsafe { super::free_layout_block(data, block) };
     }
 }
 
@@ -819,7 +910,7 @@ impl Drop for TypedPayloads {
         // where payloads are moved out, and nothing reads the block again.
         unsafe {
             for place in self.places() {
-                (self.layout.ops.drop)(table, place.layout, self.address(*place));
+                (self.layout.ops.drop)(table, place.layout, self.address_mut(*place));
             }
             super::free_layout_block(data, block);
         }

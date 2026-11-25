@@ -87,6 +87,10 @@ pub mod tensor_host;
 pub mod time_host;
 
 pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
+pub(crate) use generator::{
+    clear_pending_generator_drop_exit, swap_generator_drop_trap_state,
+    take_pending_generator_drop_exit, GeneratorDropTrapScope, PendingGeneratorDropExit,
+};
 pub use generator::{
     generator_yield, run_isolated, running_generator_depth, without_generator_drop_close,
     GeneratorHooks, GeneratorValue, IsolatedFailure, DIRECT_GENERATOR_STACK_BYTES,
@@ -746,7 +750,7 @@ impl FfiHandleValue {
 /// additionally carries the uniform boxed-argument thunk address used for
 /// indirect calls and task starts. The source metadata keeps task ancestry
 /// diagnostics as precise for calls through stored values as for direct names.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct FunctionValue {
     pub name: String,
     pub signature: Type,
@@ -761,6 +765,35 @@ pub struct FunctionValue {
     /// The inline callable that compiled code boxed into this value.
     /// Compiled code that reads the value back calls through it directly.
     pub direct_callable: Option<Arc<DirectCallable>>,
+}
+
+impl Clone for FunctionValue {
+    fn clone(&self) -> Self {
+        let direct_callable = match self.direct_callable.as_ref() {
+            Some(callable) if callable.is_mutable() => {
+                // Mutable inline words are updated without locking, so clones
+                // settle the state into the synchronized closure environment
+                // and drop the shared DirectCallable handle.
+                if let Some(env) = &self.closure_environment {
+                    env.settle();
+                } else {
+                    callable.release();
+                }
+                None
+            }
+            other => other.cloned(),
+        };
+        Self {
+            name: self.name.clone(),
+            signature: self.signature.clone(),
+            source_path: self.source_path.clone(),
+            entry_span: self.entry_span,
+            direct_thunk: self.direct_thunk,
+            direct_default_binder: self.direct_default_binder,
+            closure_environment: self.closure_environment.clone(),
+            direct_callable,
+        }
+    }
 }
 
 /// An inline callable of compiled code kept inside a boxed function value:
@@ -843,7 +876,7 @@ impl DirectCallable {
     /// the key `abi_key`, or `None` when the words were released or belong
     /// to another contract.
     pub fn words_for(&self, abi_key: i64) -> Option<*mut i64> {
-        (self.abi_key == abi_key && !self.released.load(Ordering::Relaxed))
+        (self.abi_key == abi_key && !self.released.load(Ordering::Acquire))
             .then(|| self.words.get().cast::<i64>())
     }
 
@@ -880,7 +913,7 @@ impl DirectCallable {
 
     /// The address of the words while they are live.
     pub fn live_words(&self) -> Option<*mut i64> {
-        (!self.released.load(Ordering::Relaxed)).then(|| self.words.get().cast::<i64>())
+        (!self.released.load(Ordering::Acquire)).then(|| self.words.get().cast::<i64>())
     }
 
     pub fn capture_count(&self) -> usize {
@@ -950,6 +983,28 @@ impl ClosureEnvironment {
             .map_or(0, Vec::len)
     }
 
+    /// Whether any captured value satisfies `predicate`.
+    pub fn any_capture(&self, predicate: impl Fn(&Value) -> bool) -> bool {
+        self.captures
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .is_some_and(|captures| captures.iter().any(|capture| predicate(&capture.value)))
+    }
+
+    /// Consumes this environment when uniquely owned and returns its captured values.
+    pub fn into_captured_values(self: Arc<Self>) -> Vec<Value> {
+        let Ok(env) = Arc::try_unwrap(self) else {
+            return Vec::new();
+        };
+        env.captures
+            .into_inner()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .map_or_else(Vec::new, |captures| {
+                captures.into_iter().map(|capture| capture.value).collect()
+            })
+    }
+
     pub fn new(captures: Vec<ClosureCaptureValue>, consuming: bool) -> Self {
         representation_stats::note_closure_environment();
         Self {
@@ -976,12 +1031,11 @@ impl ClosureEnvironment {
     /// Boxes the captures of a deferred environment. A Mutable closure's
     /// state moves to the boxed captures, so its inline words are released.
     fn settle(&self) {
-        let pending = self
+        let mut pending = self
             .pending
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take();
-        let Some(callable) = pending else {
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(callable) = pending.take() else {
             return;
         };
         let captures = (callable.boxed_captures)(&callable);
@@ -992,6 +1046,7 @@ impl ClosureEnvironment {
         if callable.is_mutable() {
             callable.release();
         }
+        drop(pending);
     }
 
     /// Takes the captures out, leaving the environment consumed.
@@ -2563,6 +2618,7 @@ impl ArrayValue {
     pub fn len(&self) -> usize {
         match &self.strided {
             None => self.base.len(),
+            Some(_) if self.shape.contains(&0) => 0,
             // A live shape's product was checked when the view was made.
             Some(_) => self.shape.iter().product(),
         }
@@ -2791,6 +2847,7 @@ impl ArrayValue {
         }
         let shape =
             array_layout::broadcast_shape(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        checked_array_element_count(&shape)?;
         let left = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
         let right = array_layout::broadcast_layout(&other.shape, &other.layout(), &shape);
         let storage = array_simd::widest(
@@ -3228,27 +3285,30 @@ fn checked_array_shape(shape: &[usize]) -> Result<usize> {
 }
 
 pub(crate) fn checked_array_element_count(shape: &[usize]) -> Result<usize> {
-    for dimension in shape {
-        if *dimension > i64::MAX as usize {
+    let mut has_zero = false;
+    let mut nonzero_product = 1_usize;
+    for &dimension in shape {
+        if dimension > i64::MAX as usize {
             return Err(Diagnostic::coded(
                 "AU4005",
                 format!("array dimension {dimension} exceeds the Aura int64 shape limit"),
             ));
         }
+        if dimension == 0 {
+            has_zero = true;
+        } else {
+            nonzero_product = nonzero_product
+                .checked_mul(dimension)
+                .filter(|&product| product <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!("array shape product overflows host allocation bounds: {shape:?}"),
+                    )
+                })?;
+        }
     }
-    if shape.contains(&0) {
-        return Ok(0);
-    }
-    let mut count = 1_usize;
-    for dimension in shape {
-        count = count.checked_mul(*dimension).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("array shape product overflows host allocation bounds: {shape:?}"),
-            )
-        })?;
-    }
-    Ok(count)
+    Ok(if has_zero { 0 } else { nonzero_product })
 }
 
 fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
@@ -3306,7 +3366,11 @@ pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
     Ok(values)
 }
 
-fn try_filled_array_storage<T: Clone>(len: usize, value: T, label: &str) -> Result<Box<[T]>> {
+pub(crate) fn try_filled_array_storage<T: Clone>(
+    len: usize,
+    value: T,
+    label: &str,
+) -> Result<Box<[T]>> {
     let mut values = try_array_buffer(len, label)?;
     values.resize(len, value);
     Ok(values.into_boxed_slice())
@@ -9383,6 +9447,16 @@ impl PendingTaskExit {
         CURRENT_LIGHTWEIGHT_TASK_EXIT
             .with(|slot| slot.borrow_mut().take())
             .map(Self)
+    }
+
+    /// Records a trap diagnostic as a pending task exit.
+    pub fn from_trap(diagnostic: Diagnostic) -> Self {
+        Self(TaskExecutionResult::Ready(Err(diagnostic)))
+    }
+
+    /// Whether the pending task exit represents task cancellation.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self.0, TaskExecutionResult::Cancelled)
     }
 
     /// The trap, when the task was exiting because it failed. Any other

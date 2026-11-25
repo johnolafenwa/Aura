@@ -314,3 +314,65 @@ fn strided_reordered_sums_match_the_packed_elements_bit_for_bit() {
         }
     }
 }
+
+#[test]
+fn empty_axis_mean_returns_float64_dtype() {
+    use crate::runtime_value::{ArrayDType, ArrayPairOp};
+
+    for dtype in [
+        ArrayDType::Int32,
+        ArrayDType::Int64,
+        ArrayDType::Float32,
+        ArrayDType::Float64,
+    ] {
+        let empty = ArrayValue::zeros(dtype, [0, 0].into()).unwrap();
+        let rhs = ArrayValue::zeros(ArrayDType::Float64, [0].into()).unwrap();
+        for reduction in [ArrayReduction::Mean, ArrayReduction::FastMean] {
+            let reduced = empty.reduce_axis(reduction, 0).unwrap();
+            assert_eq!(
+                reduced.dtype(),
+                ArrayDType::Float64,
+                "{dtype:?} {reduction:?} over [0, 0] must return float64"
+            );
+            assert_eq!(&*reduced.shape, &[0]);
+            let combined = reduced
+                .pairwise(&Value::Array(rhs.clone()), ArrayPairOp::Minimum)
+                .unwrap();
+            assert_eq!(combined.dtype(), ArrayDType::Float64);
+            assert_eq!(reduced.reduce(ArrayReduction::Sum).unwrap(), Value::Float(0.0));
+        }
+    }
+}
+
+#[test]
+fn empty_axis_shape_validation_and_fallible_reduction_allocation() {
+    use crate::runtime_value::{with_array_allocation_budget, ArrayDType};
+
+    // Non-zero dimensions whose product overflows isize must be rejected even when an axis is 0.
+    let large = 1_usize << 40;
+    let err = ArrayValue::zeros(ArrayDType::Int64, [0, large, large].into())
+        .expect_err("empty shape with overflowing non-zero dimensions must fail");
+    assert_eq!(err.code, "AU4005");
+
+    let empty = ArrayValue::zeros(ArrayDType::Int64, [0].into()).unwrap();
+    let err = empty
+        .reshape(&[0, large as i64, large as i64])
+        .expect_err("reshape to empty shape with overflowing non-zero dimensions must fail");
+    assert_eq!(err.code, "AU4005");
+
+    // Empty-axis reduction must allocate fallibly through try_array_buffer so budget/OOM returns AU4005.
+    let small_empty = ArrayValue::zeros(ArrayDType::Int64, [0, 4].into()).unwrap();
+    let err = with_array_allocation_budget(0, || {
+        small_empty.reduce_axis(ArrayReduction::Sum, 0)
+    })
+    .expect_err("reduce_axis empty-axis allocation must respect fallible allocation budget");
+    assert_eq!(err.code, "AU4005");
+
+    let huge_empty = ArrayValue::zeros(ArrayDType::Int64, [0, 1_usize << 50].into()).unwrap();
+    let err = huge_empty
+        .reduce_axis(ArrayReduction::Sum, 0)
+        .expect_err("huge empty-axis sum must fail fallibly instead of aborting on OOM");
+    assert_eq!(err.code, "AU4005");
+}
+
+

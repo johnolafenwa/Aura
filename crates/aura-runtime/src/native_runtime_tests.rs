@@ -310,6 +310,7 @@ fn recovered_stack_exhaustion_reports_the_frame_the_native_caller_already_entere
         panic!("a call with no stack reserve returned");
     }
 
+    let _guard = super::direct_task_claim_flag_test_guard();
     run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             let result = call_recovered_thunk(exhaust, &[]);
@@ -31012,36 +31013,79 @@ fn direct_array_views_take_one_or_two_components_as_plain_words() {
 fn every_direct_task_start_test_holds_claim_flag_test_guard() {
     let source = include_str!("native_runtime_tests.rs");
     let lines: Vec<&str> = source.lines().collect();
-    let mut unguarded = Vec::new();
+    let needle_start = ["aura_direct_start_task", "_"].concat();
+    let needle_alloc = ["allocate_direct_task_claim", "_flag"].concat();
+    let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
+    let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
+
+    // Collect every top-level `fn <name>` in the test module with whether it is a `#[test]`.
+    let mut funcs: Vec<(bool, usize, String, String)> = Vec::new();
     let mut index = 0;
     while index < lines.len() {
         let trimmed = lines[index].trim();
-        let is_test_attr = trimmed == "#[test]";
-        if is_test_attr {
-            let mut fn_idx = index + 1;
+        let mut is_test = false;
+        let mut fn_idx = index;
+        if trimmed == "#[test]" {
+            is_test = true;
+            fn_idx = index + 1;
             while fn_idx < lines.len() && lines[fn_idx].trim().starts_with("#[") {
                 fn_idx += 1;
             }
-            if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
-                let fn_header = lines[fn_idx];
-                let mut end_idx = fn_idx + 1;
-                while end_idx < lines.len() && lines[end_idx] != "}" {
-                    end_idx += 1;
-                }
-                let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
-                let needle_start = ["aura_direct_start_task", "_"].concat();
-                let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
-                let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
-                if (body.contains(&needle_start) || body.contains(&needle_count))
-                    && !body.contains(&needle_guard)
-                {
-                    unguarded.push(format!("line {}: {}", fn_idx + 1, fn_header));
-                }
-                index = end_idx + 1;
-                continue;
+        }
+        if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
+            let fn_header = lines[fn_idx];
+            let name = fn_header
+                .strip_prefix("fn ")
+                .and_then(|rest| rest.split(|ch: char| ch == '(' || ch == '<' || ch.is_whitespace()).next())
+                .unwrap_or("")
+                .to_string();
+            let mut end_idx = fn_idx + 1;
+            while end_idx < lines.len() && lines[end_idx] != "}" {
+                end_idx += 1;
             }
+            let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
+            funcs.push((is_test, fn_idx + 1, name, body));
+            index = end_idx + 1;
+            continue;
         }
         index += 1;
+    }
+
+    // Compute transitive set of non-test helper functions that start direct tasks
+    // or mutate `DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT` without holding the guard themselves.
+    let mut unguarded_helpers: Vec<String> = Vec::new();
+    let touches_flag = |body: &str, helpers: &[String]| {
+        body.contains(&needle_start)
+            || body.contains(&needle_alloc)
+            || body.contains(&needle_count)
+            || helpers
+                .iter()
+                .any(|helper| body.contains(&format!("{helper}(")))
+    };
+    loop {
+        let mut added = false;
+        for (is_test, _, name, body) in &funcs {
+            if *is_test || name.is_empty() || unguarded_helpers.contains(name) {
+                continue;
+            }
+            if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+                unguarded_helpers.push(name.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    let mut unguarded = Vec::new();
+    for (is_test, line_no, name, body) in &funcs {
+        if !*is_test {
+            continue;
+        }
+        if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+            unguarded.push(format!("line {line_no}: fn {name}"));
+        }
     }
     assert!(
         unguarded.is_empty(),
@@ -32056,3 +32100,266 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     );
     assert_eq!(out, [-1, 0]);
 }
+
+#[test]
+fn float_trait_object_preserves_width_through_generic_boxing() {
+    let f32_box = super::boxed_typed_value(Value::Float(1.5), "float32");
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(f32_box, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    let wrapped = super::aura_direct_trait_object_from(f32_box);
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float32".as_ptr(), b"float32".len()),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_value_type_matches(wrapped, b"float64".as_ptr(), b"float64".len()),
+        0
+    );
+    unsafe { release_value(wrapped) };
+}
+
+#[test]
+fn cancelled_task_with_trapping_cleanup_reports_trap_cleanly() {
+    unsafe extern "C-unwind" fn trapping_cleanup(_: *const i64, _: usize) -> *mut OpaqueValue {
+        super::aura_direct_assert_fail(0, 12, 3, 0)
+    }
+
+    let leaked_panic = Arc::new(AtomicBool::new(false));
+    let leaked_panic_flag = Arc::clone(&leaked_panic);
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _id = super::aura_direct_register_cleanup(
+                    trapping_cleanup as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    super::task_runtime_boundary(|| {
+                        std::panic::panic_any(crate::runtime_value::TaskCancelledSignal);
+                    });
+                }));
+                if let Err(payload) = outcome {
+                    if payload.is::<super::LightweightTaskFailureSignal>() {
+                        leaked_panic_flag.store(true, Ordering::SeqCst);
+                    }
+                    std::panic::resume_unwind(payload);
+                }
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert!(
+        !leaked_panic.load(Ordering::SeqCst),
+        "task_runtime_boundary must not let LightweightTaskFailureSignal escape uncaught on cancelled cleanup trap"
+    );
+    let err = result.expect_err("cancelled task with trapping cleanup must fail with trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+}
+
+#[test]
+fn nested_rust_boundary_runs_destructors_before_task_exit() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dropped_flag = Arc::clone(&dropped);
+
+    struct DropFlag(Arc<AtomicBool>);
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let result = unsafe {
+        crate::runtime_value::run_lightweight_root_task_with_forced_exit_cleanup(
+            move || {
+                super::with_direct_task_runtime_scope(|| {
+                    super::with_task_runtime_error_capture(|| {
+                        super::task_runtime_boundary(|| {
+                            let _guard = DropFlag(dropped_flag);
+                            super::aura_direct_assert_fail(0, 7, 1, 0);
+                        });
+                        #[allow(unreachable_code)]
+                        Ok(Value::Unit)
+                    })
+                })
+            },
+            || {
+                super::discard_current_direct_task_runtime_state();
+            },
+        )
+    };
+    let err = result.expect_err("inner assertion trap must fail the task");
+    assert_eq!(err.code, "AU4001");
+    assert!(
+        dropped.load(Ordering::SeqCst),
+        "enclosing Rust frame destructors must run before task exit or recovery jump"
+    );
+}
+
+#[test]
+fn dropping_list_of_trapping_generators_completes_all_drops_and_reports_trap() {
+    use crate::runtime_value::{
+        generator_yield, GeneratorValue, VecValue, DIRECT_GENERATOR_STACK_BYTES,
+    };
+
+    let second_closed = Arc::new(AtomicBool::new(false));
+    let second_closed_flag = Arc::clone(&second_closed);
+
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let first = GeneratorValue::new(
+                    || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(1)))?;
+                        super::aura_direct_assert_fail(0, 11, 2, 0)
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                let second = GeneratorValue::new(
+                    move || {
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(2)))?;
+                        second_closed_flag.store(true, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+                assert!(first.resume().expect("first yields"));
+                assert!(second.resume().expect("second yields"));
+                let list = boxed_value(Value::Vec(VecValue::new(
+                    Type::named("Generator"),
+                    vec![Value::Generator(first), Value::Generator(second)].into(),
+                )));
+                unsafe { super::aura_direct_release_value(list) };
+                Ok(Value::Unit)
+            })
+        })
+    });
+    let err = result.expect_err("dropping a trapping generator must report its trap");
+    assert_eq!(err.code, "AU4001", "expected AU4001 trap: {err:?}");
+    assert!(
+        second_closed.load(Ordering::SeqCst),
+        "remaining generators in the dropped Vec must still close cleanly"
+    );
+}
+
+#[test]
+fn generator_suspending_inside_cleanup_isolates_cleanup_stack_from_caller() {
+    use crate::runtime_value::{generator_yield, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES};
+
+    static CALLER_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static GEN_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn caller_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        CALLER_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+    unsafe extern "C-unwind" fn gen_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        GEN_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+
+    CALLER_EXIT_COUNT.store(0, Ordering::SeqCst);
+    GEN_EXIT_COUNT.store(0, Ordering::SeqCst);
+
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _caller_cleanup = super::aura_direct_register_cleanup(
+                    caller_exit as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let generator = GeneratorValue::new(
+                    || {
+                        let gen_cleanup = super::aura_direct_register_cleanup(
+                            gen_exit as *const () as usize as i64,
+                            std::ptr::null_mut(),
+                            0,
+                        );
+                        let keep_going =
+                            generator_yield(Value::Int(IntegerValue::from_i64(42)))?;
+                        if !keep_going {
+                            // Normal close path runs the generator's own cleanup once.
+                            super::aura_direct_unregister_cleanup(gen_cleanup);
+                            unsafe { gen_exit(std::ptr::null(), 0) };
+                        }
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+
+                assert!(generator.resume().expect("generator yields 42"));
+                // While the generator is suspended, the caller's cleanup_stack must
+                // contain only the caller's own cleanup registration.
+                let caller_cleanup_len =
+                    super::with_direct_task_runtime_state(|state| state.cleanup_stack.len());
+                assert_eq!(
+                    caller_cleanup_len, 1,
+                    "suspended generator cleanup registration must not remain on caller cleanup_stack"
+                );
+
+                // Draining the caller's cleanups (as on a caller trap) must run only
+                // the caller's cleanup, leaving the suspended generator's cleanup untouched.
+                super::drain_direct_cleanup_stack();
+                assert_eq!(CALLER_EXIT_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    GEN_EXIT_COUNT.load(Ordering::SeqCst),
+                    0,
+                    "caller cleanup drain must not invoke suspended generator cleanup"
+                );
+
+                // Closing the generator afterwards runs its cleanup exactly once.
+                generator.close().expect("generator closes cleanly");
+                assert_eq!(GEN_EXIT_COUNT.load(Ordering::SeqCst), 1);
+
+                // Dropping DirectGeneratorFrames with saved owned frames and a
+                // live body_box releases both cleanly.
+                let body_raw = super::untracked_boxed_value(Value::Unit, None);
+                let body_box = Arc::new(AtomicUsize::new(body_raw as usize));
+                let discarded = GeneratorValue::new(
+                    || {
+                        super::with_direct_task_runtime_state(|state| {
+                            state.frames_mut().push_owned(Box::new(
+                                super::DirectRuntimeCallFrame {
+                                    function: super::DirectFrameText::shared(
+                                        "gen_body".to_string(),
+                                    ),
+                                    span: super::DirectRuntimeSourceSpan::point(
+                                        None,
+                                        Span::new(1, 1),
+                                    ),
+                                },
+                            ));
+                        });
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(7)))?;
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::with_body_box(
+                        Arc::clone(&body_box),
+                    ))),
+                );
+                assert!(discarded.resume().expect("discarded yields"));
+                crate::runtime_value::without_generator_drop_close(|| drop(discarded));
+                assert_eq!(body_box.load(Ordering::Acquire), 0);
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert_eq!(result.expect("task succeeds"), Value::Unit);
+}
+
+
