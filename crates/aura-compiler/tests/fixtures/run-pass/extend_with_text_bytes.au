@@ -1,0 +1,40 @@
+# `out.extend(text.to_bytes())` appends the text's bytes without a list
+# between, on a local, a parameter, a field and a list element, and padded
+# integers in f-strings take the short path for a plain width.
+class Page:
+    body: list[uint8]
+    title: str
+
+    def add(mut self, text: str):
+        self.body.extend(text.to_bytes())
+        self.body.extend(self.title.to_bytes())
+
+
+def add_text(out: mut list[uint8], text: str):
+    out.extend(text.to_bytes())
+
+
+def main():
+    mut out: list[uint8] = []
+    out.extend("<p>".to_bytes())
+    word = "caf\u{e9}"
+    out.extend(word.to_bytes())
+    add_text(out, " &amp; ")
+    for i in range(3):
+        add_text(out, f"{i:02}|{-i:3}|{i * 1000:08}|{i:x};")
+    out.extend("".to_bytes())
+    print(out.len())
+    match str.from_bytes(out):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(_):
+            print("not text")
+    mut page = Page(body=[60], title="t")
+    page.add("abc")
+    print(page.body)
+    mut rows: list[list[uint8]] = [[], [1]]
+    rows[1].extend("hi".to_bytes())
+    print(rows)
+    kept = word.to_bytes()
+    out.extend(kept.copy())
+    print(f"{kept.len()} {out.len()}")

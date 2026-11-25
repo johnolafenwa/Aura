@@ -2814,6 +2814,8 @@ impl<'a> NativeCodegen<'a> {
             lookup_word_found: None,
             emptied_store_root: None,
             str_append_root: None,
+            owned_replace_receiver: None,
+            extended_str_bytes: None,
             lent_temps: HashMap::new(),
             field_lend_temps,
             field_lends: HashMap::new(),
@@ -4344,6 +4346,12 @@ struct FunctionCompiler<'a> {
     /// The `str` root that the current instruction appends to, as
     /// [`str_append_root`] finds it.
     str_append_root: Option<String>,
+    /// The `str` temporary whose box the current instruction's literal
+    /// `replace` takes over, as [`owned_replace_receiver`] finds it.
+    owned_replace_receiver: Option<String>,
+    /// The `str` whose bytes the current instruction's `extend` appends, as
+    /// [`extended_str_bytes`] finds it.
+    extended_str_bytes: Option<Operand>,
     /// The temporaries of the function's lends, each with whether its lend
     /// is mutable. The call that writes back a mutable one takes its value,
     /// as MIR states by giving it no retain. A builtin operation changes a
@@ -5427,6 +5435,43 @@ impl<'a> FunctionCompiler<'a> {
                     self.compile_try_read(target, file)?;
                     continue;
                 }
+            }
+            if let Some(text) = extended_str_bytes(&block.instructions[instruction_index..])
+                .filter(|_| self.extends_byte_list(&block.instructions[instruction_index + 1]))
+            {
+                // The extend reads the text's bytes itself, so the list
+                // `to_bytes` would make for it is never built.
+                self.extended_str_bytes = Some(text.clone());
+                let compiled = self.compile_instruction(
+                    &block.label,
+                    instruction_index + 1,
+                    &block.instructions[instruction_index + 1],
+                );
+                let taken = self.extended_str_bytes.take().is_none();
+                compiled?;
+                if !taken {
+                    return Err(
+                        "direct backend left a fused `extend(text.to_bytes())` without its bytes"
+                            .to_string(),
+                    );
+                }
+                skipped = 1;
+                continue;
+            }
+            if let Some(receiver) = owned_replace_receiver(&block.instructions[instruction_index..])
+                .filter(|receiver| self.owns_str_temporary(receiver))
+            {
+                // The replace takes the temporary's box, so the release
+                // after it has nothing left to release.
+                self.owned_replace_receiver = Some(receiver.to_string());
+                let compiled =
+                    self.compile_instruction(&block.label, instruction_index, instruction);
+                // A replace compiled some other way left the box where it
+                // was, for the release to free.
+                let taken = self.owned_replace_receiver.take().is_none();
+                compiled?;
+                skipped = usize::from(taken);
+                continue;
             }
             self.str_append_root =
                 str_append_root(&block.instructions[instruction_index..]).map(str::to_string);
@@ -10340,6 +10385,45 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.push_format_parts(handle, rest)?;
         Ok(builder)
+    }
+
+    /// Whether `instruction` is an `extend` on a place that holds a
+    /// `list[uint8]`, the receiver [`extended_str_bytes`] needs.
+    fn extends_byte_list(&self, instruction: &Instruction) -> bool {
+        let Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            receiver: Some(Operand::Place(receiver)),
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } = instruction
+        else {
+            return false;
+        };
+        matches!(
+            self.type_of_place(receiver),
+            Ok(DirectType::Opaque(Type::Named(name, args)))
+                if name == "list" && args == [Type::named("uint8")]
+        )
+    }
+
+    /// Whether `root` is a `str` temporary this function owns outright, so
+    /// an operation may take its box: nothing lends it or holds a loan of
+    /// it.
+    fn owns_str_temporary(&self, root: &str) -> bool {
+        self.tracked_roots.contains(root)
+            && !self.loan_locals.contains(root)
+            && !self.lent_places.contains(root)
+            && !self.lent_elements.contains_key(root)
+            && matches!(
+                self.local_type(root),
+                Ok(DirectType::Opaque(Type::Named(name, args))) if name == "str" && args.is_empty()
+            )
     }
 
     /// `text += ...` on a `str` local, which MIR states as an f-string
@@ -17396,11 +17480,42 @@ impl<'a> FunctionCompiler<'a> {
             let object = self.ensure_opaque(object)?;
             let (from_ptr, from_len) = self.string_constant(from.as_bytes())?;
             let (to_ptr, to_len) = self.string_constant(to.as_bytes())?;
+            // The step before in a chain of replaces hands its box over to
+            // become the result.
+            let (helper, text) = match self.owned_replace_receiver.take() {
+                Some(receiver) => {
+                    let text = self.take_place(&receiver)?;
+                    let text = self.transfer_owned_opaque_value(&text);
+                    (RuntimeFn::StringReplaceLiteralOwned, text)
+                }
+                None => (RuntimeFn::StringReplaceLiteral, object.values[0]),
+            };
             let call = self.builder.call(
-                self.runtime[RuntimeFn::StringReplaceLiteral],
-                &[object.values[0], from_ptr, from_len, to_ptr, to_len],
+                self.runtime[helper],
+                &[text, from_ptr, from_len, to_ptr, to_len],
             );
             return Ok(self.owned_opaque_result(call.results, Type::named("str")));
+        }
+        if let (
+            RuntimeOp::Str(StrOp::Split),
+            [MirArg {
+                value: Operand::String(separator),
+                ..
+            }],
+        ) = (op, args)
+        {
+            // A literal separator is read where the program keeps it, so
+            // the call makes no box for it.
+            let object = self.ensure_opaque(object)?;
+            let (ptr, len) = self.string_constant(separator.as_bytes())?;
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::StringSplitLiteral],
+                &[object.values[0], ptr, len],
+            );
+            return Ok(self.owned_opaque_result(
+                call.results,
+                Type::Named("list".to_string(), vec![Type::named("str")]),
+            ));
         }
         if let (
             RuntimeOp::Str(affix @ (StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith)),
@@ -18248,6 +18363,17 @@ impl<'a> FunctionCompiler<'a> {
                     values: self.runtime_call_results(function, &[list, value.values[0]]),
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
+            }
+            ListOp::Extend if self.extended_str_bytes.is_some() => {
+                let text = self.extended_str_bytes.take().expect("checked above");
+                let loaded = self.load_operand(&text)?;
+                let text = self.ensure_opaque(loaded)?;
+                self.builder.call(
+                    self.runtime[RuntimeFn::VecExtendStrBytes],
+                    &[list, text.values[0]],
+                );
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
             }
             ListOp::Extend => {
                 let loaded = self.load_operand(&args[0].value)?;
@@ -21827,6 +21953,97 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
             .filter_map(MirFormatPart::operand)
             .any(reads_root))
     .then_some(root.as_str())
+}
+
+/// The `str` operand `text` of `instructions` that start `%t =
+/// text.to_bytes(); x = out.extend(move %t)`, the form
+/// `out.extend(text.to_bytes())` takes: nothing else reads the list of
+/// bytes, so the extend may read them from the text.
+fn extended_str_bytes(instructions: &[Instruction]) -> Option<&Operand> {
+    let [Instruction::Assign {
+        target: bytes,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Host(builtin),
+                        receiver: None,
+                        ..
+                    },
+                args: text,
+                ..
+            },
+    }, Instruction::Assign {
+        target: extended,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::Extend),
+                        receiver: Some(Operand::Place(receiver)),
+                        ..
+                    },
+                args: extended_with,
+                ..
+            },
+    }, ..] = instructions
+    else {
+        return None;
+    };
+    let [MirArg {
+        value: text @ Operand::Place(read),
+        ..
+    }] = text.as_slice()
+    else {
+        return None;
+    };
+    let [MirArg {
+        value: Operand::MovePlace(moved),
+        ..
+    }] = extended_with.as_slice()
+    else {
+        return None;
+    };
+    let root = |place: &'_ str| place.split('.').next().map(str::to_string);
+    (builtin.name() == "str.to_bytes"
+        && moved == bytes
+        && bytes.starts_with('%')
+        && extended != bytes
+        && root(receiver) != root(bytes)
+        && root(read) != root(bytes))
+    .then_some(text)
+}
+
+/// The temporary `%t` of `instructions` that start `x = %t.replace("a",
+/// "b"); Release(%t)`, the form each later step of a chain of literal
+/// replaces takes: the step is the last to read the temporary, so it may
+/// take the temporary's box for its result.
+fn owned_replace_receiver(instructions: &[Instruction]) -> Option<&str> {
+    let [Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Str(StrOp::Replace),
+                        receiver: Some(Operand::Place(receiver)),
+                        ..
+                    },
+                args,
+                ..
+            },
+    }, Instruction::Release { place: released }, ..] = instructions
+    else {
+        return None;
+    };
+    let literal = |argument: &MirArg| matches!(argument.value, Operand::String(_));
+    (receiver == released
+        && receiver != target
+        && receiver.starts_with('%')
+        && !receiver.contains('.')
+        && args.len() == 2
+        && args.iter().all(literal))
+    .then_some(receiver.as_str())
 }
 
 /// The temporaries that hold the result of Array arithmetic and are read
