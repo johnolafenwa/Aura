@@ -78,6 +78,9 @@ fn assembly_registers_options_and_bindings_are_checked() {
         ("asm('nop', 1)", "AU2093"),
         ("asm('nop', other('reg'))", "AU2093"),
         ("asm('nop', input('reg'))", "AU2093"),
+        ("asm('nop', input(1, a))", "AU2093"),
+        ("asm('nop', clobber('rax', 2))", "AU2093"),
+        ("asm('nop', options(3))", "AU2093"),
         ("asm('nop', output('reg', 5))", "AU3035"),
         ("asm('nop', output('reg', a))", "AU3035"),
         ("asm('nop', output('reg', b), output('reg', b))", "AU3035"),
@@ -120,6 +123,24 @@ fn assembly_registers_options_and_bindings_are_checked() {
         check_module_with_builtin_imports(parsed).unwrap_err().code,
         "AU2090"
     );
+}
+
+#[test]
+fn aarch64_clobbers_share_registers_with_scalar_operands() {
+    for (clobber, message) in [
+        ("v32", "unknown or reserved aarch64 assembly register `v32`"),
+        ("v31", "overlapping assembly register `v31`"),
+    ] {
+        let source = format!(
+            "export \"C\" def entry(value: float64) -> None:\n    asm('nop', input('d31', value), clobber('{clobber}'))\n"
+        );
+        let error = checked(&source, FreestandingTarget::Aarch64).unwrap_err();
+        assert_eq!(error.code, "AU2092");
+        assert_eq!(error.message, message);
+    }
+
+    let source = "export \"C\" def entry(value: float64) -> None:\n    asm('nop', input('d31', value), clobber('v30'))\n";
+    assert!(checked(source, FreestandingTarget::Aarch64).is_ok());
 }
 
 #[test]
