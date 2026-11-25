@@ -33851,6 +33851,19 @@ fn ffi_drop_rejects_float_return_types() {
 }
 
 #[test]
+fn ffi_drop_rejects_contracted_extern_functions() {
+    for clause in ["requires true", "ensures result == 0"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> int32:\n    {clause}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop with `{clause}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains("contracts"), "{}", error.message);
+    }
+}
+
+#[test]
 fn file_line_and_chunk_reads_type_check_on_a_shared_handle() {
     crate::check_source(
         r#"import fs

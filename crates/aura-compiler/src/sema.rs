@@ -852,6 +852,16 @@ pub(crate) fn ffi_drop_symbol(
             ),
         ));
     }
+    if !function.contracts.is_empty() {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            *span,
+            format!(
+                "`drop` function `{name}` of opaque class `{}` cannot declare `requires` or `ensures` contracts",
+                class.name
+            ),
+        ));
+    }
     Ok(Some(function.link_name().to_string()))
 }
 
