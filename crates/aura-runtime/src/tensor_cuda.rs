@@ -178,29 +178,44 @@ struct Api {
         i64,
         c_int,
     ) -> Status,
+    _libraries: [Library; 3],
 }
 
-/// Opens the first of `names` the loader finds.
-fn open(names: &[&str]) -> Option<*mut c_void> {
+/// An opened shared library closed automatically if loading fails partway.
+struct Library(*mut c_void);
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: `self.0` is an owned handle returned by `dlopen`.
+            unsafe {
+                libc::dlclose(self.0);
+            }
+        }
+    }
+}
+
+/// Opens the first of `names` the loader finds using `RTLD_LOCAL`.
+fn open(names: &[&str]) -> Option<Library> {
     names.iter().find_map(|name| {
         let name = CString::new(*name).ok()?;
         // SAFETY: `name` is a NUL-terminated path or library name.
-        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
-        (!handle.is_null()).then_some(handle)
+        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        (!handle.is_null()).then_some(Library(handle))
     })
 }
 
 /// The address of `name` in `library`.
-fn symbol(library: *mut c_void, name: &str) -> Option<*mut c_void> {
+fn symbol(library: &Library, name: &str) -> Option<*mut c_void> {
     let name = CString::new(name).ok()?;
     // SAFETY: `library` is an open library and `name` is NUL-terminated.
-    let address = unsafe { libc::dlsym(library, name.as_ptr()) };
+    let address = unsafe { libc::dlsym(library.0, name.as_ptr()) };
     (!address.is_null()).then_some(address)
 }
 
 macro_rules! load {
     ($library:expr, $name:ident) => {{
-        let address = symbol($library, stringify!($name))?;
+        let address = symbol(&$library, stringify!($name))?;
         // SAFETY: the symbol is the CUDA function of this name, whose C
         // signature is the field's type.
         #[allow(clippy::missing_transmute_annotations)]
@@ -208,6 +223,93 @@ macro_rules! load {
             std::mem::transmute(address)
         }
     }};
+}
+
+const CUDA_LIBRARY_VERSIONS: &[&str] = &["", ".13", ".12", ".11.2", ".11"];
+
+fn is_at_secure() -> bool {
+    // SAFETY: `getauxval` with `AT_SECURE` has no preconditions on Linux.
+    unsafe { libc::getauxval(libc::AT_SECURE) != 0 }
+}
+
+fn is_trusted_owned_dir(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    let Ok(link_meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if link_meta.file_type().is_symlink() {
+        let uid = link_meta.uid();
+        if uid != 0 && uid != euid {
+            return false;
+        }
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let uid = meta.uid();
+    meta.is_dir() && (uid == 0 || uid == euid) && (meta.mode() & 0o022) == 0
+}
+
+/// Validates a CUDA toolkit root and returns its canonical `lib64` directory
+/// when it is an absolute, traversal-free, non-group/world-writable directory
+/// owned by root or the current user.
+fn validated_cuda_lib_dir(root: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Component, Path};
+
+    if root.is_empty() || root.contains('\0') {
+        return None;
+    }
+    let path = Path::new(root);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    if !is_trusted_owned_dir(path) {
+        return None;
+    }
+    let lib64 = path.join("lib64");
+    if !is_trusted_owned_dir(&lib64) {
+        return None;
+    }
+    let canonical = std::fs::canonicalize(&lib64).ok()?;
+    if !is_trusted_owned_dir(&canonical) {
+        return None;
+    }
+    Some(canonical)
+}
+
+fn cuda_library_candidates(
+    stem: &str,
+    env_roots: &[Option<String>],
+    at_secure: bool,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for version in CUDA_LIBRARY_VERSIONS {
+        names.push(format!("{stem}.so{version}"));
+    }
+    let env_iter = if at_secure {
+        [].iter()
+    } else {
+        env_roots.iter()
+    };
+    for root in env_iter
+        .flatten()
+        .map(String::as_str)
+        .chain(std::iter::once("/usr/local/cuda"))
+    {
+        if let Some(lib_dir) = validated_cuda_lib_dir(root) {
+            for version in CUDA_LIBRARY_VERSIONS {
+                names.push(format!("{}/{stem}.so{version}", lib_dir.display()));
+            }
+        }
+    }
+    names
 }
 
 impl Api {
@@ -221,28 +323,17 @@ impl Api {
             "libcuda.so.1",
             "libcuda.so",
         ])?;
-        let versions = ["", ".13", ".12", ".11.2", ".11"];
-        let candidates = |stem: &str| -> Vec<String> {
-            let mut names = Vec::new();
-            for version in versions {
-                names.push(format!("{stem}.so{version}"));
-            }
-            for root in [
+        let at_secure = is_at_secure();
+        let env_roots = if at_secure {
+            [None, None]
+        } else {
+            [
                 std::env::var("CUDA_HOME").ok(),
                 std::env::var("CUDA_PATH").ok(),
-                Some("/usr/local/cuda".to_string()),
             ]
-            .into_iter()
-            .flatten()
-            {
-                for version in versions {
-                    names.push(format!("{root}/lib64/{stem}.so{version}"));
-                }
-            }
-            names
         };
         let open_library = |stem: &str| {
-            let names = candidates(stem);
+            let names = cuda_library_candidates(stem, &env_roots, at_secure);
             open(&names.iter().map(String::as_str).collect::<Vec<_>>())
         };
         let nvrtc = open_library("libnvrtc")?;
@@ -278,6 +369,7 @@ impl Api {
             cublasDgemmBatched: load!(cublas, cublasDgemmBatched),
             cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
             cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
+            _libraries: [driver, nvrtc, cublas],
         })
     }
 }
@@ -1743,6 +1835,78 @@ mod tests {
             validate_leaf_byte_len(&bad_dtype, 4).unwrap_err().code,
             "AU4007"
         );
+    }
+
+    #[test]
+    fn cuda_root_validation_rejects_untrusted_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("aura-cuda-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let valid_root = base.join("valid");
+        let valid_lib64 = valid_root.join("lib64");
+        std::fs::create_dir_all(&valid_lib64).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&valid_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&valid_lib64, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let group_writable_root = base.join("group-writable");
+        std::fs::create_dir_all(group_writable_root.join("lib64")).unwrap();
+        std::fs::set_permissions(&group_writable_root, std::fs::Permissions::from_mode(0o775))
+            .unwrap();
+
+        let world_writable_lib = base.join("world-writable-lib");
+        let world_lib64 = world_writable_lib.join("lib64");
+        std::fs::create_dir_all(&world_lib64).unwrap();
+        std::fs::set_permissions(&world_writable_lib, std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::set_permissions(&world_lib64, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let traversal = format!("{}/../valid", valid_root.display());
+        let env_roots = vec![
+            Some(".".to_string()),
+            Some("relative/cuda".to_string()),
+            Some(traversal),
+            Some(group_writable_root.to_string_lossy().into_owned()),
+            Some(world_writable_lib.to_string_lossy().into_owned()),
+            Some(valid_root.to_string_lossy().into_owned()),
+        ];
+
+        let candidates = cuda_library_candidates("libnvrtc", &env_roots, false);
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.starts_with("./") || c.starts_with("relative/")),
+            "relative paths must be rejected: {candidates:?}"
+        );
+        assert!(
+            !candidates.iter().any(|c| c.contains("..")),
+            "parent traversal paths must be rejected: {candidates:?}"
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.contains("group-writable") || c.contains("world-writable-lib")),
+            "group/world-writable directories must be rejected: {candidates:?}"
+        );
+        let canonical_lib = std::fs::canonicalize(&valid_lib64).unwrap();
+        let expected_valid = format!("{}/libnvrtc.so", canonical_lib.display());
+        assert!(
+            candidates.contains(&expected_valid),
+            "valid owned directory should be accepted: {candidates:?}"
+        );
+
+        let secure_candidates = cuda_library_candidates(
+            "libnvrtc",
+            &[Some(valid_root.to_string_lossy().into_owned())],
+            true,
+        );
+        assert!(
+            !secure_candidates.contains(&expected_valid),
+            "AT_SECURE must ignore CUDA_HOME/CUDA_PATH: {secure_candidates:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
 
