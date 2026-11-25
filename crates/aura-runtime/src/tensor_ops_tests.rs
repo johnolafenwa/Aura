@@ -2381,3 +2381,29 @@ fn overflowing_tensor_shape_and_byte_size_are_rejected_before_planning() {
     let error = tensor_codegen::generate(&overflow_plan).unwrap_err();
     assert_eq!(error.code, "AU4005");
 }
+
+#[test]
+fn slice_handles_large_steps_without_signed_overflow() {
+    let source = tensor(float32(&[10.0, 20.0, 30.0, 40.0], &[4]), TensorDevice::Cpu);
+    let check_cases = || {
+        for step in [i64::MAX - 1, i64::MAX] {
+            let sliced = node_op(&source, 0, &[0, 0, 4, step]).unwrap();
+            assert_eq!(node(&sliced).shape(), &[1]);
+            assert_eq!(array(&sliced), float32(&[10.0], &[1]));
+
+            let offset = node_op(&source, 0, &[0, 1, 4, step]).unwrap();
+            assert_eq!(node(&offset).shape(), &[1]);
+            assert_eq!(array(&offset), float32(&[20.0], &[1]));
+
+            let empty = node_op(&source, 0, &[0, 2, 2, step]).unwrap();
+            assert_eq!(node(&empty).shape(), &[0]);
+            assert_eq!(array(&empty), float32(&[], &[0]));
+        }
+        let clamped = node_op(&source, 0, &[0, i64::MIN, i64::MAX, i64::MAX]).unwrap();
+        assert_eq!(node(&clamped).shape(), &[1]);
+        assert_eq!(array(&clamped), float32(&[10.0], &[1]));
+    };
+
+    check_cases();
+    deferred(check_cases);
+}

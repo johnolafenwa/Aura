@@ -1997,15 +1997,29 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                 return Err(tensor_error(name, "expects a step of at least 1"));
             }
             // A negative bound counts from the end, as in a list slice.
-            let bound = |at: i64| (if at < 0 { at + length } else { at }).clamp(0, length);
+            let bound = |at: i64| {
+                (if at < 0 {
+                    at.saturating_add(length)
+                } else {
+                    at
+                })
+                .clamp(0, length)
+            };
             let (start, stop) = (bound(start), bound(stop));
-            let taken = ((stop - start).max(0) + step - 1) / step;
+            let taken = if stop <= start {
+                0
+            } else {
+                let span = (stop - start) as u64;
+                usize::try_from(1 + (span - 1) / (step as u64))
+                    .expect("slice length fits within the input axis")
+            };
+            let step = usize::try_from(step).unwrap_or(usize::MAX);
             let start = start_tensor(operand.device(), start as usize)?;
             operate(
                 Operation::Slice {
                     axis,
-                    step: step as usize,
-                    length: taken as usize,
+                    step,
+                    length: taken,
                 },
                 &[operand, &start],
             )
