@@ -2857,6 +2857,10 @@ pub(crate) struct RuntimeTypeTag {
     /// For a list type, its element type, shared once so that each new
     /// list of the type takes a reference to it instead of a copy.
     pub(crate) list_element: Option<SharedType>,
+    /// For a `list`, `set`, or `dict` type, its type arguments, shared once
+    /// so that retagging a collection takes references to them instead of
+    /// copies.
+    pub(crate) collection_args: Vec<SharedType>,
 }
 
 /// The name of a variant of enum `base` tagged with `runtime_type_name`.
@@ -2964,6 +2968,17 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         }
         _ => None,
     };
+    let collection_args = match &parsed {
+        Type::Named(name, args)
+            if matches!(
+                (name.as_str(), args.len()),
+                ("list", 1) | ("set", 1) | ("dict", 2)
+            ) =>
+        {
+            args.iter().cloned().map(SharedType::from).collect()
+        }
+        _ => Vec::new(),
+    };
     let tag = Arc::new(RuntimeTypeTag {
         name: RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str())),
         parsed: Arc::new(parsed),
@@ -2973,6 +2988,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         descriptor,
         tagged_enum_name,
         list_element,
+        collection_args,
     });
     let mut registry = registry
         .lock()
@@ -3087,11 +3103,22 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             *slot = ty.clone();
         }
     }
-    fn assign_shared_type(slot: &mut SharedType, ty: &Type) {
-        if *slot != *ty {
-            *slot = ty.clone().into();
+    // The tag's shared copy of the argument, when it keeps one.
+    fn assign_shared_type(slot: &mut SharedType, ty: &Type, shared: Option<&SharedType>) {
+        match shared {
+            Some(shared) => {
+                if *slot != *shared {
+                    *slot = shared.clone();
+                }
+            }
+            None => {
+                if *slot != *ty {
+                    *slot = ty.clone().into();
+                }
+            }
         }
     }
+    let shared_arg = |index: usize| tag.collection_args.get(index);
     match value {
         Value::Int(integer) => {
             if let Some(kind) = tag.integer_kind {
@@ -3103,7 +3130,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Vec(vector) => {
             if let Type::Named(name, args) = parsed {
                 if name == "list" && args.len() == 1 {
-                    assign_shared_type(&mut vector.element_type, &args[0]);
+                    assign_shared_type(&mut vector.element_type, &args[0], shared_arg(0));
                     if is_float32_element(&args[0]) {
                         vector.elements.narrow_to_float32();
                     }
@@ -3113,19 +3140,15 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Set(set) => {
             if let Type::Named(name, args) = parsed {
                 if name == "set" && args.len() == 1 {
-                    assign_shared_type(&mut set.element_type, &args[0]);
+                    assign_shared_type(&mut set.element_type, &args[0], shared_arg(0));
                 }
             }
         }
         Value::Map(map) => {
             if let Type::Named(name, args) = parsed {
                 if name == "dict" && args.len() == 2 {
-                    if map.key_type != args[0] {
-                        map.key_type = args[0].clone().into();
-                    }
-                    if map.value_type != args[1] {
-                        map.value_type = args[1].clone().into();
-                    }
+                    assign_shared_type(&mut map.key_type, &args[0], shared_arg(0));
+                    assign_shared_type(&mut map.value_type, &args[1], shared_arg(1));
                 }
             }
         }
