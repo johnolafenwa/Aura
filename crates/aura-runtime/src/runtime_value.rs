@@ -21133,6 +21133,23 @@ pub fn evaluate_host_builtin_with_program_args(
     evaluate_host_builtin_with_args(name, args, Some(program_args))
 }
 
+/// Evaluates a host builtin that may access raw memory (`mem::*`).
+///
+/// # Safety
+///
+/// Any raw-memory address passed to a `mem::*` builtin must satisfy the
+/// operation's validity contract.
+pub unsafe fn evaluate_unsafe_host_builtin_with_program_args(
+    name: &str,
+    args: Vec<Value>,
+    program_args: &[String],
+) -> Result<Value> {
+    if let Some(function) = host_builtins::unsafe_mem_builtin_function(name) {
+        return unsafe { function(args, Some(program_args)) };
+    }
+    evaluate_host_builtin_with_args(name, args, Some(program_args))
+}
+
 pub fn send_error_closed(value: Value) -> Value {
     Value::EnumVariant(EnumVariantValue {
         enum_name: RuntimeName::from_static("SendError"),

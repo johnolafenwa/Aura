@@ -11,6 +11,9 @@ use super::*;
 /// from the process.
 pub type HostBuiltinFn = fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
 
+/// A host builtin whose contract requires caller-vouched memory safety.
+pub type UnsafeHostBuiltinFn = unsafe fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
+
 /// A `math` function of one `float64`, named for its diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MathFunction {
@@ -900,9 +903,14 @@ pub fn host_trace_event(args: Vec<Value>, _program_args: Option<&[String]>) -> R
     host_log_record("trace::event", args)
 }
 
-/// One `mem` operation at a raw address. The caller vouches for the
-/// address, as C code does for a pointer: a bad one has undefined behavior.
-fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
+/// One `mem` operation at a raw address.
+///
+/// # Safety
+///
+/// For any non-fence operation, the caller must vouch that the address passed
+/// in `args[0]` points to valid memory for the requested width and access kind.
+/// Null and misaligned addresses are rejected with `AU4001` before dereference.
+unsafe fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
     use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering::SeqCst};
     let operation = name.strip_prefix("mem::").unwrap_or(name);
     if operation == "fence" {
@@ -939,9 +947,46 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
         _ => 2,
     };
     host_expect_arity(name, &args, arity)?;
-    let address = word(0)? as usize;
-    // SAFETY: the program states that `address` is valid for this access;
-    // the `mem` module is available only to a package with `allow_ffi`.
+    let raw_address = word(0)?;
+    let arg1 = if arity >= 2 { Some(word(1)?) } else { None };
+    let arg2 = if arity >= 3 { Some(word(2)?) } else { None };
+    let address = usize::try_from(raw_address).map_err(|_| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("`{}` address is out of range", name.replace("::", ".")),
+        )
+    })?;
+    if address == 0 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{}` cannot access a null address", name.replace("::", ".")),
+        ));
+    }
+    let required_alignment = match operation {
+        "read" | "write" => 1,
+        "volatile_read" | "volatile_write" => match kind {
+            IntegerKind::Uint8 => std::mem::align_of::<u8>(),
+            IntegerKind::Uint16 => std::mem::align_of::<u16>(),
+            IntegerKind::Uint32 => std::mem::align_of::<u32>(),
+            _ => std::mem::align_of::<u64>(),
+        },
+        _ => match kind {
+            IntegerKind::Uint32 => std::mem::align_of::<AtomicU32>(),
+            _ => std::mem::align_of::<AtomicU64>(),
+        },
+    };
+    if !address.is_multiple_of(required_alignment) {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{}` requires an address aligned to {} bytes",
+                name.replace("::", "."),
+                required_alignment
+            ),
+        ));
+    }
+    // SAFETY: non-null and required alignment were validated above, and the
+    // caller vouches that `address` points to valid memory for this access.
     unsafe {
         match (operation, kind) {
             ("read", IntegerKind::Uint8) => {
@@ -965,68 +1010,73 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
             }
             ("volatile_read", _) => result((address as *const u64).read_volatile()),
             ("write", IntegerKind::Uint8) => {
-                (address as *mut u8).write_unaligned(word(1)? as u8);
+                (address as *mut u8).write_unaligned(arg1.unwrap() as u8);
                 Ok(Value::Unit)
             }
             ("write", IntegerKind::Uint16) => {
-                (address as *mut u16).write_unaligned(word(1)? as u16);
+                (address as *mut u16).write_unaligned(arg1.unwrap() as u16);
                 Ok(Value::Unit)
             }
             ("write", IntegerKind::Uint32) => {
-                (address as *mut u32).write_unaligned(word(1)? as u32);
+                (address as *mut u32).write_unaligned(arg1.unwrap() as u32);
                 Ok(Value::Unit)
             }
             ("write", _) => {
-                (address as *mut u64).write_unaligned(word(1)?);
+                (address as *mut u64).write_unaligned(arg1.unwrap());
                 Ok(Value::Unit)
             }
             ("volatile_write", IntegerKind::Uint8) => {
-                (address as *mut u8).write_volatile(word(1)? as u8);
+                (address as *mut u8).write_volatile(arg1.unwrap() as u8);
                 Ok(Value::Unit)
             }
             ("volatile_write", IntegerKind::Uint16) => {
-                (address as *mut u16).write_volatile(word(1)? as u16);
+                (address as *mut u16).write_volatile(arg1.unwrap() as u16);
                 Ok(Value::Unit)
             }
             ("volatile_write", IntegerKind::Uint32) => {
-                (address as *mut u32).write_volatile(word(1)? as u32);
+                (address as *mut u32).write_volatile(arg1.unwrap() as u32);
                 Ok(Value::Unit)
             }
             ("volatile_write", _) => {
-                (address as *mut u64).write_volatile(word(1)?);
+                (address as *mut u64).write_volatile(arg1.unwrap());
                 Ok(Value::Unit)
             }
             (_, IntegerKind::Uint32) => {
-                let cell = &*(address as *const AtomicU32);
+                let cell = AtomicU32::from_ptr(address as *mut u32);
                 match operation {
                     "atomic_load" => result(u64::from(cell.load(SeqCst))),
                     "atomic_store" => {
-                        cell.store(word(1)? as u32, SeqCst);
+                        cell.store(arg1.unwrap() as u32, SeqCst);
                         Ok(Value::Unit)
                     }
-                    "atomic_swap" => result(u64::from(cell.swap(word(1)? as u32, SeqCst))),
-                    "atomic_add" => result(u64::from(cell.fetch_add(word(1)? as u32, SeqCst))),
+                    "atomic_swap" => result(u64::from(cell.swap(arg1.unwrap() as u32, SeqCst))),
+                    "atomic_add" => result(u64::from(cell.fetch_add(arg1.unwrap() as u32, SeqCst))),
                     _ => {
                         let previous = cell
-                            .compare_exchange(word(1)? as u32, word(2)? as u32, SeqCst, SeqCst)
+                            .compare_exchange(
+                                arg1.unwrap() as u32,
+                                arg2.unwrap() as u32,
+                                SeqCst,
+                                SeqCst,
+                            )
                             .unwrap_or_else(|current| current);
                         result(u64::from(previous))
                     }
                 }
             }
             _ => {
-                let cell = &*(address as *const AtomicU64);
+                let cell = AtomicU64::from_ptr(address as *mut u64);
                 match operation {
                     "atomic_load" => result(cell.load(SeqCst)),
                     "atomic_store" => {
-                        cell.store(word(1)?, SeqCst);
+                        cell.store(arg1.unwrap(), SeqCst);
                         Ok(Value::Unit)
                     }
-                    "atomic_swap" => result(cell.swap(word(1)?, SeqCst)),
-                    "atomic_add" => result(cell.fetch_add(word(1)?, SeqCst)),
+                    "atomic_swap" => result(cell.swap(arg1.unwrap(), SeqCst)),
+                    "atomic_add" => result(cell.fetch_add(arg1.unwrap(), SeqCst)),
                     _ => {
                         let previous = cell
-                            .compare_exchange(word(1)?, word(2)?, SeqCst, SeqCst)
+                            .compare_exchange(arg1.unwrap(), arg2.unwrap(), SeqCst, SeqCst)
                             .unwrap_or_else(|current| current);
                         result(previous)
                     }
@@ -1046,8 +1096,15 @@ fn mem_argument_error(name: &str) -> Diagnostic {
 macro_rules! host_mem_functions {
     ($($function:ident => $name:literal;)*) => {
         $(
-            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-                host_mem($name, args)
+            /// # Safety
+            ///
+            /// Any address passed in `args` must be valid for the requested
+            /// raw memory operation.
+            pub unsafe fn $function(
+                args: Vec<Value>,
+                _program_args: Option<&[String]>,
+            ) -> Result<Value> {
+                unsafe { host_mem($name, args) }
             }
         )*
     };
@@ -1083,29 +1140,10 @@ host_mem_functions! {
     host_mem_fence => "mem::fence";
 }
 
-/// The owned-argument function for a host builtin, or `None` for a name the
-/// table does not hold.
-pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
-    let function: HostBuiltinFn = match name {
-        "collections::__aura_new" => ordered_collections::new,
-        "collections::__aura_len" => ordered_collections::len,
-        "collections::__aura_supported" => ordered_collections::supported,
-        "collections::__aura_deque_push" => ordered_collections::deque_push,
-        "collections::__aura_deque_pop" => ordered_collections::deque_pop,
-        "collections::__aura_deque_get" => ordered_collections::deque_get,
-        "collections::__aura_heap_from" => ordered_collections::heap_from,
-        "collections::__aura_heap_push" => ordered_collections::heap_push,
-        "collections::__aura_heap_take" => ordered_collections::heap_take,
-        "collections::__aura_heap_peek" => ordered_collections::heap_peek,
-        "collections::__aura_map_put" => ordered_collections::map_put,
-        "collections::__aura_map_get" => ordered_collections::map_get,
-        "collections::__aura_map_has" => ordered_collections::map_has,
-        "collections::__aura_map_take" => ordered_collections::map_take,
-        "collections::__aura_map_edge" => ordered_collections::map_edge,
-        "collections::__aura_map_bound" => ordered_collections::map_bound,
-        "collections::__aura_map_range" => ordered_collections::map_range,
-        "collections::__aura_map_drain" => ordered_collections::map_drain,
-        "math::floor" => host_math_floor,
+/// The unsafe raw-memory function for a `mem::*` host builtin, or `None` for
+/// any other name.
+pub fn unsafe_mem_builtin_function(name: &str) -> Option<UnsafeHostBuiltinFn> {
+    let function: UnsafeHostBuiltinFn = match name {
         "mem::read_uint8" => host_mem_read_uint8,
         "mem::read_uint16" => host_mem_read_uint16,
         "mem::read_uint32" => host_mem_read_uint32,
@@ -1133,6 +1171,34 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "mem::atomic_compare_exchange_uint32" => host_mem_atomic_compare_exchange_uint32,
         "mem::atomic_compare_exchange_uint64" => host_mem_atomic_compare_exchange_uint64,
         "mem::fence" => host_mem_fence,
+        _ => return None,
+    };
+    Some(function)
+}
+
+/// The owned-argument function for a safe host builtin, or `None` for a name
+/// the safe table does not hold.
+pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
+    let function: HostBuiltinFn = match name {
+        "collections::__aura_new" => ordered_collections::new,
+        "collections::__aura_len" => ordered_collections::len,
+        "collections::__aura_supported" => ordered_collections::supported,
+        "collections::__aura_deque_push" => ordered_collections::deque_push,
+        "collections::__aura_deque_pop" => ordered_collections::deque_pop,
+        "collections::__aura_deque_get" => ordered_collections::deque_get,
+        "collections::__aura_heap_from" => ordered_collections::heap_from,
+        "collections::__aura_heap_push" => ordered_collections::heap_push,
+        "collections::__aura_heap_take" => ordered_collections::heap_take,
+        "collections::__aura_heap_peek" => ordered_collections::heap_peek,
+        "collections::__aura_map_put" => ordered_collections::map_put,
+        "collections::__aura_map_get" => ordered_collections::map_get,
+        "collections::__aura_map_has" => ordered_collections::map_has,
+        "collections::__aura_map_take" => ordered_collections::map_take,
+        "collections::__aura_map_edge" => ordered_collections::map_edge,
+        "collections::__aura_map_bound" => ordered_collections::map_bound,
+        "collections::__aura_map_range" => ordered_collections::map_range,
+        "collections::__aura_map_drain" => ordered_collections::map_drain,
+        "math::floor" => host_math_floor,
         "math::ceil" => host_math_ceil,
         "math::trunc" => host_math_trunc,
         "math::pow" => host_math_pow,

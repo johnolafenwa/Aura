@@ -39,15 +39,16 @@ use crate::runtime_value::{
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, flush_buffered_files,
-    format_runtime_value_with, generator_yield, host_process_args, io_error, io_read_line,
-    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
-    json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
-    manager_exit_failure_note, nominal_runtime_base_name, optional_absent, optional_bytes_value,
-    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
-    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    evaluate_string_to_bytes_host_ref, evaluate_unsafe_host_builtin_with_program_args,
+    float_floor_divmod, float_power, flush_buffered_files, format_runtime_value_with,
+    generator_yield, host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, manager_exit_failure_note,
+    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -5989,7 +5990,8 @@ impl MirRuntime {
         }
 
         if let Some(metadata) = host_builtin_metadata(name) {
-            if is_mem_symbol(&metadata.qualified_name) && !self.trusted_ffi {
+            let is_mem = is_mem_symbol(&metadata.qualified_name);
+            if is_mem && !self.trusted_ffi {
                 return Err(untrusted_ffi_diagnostic(&metadata.qualified_name));
             }
             // Checked MIR materializes builtin defaults before runtime dispatch, so
@@ -6001,9 +6003,22 @@ impl MirRuntime {
                 .collect::<Vec<_>>();
             let values = evaluate_named_args(args, env)?;
             let bound = bind_builtin_args(&arg_names, values)?;
+            let evaluated_args = bound.into_iter().map(|argument| argument.value).collect();
+            if is_mem {
+                // SAFETY: `self.trusted_ffi` confirmed the package opted into
+                // `allow_ffi = true` and executed through a path-checked API;
+                // `host_mem` checks null and alignment before dereferencing.
+                return unsafe {
+                    evaluate_unsafe_host_builtin_with_program_args(
+                        &metadata.qualified_name,
+                        evaluated_args,
+                        self.program_args.as_slice(),
+                    )
+                };
+            }
             return evaluate_host_builtin_with_program_args(
                 &metadata.qualified_name,
-                bound.into_iter().map(|argument| argument.value).collect(),
+                evaluated_args,
                 self.program_args.as_slice(),
             );
         }

@@ -2375,10 +2375,12 @@ fn direct_host_builtin_call(name: &str, arguments: &[*mut OpaqueValue]) -> *mut 
     for (index, argument) in arguments.iter().copied().enumerate() {
         super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
     }
-    host_builtin_entry(name)(buffer, arguments.len() as i64)
+    unsafe { host_builtin_entry(name)(buffer, arguments.len() as i64) }
 }
 
-fn host_builtin_entry(name: &str) -> extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue {
+fn host_builtin_entry(
+    name: &str,
+) -> unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue {
     super::HOST_BUILTIN_ENTRIES
         .iter()
         .find(|(entry, _)| *entry == name)
@@ -2392,7 +2394,7 @@ fn direct_json_owned_host_builtin_call(name: &str, argument: *mut OpaqueValue) -
     let clone_count = super::direct_value_clone_count();
     let buffer = super::aura_direct_arg_buffer_new(1);
     super::aura_direct_arg_buffer_store_owned(buffer, 0, argument as i64);
-    let result = host_builtin_entry(name)(buffer, 1);
+    let result = unsafe { host_builtin_entry(name)(buffer, 1) };
     assert_eq!(
         super::direct_value_clone_count(),
         clone_count,
@@ -2501,6 +2503,7 @@ fn direct_host_builtin_ffi_covers_success_and_diagnostic_boundaries() {
     for (name, _) in super::HOST_BUILTIN_SYMBOLS {
         assert!(
             crate::runtime_value::host_builtins::host_builtin_function(name).is_some()
+                || crate::runtime_value::host_builtins::unsafe_mem_builtin_function(name).is_some()
                 || crate::runtime_value::evaluate_bytes_host_builtin_ref(name, &Value::Unit)
                     .is_some()
                 || crate::text_methods::is_bytes_search_builtin(name)
@@ -2558,7 +2561,7 @@ fn every_host_builtin_entry_checks_its_argument_count() {
         let result = run_lightweight_root_task(move || {
             super::with_task_runtime_error_capture(|| {
                 let empty_args = super::aura_direct_arg_buffer_new(0);
-                let value = entry(empty_args, 0);
+                let value = unsafe { entry(empty_args, 0) };
                 unsafe { release_value(value) };
                 Ok(Value::Unit)
             })
@@ -2678,14 +2681,14 @@ fn every_image_host_entry_reaches_its_host_function() {
 }
 
 fn direct_host_builtin_call_entry(
-    entry: extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+    entry: unsafe extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
     arguments: &[*mut OpaqueValue],
 ) -> *mut OpaqueValue {
     let buffer = super::aura_direct_arg_buffer_new(arguments.len() as i64);
     for (index, argument) in arguments.iter().copied().enumerate() {
         super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
     }
-    entry(buffer, arguments.len() as i64)
+    unsafe { entry(buffer, arguments.len() as i64) }
 }
 
 #[test]
