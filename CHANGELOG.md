@@ -50,6 +50,83 @@ in this file.
   the allocation hooks with a reference count, and the program frees
   every block when its last reference goes. Classes, tuples, and `Result`
   may hold such an enum, and `match own` and `try` work on them.
+- Speed: `d.remove(key)` builds no `Lookup` value when its result is
+  matched or dropped, and takes about a quarter of the instructions. A loop
+  over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`
+  keys and values walks the dict and makes no list: one entry of an
+  `items()` loop went from about 4,000 instructions to about 250.
+- Speed: a `str` read from a list only to be looked up, as in
+  `words[i] in seen` or `table.get(words[i])`, is no longer copied first.
+  A membership test takes about a third of the instructions.
+- `aura verify` no longer reports a made-up counterexample for a check that
+  reads the result of a step it does not model, such as `split`, an
+  f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
+  Such a check is reported as not modeled (`AU5104`), and the message names
+  the step and its line. A real failure beside such a step is still a
+  failure.
+- `aura verify` reports `AU5120` for a function whose `requires` clauses and
+  class invariants can never hold together, and does not count it as
+  proved.
+- `aura verify` prints how many open checks failed, are not modeled, or are
+  undecided, and the JSON report carries `failed`, `not_modeled` and
+  `undecided` counts.
+- `aura verify` reasons about `Span[T]` and list views like lists: `len`,
+  indexes, and elements, in code and in contracts. A write through a `mut`
+  span or view now reaches the viewed list in the proof; before, an
+  assertion about the list after such a call could be proved wrongly.
+- `aura verify` checks every `Array[T]` element read and write: the rank
+  and each coordinate. Before, an `Array` index created no check at all.
+- `aura verify` assumes a class's invariants in the methods of its
+  `impl Trait for Class:` blocks, proves them again when a `mut self` one
+  returns, and proves them wherever such a method is called or an object
+  becomes a trait object.
+- `aura verify` keeps what a call cannot change: after a call, a `mut`
+  argument keeps the value of every field the callee never writes, so two
+  `push` calls in a row prove without an `ensures` for the untouched
+  fields.
+- `aura verify` proves the body of a generator function with its `requires`
+  clauses known, and reports its checks under the generator's name.
+- `aura verify` models more of the language, in code and in contracts:
+  - lists: `in` and `contains` on `int`, `bool`, and `str` elements; slices
+    without a step, whose bounds are now a check; `sorted`, `sort`, and
+    `reverse`; the length of a comprehension; `min` and `max` of a
+    non-empty list; lists of lists, including writes inside a row;
+  - integers: `&`, `|`, `^`, `~`, `<<`, and `>>` on every width up to 64
+    bits, with a check that a shift count is in range and that `<<` loses no
+    bits; the `wrapping_` and `saturating_` methods; `**`; and `as`
+    conversions in contracts; `math.floor`, `ceil`, `trunc`, `sqrt`,
+    `isqrt`, `factorial`, and the `is_nan` family;
+  - text: `split`, `lines`, `find`, indexing and slicing (now checked),
+    `strip_prefix`, `strip_suffix`, `split_once`, f-strings, and `str(x)`,
+    with length bounds for `trim`, `replace`, and the case methods;
+  - lambdas and local `def` functions called where they are made, with the
+    values they captured, by value or by reference, and bound methods;
+  - class invariants of objects stored in fields, tuples, optional values,
+    `Result` and enum payloads, and lists; `match` as an expression and
+    every decidable arm pattern; calls on a union-typed value, whose
+    members' contracts now apply; `==` between unions and enum variants.
+- `aura verify` names an enum variant in a counterexample instead of its
+  index, and reports a recursive spec function that needs more than eight
+  levels as not modeled instead of failed.
+- `aura verify` no longer proves an assertion about a local that a lambda
+  changed through a view it captured.
+- `aura verify` with no path, a directory, or several files verifies every
+  module of a package and prints each file's summary and one line of
+  totals. Such a run fails only when a check failed, a file does not
+  compile, or a `--must-verify` function is open. `--deny not-modeled`,
+  `--deny undecided` and `--deny all` make the other outcomes fail it too.
+  A run on one file is unchanged: it fails unless every check is proved.
+- `aura verify --must-verify <function>` reports `AU5122` when the named
+  function has a check that is not proved.
+- `aura test --verify` verifies the package before it runs the tests.
+- `aura verify` on one file says how many imported modules it did not
+  check.
+- `aura verify` verifies the statements a module writes outside every
+  function, and reports them as `<module>`. Before, they were not checked.
+- `aura verify` reports a check in a copy of a function made for a
+  generator argument once, under the function's own name. Before, it was
+  reported a second time under a name starting with `__aura_with_`. A
+  module constant's initializer is reported under the constant's name.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 
