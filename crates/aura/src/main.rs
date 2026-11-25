@@ -975,6 +975,7 @@ fn handle_test_command(args: Vec<String>) {
     let mut timeout_ms = 30_000u64;
     let mut filter = None;
     let mut format = TestReportFormat::Human;
+    let mut verify = false;
     let mut inputs = Vec::new();
     let mut args = args.into_iter();
     while let Some(argument) = args.next() {
@@ -1011,6 +1012,8 @@ fn handle_test_command(args: Vec<String>) {
                 process::exit(2);
             }
             format = TestReportFormat::Json;
+        } else if argument == "--verify" {
+            verify = true;
         } else if argument.starts_with('-') {
             eprintln!("unknown aura test option `{argument}`");
             process::exit(2);
@@ -1018,6 +1021,28 @@ fn handle_test_command(args: Vec<String>) {
             inputs.push(PathBuf::from(argument));
         }
     }
+    // `--verify` proves the package's checks first. A failed check fails
+    // the run before any test starts.
+    let verification = verify.then(|| {
+        let options = aura_compiler::verify::Options {
+            cache_dir: verify_cache_root(),
+            ..aura_compiler::verify::Options::default()
+        };
+        let package = verify_package(&[], &options);
+        let passes = package.passes(aura_compiler::verify::Deny::default());
+        let verify_format = match format {
+            TestReportFormat::Human => Some(DiagnosticFormat::Human),
+            TestReportFormat::Json if !passes => Some(DiagnosticFormat::Json),
+            TestReportFormat::Json => None,
+        };
+        if let Some(verify_format) = verify_format {
+            write_package_verification(verify_format, &package, &[]);
+        }
+        if !passes {
+            process::exit(1);
+        }
+        package.totals()
+    });
     let inputs = if inputs.is_empty() {
         vec![PathBuf::from("tests")]
     } else {
@@ -1142,6 +1167,9 @@ fn handle_test_command(args: Vec<String>) {
                 },
                 "tests": tests,
             });
+            if let Some(totals) = &verification {
+                report["verification"] = verify_totals_json(totals);
+            }
             if !discovery_outputs.is_empty() {
                 report["discovery"] = JsonValue::Array(
                     discovery_outputs
@@ -4572,8 +4600,10 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 }
 
 /// `aura verify`: proves the program's checks with an SMT solver and
-/// reports each check it could not prove. Exits 1 unless every check was
-/// proved.
+/// reports each check it could not prove. With one file it exits 1 unless
+/// every check was proved. With a directory, several files, or no path it
+/// verifies each module of the package and exits 1 when a check failed or
+/// has an outcome `--deny` names.
 fn handle_verify_command(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
     let freestanding = args.iter().any(|arg| arg == "--freestanding");
@@ -4587,6 +4617,7 @@ fn handle_verify_command(args: Vec<String>) {
         cache_dir: verify_cache_root(),
         ..aura_compiler::verify::Options::default()
     };
+    let mut deny = aura_compiler::verify::Deny::default();
     let mut rest = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -4608,6 +4639,17 @@ fn handle_verify_command(args: Vec<String>) {
                 options.function_filter = Some(value());
                 index += 2;
             }
+            "--deny" => {
+                if !deny.add(&value()) {
+                    eprintln!("aura verify --deny accepts `not-modeled`, `undecided`, or `all`");
+                    process::exit(2);
+                }
+                index += 2;
+            }
+            "--must-verify" => {
+                options.must_verify.push(value());
+                index += 2;
+            }
             "--no-cache" => {
                 options.cache_dir = None;
                 index += 1;
@@ -4617,6 +4659,20 @@ fn handle_verify_command(args: Vec<String>) {
                 index += 1;
             }
         }
+    }
+    let single = match rest.as_slice() {
+        [first, ..] if first == "--stdin" => true,
+        [path] => !Path::new(path).is_dir(),
+        _ => false,
+    };
+    if !single {
+        let package = verify_package(&rest, &options);
+        write_package_verification(diagnostic_format, &package, &options.must_verify);
+        let unmatched = report_unmatched_must_verify(&options.must_verify, package.reports());
+        if unmatched || !package.passes(deny) {
+            process::exit(1);
+        }
+        return;
     }
     let input = read_input(&mut rest.into_iter());
     let result = if freestanding {
@@ -4634,73 +4690,250 @@ fn handle_verify_command(args: Vec<String>) {
             process::exit(1);
         }
     };
-    let diagnostics = report.diagnostics();
     match diagnostic_format {
         DiagnosticFormat::Human => {
-            for diagnostic in &diagnostics {
+            for diagnostic in &report.diagnostics() {
                 eprintln!("{}", render_error(&input.path, &input.source, diagnostic));
             }
-            let cached = match report.cached {
+            write_stdout(&verify_summary(&input.path, &report));
+            // The bodies of imported modules are verified only in a run
+            // of their own.
+            if !report.unchecked_modules.is_empty() {
+                write_stdout(&format!(
+                    "imported modules not checked: {} ({}); `aura verify` with no path checks every module\n",
+                    report.unchecked_modules.len(),
+                    report.unchecked_modules.join(", ")
+                ));
+            }
+        }
+        DiagnosticFormat::Json => {
+            write_stdout(&format!("{}\n", verify_report_json(&input.path, &report)));
+        }
+    }
+    let unmatched = report_unmatched_must_verify(&options.must_verify, [&report]);
+    if unmatched || !report.is_proved() {
+        process::exit(1);
+    }
+}
+
+/// The summary of one verified file: its counts, and the open checks by
+/// outcome when there are any.
+fn verify_summary(path: &str, report: &aura_compiler::verify::Report) -> String {
+    let cached = match report.cached {
+        0 => String::new(),
+        count => format!(", {count} from the proof cache"),
+    };
+    let mut summary = format!(
+        "verified {path}: {} of {} checks proved in {} functions{cached} ({})\n",
+        report.proved(),
+        report.obligations.len(),
+        report.functions,
+        report.solver
+    );
+    if !report.is_proved() {
+        summary.push_str(&format!(
+            "not proved: {} failed, {} not modeled, {} undecided\n",
+            report.failed(),
+            report.not_modeled(),
+            report.undecided()
+        ));
+    }
+    summary
+}
+
+/// One file's report as JSON.
+fn verify_report_json(path: &str, report: &aura_compiler::verify::Report) -> JsonValue {
+    let obligations = report
+        .obligations
+        .iter()
+        .map(|obligation| {
+            let (status, detail) = match &obligation.status {
+                aura_compiler::verify::Status::Proved => ("proved", JsonValue::Null),
+                aura_compiler::verify::Status::Failed { counterexample } => (
+                    "failed",
+                    serde_json::json!(counterexample
+                        .iter()
+                        .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
+                        .collect::<Vec<_>>()),
+                ),
+                aura_compiler::verify::Status::Unknown => ("unknown", JsonValue::Null),
+                aura_compiler::verify::Status::Unsupported(reason) => {
+                    ("unsupported", JsonValue::String(reason.clone()))
+                }
+            };
+            serde_json::json!({
+                "kind": obligation.kind.name(),
+                "function": obligation.function,
+                "line": obligation.span.line,
+                "column": obligation.span.column,
+                "message": obligation.message,
+                "status": status,
+                "detail": detail,
+            })
+        })
+        .collect::<Vec<_>>();
+    let must_verify = report
+        .must_verify
+        .iter()
+        .map(|marked| {
+            serde_json::json!({
+                "function": marked.function,
+                "line": marked.span.line,
+                "open": marked.open,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "schema_version": 1,
+        "solver": report.solver,
+        "functions": report.functions,
+        "cached": report.cached,
+        "proved": report.proved(),
+        "failed": report.failed(),
+        "not_modeled": report.not_modeled(),
+        "undecided": report.undecided(),
+        "obligations": obligations,
+        "must_verify": must_verify,
+        "unchecked_modules": report.unchecked_modules,
+        "diagnostics": report
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.structured(path))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Says which `--must-verify` names match no verified function. Returns
+/// whether there is one, which fails the run: a misspelled name would
+/// otherwise pass for a proved function.
+fn report_unmatched_must_verify<'a>(
+    names: &'a [String],
+    reports: impl IntoIterator<Item = &'a aura_compiler::verify::Report>,
+) -> bool {
+    let unmatched = aura_compiler::verify::unmatched_must_verify(names, reports);
+    for name in &unmatched {
+        eprintln!("aura verify: `--must-verify {name}` names no verified function");
+    }
+    !unmatched.is_empty()
+}
+
+/// Verifies every module of a package: each `.au` file under each input,
+/// where a directory stands for its `src` directory when it has one. No
+/// input means the current directory.
+fn verify_package(
+    inputs: &[String],
+    options: &aura_compiler::verify::Options,
+) -> aura_compiler::verify::PackageReport {
+    let current = [".".to_string()];
+    let inputs = if inputs.is_empty() { &current } else { inputs };
+    let roots = inputs
+        .iter()
+        .map(|input| {
+            let path = PathBuf::from(input);
+            if path.is_dir() {
+                aura_compiler::verify::package_source_root(&path)
+            } else {
+                path
+            }
+        })
+        .collect::<Vec<_>>();
+    let paths = collect_aura_source_paths(&roots).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        process::exit(1);
+    });
+    if paths.is_empty() {
+        eprintln!("no Aura source files found");
+        process::exit(1);
+    }
+    aura_compiler::verify::verify_files(&paths, options)
+}
+
+/// Prints the result of a run over several files: each file's diagnostics
+/// and summary, then one line of totals; or one JSON document.
+fn write_package_verification(
+    format: DiagnosticFormat,
+    package: &aura_compiler::verify::PackageReport,
+    must_verify: &[String],
+) {
+    let totals = package.totals();
+    match format {
+        DiagnosticFormat::Human => {
+            for file in &package.files {
+                let path = normalized_test_display_path(&file.path);
+                match &file.result {
+                    Ok(report) => {
+                        for diagnostic in &report.diagnostics() {
+                            eprintln!("{}", render_error(&path, &file.source, diagnostic));
+                        }
+                        write_stdout(&verify_summary(&path, report));
+                    }
+                    Err(error) => {
+                        eprintln!("{}", render_error(&path, &file.source, error));
+                        write_stdout(&format!("not verified {path}: {}\n", error.message));
+                    }
+                }
+            }
+            let cached = match totals.cached {
                 0 => String::new(),
                 count => format!(", {count} from the proof cache"),
             };
+            let errors = match totals.errors {
+                0 => String::new(),
+                count => format!(", {count} files not verified"),
+            };
             write_stdout(&format!(
-                "verified {}: {} of {} checks proved in {} functions{cached} ({})\n",
-                input.path,
-                report.proved(),
-                report.obligations.len(),
-                report.functions,
-                report.solver
+                "verified {} files: {} of {} checks proved in {} functions{cached}; {} failed, {} not modeled, {} undecided{errors}\n",
+                totals.files - totals.errors,
+                totals.proved,
+                totals.checks,
+                totals.functions,
+                totals.failed,
+                totals.not_modeled,
+                totals.undecided,
             ));
         }
         DiagnosticFormat::Json => {
-            let obligations = report
-                .obligations
+            let files = package
+                .files
                 .iter()
-                .map(|obligation| {
-                    let (status, detail) = match &obligation.status {
-                        aura_compiler::verify::Status::Proved => ("proved", JsonValue::Null),
-                        aura_compiler::verify::Status::Failed { counterexample } => (
-                            "failed",
-                            serde_json::json!(counterexample
-                                .iter()
-                                .map(|(name, value)| serde_json::json!({"name": name, "value": value}))
-                                .collect::<Vec<_>>()),
-                        ),
-                        aura_compiler::verify::Status::Unknown => ("unknown", JsonValue::Null),
-                        aura_compiler::verify::Status::Unsupported(reason) => {
-                            ("unsupported", JsonValue::String(reason.clone()))
-                        }
+                .map(|file| {
+                    let path = normalized_test_display_path(&file.path);
+                    let mut entry = match &file.result {
+                        Ok(report) => verify_report_json(&path, report),
+                        Err(error) => serde_json::json!({
+                            "schema_version": 1,
+                            "error": error.structured(&path),
+                        }),
                     };
-                    serde_json::json!({
-                        "kind": obligation.kind.name(),
-                        "function": obligation.function,
-                        "line": obligation.span.line,
-                        "column": obligation.span.column,
-                        "message": obligation.message,
-                        "status": status,
-                        "detail": detail,
-                    })
+                    entry["path"] = JsonValue::String(path);
+                    entry
                 })
                 .collect::<Vec<_>>();
+            let reports = package.reports();
             let output = serde_json::json!({
                 "schema_version": 1,
-                "solver": report.solver,
-                "functions": report.functions,
-                "cached": report.cached,
-                "proved": report.proved(),
-                "obligations": obligations,
-                "diagnostics": diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.structured(&input.path))
-                    .collect::<Vec<_>>(),
+                "files": files,
+                "totals": verify_totals_json(&totals),
+                "unmatched_must_verify":
+                    aura_compiler::verify::unmatched_must_verify(must_verify, reports),
             });
             write_stdout(&format!("{output}\n"));
         }
     }
-    if !report.is_proved() {
-        process::exit(1);
-    }
+}
+
+fn verify_totals_json(totals: &aura_compiler::verify::Totals) -> JsonValue {
+    serde_json::json!({
+        "files": totals.files,
+        "errors": totals.errors,
+        "functions": totals.functions,
+        "cached": totals.cached,
+        "checks": totals.checks,
+        "proved": totals.proved,
+        "failed": totals.failed,
+        "not_modeled": totals.not_modeled,
+        "undecided": totals.undecided,
+    })
 }
 
 /// The proof cache of `aura verify`: `verify` under `AURA_CACHE_DIR` when
@@ -6137,8 +6370,8 @@ fn usage_text() -> &'static str {
        or: aura new <project-path>\n\
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
-       or: aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
-       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
+       or: aura test [--cfg name[=value]] [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]\n\
+       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--deny not-modeled|undecided|all] [--must-verify <function>] [--no-cache] [--format human|json] [path ...]\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\

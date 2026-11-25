@@ -451,11 +451,9 @@ count of zero or less. Exhaustiveness and verification answer different
 questions about the same `match`: the compiler says every variant has an
 arm, and the verifier says every arm keeps the promise.
 
-One limit applies today. The verifier follows a `match` statement, like the
-one above, whose arms `return`. It does not yet model the value of a `match`
-used as an expression, as in `return match command:`, so an `ensures` clause
-that depends on one is reported as unproved. Write the statement form in a
-function whose result you want proved.
+The verifier follows a `match` used as an expression, as in
+`return match command:`, the same way: it knows which arm produced the value,
+so an `ensures` clause that depends on it is proved arm by arm.
 
 ## A recursive match
 

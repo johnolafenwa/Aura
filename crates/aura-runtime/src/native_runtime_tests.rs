@@ -27840,8 +27840,254 @@ fn lookup_debug(lookup: *mut OpaqueValue) -> Option<String> {
 }
 
 /// A payload box as debug text, or `None` for null.
+fn value_debug(value: *mut OpaqueValue) -> String {
+    unsafe { super::with_value(value, |value| format!("{value:?}")) }
+}
+
 fn payload_debug(payload: *mut OpaqueValue) -> Option<String> {
     (!payload.is_null()).then(|| format!("{:?}", unsafe { take_value(payload) }))
+}
+
+#[test]
+fn direct_str_membership_agrees_with_boxed_membership() {
+    let map = string_map(&[("age", "41"), ("clé", "x"), ("", "empty")]);
+    let set = super::aura_direct_set_empty();
+    for element in ["age", "ключ", ""] {
+        super::aura_direct_set_insert_in_place(set, string_value(element));
+    }
+    for key in ["age", "clé", "", "ключ", "missing", "ag", "agee"] {
+        let boxed = string_value(key);
+        assert_eq!(
+            super::aura_direct_map_contains_view(map, key.as_ptr(), key.len()),
+            super::aura_direct_map_contains_key(map, boxed),
+            "dict has `{key}`"
+        );
+        assert_eq!(
+            super::aura_direct_set_contains_view(set, key.as_ptr(), key.len()),
+            super::aura_direct_set_contains(set, boxed),
+            "set has `{key}`"
+        );
+    }
+    assert_eq!(
+        super::aura_direct_map_contains_view(map, "age".as_ptr(), 3),
+        1
+    );
+    assert_eq!(
+        super::aura_direct_set_contains_view(set, "clé".as_ptr(), 4),
+        0
+    );
+}
+
+#[test]
+fn direct_view_keyed_writes_agree_with_boxed_writes() {
+    let (viewed, boxed) = (
+        super::aura_direct_map_empty(),
+        super::aura_direct_map_empty(),
+    );
+    // Enough keys to pass from the scanned form to the indexed one.
+    let keys = (0..20)
+        .map(|index| format!("ключ{}", index % 12))
+        .collect::<Vec<_>>();
+    for (index, key) in keys.iter().enumerate() {
+        let value = index as i64;
+        if index % 2 == 0 {
+            super::aura_direct_map_set_index_int64_view(viewed, key.as_ptr(), key.len(), value);
+        } else {
+            super::aura_direct_map_set_index_view(
+                viewed,
+                key.as_ptr(),
+                key.len(),
+                int_value(value),
+            );
+        }
+        super::aura_direct_map_set_index_int64(boxed, string_value(key), value);
+        assert_eq!(value_debug(viewed), value_debug(boxed), "storing `{key}`");
+    }
+    assert_eq!(super::aura_direct_map_len(viewed), 12);
+
+    for key in ["ключ3", "missing", "ключ3", "ключ11", ""] {
+        let expected = payload_debug(super::aura_direct_map_remove_payload(
+            boxed,
+            string_value(key),
+        ));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_payload_view(
+                viewed,
+                key.as_ptr(),
+                key.len()
+            )),
+            expected,
+            "removing `{key}`"
+        );
+    }
+    for key in ["ключ0", "missing"] {
+        assert!(super::aura_direct_map_discard_view(viewed, key.as_ptr(), key.len()).is_null());
+        assert!(super::aura_direct_map_discard(boxed, string_value(key)).is_null());
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
+
+    for key in ["ключ1", "ключ0", "missing"] {
+        let by_view = super::aura_direct_map_probe_slot_view(viewed, key.as_ptr(), key.len(), 1);
+        let by_box = super::aura_direct_map_probe_slot(viewed, string_value(key), 1);
+        assert_eq!(by_view, by_box, "probing `{key}`");
+        assert_eq!(by_view.is_null(), key != "ключ1");
+    }
+
+    let (viewed, boxed) = (
+        super::aura_direct_set_empty(),
+        super::aura_direct_set_empty(),
+    );
+    for key in keys.iter().chain(&keys) {
+        assert_eq!(
+            super::aura_direct_set_insert_view(viewed, key.as_ptr(), key.len()),
+            super::aura_direct_set_insert_in_place(boxed, string_value(key)),
+            "adding `{key}`"
+        );
+    }
+    assert_eq!(value_debug(viewed), value_debug(boxed));
+}
+
+#[test]
+fn direct_map_remove_payload_agrees_with_remove() {
+    let entries = [("age", "41"), ("city", "Lagos"), ("name", "Ada")];
+    let with_lookup = string_map(&entries);
+    let with_payload = string_map(&entries);
+    for key in ["city", "missing", "city", "age", ""] {
+        let boxed = string_value(key);
+        let expected = lookup_debug(super::aura_direct_map_remove_in_place(with_lookup, boxed));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_payload(with_payload, boxed)),
+            expected,
+            "removing `{key}`"
+        );
+        assert_eq!(
+            super::aura_direct_map_len(with_payload),
+            super::aura_direct_map_len(with_lookup)
+        );
+    }
+    assert_eq!(super::aura_direct_map_len(with_payload), 1);
+}
+
+#[test]
+fn direct_int64_removes_and_discards_agree_with_remove() {
+    let build = || {
+        let map = super::aura_direct_map_empty();
+        for key in 0..30 {
+            super::aura_direct_map_set_index_int64_key(map, key, string_value("v"));
+        }
+        map
+    };
+    let (with_lookup, with_payload, discarded, discarded_boxed) =
+        (build(), build(), build(), build());
+    for key in [4, 4, 29, 0, 99, -1] {
+        let boxed = int_value(key);
+        let expected = lookup_debug(super::aura_direct_map_remove_in_place(with_lookup, boxed));
+        assert_eq!(
+            payload_debug(super::aura_direct_map_remove_int64_payload(
+                with_payload,
+                key
+            )),
+            expected,
+            "removing {key}"
+        );
+        assert!(super::aura_direct_map_discard_int64(discarded, key).is_null());
+        assert!(super::aura_direct_map_discard(discarded_boxed, boxed).is_null());
+        for map in [with_payload, discarded, discarded_boxed] {
+            assert_eq!(
+                super::aura_direct_map_len(map),
+                super::aura_direct_map_len(with_lookup)
+            );
+            assert_eq!(
+                super::aura_direct_map_contains_int64(map, key),
+                0,
+                "{key} is gone"
+            );
+        }
+    }
+    assert_eq!(super::aura_direct_map_len(discarded), 27);
+}
+
+#[test]
+fn a_map_snapshot_keeps_its_entries_through_writes() {
+    let map = super::aura_direct_map_empty();
+    for key in 0..20 {
+        super::aura_direct_map_set_index_int64_pair(map, key, key * 10);
+    }
+    super::aura_direct_map_remove_int64_payload(map, 3);
+    let snapshot = super::aura_direct_map_snapshot(map);
+    // Every kind of write to the dict leaves the snapshot as it was.
+    super::aura_direct_map_set_index_int64_pair(map, 5, -1);
+    super::aura_direct_map_set_index_int64_pair(map, 77, 7);
+    super::aura_direct_map_discard_int64(map, 0);
+    assert_eq!(super::aura_direct_map_len(snapshot), 19);
+    let mut seen = Vec::new();
+    let mut next = 0;
+    for _ in 0..super::aura_direct_map_len(snapshot) {
+        let slot = super::aura_direct_map_next_slot(snapshot, next);
+        assert!(slot >= 0);
+        next = slot + 1;
+        let key = super::aura_direct_map_key_int64_at(snapshot, slot);
+        let value = super::aura_direct_map_value_int64_at(snapshot, slot);
+        assert_eq!(
+            payload_debug(super::aura_direct_map_key_at(snapshot, slot)),
+            payload_debug(int_value(key))
+        );
+        assert_eq!(
+            payload_debug(super::aura_direct_map_value_at(snapshot, slot)),
+            payload_debug(int_value(value))
+        );
+        seen.push((key, value));
+    }
+    assert_eq!(super::aura_direct_map_next_slot(snapshot, next), -1);
+    let expected = (0..20)
+        .filter(|key| *key != 3)
+        .map(|key| (key, key * 10))
+        .collect::<Vec<_>>();
+    assert_eq!(seen, expected);
+    assert_eq!(super::aura_direct_map_len(map), 19);
+    assert_eq!(super::aura_direct_map_contains_int64(map, 77), 1);
+
+    let words = string_map(&[("a", "x"), ("b", "y")]);
+    let snapshot = super::aura_direct_map_snapshot(words);
+    super::aura_direct_map_clear_in_place(words);
+    let slot = super::aura_direct_map_next_slot(snapshot, 1);
+    assert_eq!(
+        payload_debug(super::aura_direct_map_key_at(snapshot, slot)),
+        payload_debug(string_value("b"))
+    );
+    assert_eq!(
+        payload_debug(super::aura_direct_map_value_at(snapshot, slot)),
+        payload_debug(string_value("y"))
+    );
+    let snapshot_address = snapshot as usize;
+    let message = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_map_key_at(snapshot_address as *mut OpaqueValue, 9);
+    })
+    .message;
+    assert!(message.contains("walked past the entries"), "{message}");
+}
+
+#[test]
+fn direct_int64_pair_stores_replace_and_append_in_order() {
+    let map = super::aura_direct_map_empty();
+    // Enough keys to pass the scan threshold, so the index holds them.
+    for key in 0..40 {
+        super::aura_direct_map_set_index_int64_pair(map, key * 7, key);
+    }
+    for key in (0..40).rev() {
+        super::aura_direct_map_set_index_int64_pair(map, key * 7, key + 100);
+    }
+    assert_eq!(super::aura_direct_map_len(map), 40);
+    for key in 0..40 {
+        assert_eq!(
+            payload_debug(super::aura_direct_map_get_int64_payload(map, key * 7)),
+            lookup_debug(super::aura_direct_map_get_int64(map, key * 7)),
+        );
+        assert_eq!(super::aura_direct_map_contains_int64(map, key * 7), 1);
+        assert_eq!(super::aura_direct_map_contains_int64(map, key * 7 + 1), 0);
+    }
+    assert_eq!(super::aura_direct_map_next_slot(map, 39), 39);
+    assert_eq!(super::aura_direct_map_next_slot(map, 40), -1);
 }
 
 #[test]
@@ -31841,4 +32087,242 @@ fn direct_bit_methods_check_arguments_and_preserve_wide_values() {
         super::aura_direct_integer_bits(&mut text, 0, BitMethod::CountOnes as i64);
     })
     .contains("requires an integer"));
+}
+
+#[test]
+fn a_tasks_last_reference_to_a_str_box_frees_the_text_and_the_block() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            // A text kept in the value, one kept on the heap, and a `str`
+            // box with a type name, which takes the general release.
+            let long = "a text that is too long to keep in the value itself";
+            for text in ["", "short", long] {
+                let value = string_value(text);
+                assert_eq!(entries(), [(value as usize, 1)]);
+                unsafe { super::aura_direct_release_last_owned_value(value) };
+                assert!(entries().is_empty(), "{text}");
+            }
+            let named = super::boxed_typed_value(Value::String(long.into()), "Name");
+            unsafe { super::aura_direct_release_last_owned_value(named) };
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn appending_an_only_str_box_moves_its_text_into_the_list() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let long = "a text that is too long to keep in the value itself";
+            let vec = super::aura_direct_vec_empty();
+            super::aura_direct_vec_push_in_place(vec, string_value("first"));
+            super::aura_direct_vec_push_in_place(vec, string_value(long));
+            // The list is all the ledger still owns.
+            assert_eq!(entries(), [(vec as usize, 1)]);
+            // A box another reference holds keeps its text.
+            let kept = string_value("kept");
+            unsafe { super::aura_direct_retain_value(kept) };
+            super::aura_direct_vec_push_in_place(vec, kept);
+            assert_eq!(unsafe { value_ref(kept) }, Value::String("kept".into()));
+            // A `str` box with a type name takes the general append.
+            let named = super::boxed_typed_value(Value::String("named".into()), "Name");
+            super::aura_direct_vec_push_in_place(vec, named);
+            let texts = super::with_vector(vec, |vector| {
+                assert_eq!(*vector.element_type, Type::named("str"));
+                (0..vector.elements.len())
+                    .map(|index| match vector.elements.at(index).into_owned() {
+                        Value::String(text) => text.into_string(),
+                        other => panic!("expected a string, found {other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(texts, ["first", long, "kept", "named"]);
+            unsafe {
+                release_value(kept);
+                release_value(vec);
+            }
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn an_owned_literal_replace_keeps_the_only_box() {
+    let replace = |value: *mut OpaqueValue, from: &str, to: &str| unsafe {
+        super::aura_direct_string_replace_literal_owned(
+            value,
+            from.as_ptr(),
+            from.len(),
+            to.as_ptr(),
+            to.len(),
+        )
+    };
+    // The only reference comes back, untouched or with its text replaced.
+    let text = string_value("a<b><");
+    assert_eq!(replace(text, "zz", ""), text);
+    assert_eq!(replace(text, "<", "&lt;"), text);
+    assert_eq!(
+        unsafe { value_ref(text) },
+        Value::String("a&lt;b>&lt;".into())
+    );
+    assert_eq!(replace(text, "", "-"), text);
+    assert_eq!(expect_string(text), "a&lt;b>&lt;".replace("", "-"));
+
+    // A box another reference holds keeps its text, and the caller's
+    // reference goes for a new box.
+    let shared = string_value("x&y");
+    unsafe { retain_value(shared) };
+    let replaced = replace(shared, "&", "&amp;");
+    assert_ne!(replaced, shared);
+    assert_eq!(expect_string(replaced), "x&amp;y");
+    assert_eq!(expect_string(shared), "x&y");
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        replace(address as *mut OpaqueValue, "a", "b");
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+}
+
+#[test]
+fn literal_split_reads_its_separator_where_the_program_keeps_it() {
+    let split = |text: *mut OpaqueValue, separator: &str| {
+        let parts =
+            super::aura_direct_string_split_literal(text, separator.as_ptr(), separator.len());
+        let texts = super::with_vector(parts, |vector| {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            (0..vector.elements.len())
+                .map(|index| match vector.elements.at(index).into_owned() {
+                    Value::String(text) => text.into_string(),
+                    other => panic!("expected a string, found {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        });
+        unsafe { release_value(parts) };
+        texts
+    };
+    let text = string_value("2026-01-02,north,,SKU-7,");
+    assert_eq!(split(text, ","), ["2026-01-02", "north", "", "SKU-7", ""]);
+    assert_eq!(split(text, ",,"), ["2026-01-02,north", "SKU-7,"]);
+    assert_eq!(split(text, ";"), ["2026-01-02,north,,SKU-7,"]);
+    unsafe { release_value(text) };
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_string_split_literal(address as *mut OpaqueValue, ",".as_ptr(), 1);
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+}
+
+#[test]
+fn padded_int64_parts_match_the_general_formatter() {
+    let values = [
+        0,
+        7,
+        -7,
+        42,
+        -42,
+        99,
+        100,
+        -100,
+        12345,
+        -98765,
+        i64::MAX,
+        i64::MIN,
+    ];
+    let specs = [
+        "1", "2", "02", "3", "03", "8", "08", "10", "010", "20", "020", "99", "099",
+    ];
+    for value in values {
+        for spec in specs {
+            let mut out = [0_u8; super::PADDED_I64_BYTES];
+            let padded = super::padded_i64(value, spec.as_bytes(), &mut out).expect(spec);
+            let general = crate::runtime_value::format_runtime_value_with(
+                &Value::Int(IntegerValue::from_i64(value)),
+                &Type::named("int64"),
+                spec,
+                &mut |value| Ok(super::render_direct_plain(value)),
+            )
+            .expect(spec);
+            assert_eq!(padded, general, "{value}:{spec}");
+        }
+    }
+    // Every other spec takes the general formatter.
+    for spec in [
+        "", "0", "00", "007", "100", ">8", "<8", "+3", "x", "08x", "8d", ",", " 5",
+    ] {
+        let mut out = [0_u8; super::PADDED_I64_BYTES];
+        assert_eq!(
+            super::padded_i64(5, spec.as_bytes(), &mut out),
+            None,
+            "{spec}"
+        );
+    }
+    let builder = super::aura_direct_format_begin("[".as_ptr(), 1);
+    super::aura_direct_format_push_i64_formatted(builder, -7, "04".as_ptr(), 2);
+    super::aura_direct_format_push_i64_formatted(builder, 255, "x".as_ptr(), 1);
+    assert_eq!(expect_string(builder), "[-007ff");
+}
+
+#[test]
+fn extending_a_byte_list_with_a_text_appends_its_bytes() {
+    let bytes_of = |list: *mut OpaqueValue| {
+        super::with_vector(list, |vector| {
+            (0..vector.elements.len())
+                .map(|index| match vector.elements.at(index).into_owned() {
+                    Value::Int(byte) => byte.as_i128().expect("a byte") as u8,
+                    other => panic!("expected a byte, found {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let text = string_value("a&é");
+    // A list that keeps bytes unboxed, and an empty one that keeps none yet.
+    let bytes = super::boxed_value(super::bytes_vec_value(b"<".to_vec()));
+    super::aura_direct_vec_extend_str_bytes(bytes, text);
+    super::aura_direct_vec_extend_str_bytes(bytes, text);
+    assert_eq!(bytes_of(bytes), "<a&éa&é".as_bytes());
+    let empty = super::aura_direct_vec_empty();
+    super::aura_direct_vec_extend_str_bytes(empty, text);
+    assert_eq!(bytes_of(empty), "a&é".as_bytes());
+    unsafe {
+        release_value(empty);
+        release_value(bytes);
+    }
+
+    let address = text as usize;
+    let number = int_value(1);
+    let number_address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_extend_str_bytes(
+            address as *mut OpaqueValue,
+            number_address as *mut OpaqueValue,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_extend_str_bytes(
+            address as *mut OpaqueValue,
+            address as *mut OpaqueValue,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `list`, found `str`");
+    unsafe {
+        release_value(number);
+        release_value(text);
+    }
 }

@@ -147,6 +147,33 @@ test("only a JSON report with obligations counts", () => {
   assert.deepEqual(parseReport('{"obligations": []}'), { obligations: [] });
 });
 
+test("a contract that can never hold has its own code", () => {
+  const report = {
+    obligations: [
+      {
+        kind: "satisfiable contract",
+        function: "bad",
+        line: 1,
+        column: 1,
+        message: "the contract `bad` assumes on entry",
+        status: "failed",
+        detail: []
+      }
+    ]
+  };
+  const diagnostics = verificationDiagnostics(report, "def bad(x: int64):\n    requires x > 0 and x < 0\n");
+  assert.deepEqual(
+    diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.code, diagnostic.message]),
+    [
+      [
+        2,
+        "AU5120",
+        "the contract `bad` assumes on entry can never hold (in `bad`, satisfiable contract check)"
+      ]
+    ]
+  );
+});
+
 test("open checks become diagnostics at the check", () => {
   assert.deepEqual(verificationDiagnostics(null, SOURCE), []);
   const diagnostics = verificationDiagnostics(REPORT, SOURCE);

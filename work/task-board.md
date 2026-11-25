@@ -19,6 +19,18 @@ The integration branch adds writable freestanding module cells, inline arrays, t
 ## Class items for 0.18
 
 Field delegation, property setters, destructor hooks and method decorators passed 62 combined interpreter and native output comparisons. All three measured programs met the instruction-count gate. [Verification results](2026-11-24-class-items.md) and [integration pull request](https://github.com/johnolafenwa/Aura/pull/317).
+## Dict and set speed (in progress)
+
+- Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
+  Details and measurements are in `2026-11-24-dict-and-set-speed.md`.
+- Done: one-call hashing, single-probe `int64` inserts, removes that build
+  no `Lookup`, and loops over `items()`, `keys()` and `values()` that walk
+  the dict and make no list. `dict_remove` went from 9.9 to 2.6 times
+  Rust's instructions and one entry of an `items()` loop from 4,046
+  instructions to 252.
+- Done: a `str` key read from a list is looked
+  up where the list holds it (`keys[i] in table` 4.2 to 1.4 times Rust).
+- Next: one probe and no copy for the counting idiom on a viewed key.
 
 ## Verification in the documentation (complete)
 
@@ -44,6 +56,27 @@ Field delegation, property setters, destructor hooks and method decorators passe
   after they pass, find what `raytracer` and `order_book` run more of,
   keep the set union test out of the plain dictionary lookup, and renew
   the extension publishing token before 2026-12-01.
+
+## Verification gaps (in progress)
+
+- Target: John's 2026-11-24 request to close the gaps a survey of
+  `aura verify` found on 0.17.0. Notes are in
+  `2026-11-24-verification-gaps.md`.
+- Stage 1, wrong answers: a check that reads an unmodeled result is
+  reported as not modeled instead of failed, a contract that can never
+  hold is `AU5120`, `Span`, view and `Array` indexes are checked,
+  generator bodies assume their `requires`, trait implementation methods
+  assume class invariants, and a call keeps the fields its callee cannot
+  write.
+- Stage 1 merged in #321.
+- Stage 2, coverage: lists (membership, slices, sort, comprehension
+  lengths, min/max, lists of lists), integer bit operations, shifts and
+  `math`, `str` methods and f-strings, closures called where they are made,
+  class invariants inside other values, `match` expressions, union calls,
+  package mode with `--deny` and `--must-verify` (`AU5122`),
+  `aura test --verify`, and module-level code.
+- Next: failure recovery, shared state, tensor shapes, fewer solver
+  timeouts, a solver watchdog and a second-solver cross-check.
 
 ## Combined feature verification
 
@@ -356,6 +389,23 @@ See `2026-11-17-ordered-collections.md`.
   section 18.2 walks through it.
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
+## Metal device catch-up (in progress)
+
+- Target: the Metal device runs on the GPU every tensor operation the
+  CUDA device runs there, and the workload programs are timed on an
+  Apple M2 Pro. Scope: `tensor_metal.rs`, `metal_shim.m`, and the Metal
+  routing in `tensor_host.rs`. The CUDA device and a kernel language are
+  out of scope.
+- Done: MPSGraph steps for `tanh`, `sigmoid`, `erf`, slices and their
+  reverse, `expand`, `cat`, `index_select`, `index_add`, `argmax`,
+  `argmin`, and random tensors; plans with several outputs; variables
+  that wait for the next run.
+- Verification: the runtime tensor tests pass on Linux and on an Apple
+  M2 Pro, where every GPU test runs on the Metal device. The small
+  workloads give the CPU device's results on Metal.
+- Remaining: time `benchmarks/tensor` on the Mac on mains power and
+  record the numbers.
+
 ## GPU tensors (in progress)
 
 - Target: tensors on a GPU for real machine learning work, training and

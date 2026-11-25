@@ -20,11 +20,13 @@ repository, which installs the version Aura's own tests use.
 ## What It Proves
 
 `aura verify` proves each of these checks on every path through each
-function:
+function. The statements a module writes outside every function are
+verified as one more function, which reports show as `<module>`:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
 | overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| overflow | `a << n`, `a >> n`, `a ** n`, `math.floor(x)`, `math.isqrt(n)` | `AU4002` a shift count outside the width, a left shift that loses bits, or a result outside the type; `AU4001` a negative exponent or an argument outside a `math` function's domain |
 | division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
 | inline array index | `row[i]` for `fixed[T, N]` | `AU4031` when the index lies outside `0 <= i < N` |
@@ -45,6 +47,55 @@ takes an `Account`, starts from an object that keeps its invariants. No run
 checks these places, so while one of them is unproved
 `aura build --remove-proved-checks` removes nothing.
 
+The same holds for each such object inside a value that crosses a boundary:
+
+- a field of another object, a tuple item, a member of a union such as
+  `Account | None`, an enum payload such as the `Ok` of a `Result`, and an
+  element of a list whose elements are modeled
+- a function that takes `xs: list[Account]` starts from elements that keep
+  their invariants, and a caller proves it of the list it passes
+- a field write that breaks an object inside a value is reported where the
+  value leaves the function: at the call it is passed to, or on return
+- a list built in a loop needs a loop invariant about its elements before
+  it is passed on, such as `invariant forall(a in ys, a.balance >= 0)`
+- a part the verifier does not model is reported as `AU5104` at the
+  boundary: the values of a `dict`, the elements a comprehension builds,
+  rows of a list of lists, and an object deeper than the encoding follows
+
+A method of an `impl Trait for Class:` block cannot be `public`, so no run
+checks the class invariants around it. The verifier treats it like a public
+method anyway. Its proof assumes the invariants on entry, and a `mut self`
+method is proved to hold them again on return. In exchange, each call that
+names the method proves the invariants of its receiver, and so does each
+conversion of an object to a trait object:
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+
+class Square:
+    side: int64
+    invariant 0 <= self.side and self.side <= 1000
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side  # proved: `side` is at most 1000
+
+
+def main():
+    print(Square(side=2).area())  # 4
+```
+
+The method assumes nothing when the program reaches it in a way that proves
+nothing about the receiver. Those ways are a call on a union value, a call
+in a generic function that the verifier could not copy for its type
+arguments, and `Display.display`, which printing calls. When the method
+belongs to an imported module, the function that reaches it this way gets an
+unsupported class invariant obligation instead.
+
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a
@@ -55,8 +106,44 @@ it relies on that type's own contract, and a `match` type arm on it is
 decided. A trait object the function receives, reads from a collection, or
 gets from two paths that hold different types may hold any type. A call of a `lemma def` relies on the
 lemma's `ensures` the same way; see
-[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
-what a caller needs to know must be in the contract.
+[Lemmas](/manual/contracts#lemmas). One more fact about the callee's body
+is used, described next. Anything else a caller needs to know must be in
+the contract.
+
+A call changes only what its callee can write. After a call, a `mut`
+argument keeps the value of every field the callee never writes, so the
+`ensures` only has to describe the fields that change:
+
+```aura
+class Stack:
+    items: list[int64]
+    cap: int64
+    invariant 0 <= len(self.items) and len(self.items) <= self.cap
+
+    public def push(mut self, x: int64):
+        requires len(self.items) < self.cap
+        ensures len(self.items) == len(old(self.items)) + 1
+        self.items.append(x)
+
+
+def fill(s: mut Stack):
+    requires s.cap == 4 and len(s.items) == 0
+    s.push(1)
+    s.push(2)  # proved: `push` cannot write `cap`
+    assert len(s.items) == 2
+
+
+def main():
+    mut s = Stack(items=[], cap=4)
+    fill(s)
+```
+
+The verifier reads the fields a function may write from its body and from
+the functions it calls. An assignment, a write through a `view mut`, a
+method such as `append`, and a `mut` argument of a call each count against
+the field they reach. A call whose callee is not known, such as one through
+a function value or through a trait, may write any part of its `mut`
+arguments.
 
 ```aura
 def clamp(x: int64, lo: int64, hi: int64) -> int64:
@@ -132,10 +219,41 @@ def gcd(a: int64, b: int64) -> int64:
     return gcd(b, a % b)
 ```
 
+### Generators
+
+The body of a generator function runs after the call returns, on the values
+the call passed, so it is proved with the generator's `requires` clauses
+known. Its checks are reported under the generator's name. Each call of the
+generator proves the clauses, as for any function:
+
+```aura
+from iter import Generator
+
+
+def countdown(n: int64) -> Generator[int64]:
+    requires 0 <= n and n <= 100
+    mut i = n
+    while i > 0:
+        invariant 0 <= i and i <= n
+        yield i
+        i -= 1
+
+
+def main():
+    for x in countdown(3):
+        print(x)  # 3 2 1
+```
+
+The generator's locals keep their values across a `yield`. A value the
+consumer can also reach, such as an atomic or a queue, is unknown after it,
+as after any other step. A consumer knows nothing about the items it
+receives beyond their type.
+
 ## Reports
 
 `aura verify` prints a diagnostic for each check it could not prove, then a
-summary line. It exits with status 0 only when every check was proved.
+summary line. With one file it exits with status 0 only when every check
+was proved.
 
 ```text
 error[AU5101]: cannot prove integer result in range
@@ -146,19 +264,112 @@ error[AU5101]: cannot prove integer result in range
   = note: in `double` (overflow check)
   = note: counterexample: x = 4611686018427387904
 verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 1 failed, 0 not modeled, 0 undecided
 ```
+
+When a check is open, a second summary line counts the open checks by
+outcome: failed, not modeled, and undecided.
 
 | Code | Meaning |
 | --- | --- |
-| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
+| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. An enum parameter shows as the name of its variant, as in `variant of light = Off`. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point `**`. It is not proved, and it stays a runtime check. |
+| `AU5104` | The check is not modeled: it reads the result of a step the verifier does not model yet, such as `text.split(",")`, a stepped slice, the elements a comprehension builds, or floating-point `**`. The message names the step and its line. There is no counterexample, because the verifier does not know what the step returns. The check is not proved, and it stays a runtime check. |
+| `AU5120` | The `requires` clauses and class invariants a function assumes on entry can never hold together, as in `requires x > 0 and x < 0`. No call can meet them, so every check in the function would pass for nothing, and the function does not count as proved. |
+| `AU5122` | A function named with `--must-verify` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
+
+A failure is reported only when the program can reach it. In this function
+the verifier does not model `split`, so it cannot tell that the result has
+at least one part, and it says so instead of inventing an input:
+
+```text
+error[AU5104]: cannot check `ensures` clause `result >= 1`: it depends on `split` at line 3, which the verifier does not model
+```
+
+A check beside such a step that does not read its result is still proved or
+refuted as usual.
 
 A check that fails to prove is not always a bug: the verifier may lack a
 fact that holds. Add it as a `requires` on the function, an `invariant` on
 the loop, or an `ensures` on the callee, and the verifier proves the fact
 where it is stated and uses it where it is needed.
+
+A check in a copy the compiler makes of a function is reported under the
+function's own name, at the place it is written. The compiler makes such
+copies for a generic function and for a function that receives a generator
+as an argument.
+
+## Verifying a Package
+
+With one file, `aura verify` proves the functions of that file. It reads
+the contracts of the modules the file imports and does not prove their
+bodies. The summary says so:
+
+```text
+imported modules not checked: 1 (util); `aura verify` with no path checks every module
+```
+
+With no path, `aura verify` proves every module of the package in the
+current directory. A directory, or several files, work the same way:
+
+```bash
+aura verify              # the package in the current directory
+aura verify services/api # the package in that directory
+aura verify src/bank.au src/ledger.au
+```
+
+A directory stands for its `src` directory when it has one. Every `.au`
+file under it is verified once, as the entry of its own run. The report has
+each file's diagnostics and summary line, then one line of totals:
+
+```text
+verified src/main.au: 1 of 1 checks proved in 1 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+verified src/util.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 1 failed, 0 not modeled, 0 undecided
+verified 2 files: 4 of 5 checks proved in 3 functions; 1 failed, 0 not modeled, 0 undecided
+```
+
+A run over a package exits with status 1 when a check failed, when a file
+does not compile, or when a function that must verify does not. A check
+that is not modeled or undecided is reported and does not fail the run.
+This differs from a run on one file, which fails unless every check is
+proved. `--deny` makes those outcomes fail a package run too:
+
+| Option | A package run also fails when |
+| --- | --- |
+| `--deny not-modeled` | a check is not modeled |
+| `--deny undecided` | the solver could not decide a check |
+| `--deny all` | any check is not proved |
+
+`aura test --verify` verifies the package in the current directory before
+it runs the tests. A failed check fails the command, and no test runs. See
+[Testing](/manual/cli-and-tooling#testing).
+
+### Functions That Must Verify
+
+`--must-verify <function>` names a function whose checks must all be
+proved. Give the name a report shows, such as `withdraw` or
+`Account.deposit`. Repeat the option for more functions.
+
+```bash
+aura verify --must-verify withdraw --must-verify Account.deposit
+```
+
+A named function with a check that failed, is not modeled, or is undecided
+reports `AU5122` at its `def`, and the run fails in every mode:
+
+```text
+error[AU5122]: function `power` marked verified has unproved checks
+ --> src/util.au:6:1
+  |
+6 | public def power(x: float64) -> float64:
+  | ^
+  = note: checks not proved: 2; each has its own diagnostic
+```
+
+A name that matches no verified function also fails the run, so a
+misspelled name cannot pass. Aura has no marker in the source for this.
 
 ### Options
 
@@ -167,8 +378,10 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--deny <class>` | Make a package run fail on checks that are `not-modeled`, `undecided`, or `all` of both. See [Verifying a Package](#verifying-a-package). |
+| `--must-verify <name>` | Report `AU5122` when function `name` has a check that is not proved. See [Functions That Must Verify](#functions-that-must-verify). |
 | `--no-cache` | Solve every check again, without the proof cache. |
-| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`, which is a check that is not modeled), the counts `proved`, `failed`, `not_modeled` and `undecided`, the `must_verify` functions with their count of `open` checks, the `unchecked_modules`, then the diagnostics. A package run prints one document with a `files` list of such reports, each with its `path`, the `totals`, and `unmatched_must_verify`. A file that does not compile has an `error` in place of its report. |
 
 ### Proof Cache
 
@@ -197,6 +410,21 @@ booleans, with each integer type's range as a check:
 - lists, with their lengths, and their elements when those are integers,
   `bool`, `str`, or tuples and classes of modeled values; the length of any
   other list
+- a list of lists: the length of each row, and the elements of each row
+  when those are integers, `bool`, or `str`. A write through a borrow of a
+  row, such as `grid[r][c] = v`, changes that element of that row
+- a borrowed element of a list of classes or tuples, such as `xs[i]`
+  passed to a function or `xs[0].add(1)`: it reads the element, and a
+  write through it changes that element of the list
+- list slices `xs[a:b]`, `xs[a:]`, and `xs[:b]`: the length, each element,
+  and a check that the bounds are in order and inside the list. `reverse`,
+  and `sort` and `sorted`: the result holds the same elements, and for
+  integers sorted by their own order it is ordered. `k in xs` and
+  `xs.contains(k)` for integers, `bool`, and `str`
+- a comprehension over one list or `range`: its length, or with an `if`
+  filter a bound on it. The elements it builds are not modeled. `min(xs)`
+  and `max(xs)` of a list of integers: a bound of every element that is one
+  of them
 - `float32` and `float64` as IEEE-754 values, rounding each `+`, `-`, `*`,
   `/`, and `sqrt` to nearest, ties to even, with NaN, infinities, and signed
   zeros; comparisons, `abs`, `to_float`, and casts between floats and
@@ -208,10 +436,50 @@ booleans, with each integer type's range as a check:
   literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `get`,
   `remove`, `keys`, `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
   `clear` of a `set`, with `==` of whole collections
+- `Span[T]` and `view` bindings of a list: `len`, each index against the
+  span's own length, the bounds of the range where a span is made, and the
+  elements, in code and in contracts. A write through a `mut` span or view
+  reaches the list it views
+- `Array[T]`: its element count and its `shape()`. Each element read and
+  write is an index check: the number of coordinates is the rank, and each
+  coordinate is inside its dimension. A one-coordinate read such as `a[i]`
+  therefore needs `requires len(a.shape()) == 1`, because it traps on an
+  `Array` of any other rank. The elements themselves, slices, and slice
+  assignment are not modeled
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
+- `match` statements and `match` expressions: each arm is taken where its
+  pattern and guard hold, and a `match` over every variant of an enum takes
+  one of its arms
+- a method call on a union value: the `requires` of each member's method
+  is proved where the value holds that member, and its `ensures` is assumed
+  there
+- in contracts, a union with one member besides `None` where that member
+  is expected, as in `ensures result is None or result > 0`; `==` of
+  unions; and an enum variant without a payload, as in
+  `ensures result == Light.Green`. A contract cannot name a payload of a
+  `Result` or of another enum, because a contract may not contain `match`
+- `min(xs)` and `max(xs)` also when the list is a field, as in
+  `max(self.items)`
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
-- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- integer bit operations and shifts. `<<` and `>>` are exact, with the
+  count and lost-bits checks of the run time; `>>` keeps the sign. `&`,
+  `|`, and `^` with a literal operand, and `~`, are exact. Of two values
+  that are not literals, `&`, `|`, and `^` have only the bounds the
+  operands' signs give, such as `0 <= a & b <= a` for `a >= 0`
+- the `wrapping_` and `saturating_` methods of integers, exactly
+- integer `**` with a literal exponent up to 63, or with a literal base,
+  as in `2 ** k`. A power of two values that are not literals has only
+  its sign and the cases of exponent 0 and 1
+- `as` casts between numbers in contracts, with the same checks as in code
+- of the `math` module: `floor`, `ceil`, `trunc`, `sqrt`, `is_nan`,
+  `is_inf`, `is_finite`, `isqrt`, and `factorial` exactly, each with the
+  check of its argument; `gcd`, `lcm`, `comb`, and `perm` by their bounds;
+  `sin` and `cos` between -1 and 1, and `exp` not below 0. The overflow of
+  `lcm`, `comb`, `perm`, and `exp` is not checked
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals.
+  A recursive `spec def` is unfolded 8 levels deep for arguments that are
+  not literals; a check that needs more is reported as `AU5104`
 - parameters, class fields, and function results of a callable alias with
   a contract ([Callable Contracts](/manual/contracts#callable-contracts)):
   calls through them prove its `requires` and assume its `ensures`, and a
@@ -226,6 +494,19 @@ booleans, with each integer type's range as a check:
 - calls through a function value that names one function, such as
   `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
   `ensures`
+- lambdas, local `def`s, and bound methods such as `f = account.add`,
+  called in the function that makes them, directly or through a local:
+  the body runs at each call, on the arguments and on what the closure
+  captured. A capture by value has the value it had where the closure was
+  made. A capture by reference (`[mut total]`, `[values]`) is read at the
+  call and written back after it. State the closure owns and changes,
+  such as a counter it captured by value, carries from one call to the
+  next. Each check in the body is made at the call and reported in the
+  calling function. A local `def` cannot state `requires` or `ensures`,
+  and an `assert` at its top is checked against the arguments of every
+  call. A call of a bound method proves the method's `requires` and
+  assumes its `ensures`. A closure that is only called this way is not
+  verified on its own, where its captured values would be unknown
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
   over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
@@ -239,8 +520,23 @@ Anything else is a value the verifier knows nothing about: a `dict` or
 follow, such as one passed as an argument, stored in a collection, or
 chosen on different paths. Such a value's `requires` is reported as
 `AU5104` where it leaves the function, and stays checked when it is
-called. A check that depends on one of them can
-still be proved when the contract around it says enough.
+called. A check that reads one of them is reported as not modeled
+(`AU5104`, naming the step), never as a failure with a counterexample.
+
+Of closures, these are not modeled:
+
+- a closure that leaves the function that makes it: passed as an
+  argument, returned, stored in a field or a collection, or captured by
+  another closure. Its body is verified on its own, for any captured
+  value. A local it captured by reference is unknown after every call
+- a recursive call of a local `def`, which has no contract to state what
+  it returns
+- a closure with state of its own called in a loop, and a closure that
+  captured a view a function returned
+- a decorated function. The decorated name is the function value the
+  decorator returned, so a call of it proves no `requires` and assumes no
+  `ensures`, even through a decorator that returns its argument. The
+  body is still verified against its own contract
 
 A loop that builds a list proves what it builds with a quantified
 invariant:
@@ -328,37 +624,33 @@ A quantifier over a `str`, or over a list of other elements, is reported as
 
 ## What It Does Not Model
 
-The verifier treats each of these as a value it knows nothing about. A check
-that depends on one is reported as `AU5101`, and its counterexample may show
-a value the program cannot produce. State the fact the check needs as an
-`ensures` on a helper function, or as a `requires` on the function that
+The verifier treats each of these as a value it knows nothing about, or knows
+only part of. A check that fails only because of such a value is reported as
+`AU5104`, naming the step and its line, instead of as a failure with a
+counterexample the program cannot produce. State the fact the check needs as
+an `ensures` on a helper function, or as a `requires` on the function that
 relies on it.
 
 | Feature | What the verifier knows |
 | --- | --- |
-| Comprehensions, slices such as `xs[0:2]`, `sum`, `sorted`, `list.sort`, and `x in xs` on a list | Nothing about the result, including its length. |
-| Nested lists such as `grid[r][c]`, and a `dict` whose values are lists | The outer length and keys. Not the inner lengths or elements. |
-| `Span[T]` | An index into a span is not proved from `len(span)`. |
-| `&`, `\|`, `^`, `<<`, `>>`, and the `wrapping_` and `saturating_` methods | Nothing about the result. `<<` and `>>` report `AU5104`. |
-| Most `str` methods, such as `split`, `to_lower`, and `trim`, and f-strings | Nothing about the result. |
-| Lambdas and local `def` functions | Each body is verified with its captured values unknown. A caller learns nothing about the result. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
-| Generator functions | The body is verified without the generator's `requires`. Yielded values have no contract. |
-| Methods in an `impl` of a trait | They do not assume the class invariants. A `public` method of the class does. |
-| Fields after a call of a `mut self` method | Only what the method's `ensures` says, also for a field the method does not assign. |
+| Comprehensions and `sum` | The length of a comprehension that maps (`len(xs)`) or filters (at most `len(xs)`). Not its elements, and nothing about `sum` or a nested comprehension. |
+| `sorted` and `list.sort` with `key=`, or on `str` and `float` elements | The length and the elements, not their order. Plain `int` lists are known to be in order. |
+| Slices with a step, such as `xs[::2]` | Nothing about the result. Slices without a step are modeled, and their bounds are a check. |
+| A `dict` whose values are lists or objects | The keys and the length. Not the inner lists, and not the class invariant of a value. |
+| `&` between two unknown values, and any bit operation on `int128` or `uint128` | Its sign and bounds only. `&` with a literal, and `\|`, `^`, `~`, `<<`, `>>` on other widths are exact. |
+| `str` methods `trim`, `replace`, `to_lower`, `to_upper`, `count`, and the digits of an integer in an f-string | Bounds on the length only. `split`, `find`, indexing, slicing, `strip_prefix`, `strip_suffix`, and `split_once` are exact. |
+| Lambdas and local `def` functions that escape, or are called in a loop while they keep state | Each body is verified with its captured values unknown, and a caller learns nothing about the result. One called where it is made is followed into its body with the values it captured. A local `def` cannot have a contract. A [callable alias](/manual/contracts#callable-contracts) can. |
+| Decorated functions | A caller learns nothing from the contract, and its `requires` is reported as `AU5104`. |
+| Generator functions | Yielded values have no contract. The body is verified with the generator's `requires` known. |
 | `control.recover` | The target's `requires` is proved at the call. Nothing is known about the `Result`. |
 | `sync` values, `Queue` items, and `mem` reads | Unknown each time they are read, since another task or a device may change them. |
-| `tensor` and `Array` values | Not modeled. An `Array` index and a shape mismatch are not checks of the proof, and stay runtime failures. |
+| `tensor` values | Not modeled. A shape mismatch stays a runtime failure. An `Array` index is a check of the proof. |
 | Library calls, such as `json`, `io`, `regex`, and `time` | Nothing about the result. |
+| Recursive spec functions | Unfolded eight levels deep. A check that needs more is reported as `AU5104`. |
 
-Two more limits apply to every proof:
-
-- A `requires` clause that no input can meet, such as
-  `requires x > 0 and x < 0`, makes every check in the function proved.
-  `aura verify` does not report it.
-- `aura verify` takes one file and verifies the functions that file defines.
-  At a call of an imported function it uses that function's contract, but it
-  does not verify the imported module's own functions. Run it on each module.
-  It has no package or workspace mode.
+A `requires` clause that no input can meet, such as
+`requires x > 0 and x < 0`, is reported as `AU5120`, since every check in
+the function would hold for no reason.
 
 ## Trust
 

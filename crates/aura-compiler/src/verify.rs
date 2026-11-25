@@ -14,6 +14,10 @@
 
 #[path = "verify_bits.rs"]
 mod bits;
+#[path = "verify_closures.rs"]
+mod closures;
+#[path = "verify_collections.rs"]
+mod collections;
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
@@ -21,10 +25,26 @@ pub(crate) use exec::CHECK_FAILURE_SITE;
 mod float;
 #[path = "verify_raw_memory.rs"]
 mod raw_memory;
+#[path = "verify_frame.rs"]
+mod frame;
+#[path = "verify_guard.rs"]
+mod guard;
+#[path = "verify_integers.rs"]
+mod integers;
+#[path = "verify_shapes.rs"]
+mod shapes;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
 mod spec;
+#[path = "verify_text.rs"]
+mod text;
+#[path = "verify_workflow.rs"]
+mod workflow;
+pub use workflow::{
+    package_source_root, unmatched_must_verify, verify_files, Deny, FileReport, MustVerify,
+    PackageReport, Totals, MODULE_BODY,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,6 +77,9 @@ pub enum ObligationKind {
     /// A `dict` key read with brackets, or a `set` element removed, is
     /// there.
     KeyPresent,
+    /// The `requires` clauses and class invariants a function assumes on
+    /// entry can hold together.
+    Satisfiable,
 }
 
 impl ObligationKind {
@@ -72,6 +95,7 @@ impl ObligationKind {
             Self::Decreases => "decreases",
             Self::ClassInvariant => "class invariant",
             Self::KeyPresent => "key present",
+            Self::Satisfiable => "satisfiable contract",
         }
     }
 }
@@ -124,6 +148,11 @@ pub struct Report {
     /// no bounds check, by MIR function name, block, and position.
     pub proved_sites: BTreeSet<(String, usize, usize)>,
     pub obligations: Vec<ObligationReport>,
+    /// Each function [`Options::must_verify`] names, and how many of its
+    /// checks are not proved.
+    pub must_verify: Vec<MustVerify>,
+    /// The imported modules whose functions this run did not verify.
+    pub unchecked_modules: Vec<String>,
 }
 
 impl Report {
@@ -131,6 +160,29 @@ impl Report {
         self.obligations
             .iter()
             .filter(|obligation| obligation.status == Status::Proved)
+            .count()
+    }
+
+    /// How many checks failed: the solver found inputs that break them,
+    /// or their function's contract can never hold.
+    pub fn failed(&self) -> usize {
+        self.count(|status| matches!(status, Status::Failed { .. }))
+    }
+
+    /// How many checks depend on a step the verifier does not model.
+    pub fn not_modeled(&self) -> usize {
+        self.count(|status| matches!(status, Status::Unsupported(_)))
+    }
+
+    /// How many checks the solver could not decide in time.
+    pub fn undecided(&self) -> usize {
+        self.count(|status| *status == Status::Unknown)
+    }
+
+    fn count(&self, is: impl Fn(&Status) -> bool) -> usize {
+        self.obligations
+            .iter()
+            .filter(|obligation| is(&obligation.status))
             .count()
     }
 
@@ -148,6 +200,17 @@ impl Report {
                 let what = &obligation.message;
                 let diagnostic = match &obligation.status {
                     Status::Proved => return None,
+                    Status::Failed { .. } if obligation.kind == ObligationKind::Satisfiable => {
+                        Diagnostic::coded_at(
+                            "AU5120",
+                            obligation.span,
+                            format!("{what} can never hold"),
+                        )
+                        .with_note(format!(
+                            "in `{}`: no call can meet this, so its checks pass for nothing and it does not count as proved",
+                            obligation.function
+                        ))
+                    }
                     Status::Failed { counterexample } => {
                         let mut diagnostic = Diagnostic::coded_at(
                             "AU5101",
@@ -182,6 +245,7 @@ impl Report {
                 };
                 Some(diagnostic)
             })
+            .chain(self.unverified().map(MustVerify::diagnostic))
             .collect()
     }
 }
@@ -203,6 +267,9 @@ pub struct Options {
     /// Also prove which element accesses can skip their bounds check, for
     /// a build that removes proved checks.
     pub prove_sites: bool,
+    /// The functions that must verify completely, by the name a report
+    /// shows. One with a check that is not proved is reported as `AU5122`.
+    pub must_verify: Vec<String>,
 }
 
 impl Default for Options {
@@ -214,6 +281,7 @@ impl Default for Options {
             trace: std::env::var_os("AURA_VERIFY_TRACE").is_some(),
             cache_dir: None,
             prove_sites: false,
+            must_verify: Vec::new(),
         }
     }
 }
@@ -242,6 +310,11 @@ pub(crate) struct VerifyContext<'a> {
     /// The callable alias with a contract that each class field declared
     /// as one has, by class and field.
     field_contracts: BTreeMap<(String, String), String>,
+    /// What each function may write of its `mut` parameters, found when a
+    /// call first asks.
+    frames: std::cell::OnceCell<frame::Frames<'a>>,
+    /// The trait implementation methods that assume their class invariant.
+    guards: guard::Guards,
 }
 
 impl<'a> VerifyContext<'a> {
@@ -652,7 +725,7 @@ impl<'a> VerifyContext<'a> {
                 }
             }
         }
-        Self {
+        let mut cx = Self {
             functions: module
                 .functions
                 .iter()
@@ -680,7 +753,88 @@ impl<'a> VerifyContext<'a> {
             implemented,
             callable_contracts,
             field_contracts,
+            frames: std::cell::OnceCell::new(),
+            guards: guard::Guards::default(),
+        };
+        cx.guards = cx.find_guards(program, module);
+        cx
+    }
+
+    /// Finds the trait implementation methods of classes with invariants
+    /// that every caller is proved to reach with the invariant holding.
+    fn find_guards(&self, program: &Program, module: &'a MirModule) -> guard::Guards {
+        let candidates: BTreeSet<&str> = module
+            .functions
+            .iter()
+            .filter(|function| {
+                matches!(
+                    function.receiver,
+                    Some(
+                        crate::mir::MirReceiverKind::Borrow
+                            | crate::mir::MirReceiverKind::BorrowMut
+                    )
+                )
+            })
+            .map(|function| function.name.as_str())
+            .filter(|name| {
+                guard::impl_method_parts(name).is_some_and(|(_, class)| {
+                    self.class_invariant(class)
+                        .is_some_and(|(_, clauses)| !clauses.is_empty())
+                })
+            })
+            .collect();
+        // Most programs have none, and then nothing is read.
+        if candidates.is_empty() {
+            return guard::Guards::default();
         }
+        let mut functions = self.functions.clone();
+        let top_level = module.top_level.as_ref();
+        functions.extend(top_level.map(|function| (function.name.as_str(), function)));
+        guard::guards(
+            &functions,
+            &candidates,
+            &program.module_name,
+            top_level.map(|function| function.name.as_str()),
+        )
+    }
+
+    /// The class whose invariant the trait implementation method `name`
+    /// assumes on entry, because every call is proved to establish it.
+    pub(crate) fn impl_guard(&self, name: &str) -> Option<&str> {
+        let (_, class) = guard::impl_method_parts(self.guards.guarded.get(name)?)?;
+        Some(class)
+    }
+
+    /// Whether a trait implementation method of `class` assumes the class
+    /// invariant, so a trait object made from a `class` value must hold it.
+    pub(crate) fn guards_class(&self, class: &str) -> bool {
+        let invariant = |class: &str| {
+            self.class_invariant(class)
+                .map(|(_, clauses)| clauses.as_ptr())
+        };
+        let wanted = invariant(class);
+        wanted.is_some()
+            && self
+                .guards
+                .guarded
+                .iter()
+                .any(|name| self.impl_guard(name).and_then(invariant) == wanted)
+    }
+
+    /// The guarded method of another module that `function` reaches in a
+    /// way that proves nothing about its receiver.
+    pub(crate) fn charged(&self, function: &str) -> Option<&str> {
+        self.guards.charged.get(function).map(String::as_str)
+    }
+
+    /// The field paths of its `mut` parameter `param` that `function` may
+    /// write, or `None` when it may write any part.
+    pub(crate) fn written(&self, function: &str, param: &str) -> Option<&BTreeSet<String>> {
+        self.frames
+            .get_or_init(|| frame::frames(&self.functions))
+            .get(function)?
+            .get(param)?
+            .as_ref()
     }
 
     /// The callable alias with a contract that field `field` of class
@@ -732,6 +886,31 @@ impl<'a> VerifyContext<'a> {
     /// The declaration whose contract a call of MIR function `name` uses.
     pub(crate) fn decl(&self, name: &str) -> Option<&'a FunctionDecl> {
         self.decls.get(spec::base_name(name)).copied()
+    }
+
+    /// The generator function whose body MIR function `name` holds: its
+    /// MIR name and its declaration. The checker gives the body function
+    /// the generator's own span, which no function a program declares
+    /// under such a name can share.
+    pub(crate) fn generator_of_body(&self, name: &str) -> Option<(String, &'a FunctionDecl)> {
+        let name = spec::base_name(name);
+        let at = name.rfind("::").map_or(0, |at| at + 2);
+        let generator = name[at..].strip_prefix(crate::diag::GENERATOR_BODY_PREFIX)?;
+        let generator = format!("{}{generator}", &name[..at]);
+        let decl = self.decl(&generator)?;
+        (self.decl(name)?.span == decl.span).then_some((generator, decl))
+    }
+
+    /// The declaration whose `requires` hold on entry to MIR function
+    /// `name`: its own, or the generator function's for a generator's body.
+    /// Each call of the generator proves them, and the body runs later on
+    /// the same argument values: a generator takes no `mut` parameter, its
+    /// closure owns the others, and no clause can read shared state.
+    pub(crate) fn entry_decl(&self, name: &str) -> Option<&'a FunctionDecl> {
+        match self.generator_of_body(name) {
+            Some((_, decl)) => Some(decl),
+            None => self.decl(name),
+        }
     }
 
     /// The contract declaration of an `extern` function by its C link symbol.
@@ -875,6 +1054,19 @@ impl<'a> VerifyContext<'a> {
         )
     }
 
+    /// The names of the variants of enum `name`, in order.
+    pub(crate) fn variant_names(&self, name: &str) -> Vec<String> {
+        self.enums
+            .get(name)
+            .map(|item| {
+                item.variants
+                    .iter()
+                    .map(|variant| variant.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(crate) fn variant_index(&self, name: &str, variant: &str) -> Option<usize> {
         // The builtin `Lookup` a checked list read returns.
         if name == LOOKUP && !self.enums.contains_key(name) {
@@ -929,13 +1121,30 @@ fn substitute(ty: &Type, substitutions: &BTreeMap<&str, &Type>) -> Type {
     }
 }
 
+/// Prefix of the function that builds the frame of a generator the checker
+/// also spells as a state machine, and of the frame's class.
+const GENERATOR_FRAME_NEW_PREFIX: &str = "__aura_frame_new_";
+const GENERATOR_FRAME_CLASS_PREFIX: &str = "__aura_frame_";
+
+/// Whether `function` is the checker's state-machine copy of a generator:
+/// the function that builds its frame, or the frame's method. The copy
+/// repeats the statements of the generator's body, which is verified as
+/// written, and its checks would read the frame's fields with no memory of
+/// the statements that ran before the last `yield`.
+fn generator_frame_function(function: &MirFunction) -> bool {
+    function.span.column >= crate::diag::GENERATED_COLUMN_STRIDE
+        && (function.name.starts_with(GENERATOR_FRAME_NEW_PREFIX)
+            || (function.name.starts_with(GENERATOR_FRAME_CLASS_PREFIX)
+                && function.name.contains('.')))
+}
+
 /// Whether `function` is one the report covers: a function of the entry
 /// module that is not a `spec def`.
 fn verified_function(program: &Program, cx: &VerifyContext<'_>, function: &MirFunction) -> bool {
     if function.module_name != program.module_name {
         return false;
     }
-    if function.name.contains("::__default_") {
+    if function.name.contains("::__default_") || generator_frame_function(function) {
         return false;
     }
     // A class's invariant check runs where the invariant must hold, and
@@ -1060,10 +1269,21 @@ pub fn verify_module(
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
     let raw_effects = raw_memory::affected_functions(module);
-    for function in &module.functions {
+    // The module body is verified like a function. A build that removes
+    // proved checks leaves it alone.
+    let at_calls = closures::checked_at_calls(program, &cx, module);
+    let top_level = module.top_level.iter().filter(|_| !options.prove_sites);
+    let mut function_spans: BTreeMap<String, Span> = BTreeMap::new();
+    for function in module.functions.iter().chain(top_level) {
         let is_primary = verified_function(program, &cx, function);
         let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
         if !is_primary && !is_auxiliary {
+            continue;
+        }
+        // A closure checked where it is called is run on its own only for
+        // a build, which asks which of its checks hold for any capture.
+        let at_calls = at_calls.contains(function.name.as_str());
+        if at_calls && !options.prove_sites {
             continue;
         }
         if let Some(filter) = &options.function_filter {
@@ -1071,10 +1291,20 @@ pub fn verify_module(
                 continue;
             }
         }
-        if is_primary {
+        // A check in a generator's body is reported under the generator,
+        // and one in a copy made for a generator argument under the
+        // function that was copied, at the place it was written.
+        let (public, is_copy) = match cx.generator_of_body(&function.name) {
+            Some((generator, _)) => (generator, false),
+            None => workflow::reported_name(&function.name),
+        };
+        let reported_span = |span: Span| if is_copy { span.written() } else { span };
+        if is_primary && !is_copy {
             report.functions += 1;
+            function_spans
+                .entry(public.clone())
+                .or_insert(function.span);
         }
-        let public = crate::mir::public_function_name(&function.name);
         let module_order = if function.module_name == program.module_name {
             String::new()
         } else {
@@ -1087,9 +1317,33 @@ pub fn verify_module(
         } else {
             let entry = exec.entry_state();
             exec.prove_weakened_requires(&entry);
+            let before = exec.facts.len();
             exec.assume_entry_requires(&entry);
             exec.assume_entry_invariant(&entry);
             exec.assume_entry_parameters(&entry);
+            if exec.facts.len() > before {
+                exec.oblige(
+                    ObligationKind::Satisfiable,
+                    function.span,
+                    format!("the contract `{public}` assumes on entry"),
+                    "true",
+                    exec::Goal::CanHold,
+                );
+            }
+            if let Some(target) = cx.charged(&function.name) {
+                exec.oblige(
+                    ObligationKind::ClassInvariant,
+                    function.span,
+                    format!(
+                        "class invariant holds wherever `{public}` may call `{}`, which assumes it",
+                        crate::mir::public_function_name(target)
+                    ),
+                    &entry.pc,
+                    exec::Goal::Unsupported(
+                        "a call on a union, through a function value, or on a value of a type parameter does not prove the receiver's class invariant".into(),
+                    ),
+                );
+            }
             exec.run(entry);
         }
         if let Some(reason) = exec.unsupported.clone() {
@@ -1120,7 +1374,7 @@ pub fn verify_module(
             .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
         let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
             Some(statuses) => {
-                if is_primary {
+                if is_primary && !is_copy {
                     report.cached += 1;
                 }
                 statuses
@@ -1158,12 +1412,23 @@ pub fn verify_module(
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
             }
-            if !is_primary && status == Status::Proved {
+            if at_calls || (!is_primary && status == Status::Proved) {
                 continue;
             }
+            // A contract that can hold is not a check of the program, so
+            // only one that cannot is reported.
+            if obligation.kind == ObligationKind::Satisfiable && status == Status::Proved {
+                continue;
+            }
+            let span = reported_span(obligation.span);
+            let status = if is_copy {
+                workflow::copy_status(status)
+            } else {
+                status
+            };
             let key = (
                 module_order.clone(),
-                (obligation.span.line, obligation.span.column),
+                (span.line, span.column),
                 obligation.kind,
                 obligation.message.clone(),
             );
@@ -1180,7 +1445,7 @@ pub fn verify_module(
                         ObligationReport {
                             kind: obligation.kind,
                             function: public.clone(),
-                            span: obligation.span,
+                            span,
                             message: obligation.message.clone(),
                             status,
                         },
@@ -1196,6 +1461,8 @@ pub fn verify_module(
         );
     }
     report.obligations = merged.into_values().collect();
+    report.must_verify = workflow::must_verify(&options.must_verify, &function_spans, &report);
+    report.unchecked_modules = workflow::unchecked_modules(program, module);
     // A lemma that is not proved may have let the verifier assume what no
     // run checks, so no access counts as proved.
     if !erased_open {
@@ -1237,7 +1504,15 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
                 part("unsupported");
                 part(reason);
             }
+            exec::Goal::CanHold => part("can hold"),
         }
+    }
+    // A failed check's status names the unmodeled step it depends on.
+    for (name, step) in &exec.unmodeled {
+        let (what, span) = &exec.unmodeled_steps[*step];
+        part(name);
+        part(what);
+        part(&span.line.to_string());
     }
     hasher
         .finalize()
@@ -1482,7 +1757,9 @@ fn ask_once(
                             exec.inputs
                                 .iter()
                                 .zip(values)
-                                .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
+                                .map(|((name, _), value)| {
+                                    (name.clone(), exec.input_text(name, smt::render_int(&value)))
+                                })
                                 .collect()
                         })
                         .unwrap_or_default()
@@ -1527,7 +1804,7 @@ fn solve(
                     .chain(exec.obligations.iter().filter_map(
                         |obligation| match &obligation.goal {
                             exec::Goal::Holds(goal) => Some(goal.as_str()),
-                            exec::Goal::Unsupported(_) => None,
+                            exec::Goal::Unsupported(_) | exec::Goal::CanHold => None,
                         },
                     )),
             );
@@ -1541,6 +1818,9 @@ fn solve(
     let mut attempts = SAMPLE_CHECKS * float::SAMPLES;
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
+    // What says what a made-up result is goes only to the checks that read
+    // the result.
+    let described = exec.described_by();
     for obligation in &exec.obligations {
         // Facts are asserted in the order the walk assumed them, so each
         // check sees only what holds before it.
@@ -1548,6 +1828,13 @@ fn solve(
             let mut text = String::new();
             let mut rough_text = String::new();
             for (index, fact) in exec.facts[asserted..obligation.facts].iter().enumerate() {
+                // A fact about constants of its own is asserted only for
+                // the checks that reach them.
+                if exec.lazy.contains_key(&(asserted + index))
+                    || exec.is_described(asserted + index)
+                {
+                    continue;
+                }
                 text.push_str(&format!("(assert {fact})\n"));
                 match replaced.get(&(asserted + index)) {
                     Some(axioms) => {
@@ -1572,10 +1859,27 @@ fn solve(
                 statuses.push(Status::Unsupported(reason.clone()));
                 continue;
             }
+            // Unsatisfiable facts are a contract no input meets. A solver
+            // that cannot tell is not a reason to report one.
+            exec::Goal::CanHold => {
+                let status = match solver.ask("(push 1)\n", None)? {
+                    Status::Proved => Status::Failed {
+                        counterexample: Vec::new(),
+                    },
+                    _ => Status::Proved,
+                };
+                if trace {
+                    eprintln!("; the entry contract can hold => {status:?}");
+                }
+                statuses.push(status);
+                continue;
+            }
             exec::Goal::Holds(goal) => goal,
         };
         let query = format!(
-            "(push 1)\n(assert {})\n",
+            "(push 1)\n{}{}(assert {})\n",
+            exec.lazy_asserts(obligation),
+            exec.descriptions(&described, obligation, goal),
             exec::and(&obligation.pc, &exec::not(goal))
         );
         if trace {
@@ -1603,8 +1907,10 @@ fn solve(
             }
             let rows = samples.as_mut().expect("the samples were just drawn");
             let mut facts = String::from("; the check with its float inputs fixed\n");
-            for fact in &exec.facts[..obligation.facts] {
-                facts.push_str(&format!("(assert {fact})\n"));
+            for (index, fact) in exec.facts[..obligation.facts].iter().enumerate() {
+                if !exec.lazy.contains_key(&index) && !exec.is_described(index) {
+                    facts.push_str(&format!("(assert {fact})\n"));
+                }
             }
             let goal = &query["(push 1)\n".len()..];
             for fixed in rows.iter().take(attempts) {
@@ -1637,6 +1943,20 @@ fn solve(
         }
         statuses.push(status);
     }
+    // A check that fails only by the solver's choice of a result the
+    // encoding does not model has no counterexample: the program may never
+    // produce that result.
+    for (obligation, status) in exec.obligations.iter().zip(&mut statuses) {
+        if !matches!(status, Status::Failed { .. }) {
+            continue;
+        }
+        if let Some((what, span)) = exec.unmodeled_cause(obligation) {
+            *status = Status::Unsupported(format!(
+                "it depends on {what} at line {}, which the verifier does not model",
+                span.line
+            ));
+        }
+    }
     solver.close();
     if let Some(rough) = rough {
         rough.close();
@@ -1647,6 +1967,43 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "verify_closures_tests.rs"]
+mod tests_closures;
+#[cfg(test)]
+#[path = "verify_outcomes_tests.rs"]
+mod tests_outcomes;
+#[cfg(test)]
+#[path = "verify_text_tests.rs"]
+mod tests_text;
+
+#[cfg(test)]
+#[path = "verify_generators_tests.rs"]
+mod tests_generators;
+
+#[cfg(test)]
+#[path = "verify_spans_tests.rs"]
+mod tests_spans;
+
+#[cfg(test)]
+#[path = "verify_classes_tests.rs"]
+mod tests_classes;
+
+#[cfg(test)]
+#[path = "verify_collections_tests.rs"]
+mod tests_collections;
+
+#[cfg(test)]
+#[path = "verify_integers_tests.rs"]
+mod tests_integers;
+
+#[cfg(test)]
+#[path = "verify_workflow_tests.rs"]
+mod tests_workflow;
+
+#[cfg(test)]
+#[path = "verify_shapes_tests.rs"]
+mod tests_shapes;
 
 /// The builtin enum a checked list read returns: `Found(element)` or
 /// `Missing`.

@@ -160,3 +160,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 147. [ADR-0147. Privileged hardware operations in mem](0147-privileged-hardware-operations.md)
 148. [ADR-0148: x86-64 Kernel Code Generation](0148-x86-64-kernel-profile.md)
 149. [ADR-0149 PC Interrupts Under QEMU](0149-qemu-x86-64-interrupt-board.md)
+150. [ADR-0150: A check that reads an unmodeled result is not a failure](0150-unmodeled-results-are-not-failures.md) — Accepted; made-up results are recorded and a refuted check that reads one is reported as not modeled, with no counterexample
+151. [ADR-0151: A contract that can never hold is reported](0151-contracts-that-cannot-hold.md) — Accepted; one satisfiability query for the entry assumptions, `AU5120`
