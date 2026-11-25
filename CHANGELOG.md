@@ -93,7 +93,7 @@ in this file.
   generator argument once, under the function's own name. Before, it was
   reported a second time under a name starting with `__aura_with_`. A
   module constant's initializer is reported under the constant's name.
-- Performance: more text steps make no copy that is thrown away. `join` builds
+- Speed: more text steps make no copy that is thrown away. `join` builds
   its result in one pass; `value.clone()` on a temporary that is released next
   hands the temporary over; `map[key].clone()` on a `dict[str, str]` is one
   lookup; `out.append(texts[i].clone())` copies the element straight into the
