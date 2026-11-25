@@ -567,3 +567,30 @@ fn a_tape_values_parts_count_what_is_left() {
     };
     assert!(variant.payloads.stored(0).is_none());
 }
+
+#[test]
+fn a_large_objects_lookups_use_one_key_index() {
+    let mut entries: Vec<String> = (0..40)
+        .map(|index| format!(r#""k{index}": {index}"#))
+        .collect();
+    entries.push(r#""ab": 99"#.to_string());
+    let object = root(&format!("{{{}}}", entries.join(", ")));
+    let bits = |key: &str| {
+        let address = object.lookup_address(key)?;
+        // SAFETY: `object` keeps the tape alive.
+        unsafe { scalar_bits_at(address, 0) }
+    };
+    for index in 0..40 {
+        assert_eq!(bits(&format!("k{index}")), Some(index), "k{index}");
+    }
+    // An escaped key is found by its unescaped text.
+    assert_eq!(bits("ab"), Some(99));
+    assert!(object.lookup_str("k40").is_none());
+    assert!(object.lookup_str("").is_none());
+    assert!(object.lookup_str("k7").is_some());
+    assert_eq!(object.tape().key_index.lock().unwrap().len(), 1);
+    // A small object is searched and not indexed.
+    let small = root(r#"{"a": 1}"#);
+    assert!(small.lookup_str("a").is_some());
+    assert!(small.tape().key_index.lock().unwrap().is_empty());
+}
