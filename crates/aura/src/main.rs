@@ -5556,6 +5556,15 @@ fn foreign_link_args(
         args.push("-L".into());
         args.push(path.clone().into_os_string());
         if embed_rpath {
+            // A run path splits at `:` and expands `$ORIGIN`-style tokens,
+            // so a directory that holds either cannot be recorded as one.
+            let text = path.to_string_lossy();
+            if text.contains(':') || text.contains('$') {
+                return Err(format!(
+                    "cannot record library path `{}` as a run path because it contains `:` or `$`; build with `--no-rpath` and set the library search path when the program runs",
+                    text.escape_default()
+                ));
+            }
             // `-Xlinker` passes the path as its own argument, so a comma in it
             // cannot split a `-Wl,` option.
             for part in ["-Xlinker", "-rpath", "-Xlinker"] {
@@ -7678,6 +7687,23 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let resolved = parse_static_library_artifact_path(stdout.as_bytes())
             .expect("cargo artifact output should expose a static archive");
         assert_eq!(resolved, PathBuf::from(format!("/tmp/{archive}")));
+    }
+
+    #[test]
+    fn foreign_link_args_refuse_run_paths_that_split_or_expand() {
+        for path in ["/pkg/lib:/tmp", "/pkg/$ORIGIN/lib"] {
+            let plan = aura_compiler::ForeignLinkPlan {
+                libraries: vec!["probe".to_string()],
+                library_paths: vec![PathBuf::from(path)],
+                frameworks: Vec::new(),
+                exports: Vec::new(),
+            };
+            let error = super::foreign_link_args(&plan, "linux", true)
+                .expect_err("a run path with `:` or `$` is refused");
+            assert!(error.contains("--no-rpath"), "{error}");
+            // Without a run path the directory is only searched at link time.
+            assert!(super::foreign_link_args(&plan, "linux", false).is_ok());
+        }
     }
 
     #[test]

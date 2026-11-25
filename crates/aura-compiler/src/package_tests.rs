@@ -2482,6 +2482,42 @@ fn ffi_link_settings_reject_empty_and_control_character_paths() {
 }
 
 #[test]
+fn ffi_link_settings_reject_run_path_separators_and_tokens() {
+    for path in [
+        "lib:/tmp",
+        "lib:.",
+        "native:",
+        "$ORIGIN/../evil",
+        "${ORIGIN}",
+        "lib/$LIB",
+        "C:/vendor",
+    ] {
+        if cfg!(windows) && path == "C:/vendor" {
+            continue;
+        }
+        for os in ["linux", "macos"] {
+            let error = expect_diag(
+                host_link_plan(
+                    &format!("library_paths = [{}]\n", toml_string(path)),
+                    true,
+                    os,
+                ),
+                "a library path that a run path would split or expand must be rejected",
+            );
+            assert_eq!(error.code, "AU2999");
+            assert!(
+                error.message.contains("`:` or `$`"),
+                "unexpected error for `{path}`: {}",
+                error.message
+            );
+        }
+    }
+    let plan = host_link_plan("library_paths = [\"native/lib\"]\n", true, "linux")
+        .expect("a plain library path is accepted");
+    assert_eq!(plan.library_paths, [Path::new("/pkg").join("native/lib")]);
+}
+
+#[test]
 fn package_graph_link_plan_lists_dependencies_before_the_root_once_each() {
     let temp = TempDir::new("aura-packages-ffi-link-plan");
     let main_path = temp.write(

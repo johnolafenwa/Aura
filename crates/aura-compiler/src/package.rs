@@ -1289,6 +1289,24 @@ fn foreign_link_plan_for_host(
                     ),
                 ));
             }
+            // A run path splits at `:` and expands `$ORIGIN`-style tokens,
+            // so either would let an entry name a directory outside the
+            // package, such as the current directory. A Windows drive
+            // letter is the one `:` allowed, and only on Windows.
+            let after_drive = match path.as_bytes() {
+                [letter, b':', ..] if cfg!(windows) && letter.is_ascii_alphabetic() => &path[2..],
+                _ => path.as_str(),
+            };
+            if after_drive.contains(':') || path.contains('$') {
+                return Err(Diagnostic::coded(
+                    "AU2999",
+                    format!(
+                        "manifest `{}` has invalid entry `{}` in `{table} library_paths`; a library path must not contain `:` or `$`",
+                        manifest_path.display(),
+                        path.escape_default()
+                    ),
+                ));
+            }
             if Path::new(path)
                 .components()
                 .any(|component| matches!(component, Component::ParentDir))
