@@ -2912,6 +2912,202 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
 }
 
 #[test]
+fn mir_lowering_omits_mem_wrappers_without_import_and_public_mir_rejects_mem_calls() {
+    let plain = crate::lower_source_to_mir("def main():\n    pass\n")
+        .expect("plain source should lower to MIR");
+    assert!(
+        plain
+            .functions
+            .iter()
+            .all(|function| !function.name.starts_with("mem::")),
+        "plain MIR without `import mem` should not emit mem::* wrapper functions"
+    );
+
+    let make_module = |functions: Vec<MirFunction>| MirModule {
+        foreign_link: Default::default(),
+        unions: Vec::new(),
+        enums: Vec::new(),
+        constants: Vec::new(),
+        functions,
+        classes: Vec::new(),
+        trait_impls: Vec::new(),
+        top_level: None,
+        ownership: Default::default(),
+        borrowing: Default::default(),
+    };
+
+    let make_main = |instructions: Vec<Instruction>, local_types: Vec<MirLocalType>| MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: Some("/tmp/mem_gate.au".to_string()),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types,
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions,
+            terminator: Terminator::Return(Operand::Unit),
+        }],
+    };
+
+    let by_name = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "res".to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Name("mem::fence".to_string()),
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        }],
+        vec![MirLocalType {
+            name: "res".to_string(),
+            ty: Type::Unit,
+        }],
+    )]);
+
+    let fence_op = crate::runtime_ops::HostBuiltin::from_name("mem::fence")
+        .expect("mem::fence host builtin should exist");
+    let by_host_op = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "res".to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: crate::runtime_ops::RuntimeOp::Host(fence_op),
+                    receiver: None,
+                    receiver_place: None,
+                },
+                args: Vec::new(),
+                type_args: Default::default(),
+            },
+        }],
+        vec![MirLocalType {
+            name: "res".to_string(),
+            ty: Type::Unit,
+        }],
+    )]);
+
+    let read_sig = Type::Function {
+        params: vec![crate::sema::FunctionParamContract {
+            name: "address".to_string(),
+            ty: Type::named("uint64"),
+            passing: crate::ast::ReceiverKind::Value,
+            has_default: false,
+            keyword_only: false,
+        }],
+        return_type: Box::new(Type::named("uint64")),
+    };
+    let by_function_operand = make_module(vec![make_main(
+        vec![Instruction::Assign {
+            target: "fn_val".to_string(),
+            value: Rvalue::Use(Operand::Function {
+                name: "mem::read_uint64".to_string(),
+                signature: Box::new(read_sig.clone()),
+            }),
+        }],
+        vec![MirLocalType {
+            name: "fn_val".to_string(),
+            ty: read_sig,
+        }],
+    )]);
+
+    let with_mem_def = make_module(vec![
+        make_main(Vec::new(), Vec::new()),
+        MirFunction {
+            name: "mem::fence".to_string(),
+            module_name: "mem".to_string(),
+            source_path: None,
+            span: Span::new(1, 1),
+            receiver: None,
+            params: Vec::new(),
+            local_types: Vec::new(),
+            return_type: Type::Unit,
+            entry: "entry".to_string(),
+            blocks: vec![BasicBlock {
+                label: "entry".to_string(),
+                instructions: Vec::new(),
+                terminator: Terminator::Return(Operand::Unit),
+            }],
+        },
+    ]);
+
+    let by_terminator = make_module(vec![MirFunction {
+        name: "main".to_string(),
+        module_name: "<test>".to_string(),
+        source_path: Some("/tmp/mem_gate.au".to_string()),
+        span: Span::new(1, 1),
+        receiver: None,
+        params: Vec::new(),
+        local_types: Vec::new(),
+        return_type: Type::Unit,
+        entry: "entry".to_string(),
+        blocks: vec![BasicBlock {
+            label: "entry".to_string(),
+            instructions: Vec::new(),
+            terminator: Terminator::Return(Operand::Function {
+                name: "mem::fence".to_string(),
+                signature: Box::new(Type::Function {
+                    params: Vec::new(),
+                    return_type: Box::new(Type::Unit),
+                }),
+            }),
+        }],
+    }]);
+
+    for (label, module) in [
+        ("CallTarget::Name", by_name),
+        ("RuntimeOp::Host", by_host_op),
+        ("Operand::Function", by_function_operand),
+        ("mem::* definition", with_mem_def),
+        ("Terminator::Return", by_terminator),
+    ] {
+        let direct =
+            crate::run_mir(&module).expect_err(&format!("{label}: run_mir must reject mem::*"));
+        assert_eq!(direct.code, "AU4001", "{label}: {direct:?}");
+
+        let serialized = serde_json::to_vec(&module).expect("module should serialize");
+        let via_json = crate::run_serialized_mir(&serialized, "/tmp/mem_gate.au", "")
+            .expect_err(&format!("{label}: run_serialized_mir must reject mem::*"));
+        assert_eq!(via_json.code, "AU4001", "{label}: {via_json:?}");
+    }
+
+    let entry_err = crate::run_mir_entry(&plain, Some("mem::fence"), None, Vec::new())
+        .expect_err("run_mir_entry must reject mem::* entry names");
+    assert_eq!(entry_err.code, "AU4001", "{entry_err:?}");
+
+    let mut untrusted = MirRuntime::new_with_stdout_sink_and_program_args(
+        plain.clone(),
+        Arc::new(Mutex::new(String::new())),
+        None,
+        CancellationContext::default(),
+        Arc::new(Vec::new()),
+        false,
+    );
+    let mut env = Env::default();
+    let builtin_err = untrusted
+        .evaluate_named_builtin("mem::fence", &[], &mut env, None)
+        .expect_err("untrusted runtime must reject mem::* builtins");
+    assert_eq!(builtin_err.code, "AU4001", "{builtin_err:?}");
+
+    let with_import_ast =
+        crate::parse_source("import mem\ndef main():\n    mem.fence()\n").expect("should parse");
+    let with_import_program =
+        crate::check_module_with_builtin_imports(with_import_ast).expect("should check");
+    let with_import_mir = crate::lower_to_mir(&with_import_program);
+    assert!(
+        with_import_mir
+            .functions
+            .iter()
+            .any(|function| function.name == "mem::fence"),
+        "MIR lowering must retain mem::* wrappers when `import mem` is present"
+    );
+    super::run_trusted(&with_import_mir)
+        .expect("trusted execution of MIR with `import mem` should succeed");
+}
+
+#[test]
 fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque_handles() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
