@@ -2407,3 +2407,41 @@ fn slice_handles_large_steps_without_signed_overflow() {
     check_cases();
     deferred(check_cases);
 }
+
+#[test]
+fn parameter_sentinel_is_rejected_as_tensor_operand() {
+    let scalar = tensor(float32(&[3.5], &[1]), TensorDevice::Cpu);
+    let param = node_op(&scalar, 6, &[]).unwrap();
+
+    let assert_rejected = |label: &str, result: Result<Value>| {
+        let error = result.expect_err(&format!("{label} should fail with AU4007"));
+        assert_eq!(error.code, "AU4007", "{label}: unexpected error {error:?}");
+    };
+
+    assert_rejected("item", host_tensor_item(vec![param.clone()], None));
+    assert_rejected("to_array", host_tensor_to_array(vec![param.clone()], None));
+    assert_rejected("eval", host_tensor_eval(vec![param.clone()], None));
+    assert_rejected("binary", binary(&param, &scalar, 0));
+    assert_rejected(
+        "unary",
+        host_tensor_unary(vec![param.clone(), int(0)], None),
+    );
+    assert_rejected("node_op slice", node_op(&param, 0, &[0, 0, 1, 1]));
+    assert_rejected("node_op expand", node_op(&param, 1, &[2]));
+    assert_rejected("node_op requires_grad", node_op(&param, 4, &[]));
+    assert_rejected("node_op detach", node_op(&param, 5, &[]));
+    assert_rejected("node_op together", node_op(&param, 8, &[]));
+    assert_rejected("pair_op assign param rhs", pair_op(&param, &param, 4, &[]));
+    assert_rejected("pair_op cat", pair_op(&param, &scalar, 0, &[0]));
+    deferred(|| {
+        assert_rejected("deferred binary", binary(&param, &scalar, 0));
+    });
+
+    // Valid Parameter operations still succeed.
+    let value = node_op(&param, 7, &[]).unwrap();
+    assert_eq!(array(&value), float32(&[3.5], &[1]));
+    let shared = host_tensor_share(vec![param.clone()], None).unwrap();
+    assert_eq!(node(&shared), node(&param));
+    let again = node_op(&param, 6, &[]).unwrap();
+    assert_eq!(node(&again), node(&param));
+}

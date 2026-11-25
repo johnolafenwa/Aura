@@ -385,15 +385,46 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
     // A leaf in host memory is copied to a buffer for this run.
     let mut uploaded: Vec<Arc<Buffer>> = Vec::new();
     let mut buffers: Vec<*mut c_void> = Vec::with_capacity(leaves.len());
-    for leaf in leaves {
+    let mut leaf_iter = leaves.iter();
+    for slot in &plan.slots {
+        let Slot::Leaf {
+            dtype: leaf_dtype,
+            shape: leaf_shape,
+        } = slot
+        else {
+            continue;
+        };
+        let leaf_dtype = ArrayDType::from_code(*leaf_dtype)
+            .ok_or_else(|| metal_error("received an unknown leaf dtype"))?;
+        let (_, expected_bytes) = super::checked_tensor_byte_len(leaf_shape, leaf_dtype)?;
+        let leaf = leaf_iter
+            .next()
+            .ok_or_else(|| metal_error("received fewer leaves than the plan expects"))?;
         match leaf {
-            Storage::Metal(buffer) => buffers.push(buffer.handle),
+            Storage::Metal(buffer) => {
+                if buffer.bytes != expected_bytes {
+                    return Err(metal_error(&format!(
+                        "received a leaf buffer of {} bytes for a shape requiring {expected_bytes} bytes",
+                        buffer.bytes
+                    )));
+                }
+                buffers.push(buffer.handle);
+            }
             Storage::Host(elements) => {
                 let buffer = Arc::new(Buffer::from_array(elements)?);
+                if buffer.bytes != expected_bytes {
+                    return Err(metal_error(&format!(
+                        "received a host leaf of {} bytes for a shape requiring {expected_bytes} bytes",
+                        buffer.bytes
+                    )));
+                }
                 buffers.push(buffer.handle);
                 uploaded.push(buffer);
             }
         }
+    }
+    if leaf_iter.next().is_some() {
+        return Err(metal_error("received more leaves than the plan expects"));
     }
     let (_, output_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
     let output = Buffer::new(output_bytes)?;

@@ -464,6 +464,11 @@ impl TensorValue {
         self.0.tracked
     }
 
+    /// Whether this node is a `Parameter` slot rather than a tensor value.
+    fn is_variable(&self) -> bool {
+        self.0.variable.is_some()
+    }
+
     /// A tensor of the elements of `elements`, in host memory.
     fn host(device: TensorDevice, elements: ArrayValue) -> Self {
         Self::ready(
@@ -519,6 +524,12 @@ impl TensorValue {
     /// The tensor's memory, after running the work it waits on. Two
     /// threads that ask at once both run the work and store equal results.
     fn storage(&self) -> Result<Storage> {
+        if self.is_variable() {
+            return Err(tensor_error(
+                "tensor",
+                "expects a tensor value rather than a parameter",
+            ));
+        }
         if let State::Ready(storage) = &*self.state() {
             return Ok(storage.clone());
         }
@@ -930,7 +941,10 @@ fn planned_result_candidate(
     inputs: &[&TensorValue],
 ) -> Result<Option<(ArrayDType, Box<[usize]>)>> {
     use ArrayDType::{Bool, Float32, Int32, Int64};
-    if inputs.iter().any(|input| input.is_empty()) {
+    if inputs
+        .iter()
+        .any(|input| input.is_variable() || input.is_empty())
+    {
         return Ok(None);
     }
     let dtype = inputs[0].dtype();
@@ -1440,6 +1454,12 @@ fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
 /// GPU device keeps the operation to run with the ones after it. The CPU
 /// device, and a GPU device whose library lacks the operation, run it now.
 fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
+    if inputs.iter().any(|input| input.is_variable()) {
+        return Err(tensor_error(
+            "tensor",
+            "expects tensor operands rather than a parameter",
+        ));
+    }
     let device = inputs[0].device();
     if defers(device) {
         if let Some((dtype, shape)) = planned_result(&operation, inputs)? {
@@ -1610,11 +1630,22 @@ fn tensor_error(name: &str, message: impl std::fmt::Display) -> Diagnostic {
     )
 }
 
-fn node_arg<'a>(args: &'a [Value], index: usize, name: &str) -> Result<&'a TensorValue> {
+fn raw_node_arg<'a>(args: &'a [Value], index: usize, name: &str) -> Result<&'a TensorValue> {
     match &args[index] {
         Value::Tensor(node) => Ok(node),
         _ => Err(tensor_error(name, "expects a tensor")),
     }
+}
+
+fn node_arg<'a>(args: &'a [Value], index: usize, name: &str) -> Result<&'a TensorValue> {
+    let node = raw_node_arg(args, index, name)?;
+    if node.is_variable() {
+        return Err(tensor_error(
+            name,
+            "expects a tensor rather than a parameter",
+        ));
+    }
+    Ok(node)
 }
 
 fn array_arg<'a>(args: &'a [Value], index: usize, name: &str) -> Result<&'a ArrayValue> {
@@ -1903,7 +1934,7 @@ pub fn host_tensor_eval(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
 pub fn host_tensor_share(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_share";
     host_expect_arity(name, &args, 1)?;
-    Ok(Value::Tensor(node_arg(&args, 0, name)?.clone()))
+    Ok(Value::Tensor(raw_node_arg(&args, 0, name)?.clone()))
 }
 
 /// `tensor::__aura_scalar_like`: one number as a tensor of the node's
@@ -1985,9 +2016,14 @@ fn parameters<const N: usize>(args: &[Value], index: usize, name: &str) -> Resul
 pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_node_op";
     host_expect_arity(name, &args, 3)?;
-    let operand = node_arg(&args, 0, name)?;
+    let op = int_arg(&args, 1, name)?;
+    let operand = if matches!(op, 6 | 7) {
+        raw_node_arg(&args, 0, name)?
+    } else {
+        node_arg(&args, 0, name)?
+    };
     let rank = operand.shape().len();
-    match int_arg(&args, 1, name)? {
+    match op {
         0 => {
             let name = "tensor::slice";
             let [axis, start, stop, step] = parameters(&args, 2, name)?;
@@ -2175,11 +2211,28 @@ fn slice_start(start: &ArrayValue) -> Result<usize> {
 pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_pair_op";
     host_expect_arity(name, &args, 4)?;
-    let (left, right) = pair_args(&args, name)?;
+    let op = int_arg(&args, 2, name)?;
+    let (left, right) = if op == 4 {
+        let left = raw_node_arg(&args, 0, name)?;
+        let right = node_arg(&args, 1, name)?;
+        if left.device() != right.device() {
+            return Err(tensor_error(
+                name,
+                format!(
+                    "expects tensors on one device, found {} and {}",
+                    left.device().name(),
+                    right.device().name()
+                ),
+            ));
+        }
+        (left, right)
+    } else {
+        pair_args(&args, name)?
+    };
     let rank = left.shape().len();
     let integer =
         |node: &TensorValue| matches!(node.dtype(), ArrayDType::Int32 | ArrayDType::Int64);
-    match int_arg(&args, 2, name)? {
+    match op {
         0 => {
             let name = "tensor::cat";
             let [axis] = parameters(&args, 3, name)?;

@@ -1071,8 +1071,14 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let mut parts: Vec<(usize, usize, usize)> = Vec::new();
     for (index, (slot, buffer)) in plan.slots.iter().zip(buffers.iter_mut()).enumerate() {
         if matches!(slot, Slot::Leaf { .. }) {
-            match leaves.next().expect("a plan has memory for each leaf") {
-                Storage::Cuda(held) => *buffer = Some(Arc::clone(held)),
+            let leaf = leaves
+                .next()
+                .ok_or_else(|| cuda_error("received fewer leaves than the plan expects"))?;
+            match leaf {
+                Storage::Cuda(held) => {
+                    validate_leaf_byte_len(slot, held.bytes)?;
+                    *buffer = Some(Arc::clone(held));
+                }
                 // A leaf in host memory is copied to the device for this
                 // run.
                 Storage::Host(elements) => {
@@ -1080,6 +1086,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     copied_elements += elements.len();
                     let storage = elements.elements()?;
                     let bytes = storage_bytes(&storage);
+                    validate_leaf_byte_len(slot, bytes.len())?;
                     if bytes.len() <= MAX_STAGED_LEAF_BYTES {
                         staged.resize(staged.len().next_multiple_of(8), 0);
                         parts.push((index, staged.len(), bytes.len()));
@@ -1090,6 +1097,9 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 }
             }
         }
+    }
+    if leaves.next().is_some() {
+        return Err(cuda_error("received more leaves than the plan expects"));
     }
     if !parts.is_empty() {
         // The numbers of an expression are the same on every pass of a
@@ -1712,4 +1722,42 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn leaf_byte_length_validation_rejects_mismatched_sizes() {
+        let slot = Slot::Leaf {
+            dtype: ArrayDType::Float32 as i64,
+            shape: vec![2, 3],
+        };
+        assert_eq!(validate_leaf_byte_len(&slot, 24).unwrap(), 24);
+        assert_eq!(validate_leaf_byte_len(&slot, 0).unwrap_err().code, "AU4007");
+        assert_eq!(
+            validate_leaf_byte_len(&slot, 20).unwrap_err().code,
+            "AU4007"
+        );
+        let bad_dtype = Slot::Leaf {
+            dtype: 99,
+            shape: vec![1],
+        };
+        assert_eq!(
+            validate_leaf_byte_len(&bad_dtype, 4).unwrap_err().code,
+            "AU4007"
+        );
+    }
+}
+
+/// Validates that a leaf buffer has the exact byte length required by `slot`.
+fn validate_leaf_byte_len(slot: &Slot, actual_bytes: usize) -> Result<usize> {
+    let Slot::Leaf { dtype, shape } = slot else {
+        return Err(cuda_error("expected a leaf slot"));
+    };
+    let dtype = ArrayDType::from_code(*dtype)
+        .ok_or_else(|| cuda_error("received an unknown leaf dtype"))?;
+    let (_, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+    if actual_bytes != expected_bytes {
+        return Err(cuda_error(format!(
+            "received a leaf buffer of {actual_bytes} bytes for a shape requiring {expected_bytes} bytes"
+        )));
+    }
+    Ok(expected_bytes)
 }
