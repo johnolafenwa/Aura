@@ -727,3 +727,64 @@ fn compact_decimal_operations_normalize_and_defer_overflow() {
     assert_eq!(small_decimal_binary(true, i64::MAX, 0, 2, 0), None);
     assert_eq!(small_decimal_binary(true, 2, 1 << 62, 5, 0), None);
 }
+
+#[test]
+fn normalizing_strips_every_trailing_zero_in_few_divisions() {
+    let naive = |mut coefficient: BigInt, mut exponent: i64| {
+        let ten = BigInt::from(10u8);
+        while !coefficient.is_zero() && (&coefficient % &ten).is_zero() {
+            coefficient /= &ten;
+            exponent += 1;
+        }
+        (coefficient, exponent)
+    };
+    for digits in ["7", "1", "12", "-35", "1024", "999999999999999999999999"] {
+        for zeros in [0u32, 1, 2, 3, 7, 8, 15, 16, 17, 63, 64, 100, 257] {
+            let scale = BigInt::from(if zeros % 2 == 0 { 1u8 } else { 8u8 });
+            let coefficient =
+                digits.parse::<BigInt>().unwrap() * BigInt::from(10u8).pow(zeros) * scale;
+            assert_eq!(
+                normalized(coefficient.clone(), -5).unwrap(),
+                naive(coefficient.clone(), -5),
+                "{coefficient}"
+            );
+        }
+    }
+    assert_eq!(normalized(BigInt::zero(), 9).unwrap(), (BigInt::zero(), 0));
+    // A coefficient of 200000 trailing zeros normalizes quickly.
+    let (coefficient, exponent) =
+        normalized(BigInt::from(3u8) * BigInt::from(10u8).pow(200_000), 0).unwrap();
+    assert_eq!((coefficient, exponent), (BigInt::from(3u8), 200_000));
+    assert_eq!(
+        code(normalized(BigInt::from(10u8), i64::MAX).map(|_| int(0))),
+        "AU4002"
+    );
+}
+
+#[test]
+fn texts_over_the_string_limit_are_refused_before_they_are_built() {
+    let limit = crate::runtime_value::MAX_STRING_BYTES as u64;
+    assert_eq!(digits_in_radix(0, 10), 1);
+    assert!(digits_in_radix(64, 2) >= 64);
+    assert!(digits_in_radix(64, 10) >= 20);
+    assert!(text_fits(limit, "x").is_ok());
+    assert_eq!(code(text_fits(limit + 1, "x").map(|()| int(0))), "AU4005");
+    // 2^(64 Mi) written in base 2 is over the limit.
+    let large = BigInt::one() << (limit + 8);
+    let error = host_big_format(args([&[int(0)], &[wire(&large, 0)], &[int(2)]]), None);
+    assert_eq!(code(error), "AU4005");
+    // Plain notation of 1e70000000 is seventy million bytes.
+    let plain = host_dec_format(args([&dec("1", 70_000_000), &[int(-2)]]), None);
+    assert_eq!(code(plain), "AU4005");
+    // Aligning across an exponent gap past the limit is refused.
+    let far = host_dec_binary(
+        args([
+            &[int(0)],
+            &dec("1", 70_000_000),
+            &dec("1", 0),
+            &[int(0), int(0)],
+        ]),
+        None,
+    );
+    assert_eq!(code(far), "AU4005");
+}
