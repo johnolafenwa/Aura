@@ -9283,18 +9283,6 @@ unsafe fn keep_spare_list(value: *mut OpaqueValue) -> bool {
     {
         return false;
     }
-    // SAFETY: the caller's contract.
-    unsafe { keep_scalar_list(header, value) }
-}
-
-/// The rest of [`keep_spare_list`] for a confined list of unboxed scalars,
-/// out of line so that releases of other values stay short.
-///
-/// # Safety
-///
-/// As for [`keep_spare_list`]; `header` is `value`'s.
-#[inline(never)]
-unsafe fn keep_scalar_list(header: &OpaqueValue, value: *mut OpaqueValue) -> bool {
     SPARE_LIST
         .try_with(|spare| {
             // SAFETY: the caller holds the only reference.
