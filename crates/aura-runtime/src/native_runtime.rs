@@ -5200,6 +5200,14 @@ fn expect_string_value(value: &Value, label: &str) -> String {
 
 fn expect_bytes_value(value: &Value, label: &str) -> Vec<u8> {
     match value {
+        // A list that keeps its bytes unboxed is copied as it is.
+        Value::Vec(vector)
+            if vector.elements.as_uint8().is_some()
+                && (vector.element_type == Type::named("uint8")
+                    || is_unknown_runtime_type(&vector.element_type)) =>
+        {
+            vector.elements.as_uint8().unwrap_or_default().to_vec()
+        }
         Value::Vec(vector)
             if (vector.element_type == Type::named("uint8")
                 || is_unknown_runtime_type(&vector.element_type))

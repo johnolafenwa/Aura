@@ -12583,6 +12583,20 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
         ),
         vec![65, 66]
     );
+    // A list that keeps its bytes unboxed hands them over as they are.
+    assert_eq!(
+        super::expect_bytes_value(
+            &Value::Vec(VecValue {
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("uint8")
+                ),
+                elements: crate::list_elements::ListElements::from_uint8(vec![0, 7, 255]),
+                str_view: Default::default(),
+            }),
+            "bytes",
+        ),
+        vec![0, 7, 255]
+    );
     assert!(super::expect_bool_value(&Value::Bool(true), "flag"));
     assert_eq!(
         super::expect_i32_value(&Value::Int(IntegerValue::from_signed(123)), "count"),
