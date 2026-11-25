@@ -631,3 +631,78 @@ fn a_proved_trap_stands_only_for_a_check_a_proof_can_remove() {
     assert!(!ArithmeticTrap::Proved.checks_divisor());
     assert!(!ArithmeticTrap::Runtime.provable());
 }
+
+#[test]
+fn narrow_integer_advance_retains_overflow_trap_under_index_in_range() {
+    let source = r#"
+def step(xs: list[int64], start: int8) -> int8:
+    mut i: int8 = start
+    return i
+
+def main():
+    pass
+"#;
+    let mut module = lowered(source);
+    let func = function_mut(&mut module, "step");
+    let entry = func.blocks.first_mut().expect("entry block");
+    entry.instructions.push(Instruction::IndexInRange {
+        list: "xs".to_string(),
+        index: "i".to_string(),
+    });
+    entry.instructions.push(Instruction::Assign {
+        target: "i".to_string(),
+        value: Rvalue::Binary {
+            op: BinaryOp::Add,
+            left: Operand::Place("i".to_string()),
+            right: Operand::Int(1),
+            span: crate::diag::Span { line: 4, column: 5 },
+            trap: ArithmeticTrap::Overflow,
+        },
+    });
+
+    super::mark_covered_accesses(&mut module);
+
+    let add_traps: Vec<ArithmeticTrap> = instructions(function(&module, "step"))
+        .filter_map(|inst| match inst {
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Binary {
+                        op: BinaryOp::Add,
+                        trap,
+                        ..
+                    },
+            } if target == "i" => Some(*trap),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        add_traps,
+        vec![ArithmeticTrap::Overflow],
+        "narrow `int8` advance `i = i + 1` must retain `ArithmeticTrap::Overflow`"
+    );
+    validate_checks(&module).expect("valid module after mark_covered_accesses");
+
+    // Mutating the narrow advance to `ArithmeticTrap::None` must fail validation.
+    for block in &mut function_mut(&mut module, "step").blocks {
+        for inst in &mut block.instructions {
+            if let Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Binary {
+                        op: BinaryOp::Add,
+                        trap,
+                        ..
+                    },
+            } = inst
+            {
+                if target == "i" {
+                    *trap = ArithmeticTrap::None;
+                }
+            }
+        }
+    }
+    let err = validate_checks(&module)
+        .expect_err("narrow `int8` advance with `ArithmeticTrap::None` must fail validation");
+    assert!(err.contains("names trap `None`"), "{err}");
+}

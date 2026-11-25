@@ -847,14 +847,14 @@ impl<'a> Exec<'a> {
 
     /// The length of a `dict` or `set` of `len` keys once `key` is added
     /// to `keys`.
-    fn len_after_add(&mut self, len: &str, keys: &str, key: &str) -> String {
+    fn len_after_add(&mut self, pc: &str, len: &str, keys: &str, key: &str) -> String {
         let after = self.define(
             "Int",
             "len",
             format!("(ite (select {keys} {key}) {len} (+ {len} 1))"),
         );
         // One more key than `int64` can count stops the program first.
-        self.fact(format!("(<= {after} {})", i64::MAX));
+        self.assume(pc, format!("(<= {after} {})", i64::MAX));
         after
     }
 
@@ -3438,7 +3438,8 @@ impl<'a> Exec<'a> {
                     let Some(k) = key_term(&value) else {
                         return fresh_target(self);
                     };
-                    len = self.len_after_add(&len, &members, &k);
+                    let pc = state.pc.clone();
+                    len = self.len_after_add(&pc, &len, &members, &k);
                     members = self.define(
                         &format!("(Array {sort} Bool)"),
                         "members",
@@ -3479,7 +3480,8 @@ impl<'a> Exec<'a> {
                         )),
                         _ => None,
                     };
-                    len = self.len_after_add(&len, &keys, &k);
+                    let pc = state.pc.clone();
+                    len = self.len_after_add(&pc, &len, &keys, &k);
                     keys = self.define(
                         &format!("(Array {sort} Bool)"),
                         "keys",
@@ -5297,7 +5299,7 @@ impl<'a> Exec<'a> {
                     DictOp::SetIndex | DictOp::Set => {
                         let k = key_arg(self, state)?;
                         let stored = arg(self, state, 1, IntTy::of(&value));
-                        let new_len = self.len_after_add(&len, &keys, &k);
+                        let new_len = self.len_after_add(&pc, &len, &keys, &k);
                         let new_keys = self.define(
                             &format!("(Array {sort} Bool)"),
                             "keys",
@@ -5453,7 +5455,7 @@ impl<'a> Exec<'a> {
                         };
                         let present = format!("(select {members} {k})");
                         let (len, members) = if matches!(set_op, SetOp::Add | SetOp::AddInt64) {
-                            let len = self.len_after_add(&len, &members, &k);
+                            let len = self.len_after_add(&pc, &len, &members, &k);
                             let members = self.define(
                                 &array,
                                 "members",

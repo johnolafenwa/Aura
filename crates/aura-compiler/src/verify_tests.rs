@@ -5732,3 +5732,32 @@ def main():
     assert_eq!(unchecked.get("use_checked_imported"), Some(&1));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn len_after_add_assumption_is_guarded_by_path_condition() {
+    let source = r#"
+def f(d: mut dict[int64, int64], flag: bool) -> int64:
+    requires len(d) == 9223372036854775807
+    requires not (1 in d)
+    if flag:
+        d[1] = 2
+    if not flag:
+        assert false
+    return 0
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    let assert_failed = report.obligations.iter().any(|ob| {
+        ob.function == "f"
+            && ob.kind == ObligationKind::Assert
+            && matches!(ob.status, Status::Failed { .. })
+    });
+    assert!(
+        assert_failed,
+        "`assert false` in the else branch must fail when `d[1] = 2` only runs in the then branch: {report:#?}"
+    );
+}
