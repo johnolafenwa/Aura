@@ -1,0 +1,86 @@
+# A field of a class instance that a union holds is read where the
+# instance keeps it, and a union field of a class literal is put into its
+# box slot.
+import sys
+
+
+class Event:
+    name: str
+    data: str
+    count: int64
+    retry: Duration | None
+
+
+def make(i: int64, n: int64) -> Result[Event | None, str]:
+    if i >= n:
+        return Result.Ok(None)
+    if i % 2 == 0:
+        return Result.Ok(Event(name=f"e{i}", data="x".repeat(i), count=i, retry=None))
+    return Result.Ok(Event(name="done", data="", count=i, retry=Duration.ms(i)))
+
+
+def total(n: int64) -> Result[int64, str]:
+    mut bytes = 0
+    mut done = 0
+    mut kept: list[Event | None] = []
+    mut i = 0
+    while true:
+        event = try make(i, n)
+        i += 1
+        if event is None:
+            break
+        if i == 2:
+            kept.append(Event(name=event.name.clone(), data="kept", count=0, retry=None))
+        if event.name == "done":
+            done += event.count
+            match event.retry:
+                case Duration as wait:
+                    print(f"retry {wait.to_ms()}")
+                case None:
+                    print("no retry")
+            continue
+        bytes += event.data.byte_len() + event.count
+    for event in kept:
+        if event is not None:
+            print(f"kept {event.name} {event.data.byte_len()}")
+    print(f"done {done}")
+    return Result.Ok(bytes)
+
+
+def local_reads(n: int64) -> int64:
+    first: Event | None = Event(name="a", data="bcd", count=n, retry=Duration.ms(n))
+    mut sum = 0
+    if first is not None:
+        sum += first.data.byte_len() + first.count
+        if first.name == "a":
+            sum += 100
+        match first.retry:
+            case Duration as wait:
+                if wait.to_ms() > 1.0:
+                    sum += 1000
+            case None:
+                pass
+    return sum
+
+
+def element_compares(lines: list[str]) -> int64:
+    mut found = 0
+    for line in lines:
+        fields = line.split(" ")
+        if fields[1] == "retry":
+            found += 1
+        if fields[0] != fields[2]:
+            found += 10
+    return found
+
+
+def main() -> int32:
+    n = sys.args().len() + 6
+    match total(n):
+        case Result.Ok(bytes):
+            print(f"bytes {bytes}")
+        case Result.Err(message):
+            print(message)
+    print(local_reads(n))
+    print(element_compares(["a retry a", "b read c", "c retry d", "x y x"]))
+    return 0
