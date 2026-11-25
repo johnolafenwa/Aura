@@ -2604,6 +2604,41 @@ impl FunctionChecker<'_> {
         self.pattern_rows_cover_type_union(&rows, element_types)
     }
 
+    /// Whether a value of `ty` can exist, as far as splitting a pattern
+    /// column on it is concerned: a tuple needs each element, a union a
+    /// member, and an enum a variant whose payloads can all exist. Any
+    /// other type is not split on unless a pattern names its parts.
+    fn column_type_is_inhabited(&self, ty: &Type) -> bool {
+        self.type_is_inhabited_within(ty, 0)
+    }
+
+    fn type_is_inhabited_within(&self, ty: &Type, depth: usize) -> bool {
+        // Too deep to tell: answer no, which keeps the full split.
+        if depth > 32 {
+            return false;
+        }
+        match ty {
+            Type::Tuple(elements) => elements
+                .iter()
+                .all(|element| self.type_is_inhabited_within(element, depth + 1)),
+            Type::Union(union) => union
+                .members
+                .iter()
+                .any(|member| self.type_is_inhabited_within(member, depth + 1)),
+            _ => match self.enum_variants_for_type(ty) {
+                Some(variants) => {
+                    variants.iter().any(|(_, payloads)| payloads.is_empty())
+                        || variants.iter().any(|(_, payloads)| {
+                            payloads
+                                .iter()
+                                .all(|payload| self.type_is_inhabited_within(payload, depth + 1))
+                        })
+                }
+                None => true,
+            },
+        }
+    }
+
     pub(super) fn pattern_rows_cover_type_union(
         &self,
         rows: &[Vec<Pattern>],
@@ -2613,6 +2648,20 @@ impl FunctionChecker<'_> {
             return !rows.is_empty();
         };
         let irrefutable = |pattern: &Pattern| self.pattern_covers_entire_type(pattern, first_ty);
+
+        // When no row tells the values of an inhabited first column apart,
+        // splitting on them gives the same rows for each value: the rows
+        // cover the types exactly when they cover the remaining ones. This
+        // keeps a match on a wide tuple from branching on every column.
+        if !rows.is_empty()
+            && rows
+                .iter()
+                .all(|row| row.first().is_some_and(|first| irrefutable(first)))
+            && self.column_type_is_inhabited(first_ty)
+        {
+            let specialized = rows.iter().map(|row| row[1..].to_vec()).collect::<Vec<_>>();
+            return self.pattern_rows_cover_type_union(&specialized, remaining_types);
+        }
 
         if matches!(first_ty, Type::Union(_) | Type::Unit) {
             let members = match first_ty {

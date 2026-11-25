@@ -2145,4 +2145,8 @@ fn insert_aliased_namespace_import(
 mod tests;
 
 #[cfg(test)]
+#[path = "compile_limits_tests.rs"]
+mod compile_limits_tests;
+
+#[cfg(test)]
 use aura_runtime::array_kernel_corpus;
