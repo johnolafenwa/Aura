@@ -21036,25 +21036,40 @@ pub extern "C-unwind" fn aura_direct_file_write_all(
     file: *mut OpaqueValue,
     text: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text,
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        };
-        match unsafe { value_ref(file) } {
-            Value::File(file) => match file.write_all(&text) {
-                Ok(()) => boxed_value(result_ok(Value::Unit)),
-                Err(error) => boxed_value(result_err(io_error(error))),
-            },
-            other => runtime_error(format!(
-                "expected `fs.File`, found `{}`",
-                value_type_name(other)
-            )),
-        }
+    task_runtime_boundary(|| match direct_file_write_all(file, text) {
+        Ok(()) => boxed_value(result_ok(Value::Unit)),
+        Err(error) => boxed_value(result_err(io_error(error))),
     })
+}
+
+/// `try file.write_all(text)`: null when the write succeeds, so no
+/// `Result` is built, and otherwise the `Result.Err` to return.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_write_all_try(
+    file: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_file_write_all(file, text) {
+        Ok(()) => std::ptr::null_mut(),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    })
+}
+
+fn direct_file_write_all(file: *mut OpaqueValue, text: *mut OpaqueValue) -> io::Result<()> {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text,
+        other => runtime_error(format!(
+            "expected `str`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    match unsafe { value_ref(file) } {
+        Value::File(file) => file.write_all(&text),
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -22304,28 +22319,50 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_write_all(
     text: *mut OpaqueValue,
     timeout: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let text = match unsafe { value_ref(text) } {
-            Value::String(text) => text.clone(),
-            other => runtime_error(format!(
-                "expected `str`, found `{}`",
-                value_type_name(other)
-            )),
-        };
-        let timeout = io_timeout_or_return!(timeout, "write_all(timeout=...)");
-        match unsafe { value_ref(stream) } {
-            Value::TcpStream(stream) => {
-                match stream.write_all(&text, timeout, Some(&current_cancellation())) {
-                    Ok(()) => boxed_value(result_ok(Value::Unit)),
-                    Err(error) => boxed_value(result_err(io_error(error))),
-                }
-            }
-            other => runtime_error(format!(
-                "expected `net.TcpStream`, found `{}`",
-                value_type_name(other)
-            )),
-        }
-    })
+    task_runtime_boundary(
+        || match direct_tcp_stream_write_all(stream, text, timeout) {
+            Ok(()) => boxed_value(result_ok(Value::Unit)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+    )
+}
+
+/// `try stream.write_all(text)`: null when the write succeeds, so no
+/// `Result` is built, and otherwise the `Result.Err` to return.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_tcp_stream_write_all_try(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(
+        || match direct_tcp_stream_write_all(stream, text, timeout) {
+            Ok(()) => std::ptr::null_mut(),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        },
+    )
+}
+
+fn direct_tcp_stream_write_all(
+    stream: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+    timeout: *mut OpaqueValue,
+) -> io::Result<()> {
+    let text = match unsafe { value_ref(text) } {
+        Value::String(text) => text,
+        other => runtime_error(format!(
+            "expected `str`, found `{}`",
+            value_type_name(other)
+        )),
+    };
+    let timeout = optional_timeout_result_from_ptr(timeout, "write_all(timeout=...)")?;
+    match unsafe { value_ref(stream) } {
+        Value::TcpStream(stream) => stream.write_all(&text, timeout, Some(&current_cancellation())),
+        other => runtime_error(format!(
+            "expected `net.TcpStream`, found `{}`",
+            value_type_name(other)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]

@@ -3203,6 +3203,7 @@ impl<'a> NativeCodegen<'a> {
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
+            pending_try_write: None,
             fused_entry_slots: HashMap::new(),
             deferred_entry_keys: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
@@ -4870,6 +4871,9 @@ struct FunctionCompiler<'a> {
     /// The result temporary, line word, and failure word address of a
     /// `try file.read_line()` whose read is emitted and whose `try` is next.
     pending_try_read: Option<(String, Val, Val)>,
+    /// The result temporary of a `try` write (see
+    /// `Self::opens_with_try_write`) and the word its helper returned.
+    pending_try_write: Option<(String, Val)>,
     fused_entry_slots: HashMap<String, Var>,
     /// The entry loans whose key a view twin holds as words, with the key
     /// and the loan's selector variable, until a walk needs the key's box.
@@ -5979,6 +5983,11 @@ impl<'a> FunctionCompiler<'a> {
             }
             if self.compile_indexed_str_comparison(&block.instructions[instruction_index..])? {
                 skipped = 2;
+                continue;
+            }
+            if let Some(write) = self.opens_with_try_write(&block.instructions[instruction_index..])
+            {
+                self.compile_try_write(write, instruction)?;
                 continue;
             }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
@@ -17063,6 +17072,13 @@ impl<'a> FunctionCompiler<'a> {
         releases_on_error: &[String],
         from: Option<&str>,
     ) -> std::result::Result<(), String> {
+        if let Some((source, failure)) = self.pending_try_write.take() {
+            debug_assert!(
+                matches!(try_value, Operand::MovePlace(moved) if *moved == source),
+                "a `try` after a fused write takes that write"
+            );
+            return self.compile_try_of_write(target, &source, failure, releases_on_error, from);
+        }
         if let Some((source, line, failure)) = self.pending_try_read.take() {
             debug_assert!(
                 matches!(try_value, Operand::MovePlace(moved) if *moved == source),
@@ -17208,6 +17224,148 @@ impl<'a> FunctionCompiler<'a> {
             )?
         };
         self.emit_return_value(error_result, releases_on_error)
+    }
+
+    /// The helper of the `try file.write_all(text)` or `try
+    /// stream.write_all(text)` that `instructions` open with: the write into
+    /// a temporary, the releases of other places, and a `try` that moves it
+    /// out into a unit.
+    fn opens_with_try_write(&self, instructions: &[Instruction]) -> Option<RuntimeFn> {
+        let [write, rest @ ..] = instructions else {
+            return None;
+        };
+        let releases = rest
+            .iter()
+            .take_while(|instruction| matches!(instruction, Instruction::Release { .. }))
+            .count();
+        // The `try` moves the result, so none of the releases is its.
+        let try_at = rest.get(releases)?;
+        let (
+            Instruction::Assign {
+                target: result,
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Resource(op),
+                                receiver: Some(Operand::Place(_)),
+                                ..
+                            },
+                        ..
+                    },
+            },
+            Instruction::Assign {
+                target: written,
+                value:
+                    Rvalue::Try {
+                        value: Operand::MovePlace(moved),
+                        ..
+                    },
+            },
+        ) = (write, try_at)
+        else {
+            return None;
+        };
+        let helper = match op {
+            crate::runtime_ops::ResourceOp::FileWriteAll => RuntimeFn::FileWriteAllTry,
+            crate::runtime_ops::ResourceOp::TcpStreamWriteAll => RuntimeFn::TcpStreamWriteAllTry,
+            _ => return None,
+        };
+        (result == moved
+            && result.starts_with('%')
+            && !self.lent_places.contains(result.as_str())
+            && !self.lookup_slots.contains(result.as_str())
+            && self.type_of_place(written) == Ok(DirectType::Scalar(ScalarKind::Unit)))
+        .then_some(helper)
+    }
+
+    /// The write of a `try file.write_all(text)` (see
+    /// [`Self::opens_with_try_write`]). Its helper returns null when the
+    /// write succeeds, so no `Result` is built, and otherwise the
+    /// `Result.Err`, which the `try` that follows takes from
+    /// `pending_try_write`.
+    fn compile_try_write(
+        &mut self,
+        helper: RuntimeFn,
+        instruction: &Instruction,
+    ) -> std::result::Result<(), String> {
+        let Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            receiver: Some(receiver),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        } = instruction
+        else {
+            return Err("direct backend expected a resource write".to_string());
+        };
+        let receiver = self.load_operand(receiver)?;
+        let mut words = vec![self.ensure_opaque(receiver)?.values[0]];
+        for argument in args {
+            let word = match &argument.value {
+                Operand::Default(ArgDefault::Omitted) => self.builder.iconst(types::I64, 0),
+                operand => {
+                    let loaded = self.load_operand(operand)?;
+                    self.ensure_opaque(loaded)?.values[0]
+                }
+            };
+            words.push(word);
+        }
+        let failure = self.builder.call(self.runtime[helper], &words).results[0];
+        self.release_all_temporary_owned();
+        self.pending_try_write = Some((target.to_string(), failure));
+        Ok(())
+    }
+
+    /// The `try` of a `try file.write_all(text)`: a null word is success,
+    /// and any other holds the `Result.Err` to return.
+    fn compile_try_of_write(
+        &mut self,
+        target: &str,
+        source: &str,
+        failure: Val,
+        releases_on_error: &[String],
+        from: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let source_ty = self.type_of_place(source)?;
+        let (source_error_ty, target_error_ty) = self.try_error_types(target, &source_ty)?;
+        let ok_block = self.builder.create_block();
+        let err_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(err_block);
+        self.builder.brif(failure, err_block, &[], ok_block, &[]);
+
+        self.builder.switch_to_block(ok_block);
+        self.builder.seal_block(ok_block);
+        let unit = unit_value(&mut *self.builder);
+        self.store_place(target, unit)?;
+        self.release_all_temporary_owned();
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(err_block);
+        self.builder.seal_block(err_block);
+        let value = ValueRef {
+            values: vec![failure],
+            ty: source_ty,
+        };
+        self.compile_try_error_return(
+            &value,
+            true,
+            &source_error_ty,
+            &target_error_ty,
+            releases_on_error,
+            from,
+        )?;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(())
     }
 
     /// Whether `instructions` open with `try file.read_line()`: the read

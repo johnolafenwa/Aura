@@ -582,6 +582,8 @@ runtime_functions! {
     FileReadBytes => ("aura_direct_file_read_bytes", [I64], Some(I64)),
     FileReadLine => ("aura_direct_file_read_line", [I64], Some(I64)),
     FileReadLineTry => ("aura_direct_file_read_line_try", [I64, I64], Some(I64)),
+    FileWriteAllTry => ("aura_direct_file_write_all_try", [I64, I64], Some(I64)),
+    TcpStreamWriteAllTry => ("aura_direct_tcp_stream_write_all_try", [I64, I64, I64], Some(I64)),
     FileReadLines => ("aura_direct_file_read_lines", [I64, I64], Some(I64)),
     FileReadChunk => ("aura_direct_file_read_chunk", [I64, I64], Some(I64)),
     FileWriteAll => ("aura_direct_file_write_all", [I64, I64], Some(I64)),

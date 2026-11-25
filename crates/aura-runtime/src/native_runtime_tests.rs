@@ -7645,8 +7645,9 @@ fn native_runtime_direct_filesystem_wrappers_cover_file_success_paths() {
     let created_ptr = boxed_value(Value::File(created));
     expect_result_ok_unit(super::aura_direct_file_write_all(
         created_ptr,
-        string_value("hi"),
+        string_value("h"),
     ));
+    assert!(super::aura_direct_file_write_all_try(created_ptr, string_value("i")).is_null());
     expect_result_ok_unit(super::aura_direct_file_write_bytes(
         created_ptr,
         int_vec(&[33]),
@@ -7821,6 +7822,10 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
         file_ptr,
         string_value("closed"),
     ));
+    expect_io_result_error(super::aura_direct_file_write_all_try(
+        file_ptr,
+        string_value("closed"),
+    ));
     expect_io_result_error(super::aura_direct_file_write_bytes(
         file_ptr,
         int_vec(&[7, 8]),
@@ -7884,9 +7889,15 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
     let tcp_client_ptr = boxed_value(Value::TcpStream(tcp_client));
     expect_result_ok_unit(super::aura_direct_tcp_stream_write_all(
         tcp_client_ptr,
-        string_value("ping\n"),
+        string_value("pi"),
         timeout,
     ));
+    assert!(super::aura_direct_tcp_stream_write_all_try(
+        tcp_client_ptr,
+        string_value("ng\n"),
+        timeout,
+    )
+    .is_null());
     expect_result_ok_unit(super::aura_direct_tcp_stream_shutdown_write(tcp_client_ptr));
     assert_eq!(
         expect_result_ok_vec_ints(super::aura_direct_tcp_stream_read_exact(
@@ -24888,6 +24899,11 @@ fn direct_tcp_wrappers_cover_stream_reads_at_end_of_stream_and_closed_resources(
         timeout(),
     ));
     expect_result_err_payload(super::aura_direct_tcp_stream_write_all(
+        client_ptr,
+        string_value("x"),
+        timeout(),
+    ));
+    expect_result_err_payload(super::aura_direct_tcp_stream_write_all_try(
         client_ptr,
         string_value("x"),
         timeout(),
