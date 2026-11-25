@@ -700,7 +700,7 @@ Every guide follows the same three steps.
    `%LOCALAPPDATA%\Programs\Aura` on Windows.
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 On Windows, in PowerShell:
@@ -740,7 +740,7 @@ To install under a different prefix, set `AURA_INSTALL_PREFIX`:
 
 ```bash
 AURA_INSTALL_PREFIX="$HOME/tools/aura" \
-  sh -c "$(curl -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
+  sh -c "$(curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
 ```
 
 Then add that prefix's `bin` directory to `PATH`.
@@ -818,7 +818,7 @@ downloaded archive.
 ## 3. Install Aura
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
@@ -829,7 +829,7 @@ To build programs for another Linux target with `aura build --target`,
 name the target and the installer adds its target pack:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
 ```
 
 ## 4. Add Aura To Bash
@@ -999,7 +999,7 @@ Both are supported. No other macOS architecture has a release archive.
 The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The script downloads the matching `v0.17.0-preview` archive. It checks the
@@ -1188,8 +1188,9 @@ Add Aura's signing key and repository once:
 ```bash
 sudo apt-get update
 sudo apt-get install -y curl ca-certificates
-curl -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
   sudo tee /usr/share/keyrings/aura-archive-keyring.gpg >/dev/null
+gpg --show-keys /usr/share/keyrings/aura-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/aura-archive-keyring.gpg] https://johnolafenwa.github.io/Aura/apt stable main" |
   sudo tee /etc/apt/sources.list.d/aura.list >/dev/null
 ```
@@ -1468,7 +1469,7 @@ enables direct native execution and `aura build`.
 Run the installer:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 Add Aura to the Ubuntu login environment:
