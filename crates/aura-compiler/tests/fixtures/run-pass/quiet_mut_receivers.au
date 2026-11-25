@@ -1,0 +1,63 @@
+# A `with` binding passed to a `mut` receiver or parameter its callee never
+# changes gets no write-through sink, and its callee's writeback publishes
+# nothing. A callee that does change it still publishes each change, so a
+# trap's cleanup sees the value as the callee left it.
+import control
+
+
+class Tally:
+    name: str
+    counts: list[int64]
+    total: int64
+
+    def peek(mut self) -> int64:
+        return self.total + self.counts.len()
+
+    def bump(mut self, by: int64) -> int64:
+        self.total += by
+        self.counts.append(by)
+        return self.total
+
+    def close(mut self) -> None:
+        print(f"close {self.name} total={self.total} counts={self.counts}")
+
+
+def look(tally: mut Tally, times: int64) -> int64:
+    mut seen = 0
+    for _ in range(times):
+        seen += tally.peek()
+    return seen
+
+
+def look_twice(tally: mut Tally) -> int64:
+    return look(tally, 2) + look(tally, 1)
+
+
+def bump_then_trap(tally: mut Tally, by: int64) -> int64:
+    _ = tally.bump(by)
+    assert by < 0, "bumped"
+    return 0
+
+
+def watched(by: int64) -> int64:
+    with tally = Tally(name="watched", counts=[], total=0):
+        _ = look_twice(tally)
+        return bump_then_trap(tally, by)
+    return -1
+
+
+def main() -> int32:
+    with tally = Tally(name="main", counts=[1], total=10):
+        mut sum = 0
+        for i in range(5):
+            sum += tally.peek()
+            sum += look_twice(tally)
+            if i % 2 == 0:
+                sum += tally.bump(i)
+        print(sum)
+    match control.recover(watched, 7):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.message)
+    return 0

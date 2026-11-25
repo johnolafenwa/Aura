@@ -763,6 +763,9 @@ struct NativeCodegen<'a> {
     /// Bodies that need no write-through sinks. Leaf bodies also defer their
     /// frame until an error.
     sinkless_functions: HashMap<String, FuncHandle>,
+    /// The `mut` call slots of each function that it never changes, which
+    /// a call hands no write-through sink (see `quiet_sinks`).
+    quiet_sinks: HashMap<String, HashSet<usize>>,
     /// Scalar bodies whose only failure is an explicit check. Their
     /// recovered entry returns the scalar and an optional error.
     recovery_functions: HashMap<String, FuncHandle>,
@@ -1387,6 +1390,7 @@ impl<'a> NativeCodegen<'a> {
             object: Some(object),
             functions,
             sinkless_functions,
+            quiet_sinks: quiet_sinks::quiet_sink_slots(module),
             recovery_functions,
             result_twins,
             result_slot_plan,
@@ -3089,6 +3093,8 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             sinkless_refs,
+            quiet_sinks: &self.quiet_sinks,
+            unpublished_store: false,
             recovery_refs,
             result_twin_refs,
             result_twin_body,
@@ -4598,6 +4604,11 @@ struct FunctionCompiler<'a> {
     /// The bodies without write-through sinks, which a call with
     /// no write-through sink to hand over calls.
     sinkless_refs: HashMap<String, FuncRef>,
+    /// The `mut` call slots of each function that it never changes.
+    quiet_sinks: &'a HashMap<String, HashSet<usize>>,
+    /// Whether the store being emitted brings back a value its place
+    /// already holds, which publishes nothing (see `quiet_sinks`).
+    unpublished_store: bool,
     /// The twin of each function that has one (see `result_slots`).
     result_twin_refs: HashMap<String, FuncRef>,
     /// The payload types of the `Result` this body returns as words, when
@@ -11334,6 +11345,7 @@ impl<'a> FunctionCompiler<'a> {
             lowered_args.extend(transferred);
         }
         lowered_args.extend(view_words);
+        let quiet_places = self.drop_quiet_sinks(name, &mut mutable_sink_places);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = match &view_twin {
             Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
@@ -11354,7 +11366,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.shaped_boxes.insert(*word);
             }
         }
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        self.apply_writeback_places(&writeback_places, writebacks, &quiet_places)?;
         let result = self.align_erased_union_result(result, &substitutions)?;
         if self.program_shapes.returns_tagged(name) {
             if let (DirectType::Opaque(_), [word]) = (&result.ty, result.values.as_slice()) {
@@ -17719,6 +17731,9 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
+        if self.unpublished_store {
+            return Ok(());
+        }
         let mut sink = self.current_mutable_sink(index);
         if let Some(snapshot) = self
             .snapshot_of_root(root)
@@ -17993,10 +18008,13 @@ impl<'a> FunctionCompiler<'a> {
         Ok((result, writebacks))
     }
 
+    /// Stores each writeback in its place. A place in `quiet` holds the
+    /// value it gets back, so its store publishes nothing to a sink.
     fn apply_writeback_places(
         &mut self,
         places: &[String],
         values: Vec<ValueRef>,
+        quiet: &[String],
     ) -> std::result::Result<(), String> {
         if places.len() != values.len() {
             return Err(format!(
@@ -18006,7 +18024,10 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         for (place, value) in places.iter().zip(values) {
-            self.store_place(place, value)?;
+            self.unpublished_store = quiet.contains(place);
+            let stored = self.store_place(place, value);
+            self.unpublished_store = false;
+            stored?;
         }
         Ok(())
     }
@@ -18315,6 +18336,7 @@ impl<'a> FunctionCompiler<'a> {
             lowered_args.extend(transferred);
         }
         lowered_args.extend(view_words);
+        let quiet_places = self.drop_quiet_sinks(&method_function_name, &mut mutable_sink_places);
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = match &view_twin {
             Some((twin, _)) => twin.callee(mutable_sinks.0.is_some()),
@@ -18357,7 +18379,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         }
-        self.apply_writeback_places(&writeback_places, writebacks)?;
+        self.apply_writeback_places(&writeback_places, writebacks, &quiet_places)?;
         Ok(result)
     }
 
@@ -24563,6 +24585,8 @@ mod list_snapshots;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_quiet_sinks.rs"]
+mod quiet_sinks;
 #[path = "native_codegen_range_loops.rs"]
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]

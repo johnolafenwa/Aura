@@ -18943,3 +18943,89 @@ def main() -> int32:
     assert!(views.contains_key("to_int"), "{views:?}");
     assert!(!views.contains_key("to_i32"), "{views:?}");
 }
+
+#[test]
+fn direct_quiet_sink_slots_are_the_mut_places_nothing_changes() {
+    let source = r#"
+class Box:
+    items: list[int64]
+    total: int64
+
+    def peek(mut self) -> int64:
+        return self.total
+
+    def grow(mut self) -> None:
+        self.items.append(1)
+
+
+def reads(b: mut Box, other: mut Box) -> int64:
+    return b.peek() + other.total
+
+
+def forwards(b: mut Box) -> int64:
+    mut local = Box(items=[], total=1)
+    return reads(b, local) + b.peek() + local.total
+
+
+def forwards_once(b: mut Box, c: mut Box) -> int64:
+    return reads(b, c)
+
+
+def grows(b: mut Box) -> None:
+    b.grow()
+
+
+def passes_on(b: mut Box) -> None:
+    grows(b)
+
+
+def stores(b: mut Box) -> None:
+    b.total = 3
+
+
+def total(items: list[int64]) -> int64:
+    return items.len()
+
+
+def lends(b: mut Box) -> int64:
+    return total(b.items)
+
+
+def puts(q: mut Queue[int64]) -> None:
+    _ = q.put(1)
+
+
+def main() -> int32:
+    mut b = Box(items=[], total=0)
+    mut c = Box(items=[], total=0)
+    _ = forwards(b)
+    _ = forwards_once(b, c)
+    passes_on(b)
+    stores(b)
+    _ = lends(b)
+    mut q = Queue[int64](capacity=2)
+    puts(q)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the program should lower");
+    let quiet = super::quiet_sinks::quiet_sink_slots(&mir);
+    let slots = |name: &str| {
+        let mut slots = quiet
+            .get(name)
+            .map(|slots| slots.iter().copied().collect::<Vec<_>>())
+            .unwrap_or_default();
+        slots.sort_unstable();
+        slots
+    };
+    assert_eq!(slots("Box.peek"), [0]);
+    assert_eq!(slots("reads"), [0, 1]);
+    assert_eq!(slots("forwards"), [0]);
+    assert_eq!(slots("forwards_once"), [0, 1]);
+    assert_eq!(slots("Box.grow"), Vec::<usize>::new());
+    assert_eq!(slots("grows"), Vec::<usize>::new());
+    assert_eq!(slots("passes_on"), Vec::<usize>::new());
+    assert_eq!(slots("stores"), Vec::<usize>::new());
+    assert_eq!(slots("lends"), Vec::<usize>::new());
+    // A queue's state changes where its handle points.
+    assert_eq!(slots("puts"), [0]);
+}
