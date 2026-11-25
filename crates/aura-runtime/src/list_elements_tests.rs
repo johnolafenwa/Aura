@@ -1153,3 +1153,16 @@ fn scalar_forms_lend_their_elements_as_a_c_array() {
     );
     assert_eq!(text.len(), 1, "a list that cannot move keeps its elements");
 }
+
+#[test]
+fn try_append_appends_like_append() {
+    let mut list = ListElements::from(vec![int(1), int(2)]);
+    list.try_append(ListElements::from(vec![int(3)]))
+        .expect("room for one more");
+    assert_eq!(list.len(), 3);
+    let mut empty = ListElements::default();
+    empty
+        .try_append(ListElements::from(vec![int(4)]))
+        .expect("an empty list takes the other");
+    assert_eq!(empty.len(), 1);
+}

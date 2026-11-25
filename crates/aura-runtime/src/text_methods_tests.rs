@@ -1,4 +1,7 @@
-use super::{chr, evaluate_bytes_search, evaluate_text_method, is_bytes_search_builtin, ord};
+use super::{
+    change_case_checked, chars, chr, evaluate_bytes_search, evaluate_text_method, is_bytes_search_builtin,
+    join_checked, ord, replace_checked,
+};
 use crate::runtime_value::Value;
 
 #[test]
@@ -84,4 +87,52 @@ fn char_at_counts_characters_from_either_end() {
     );
     let empty = super::char_at("", true, 0).expect_err("empty text has no character");
     assert!(empty.message.contains("a string of 0 characters"));
+}
+
+#[test]
+fn join_replace_and_case_changes_stop_at_the_string_limit() {
+    use crate::runtime_value::MAX_STRING_BYTES;
+    assert_eq!(join_checked(&["a", "b", "c"], ", ").unwrap(), "a, b, c");
+    assert_eq!(join_checked::<&str>(&[], ", ").unwrap(), "");
+    // 1000 parts joined by a 70000-byte separator is about 70 MB.
+    let separator = "s".repeat(70_000);
+    let parts = vec!["x"; 1000];
+    assert_eq!(join_checked(&parts, &separator).unwrap_err().code, "AU4005");
+
+    for (text, from, to) in [
+        ("a.b.c", ".", "--"),
+        ("abc", "", "-"),
+        ("aaaa", "aa", "b"),
+        ("été", "t", "TT"),
+        ("none", "x", "y"),
+        ("", "", "z"),
+    ] {
+        assert_eq!(replace_checked(text, from, to).unwrap(), text.replace(from, to));
+    }
+    let wide = "a".repeat(100_000);
+    let long = "b".repeat(1_000);
+    assert_eq!(replace_checked(&wide, "a", &long).unwrap_err().code, "AU4005");
+    assert_eq!(replace_checked(&wide, "", &long).unwrap_err().code, "AU4005");
+    // The fast bound is not a trap: few real matches still fit.
+    let sparse = format!("{}x", "a".repeat(MAX_STRING_BYTES / 2));
+    assert_eq!(
+        replace_checked(&sparse, "x", "yz").unwrap().len(),
+        sparse.len() + 1
+    );
+
+    assert_eq!(change_case_checked("Straße", true).unwrap(), "STRASSE");
+    assert_eq!(change_case_checked("ΣΑΣ", false).unwrap(), "σας");
+    assert_eq!(change_case_checked("MiXed", false).unwrap(), "mixed");
+    assert_eq!(change_case_checked("MiXed", true).unwrap(), "MIXED");
+    // Each `ß` grows from two bytes to two, `ŉ` from two to three.
+    let growing = "ŉ".repeat(MAX_STRING_BYTES / 2);
+    assert_eq!(change_case_checked(&growing, true).unwrap_err().code, "AU4005");
+}
+
+#[test]
+fn chars_lists_each_scalar() {
+    let Value::Vec(list) = chars("aé").unwrap() else {
+        panic!("a list");
+    };
+    assert_eq!(list.elements.len(), 2);
 }

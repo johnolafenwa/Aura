@@ -8638,7 +8638,10 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`extend` requires another `list[T]` value"));
                 };
                 let mut updated = vector;
-                updated.elements.append(other.elements);
+                updated
+                    .elements
+                    .try_append(other.elements)
+                    .map_err(|_| Diagnostic::coded("AU4005", "list capacity allocation failed"))?;
                 let Some(place) = receiver_place else {
                     return Err(Diagnostic::new("`extend` requires a mutable list place"));
                 };
@@ -8986,20 +8989,29 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`replace` requires `str` for `to`"));
                 };
                 Ok(Value::String(
-                    text.replace(from.as_str(), to.as_str()).into(),
+                    aura_runtime::text_methods::replace_checked(
+                        text.as_str(),
+                        from.as_str(),
+                        to.as_str(),
+                    )?
+                    .into(),
                 ))
             }
             "to_lower" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_lower` does not take arguments"));
                 }
-                Ok(Value::String(text.to_lowercase().into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::change_case_checked(text.as_str(), false)?.into(),
+                ))
             }
             "to_upper" => {
                 if !args.is_empty() {
                     return Err(Diagnostic::new("`to_upper` does not take arguments"));
                 }
-                Ok(Value::String(text.to_uppercase().into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::change_case_checked(text.as_str(), true)?.into(),
+                ))
             }
             "join" => {
                 let values = evaluate_named_args(args, env)?;
@@ -9014,7 +9026,10 @@ impl MirRuntime {
                     };
                     rendered_parts.push(part);
                 }
-                Ok(Value::String(rendered_parts.join(text.as_str()).into()))
+                Ok(Value::String(
+                    aura_runtime::text_methods::join_checked(&rendered_parts, text.as_str())?
+                        .into(),
+                ))
             }
             "add" => {
                 let values = evaluate_named_args(args, env)?;

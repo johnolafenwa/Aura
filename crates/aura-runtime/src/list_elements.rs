@@ -1326,6 +1326,16 @@ impl ListElements {
         )
     }
 
+    /// [`Self::append`], with the room for `other` reserved first so that
+    /// a list too large for the memory left is an error, not an abort.
+    pub fn try_append(&mut self, other: ListElements) -> Result<(), TryReserveError> {
+        if !self.is_empty() {
+            self.try_reserve(other.len())?;
+        }
+        self.append(other);
+        Ok(())
+    }
+
     /// Removes the elements in `start..end` and returns them as a list.
     ///
     /// # Panics
