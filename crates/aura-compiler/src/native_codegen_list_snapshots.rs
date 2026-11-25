@@ -1712,7 +1712,10 @@ impl FunctionCompiler<'_> {
             }
             _ => self.view_form(snapshot, access),
         };
-        if snapshot.region.writes {
+        // A loop that wrote the list found its storage unshared, and the
+        // words it carries hold only while nothing shares it.
+        let carried_room = carried.is_some_and(|(source, _)| source.region.writes);
+        if snapshot.region.writes && !carried_room {
             let room = self.builder.uload32(flags, handle, layout.capacity_offset);
             let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
             qualifies = self.builder.band(qualifies, has_room);
@@ -1729,9 +1732,44 @@ impl FunctionCompiler<'_> {
             let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
             qualifies = self.builder.band(qualifies, direct);
         }
+        // The carried length is the one the other loop's guards found long
+        // enough for each constant bound and distance.
+        let carried_reach = carried
+            .and_then(|(source, _)| source.range.as_ref())
+            .and_then(|proof| {
+                use super::range_loops::{RangeBound, RangeGuard};
+                proof
+                    .guards
+                    .iter()
+                    .filter_map(|guard| match guard {
+                        RangeGuard::Within {
+                            bound: RangeBound::Int(bound),
+                            distance,
+                        } => bound.checked_add(*distance),
+                        _ => None,
+                    })
+                    .max()
+            });
         if let Some(proof) = &snapshot.range {
             for guard in &proof.guards {
                 use super::range_loops::{RangeBound, RangeGuard};
+                if let (RangeGuard::Within { bound, distance }, Some(carried_reach)) =
+                    (guard, carried_reach)
+                {
+                    let bound = match bound {
+                        RangeBound::Int(value) => Some(*value),
+                        RangeBound::Place(place) => {
+                            let value = self.range_word(place)?;
+                            self.builder.integer_constant(value)
+                        }
+                    };
+                    if bound
+                        .and_then(|bound| bound.checked_add(*distance))
+                        .is_some_and(|reach| reach <= carried_reach)
+                    {
+                        continue;
+                    }
+                }
                 let holds = match guard {
                     RangeGuard::AtLeast { place, least } => {
                         let value = self.range_word(place)?;

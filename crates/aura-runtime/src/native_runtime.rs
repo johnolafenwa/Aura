@@ -1798,6 +1798,36 @@ impl OpaqueValue {
             return;
         }
         view.misses = 0;
+        self.fill_str_view(values, view);
+    }
+
+    /// Makes the `Str` view of a list of `str` values that nothing else
+    /// holds, as enough misses would, so generated code reads its elements'
+    /// words from the first read on.
+    fn make_str_view(&self) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32 {
+            return;
+        }
+        let _access = self.access(false);
+        if self.shared_lock().is_some() {
+            return;
+        }
+        // SAFETY: the access holds.
+        let Value::Vec(vector) = (unsafe { &*self.value.get() }) else {
+            return;
+        };
+        let ListElements::Values(values) = &vector.elements else {
+            return;
+        };
+        // SAFETY: the value is confined to this thread, and nothing else
+        // holds its view.
+        let view = unsafe { vector.str_view.get_or_create() };
+        self.fill_str_view(values, view);
+    }
+
+    /// Fills `view` with the words of `values` and makes it the list's
+    /// view, unless some value is not a `str`.
+    fn fill_str_view(&self, values: &[Value], view: &mut crate::list_elements::StrView) {
         view.entries.clear();
         view.entries.reserve(values.len());
         for element in values.iter() {
@@ -7581,6 +7611,42 @@ pub unsafe extern "C-unwind" fn aura_direct_string_literal_cell(
     })
 }
 
+/// The one frozen list of a literal of `str` literals that a function
+/// binds to a local it only reads by index, kept in `cell`, a word of the
+/// program's data for that literal: the first call makes it as
+/// `aura_direct_vec_empty_tagged` and `aura_direct_vec_push_str_literals`
+/// would, with the view of its elements' words that generated code reads
+/// them through, and every later call returns it without allocating. As
+/// for a `str` literal's cell, the caller's release does nothing, and
+/// anything that would change the list copies it first.
+///
+/// # Safety
+///
+/// `cell` is a word of the program's data that only this function writes;
+/// the other arguments are those of the two calls it stands for.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_str_literal_list_cell(
+    cell: *const std::sync::atomic::AtomicUsize,
+    tag_cell: *const AtomicPtr<c_void>,
+    type_ptr: *const u8,
+    type_len: usize,
+    texts: *const u8,
+    lens: *const u8,
+    count: usize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let Some(cell) = (unsafe { cell.as_ref() }) else {
+        runtime_error("direct runtime received a null literal list cell");
+    };
+    frozen_program_value(cell, || {
+        let list = aura_direct_vec_empty_tagged(tag_cell, type_ptr, type_len);
+        aura_direct_vec_push_str_literals(list, texts, lens, count);
+        // SAFETY: the list was just made and nothing else holds it.
+        unsafe { &*list }.make_str_view();
+        list
+    })
+}
+
 /// Publishes one immutable box for this program-lifetime data word. A lost
 /// race frees its private candidate. Program teardown resets the word and
 /// frees the winning box after all its readers have finished.
@@ -10669,6 +10735,17 @@ pub unsafe extern "C-unwind" fn aura_direct_string_to_bytes_view(
             // SAFETY: the caller's contract.
             _ => unsafe { slice::from_raw_parts(ptr, len) },
         };
+        // A list of the size any codec may make takes the bytes in one
+        // copy, with the program's one copy of its element type.
+        if bytes.len() <= crate::bytes_codec::MAX_CODEC_OUTPUT_LEN {
+            static UINT8: OnceLock<SharedType> = OnceLock::new();
+            let element_type = UINT8.get_or_init(|| SharedType::from(Type::named("uint8")));
+            return boxed_value(Value::Vec(VecValue {
+                element_type: element_type.clone(),
+                elements: ListElements::from_uint8(bytes.to_vec()),
+                str_view: Default::default(),
+            }));
+        }
         // SAFETY: the bytes of a `str` are UTF-8.
         let text = unsafe { str::from_utf8_unchecked(bytes) };
         match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {

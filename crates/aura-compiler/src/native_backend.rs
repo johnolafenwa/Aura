@@ -804,6 +804,9 @@ pub(crate) trait FunctionBackend {
     /// Whether a block the entry reaches without crossing a cold block,
     /// and that does not end in a trap, calls a callee not in `free`.
     fn calls_when_warm(&self, free: &[FuncRef]) -> bool;
+    /// As `calls_when_warm`, for a direct call of a callee `needs` picks,
+    /// or any indirect call.
+    fn calls_when_warm_where(&self, needs: &dyn Fn(FuncRef) -> bool) -> bool;
     /// Branches on `condition` to `then_block` or `else_block`, until
     /// `settle_frame`, which makes the branch a jump to `then_block`.
     fn frame_branch(&mut self, condition: Val, then_block: Blk, else_block: Blk);

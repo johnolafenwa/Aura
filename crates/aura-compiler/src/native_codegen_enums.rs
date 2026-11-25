@@ -556,6 +556,12 @@ impl FunctionCompiler<'_> {
             Some(_) => self.builder.create_block(),
             None => slow_block,
         };
+        // Without a tape, the join's second parameter is 1 where the box
+        // is in its layout and of the variant (see `tested_variant`).
+        let plain = tape_tags.is_none();
+        if plain {
+            self.builder.append_block_param(join_block, types::I64);
+        }
         self.emit_class_check(variant, record.access, untyped_block, checked);
 
         self.builder.switch_to_block(checked);
@@ -563,7 +569,11 @@ impl FunctionCompiler<'_> {
         let actual = self.variant_index_of(variant);
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, index as i64);
         let matches = self.builder.uextend(types::I64, matches);
-        self.builder.jump(join_block, &[matches]);
+        if plain {
+            self.builder.jump(join_block, &[matches, matches]);
+        } else {
+            self.builder.jump(join_block, &[matches]);
+        }
 
         if let Some(tags) = tape_tags {
             let tape_block = self.builder.create_block();
@@ -580,11 +590,20 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let matched = slow(self)?;
-        self.builder.jump(join_block, &[matched]);
+        if plain {
+            let untyped = self.builder.iconst(types::I64, 0);
+            self.builder.jump(join_block, &[matched, untyped]);
+        } else {
+            self.builder.jump(join_block, &[matched]);
+        }
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        Ok(Some(self.builder.block_params(join_block)[0]))
+        let params = self.builder.block_params(join_block).to_vec();
+        if plain {
+            self.tested_variant = Some((index, params[1]));
+        }
+        Ok(Some(params[0]))
     }
 
     /// Reads payload `index` of variant `variant_name` from the variant box
@@ -664,14 +683,29 @@ impl FunctionCompiler<'_> {
         } else {
             slow_block
         };
-        self.emit_variant_check(
-            object,
-            &record,
-            variant,
-            slow_block,
-            untyped_block,
-            fast_block,
-        );
+        // A plain check is kept for the next read of the same box (see
+        // `checked_variant`): the join's last parameter says which way
+        // this read went.
+        let read_place = self.variant_read_place.take();
+        let plain = untyped_block == slow_block && read_place.is_some();
+        if plain {
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        match self.checked_variant.take() {
+            Some((checked, checked_index, typed))
+                if plain && read_place.as_ref() == Some(&checked) && checked_index == variant =>
+            {
+                self.builder.brif(typed, fast_block, &[], slow_block, &[]);
+            }
+            _ => self.emit_variant_check(
+                object,
+                &record,
+                variant,
+                slow_block,
+                untyped_block,
+                fast_block,
+            ),
+        }
         if view {
             use aura_runtime::json_tape::JsonTag;
             let tags = (JsonTag::Object as i64, JsonTag::Object as i64);
@@ -731,6 +765,10 @@ impl FunctionCompiler<'_> {
                 }
             }
         };
+        let mut values = values;
+        if plain {
+            values.push(self.builder.iconst(types::I64, 1));
+        }
         self.builder.jump(join_block, &values);
 
         self.builder.switch_to_block(slow_block);
@@ -758,12 +796,19 @@ impl FunctionCompiler<'_> {
         if lend {
             values.push(self.builder.iconst(types::I64, 0));
         }
+        if plain {
+            values.push(self.builder.iconst(types::I64, 0));
+        }
         self.builder.jump(join_block, &values);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         let mut values = self.builder.block_params(join_block).to_vec();
+        if let Some(place) = read_place.filter(|_| plain) {
+            let typed = values.pop().expect("the check's flag");
+            self.checked_variant = Some((place, variant, typed));
+        }
         if lend {
             self.lent_element_flag = values.pop();
         }

@@ -27242,6 +27242,63 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
 }
 
 #[test]
+fn a_literal_list_cell_makes_one_frozen_list_with_its_str_view() {
+    use std::sync::atomic::{AtomicPtr, AtomicUsize};
+    let cell: &'static AtomicUsize = Box::leak(Box::default());
+    let tag_cell = AtomicPtr::new(std::ptr::null_mut());
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "list".to_string(),
+        vec![Type::named("str")],
+    ));
+    let texts = "AByz";
+    let lens = [1u32, 1, 2]
+        .iter()
+        .flat_map(|len| len.to_le_bytes())
+        .collect::<Vec<_>>();
+    let make = || unsafe {
+        super::aura_direct_str_literal_list_cell(
+            cell,
+            &tag_cell,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            texts.as_ptr(),
+            lens.as_ptr(),
+            3,
+        )
+    };
+    let first = make();
+    assert_eq!(make(), first);
+    assert!(super::direct_value_is_frozen(first));
+    assert_eq!(
+        unsafe { &*first }.list_access.load(Ordering::Relaxed),
+        super::DirectListAccess::Str as u32
+    );
+    match unsafe { value_ref(first) } {
+        Value::Vec(vector) => {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            assert_eq!(vector.elements.len(), 3);
+            assert_eq!(
+                vector.elements.value_at(2),
+                Some(&Value::String("yz".into()))
+            );
+        }
+        other => panic!("expected a list, found {other:?}"),
+    }
+    // A caller's release leaves it as it is.
+    unsafe { release_value(first) };
+    assert_eq!(make(), first);
+    // Only a list of `str` values gets the view.
+    let numbers = super::aura_direct_vec_empty();
+    super::aura_direct_vec_push_scalar(numbers, 1, 0);
+    unsafe { &*numbers }.make_str_view();
+    assert_ne!(
+        unsafe { &*numbers }.list_access.load(Ordering::Relaxed),
+        super::DirectListAccess::Str as u32
+    );
+    unsafe { release_value(numbers) };
+}
+
+#[test]
 fn str_bytes_are_copied_from_their_words() {
     for text in ["", "h\u{e9}llo"] {
         let bytes = unsafe { super::aura_direct_string_to_bytes_view(text.as_ptr(), text.len()) };

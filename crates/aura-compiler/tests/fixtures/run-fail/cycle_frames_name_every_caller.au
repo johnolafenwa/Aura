@@ -1,0 +1,20 @@
+enum Tree:
+    Leaf(value: int64)
+    Ref(cell: int64)
+    Pair(left: indirect Tree, right: indirect Tree)
+
+def evaluate(node: Tree, cells: list[int64]) -> int64:
+    match node:
+        case Tree.Leaf(value):
+            return value
+        case Tree.Ref(cell):
+            return cells[cell]
+        case Tree.Pair(left, right):
+            return evaluate(left, cells) + evaluate(right, cells)
+
+def main():
+    cells = [1, 2, 3]
+    good = Tree.Pair(left=Tree.Leaf(value=4), right=Tree.Ref(cell=1))
+    print(evaluate(good, cells))
+    bad = Tree.Pair(left=Tree.Leaf(value=4), right=Tree.Pair(left=Tree.Ref(cell=0), right=Tree.Ref(cell=7)))
+    print(evaluate(bad, cells))

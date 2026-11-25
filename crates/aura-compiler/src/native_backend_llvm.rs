@@ -1695,6 +1695,10 @@ impl FunctionBackend for LlvmFunction<'_> {
     }
 
     fn calls_when_warm(&self, free: &[FuncRef]) -> bool {
+        self.calls_when_warm_where(&|callee| !free.contains(&callee))
+    }
+
+    fn calls_when_warm_where(&self, needs: &dyn Fn(FuncRef) -> bool) -> bool {
         let ir = &self.ir;
         let mut warm = ir.layout.first().copied().into_iter().collect::<Vec<_>>();
         let mut seen = warm.iter().copied().collect::<HashSet<_>>();
@@ -1713,7 +1717,7 @@ impl FunctionBackend for LlvmFunction<'_> {
             }
             for inst in &entry.insts {
                 let targets = match &ir.insts[*inst as usize].op {
-                    Op::Call(callee, _) if !free.contains(callee) => return true,
+                    Op::Call(callee, _) if needs(*callee) => return true,
                     Op::CallIndirect(..) => return true,
                     Op::Jump(target, _) => vec![target.0],
                     Op::Brif(_, then_block, _, else_block, _) => vec![then_block.0, else_block.0],

@@ -1,0 +1,6 @@
+error[AU4003]: list index `7` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/cycle_frames_name_every_caller.au:11:26
+   |
+11 |             return cells[cell]
+   |                          ^
+  = note: Aura call chain (innermost first): evaluate at 6:1 -> evaluate at 6:1 -> evaluate at 6:1 -> main at 15:1

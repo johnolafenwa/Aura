@@ -6,7 +6,7 @@ use crate::runtime_ops::{ListOp, RuntimeOp, StrOp, ValueOp};
 use super::super::validated_for_emission;
 use super::{
     appended_copies, clone_moves, element_slots, extended_bytes, formatted_reads, literal_chunks,
-    plan_views, receiver_view_read, spliced_formats, ViewParam, ViewRead,
+    plan_views, receiver_view_read, spliced_formats, str_literal_lists, ViewParam, ViewRead,
 };
 
 const SOURCE: &str = r#"
@@ -459,4 +459,66 @@ fn bytes_made_only_to_extend_a_list_are_appended_from_the_words() {
     assert_eq!(views["add_text"], [view(1, true)]);
     assert_eq!(views["keep"], [view(0, true)]);
     assert_eq!(views["size"], [view(1, true)]);
+}
+
+const LITERAL_LISTS: &str = r#"
+def pick(at: int64) -> str:
+    names = ["ann", "bo", ""]
+    if names.len() > at and names[at] == "bo":
+        return "second"
+    return names[at].clone()
+
+def grows(at: int64) -> str:
+    mut names = ["ann", "bo"]
+    names.append("cy")
+    return names[at].clone()
+
+def passes(at: int64) -> str:
+    names = ["ann", "bo"]
+    return ",".join(names)
+
+def mixed(at: int64, extra: str) -> str:
+    names = ["ann", extra.clone()]
+    return names[at].clone()
+
+def single(at: int64) -> str:
+    names = ["ann"]
+    return names[at].clone()
+
+def blank(at: int64) -> str:
+    names = ["", ""]
+    return names[at].clone()
+
+def again(at: int64) -> str:
+    mut names = ["ann", "bo"]
+    names = ["cy", "di"]
+    return names[at].clone()
+
+def main():
+    print(pick(1) + grows(2) + passes(0) + mixed(1, "x") + single(0) + blank(0) + again(0))
+"#;
+
+#[test]
+fn a_literal_of_str_literals_that_is_only_read_is_kept_frozen() {
+    let mir = lower_source_to_mir(LITERAL_LISTS).expect("the source should lower");
+    let module = validated_for_emission(&mir).expect("the source should validate");
+    let frozen = |name: &str| {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the module has the function");
+        str_literal_lists(function)
+    };
+    assert_eq!(
+        frozen("pick").into_iter().collect::<Vec<_>>(),
+        vec!["names".to_string()]
+    );
+    // A list that is changed, handed on, spelled with another value, has
+    // one element or only empty ones, or is assigned twice stays a list.
+    for name in [
+        "grows", "passes", "mixed", "single", "blank", "again", "main",
+    ] {
+        assert!(frozen(name).is_empty(), "{name}");
+    }
 }

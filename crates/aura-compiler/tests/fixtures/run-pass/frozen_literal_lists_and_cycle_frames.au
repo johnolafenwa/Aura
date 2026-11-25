@@ -1,0 +1,86 @@
+# Lists spelled with `str` literals that a function only reads by index, and
+# functions on a call cycle that push their frame record only on the ways
+# that call out: every trap still names each caller.
+import control
+
+
+enum Tree:
+    Leaf(value: int64)
+    Ref(cell: int64)
+    Sum(left: indirect Tree, right: indirect Tree)
+    Twice(inner: indirect Tree)
+
+
+def letter(column: int64) -> str:
+    letters = ["A", "B", "C", "D"]
+    return letters[column].clone()
+
+
+def describe(index: int64) -> str:
+    words = ["zero", "one", "", "three"]
+    if words[index] == "one":
+        return "the first"
+    if words[index].byte_len() == 0:
+        return "nothing"
+    return words[index].clone() + "!"
+
+
+def shout(word: str) -> str:
+    return word + word
+
+
+def louder(at: int64) -> str:
+    words = ["hi", "ho"]
+    return shout(words[at])
+
+
+def bounded(value: int64) -> int64:
+    return value % 1000 + 1
+
+
+def evaluate(node: Tree, cells: list[int64]) -> int64:
+    match node:
+        case Tree.Leaf(value):
+            return value
+        case Tree.Ref(cell):
+            return cells[cell]
+        case Tree.Sum(left, right):
+            return bounded(evaluate(left, cells) + evaluate(right, cells))
+        case Tree.Twice(inner):
+            return 2 * evaluate(inner, cells)
+
+
+def render(trap: control.Trap) -> str:
+    return trap.describe().replace(trap.path, "site.au") + " | " + str(trap.frames)
+
+
+def main() -> None:
+    mut row = ""
+    for column in range(8):
+        row = row + letter(column % 4)
+    print(row)
+    print(letter(-1))
+    for index in range(4):
+        print(describe(index))
+    print(louder(0) + louder(-1))
+    match control.recover(letter, 4):
+        case Ok(text):
+            print(text)
+        case Err(trap):
+            print(render(trap))
+    cells = [10, 20, 30]
+    tree = Tree.Sum(
+        left=Tree.Twice(inner=Tree.Ref(cell=2)),
+        right=Tree.Sum(left=Tree.Leaf(value=5), right=Tree.Ref(cell=0)),
+    )
+    print(evaluate(tree, cells))
+    mut total = 0
+    for value in range(2000):
+        total = (total + evaluate(Tree.Sum(left=Tree.Leaf(value=value), right=Tree.Ref(cell=value % 3)), cells)) % 7919
+    print(total)
+    broken = Tree.Twice(inner=Tree.Sum(left=Tree.Leaf(value=1), right=Tree.Ref(cell=5)))
+    match control.recover(evaluate, broken, cells):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(render(trap))

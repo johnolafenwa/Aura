@@ -731,6 +731,11 @@ struct NativeCodegen<'a> {
     /// check the machine stack, and count the task's call fuel unless
     /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
+    /// The module's entry of a call-cycle frame record (see
+    /// `define_cycle_frame_entry`), which a function on a call cycle runs
+    /// before its first call instead of on entry. `None` when the program
+    /// has no such function.
+    cycle_frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
     /// The functions that only read scalar fields of an instance they are
@@ -1037,6 +1042,20 @@ impl<'a> NativeCodegen<'a> {
         let mut runtime =
             RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
         let ownership = declare_ownership_fast_paths(&mut *object, &mut runtime)?;
+        let cycle_frame_entry = match recursive_functions.is_empty() {
+            true => None,
+            false => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_cycle_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the call-cycle frame entry: {}"
+            )),
+        };
+        if let Some(entry) = cycle_frame_entry {
+            object.mark_inline(entry);
+        }
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -1336,6 +1355,7 @@ impl<'a> NativeCodegen<'a> {
             reachable_blocks,
             safepoints_enabled,
             recursive_functions,
+            cycle_frame_entry,
             total_leaves,
             instance_keepers,
             layout_keepers,
@@ -1432,10 +1452,44 @@ impl<'a> NativeCodegen<'a> {
             self.define_cleanup_thunks(function)?;
         }
         self.define_ownership_fast_paths()?;
+        self.define_cycle_frame_entry()?;
         self.define_main_wrapper()
     }
 
     /// Defines the module's retain and release.
+    /// Defines the entry of a call-cycle frame record, which a function on
+    /// a call cycle runs where it first calls out, not on entry (see
+    /// `defers_frame`): the push, the call safepoint when the program has
+    /// tasks, and then the check of the machine stack. It is inlined into
+    /// its caller, so the stack check reads that caller's stack pointer,
+    /// the one its entry would have read.
+    fn define_cycle_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.cycle_frame_entry else {
+            return Ok(());
+        };
+        let safepoints = self.safepoints_enabled;
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the call-cycle frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
+                if safepoints {
+                    emit_call_safepoint(builder, &runtime_refs);
+                }
+                emit_stack_check(builder, &runtime_refs);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
     fn define_ownership_fast_paths(&mut self) -> std::result::Result<(), String> {
         let paths = self.ownership;
         let frame_stack = self.runtime[RuntimeFn::FrameStack];
@@ -1796,14 +1850,21 @@ impl<'a> NativeCodegen<'a> {
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
             || calls_total_leaves;
-        // Any other function on no call cycle with no `mut` parameter,
-        // cleanup, or second frame pushes its record where it first calls
-        // out (see `defer_frame`), unless a way that is not cold does.
+        // Any other function with no `mut` parameter, cleanup, or second
+        // frame pushes its record where it first calls out (see
+        // `defer_frame`). One on no call cycle pushes it on entry after
+        // all when a way that is not cold calls out. One on a call cycle
+        // runs `aura_enter_cycle_frame` there instead, with the safepoint
+        // and stack check of its entry, so a call that makes no call of
+        // its own, such as the leaves of a recursive walk, leaves the
+        // frame stack alone.
+        let on_cycle = !checked_entry
+            && !calls_total_leaves
+            && self.recursive_functions.contains(&function.name);
         let defers_frame = !frameless
             && forwarding_frame.is_none()
             && function.name != "main"
             && !takes_mutable(function)
-            && !self.recursive_functions.contains(&function.name)
             && !function.blocks.iter().any(|block| {
                 block
                     .instructions
@@ -1824,10 +1885,7 @@ impl<'a> NativeCodegen<'a> {
         // the ordinary entry as a possible target of a callback.
         // A function that only calls total leaves is on no cycle, whatever
         // the conservative call graph says of the names in its body.
-        if !checked_entry
-            && !calls_total_leaves
-            && self.recursive_functions.contains(&function.name)
-        {
+        if on_cycle && !defers_frame {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -2115,7 +2173,17 @@ impl<'a> NativeCodegen<'a> {
             builder.frame_branch(deferred, push, skip);
             builder.switch_to_block(push);
             builder.seal_block(push);
-            emit_frame_push(builder, &runtime_refs, descriptor);
+            // A function on a call cycle also checks the stack and counts
+            // the call as its entry does (see `define_cycle_frame_entry`).
+            match self.cycle_frame_entry {
+                Some(entry) if on_cycle => {
+                    let entry = builder.import_function(entry);
+                    builder.call(entry, &[descriptor]);
+                }
+                _ => {
+                    emit_frame_push(builder, &runtime_refs, descriptor);
+                }
+            }
             let one = builder.iconst(types::I64, 1);
             builder.def_var(framed, one);
             builder.jump(start, &[]);
@@ -2127,12 +2195,11 @@ impl<'a> NativeCodegen<'a> {
             builder.switch_to_block(start);
             builder.seal_block(start);
             blocks.insert(function.entry.clone(), start);
-            builder.defer_frame(
-                framed,
-                descriptor,
-                runtime_refs[RuntimeFn::EnterCall],
-                &frame_calls(&runtime_refs),
-            );
+            let enter = match self.cycle_frame_entry {
+                Some(entry) if on_cycle => builder.import_function(entry),
+                _ => runtime_refs[RuntimeFn::EnterCall],
+            };
+            builder.defer_frame(framed, descriptor, enter, &frame_calls(&runtime_refs));
             framed
         });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -2981,6 +3048,10 @@ impl<'a> NativeCodegen<'a> {
             view_twin_refs,
             str_slots,
             str_element_lists: str_elements.lists,
+            str_literal_lists: match self.freestanding {
+                Some(_) => HashSet::new(),
+                None => str_slots::str_literal_lists(function),
+            },
             clone_moves: match self.freestanding {
                 Some(_) => HashMap::new(),
                 None => str_slots::clone_moves(function),
@@ -3112,6 +3183,9 @@ impl<'a> NativeCodegen<'a> {
             reusable_array_temporaries: reusable_array_temporaries(function),
             array_binary_reuse: 0,
             shaped_boxes: HashSet::new(),
+            checked_variant: None,
+            variant_read_place: None,
+            tested_variant: None,
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
             class_check_snapshot: None,
@@ -3174,11 +3248,27 @@ impl<'a> NativeCodegen<'a> {
             .unwrap_or_default();
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
-        if compiler.deferred_frame.is_some()
-            && compiler
-                .builder
-                .calls_when_warm(&frame_calls(&compiler.runtime))
-        {
+        // A function on a call cycle pushes its record where a way first
+        // calls out, warm or not.
+        // A function on a call cycle defers its record past the calls of
+        // its own code and the runtime's reads of boxes generated code
+        // could not read in place. It pushes the record on entry when a
+        // warm way calls the runtime for anything else, which pays for the
+        // record on that way anyway.
+        let frame_free = frame_calls(&compiler.runtime);
+        let warm_calls = if on_cycle {
+            let mut runtime = Vec::new();
+            compiler.runtime.map(|callee| runtime.push(*callee));
+            let fallbacks = layout_fallbacks(&compiler.runtime);
+            compiler.builder.calls_when_warm_where(&|callee| {
+                runtime.contains(&callee)
+                    && !frame_free.contains(&callee)
+                    && !fallbacks.contains(&callee)
+            })
+        } else {
+            compiler.builder.calls_when_warm(&frame_free)
+        };
+        if compiler.deferred_frame.is_some() && warm_calls {
             compiler.builder.settle_frame();
         }
 
@@ -4476,6 +4566,9 @@ struct FunctionCompiler<'a> {
     str_slots: HashMap<String, str_slots::StrSlot>,
     /// Each `str` local that holds a list element as words, with the list.
     str_element_lists: HashMap<String, String>,
+    /// The locals that hold the frozen copy of a literal of `str` literals
+    /// (see `str_slots::str_literal_lists`).
+    str_literal_lists: HashSet<String>,
     /// The copies of a `str` local that may move its reference instead,
     /// each with the local and the scrutinee it is a payload of (see
     /// `str_slots::clone_moves`).
@@ -4823,6 +4916,16 @@ struct FunctionCompiler<'a> {
     /// what it returns, or a variant that keeps its payloads in place.
     /// Coercing one to that type tags nothing.
     shaped_boxes: HashSet<Val>,
+    /// The scrutinee local, variant and flag of the last payload read in
+    /// place: the flag is 1 where that read found the box in its layout
+    /// and of that variant. A read from the same local right after it
+    /// takes the flag instead of checking again. Cleared by anything else.
+    checked_variant: Option<(String, usize, Val)>,
+    /// The scrutinee local of the payload read being compiled, if any.
+    variant_read_place: Option<String>,
+    /// The variant and flag of the last `typed_variant_test` that checked
+    /// the box's layout: as `checked_variant`, for a match to hand on.
+    tested_variant: Option<(usize, Val)>,
     /// The `str` boxes this instruction loaded as fresh copies through an
     /// element path, which no other place holds, so a clone of one is the
     /// box itself.
@@ -5601,6 +5704,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.enter_method_snapshot(function)?;
 
+        let mut checked_at_exit = HashMap::new();
         for label in order {
             let block = block_by_label.get(label.as_str()).ok_or_else(|| {
                 format!(
@@ -5627,8 +5731,19 @@ impl<'a> FunctionCompiler<'a> {
             if entered.all(|from| compiled.contains(*from)) {
                 self.builder.note_complete(self.blocks[label.as_str()]);
             }
+            // A payload read's check holds in a block that only one block
+            // reaches, by its `Goto` or `Match`.
+            self.checked_variant = match predecessors.get(label.as_str()).map(Vec::as_slice) {
+                Some([from]) => checked_at_exit.get(*from).cloned(),
+                _ => None,
+            };
             let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
+            if let (Some(checked), Terminator::Goto(_) | Terminator::Match { .. }) =
+                (self.checked_variant.take(), &block.terminator)
+            {
+                checked_at_exit.insert(label.clone(), checked);
+            }
             let own = self.compiled_block_id(&label)?;
             self.note_snapshot_blocks(&label, own, first_block);
             compiled.insert(label.clone());
@@ -5768,6 +5883,18 @@ impl<'a> FunctionCompiler<'a> {
             // retain before it stays for the read that follows.
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
+            }
+            if !matches!(
+                instruction,
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(place),
+                        ..
+                    },
+                } if target != place
+            ) {
+                self.checked_variant = None;
             }
             self.current_snapshot_instruction = instruction_index;
             if self.compile_union_buffer_read(block, instruction_index)? {
@@ -6505,6 +6632,14 @@ impl<'a> FunctionCompiler<'a> {
             }
             // The tuple of a walk by entry is never made.
             Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
+            Instruction::Assign {
+                target,
+                value: Rvalue::VecLiteral { elements, .. },
+            } if self.str_literal_lists.contains(target) => {
+                self.compile_str_literal_list(target, elements)?;
+            }
+            // The frozen copy of a literal takes no reference.
+            Instruction::Release { place } if self.str_literal_lists.contains(place) => {}
             Instruction::Assign { target, value }
                 if self.compile_callable_element_read(target, value)? => {}
             // A callee read from a loan only to be called is called through
@@ -7160,6 +7295,21 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.node_read_targets.contains(place.as_str())
                 );
+                // A match of one variant of a local hands its check on to
+                // the payload reads of its arm (see `checked_variant`).
+                let tested_place = match (scrutinee, arms.as_slice()) {
+                    (Operand::Place(place), [arm])
+                        if !arm.wildcard
+                            && !recovery_slot
+                            && !lookup_slot
+                            && !lent
+                            && !node_read =>
+                    {
+                        Some(place.clone())
+                    }
+                    _ => None,
+                };
+                self.tested_variant = None;
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -7253,6 +7403,11 @@ impl<'a> FunctionCompiler<'a> {
                     self.layout_scratch = pending_owned;
                 }
                 self.release_all_temporary_owned();
+                if let (Some(place), Some((index, typed))) =
+                    (tested_place, self.tested_variant.take())
+                {
+                    self.checked_variant = Some((place, index, typed));
+                }
                 if self.closed_matches.contains(block_label) {
                     self.builder.trap(TrapCode::User(2));
                 } else {
@@ -8053,6 +8208,10 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
+                let read_place = match scrutinee {
+                    Operand::Place(place) => Some(place.clone()),
+                    _ => None,
+                };
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 if !lent {
                     let any = DirectType::Opaque(Type::named("Unknown"));
@@ -8063,13 +8222,16 @@ impl<'a> FunctionCompiler<'a> {
                     };
                     let index = *index;
                     let slow_scrutinee = scrutinee.clone();
-                    if let Some(payload) = self.typed_variant_payload(
+                    self.variant_read_place = read_place;
+                    let read = self.typed_variant_payload(
                         &scrutinee,
                         variant_name,
                         index,
                         read_as,
                         |this| this.compile_variant_payload(slow_scrutinee, index),
-                    )? {
+                    );
+                    self.variant_read_place = None;
+                    if let Some(payload) = read? {
                         return Ok(payload);
                     }
                 }
@@ -9745,9 +9907,12 @@ impl<'a> FunctionCompiler<'a> {
         let remainder_nonzero = self
             .builder
             .icmp(IntCC::NotEqual, truncating_remainder, zero);
-        let left_negative = self.builder.icmp(IntCC::SignedLessThan, left, zero);
-        let right_negative = self.builder.icmp(IntCC::SignedLessThan, right, zero);
-        let signs_differ = self.builder.bxor(left_negative, right_negative);
+        // A remainder that is not zero has the sign of `left`, so the
+        // signs differ when its sign is not the divisor's. Tested on the
+        // remainder, a positive constant divisor leaves `remainder < 0`,
+        // and LLVM knows the floor remainder lies in `0..right`.
+        let signs = self.builder.bxor(truncating_remainder, right);
+        let signs_differ = self.builder.icmp(IntCC::SignedLessThan, signs, zero);
         let adjust = self.builder.band(remainder_nonzero, signs_differ);
 
         if quotient {
@@ -16521,11 +16686,13 @@ impl<'a> FunctionCompiler<'a> {
         };
         if !lent {
             let slow_scrutinee = scrutinee.clone();
-            if let Some(scalar) =
+            self.variant_read_place = Some(place.clone());
+            let read =
                 self.typed_variant_payload(&scrutinee, variant_name, index, &target_ty, |this| {
                     runtime_read(this, &slow_scrutinee)
-                })?
-            {
+                });
+            self.variant_read_place = None;
+            if let Some(scalar) = read? {
                 return Ok(Some(scalar));
             }
         }
@@ -21555,6 +21722,13 @@ fn emit_frame_push(
     (done, builder.block_params(done)[0])
 }
 
+/// The signature of `aura_enter_cycle_frame`: the frame descriptor.
+fn cycle_frame_entry_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    signature
+}
+
 fn ownership_fast_path_signature(returns_value: bool) -> Signature {
     let mut signature = Signature::new(CallConv::C);
     signature.params.push(types::I64);
@@ -22013,6 +22187,28 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// the stack's flags ask for the runtime or no call is above its floor.
 /// Then `aura_direct_exit_call` does the whole pop.
 /// The calls that push, find, and pop frame records, which need none.
+/// The runtime's reads of a variant or list box that generated code reads
+/// in place when the box is in its layout, and its releases.
+fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
+    [
+        RuntimeFn::VariantMatches,
+        RuntimeFn::VariantPayload,
+        RuntimeFn::VariantPayloadI64,
+        RuntimeFn::VariantPayloadInt64,
+        RuntimeFn::VariantPayloadU64,
+        RuntimeFn::VariantPayloadBool,
+        RuntimeFn::VecLen,
+        RuntimeFn::VecIndex,
+        RuntimeFn::VecIndexScalar,
+        RuntimeFn::TagValueType,
+        RuntimeFn::ReleaseValue,
+        RuntimeFn::ReleaseLastOwnedValue,
+    ]
+    .into_iter()
+    .map(|function| runtime[function])
+    .collect()
+}
+
 fn frame_calls(runtime: &RuntimeTable<FuncRef>) -> [FuncRef; 3] {
     [
         runtime[RuntimeFn::FrameStack],

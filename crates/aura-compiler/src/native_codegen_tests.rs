@@ -9732,18 +9732,22 @@ def main() -> int32:
     );
     let bytes = emit_host_object(&mir).expect("str.to_bytes should emit direct native code");
     let referenced = object_referenced_symbols(&bytes);
+    // A literal's bytes are copied from where the program keeps them, and
+    // a boxed `str`'s from its box, with no lookup of the builtin.
     assert!(
         referenced
+            .iter()
+            .any(|symbol| symbol.contains("aura_direct_string_to_bytes_view"))
+            && referenced
+                .iter()
+                .any(|symbol| symbol.contains("aura_direct_string_bytes")),
+        "str.to_bytes copies the words of a literal or a box: {referenced:?}"
+    );
+    assert!(
+        !referenced
             .iter()
             .any(|symbol| symbol.contains("aura_host_str_to_bytes")),
-        "str.to_bytes must call its own host builtin entry: {referenced:?}"
-    );
-    // A literal's bytes are copied from where the program keeps them.
-    assert!(
-        referenced
-            .iter()
-            .any(|symbol| symbol.contains("aura_direct_string_to_bytes_view")),
-        "a literal's str.to_bytes copies its words: {referenced:?}"
+        "a boxed str.to_bytes reads its words in place: {referenced:?}"
     );
 
     let object = object::File::parse(bytes.as_slice())
