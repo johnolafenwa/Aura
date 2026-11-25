@@ -249,3 +249,54 @@ fn a_window_copies_inside_a_buffer_it_shares_with_one_other_window() {
     let other: ArrayBuf<i64> = (0..2).collect();
     assert!(!whole.copy_within_from(other, 0));
 }
+
+#[test]
+fn copy_within_from_handles_mid_drop_third_holder_without_panicking() {
+    use std::sync::Arc;
+
+    let mut whole: ArrayBuf<i64> = (0..6).collect();
+    let tail = whole.window(2, 4);
+    // Simulate a third ArrayBuf whose Drop has decremented `holders` back to 2
+    // while its `Arc<ArrayOwner>` has not yet been dropped.
+    let lingering_owner = Arc::clone(&whole.owner);
+    assert_eq!(whole.holders(), 2);
+    assert_eq!(Arc::strong_count(&whole.owner), 3);
+
+    assert!(
+        !whole.is_shared_only_with(&tail),
+        "a lingering third Arc must prevent in-place copy_within_from"
+    );
+    assert!(
+        !whole.copy_within_from(tail, 1),
+        "copy_within_from must not panic when a lingering third Arc exists"
+    );
+    assert_eq!(&*whole, &[0, 1, 2, 3, 4, 5]);
+
+    // If `copy_within_or_detach` runs while another Arc is still live, it
+    // detaches into a private buffer without disturbing the lingering Arc.
+    let original_ptr = whole.as_ptr();
+    whole.copy_within_or_detach(2, 4, 1);
+    assert_ne!(whole.as_ptr(), original_ptr);
+    assert_eq!(&*whole, &[0, 2, 3, 4, 5, 5]);
+    assert_eq!(&*lingering_owner.elements, &[0, 1, 2, 3, 4, 5]);
+    drop(lingering_owner);
+
+    // Concurrent clone/drop stress while invoking copy_within_from.
+    for _ in 0..200 {
+        let mut target: ArrayBuf<i64> = (0..8).collect();
+        let src = target.window(2, 4);
+        let worker_clone = target.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                drop(worker_clone);
+            });
+            let moved = target.copy_within_from(src, 1);
+            if moved {
+                assert_eq!(&*target, &[0, 2, 3, 4, 5, 5, 6, 7]);
+            } else {
+                assert_eq!(&*target, &[0, 1, 2, 3, 4, 5, 6, 7]);
+            }
+        });
+    }
+}
+
