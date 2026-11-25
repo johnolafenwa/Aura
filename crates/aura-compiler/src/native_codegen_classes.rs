@@ -282,6 +282,60 @@ fn reaches_lent_field(value: &Operand, temp: &str, root: &str) -> bool {
     }
 }
 
+/// The temporaries of `temps` (see [`field_lend_temps`]) whose lend only
+/// reads the list it lends: its one operation reads an element scalar or
+/// the length. Such an operation neither keeps the box nor puts another in
+/// the temporary, so the box comes back to its field as it went.
+pub(super) fn read_only_field_lends(
+    function: &MirFunction,
+    temps: &HashSet<String>,
+) -> HashSet<String> {
+    let mut read_only = HashSet::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Lend { temp, .. } = instruction else {
+                continue;
+            };
+            if !temps.contains(temp) {
+                continue;
+            }
+            let body = block.instructions[index + 1..].iter().take_while(
+                |later| !matches!(later, Instruction::EndLend { temp: ended, .. } if ended == temp),
+            );
+            let reads_only = body.into_iter().all(|instruction| match instruction {
+                Instruction::IndexInRange { .. } => true,
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    op: RuntimeOp::List(op),
+                                    receiver: Some(Operand::Place(receiver)),
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } => {
+                    receiver == temp
+                        && matches!(
+                            op,
+                            ListOp::IndexScalar(_)
+                                | ListOp::IndexScalarUnchecked(_)
+                                | ListOp::Len
+                                | ListOp::IsEmpty
+                        )
+                }
+                _ => false,
+            });
+            if reads_only {
+                read_only.insert(temp.clone());
+            }
+        }
+    }
+    read_only
+}
+
 /// Whether `instruction` is a runtime operation on the lent temporary
 /// `temp` as its receiver, which only reads the temporary or changes it in
 /// place, and which names neither it elsewhere nor the instance `root`.
@@ -852,18 +906,24 @@ impl FunctionCompiler<'_> {
         let flags = MemFlags::trusted();
         let boxed = self.builder.use_var(temp_var);
         let field_slot = self.builder.use_var(lend.slot);
-        let held = self.builder.load(types::I64, flags, field_slot, 0);
-        let kept = self.builder.icmp(IntCC::Equal, held, boxed);
-        let count = self
-            .builder
-            .uload32(flags, boxed, ownership.ref_count_offset);
-        let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
-        let mut unchanged = self.builder.band(kept, alone);
-        if let Some(snapshot) = self.field_snapshot(place) {
-            // The loop's copy only reads the list, which leaves the box
-            // in its field with the one holder the loop's entry found.
-            unchanged = self.holds_in_copy(snapshot, unchanged);
-        }
+        // A lend that only read the list left the box as it went.
+        let unchanged = if self.read_only_field_lends.contains(temp) {
+            self.builder.iconst(types::I8, 1)
+        } else {
+            let held = self.builder.load(types::I64, flags, field_slot, 0);
+            let kept = self.builder.icmp(IntCC::Equal, held, boxed);
+            let count = self
+                .builder
+                .uload32(flags, boxed, ownership.ref_count_offset);
+            let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
+            let mut unchanged = self.builder.band(kept, alone);
+            if let Some(snapshot) = self.field_snapshot(place) {
+                // The loop's copy only reads the list, which leaves the box
+                // in its field with the one holder the loop's entry found.
+                unchanged = self.holds_in_copy(snapshot, unchanged);
+            }
+            unchanged
+        };
         // The temporary never owned the box.
         let zero = self.builder.iconst(types::I64, 0);
         self.builder.def_var(temp_var, zero);

@@ -3191,6 +3191,7 @@ impl<'a> NativeCodegen<'a> {
             str_append_root: None,
             owned_replace_receiver: None,
             lent_temps: HashMap::new(),
+            read_only_field_lends: classes::read_only_field_lends(function, &field_lend_temps),
             field_lend_temps,
             field_lends: HashMap::new(),
             record_lends: HashMap::new(),
@@ -4841,6 +4842,9 @@ struct FunctionCompiler<'a> {
     /// The temporaries of lends of a field to one runtime operation, which
     /// may lend the field's box as it is. See `classes::field_lend_temps`.
     field_lend_temps: HashSet<String>,
+    /// The field lend temporaries whose one operation only reads the list.
+    /// See `classes::read_only_field_lends`.
+    read_only_field_lends: HashSet<String>,
     /// The field lends in progress that lent a box as it is, by temporary.
     field_lends: HashMap<String, classes::FieldLend>,
     /// The lends of a plain record to a method call in progress that read
