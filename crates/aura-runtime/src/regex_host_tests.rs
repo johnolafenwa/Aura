@@ -123,19 +123,11 @@ fn searches_report_matches_and_scalar_offsets() {
 #[test]
 fn captures_mark_groups_that_took_no_part() {
     let pattern = r"(?P<key>[a-z]+)=(\d+)(;)?";
-    let Value::Tuple(found) = call("regex::__aura_captures", &[pattern, "x bb=22 y"]).unwrap()
-    else {
-        panic!("expected a tuple");
-    };
-    assert_eq!(texts(&found.elements[0]), ["bb=22", "bb", "22", ""]);
-    assert_eq!(
-        items(&found.elements[1]),
-        [true, true, true, false].map(Value::Bool)
-    );
-    let Value::Tuple(none) = call("regex::__aura_captures", &[pattern, "none"]).unwrap() else {
-        panic!("expected a tuple");
-    };
-    assert!(texts(&none.elements[0]).is_empty());
+    // Each group's text, then a mark for each group: `y` when it took part.
+    let found = call("regex::__aura_captures", &[pattern, "x bb=22 y"]).unwrap();
+    assert_eq!(texts(&found), ["bb=22", "bb", "22", "", "y", "y", "y", ""]);
+    let none = call("regex::__aura_captures", &[pattern, "none"]).unwrap();
+    assert!(texts(&none).is_empty());
     let index = |name: &str| call("regex::__aura_group_index", &[pattern, name]).unwrap();
     assert_eq!(index("key"), Value::Int(IntegerValue::from_i64(1)));
     assert_eq!(index("nope"), Value::Int(IntegerValue::from_i64(-1)));

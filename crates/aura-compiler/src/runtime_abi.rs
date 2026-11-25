@@ -225,6 +225,7 @@ runtime_functions! {
     VecLen => ("aura_direct_vec_len", [I64], Some(I64)),
     VecIsEmpty => ("aura_direct_vec_is_empty", [I64], Some(I64)),
     VecPushInPlace => ("aura_direct_vec_push_in_place", [I64, I64], None),
+    VecPushInstance => ("aura_direct_vec_push_instance", [I64, I64, I64], None),
     VecGet => ("aura_direct_vec_get", [I64, I64], Some(I64)),
     VecSetInPlace => ("aura_direct_vec_set_in_place", [I64, I64, I64], Some(I64)),
     VecSwapInPlace => ("aura_direct_vec_swap_in_place", [I64, I64, I64], Some(I64)),

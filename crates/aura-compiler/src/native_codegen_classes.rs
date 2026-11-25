@@ -24,7 +24,7 @@
 use std::rc::Rc;
 
 use aura_core::layout::{encode_layouts, LayoutBuilder, LayoutId, LayoutKind, LayoutTable};
-use aura_runtime::native_runtime::FIRST_CLASS_ACCESS;
+use aura_runtime::native_runtime::{FIRST_CLASS_ACCESS, FIRST_INSTANCE_LIST_ACCESS};
 
 use super::plain::{collect_leaves, PlainLeaf, PlainRecords};
 use super::*;
@@ -129,6 +129,18 @@ impl PlainRecords {
         Some((builder.into_table(), root))
     }
 
+    /// Whether a list may keep the instances of `class_name` in place, one
+    /// block's bytes after another, as the runtime's
+    /// `ClassLayout::keeps_in_list` decides for the same layout: every field
+    /// is a scalar, a `str` in a box, or a class or tuple of such fields.
+    pub(super) fn keeps_in_list(&self, class_name: &str) -> bool {
+        let Some((table, root)) = self.class_layout(class_name) else {
+            return false;
+        };
+        let layout = table.get(root);
+        layout.size > 0 && layout.align <= 8 && fits_list(&table, root)
+    }
+
     /// Whether a field of type `ty` of a class that is not Copy lies in the
     /// instance's block in its own layout rather than in a box. A class
     /// field stays inline, where generated code reads its scalars.
@@ -139,6 +151,164 @@ impl PlainRecords {
             _ => true,
         }
     }
+}
+
+/// Whether a list may keep values of `id` in place (see
+/// [`PlainRecords::keeps_in_list`]).
+fn fits_list(table: &LayoutTable, id: LayoutId) -> bool {
+    let layout = table.get(id);
+    match &layout.kind {
+        LayoutKind::Unit | LayoutKind::Scalar(_) => true,
+        LayoutKind::Handle => {
+            matches!(&layout.ty, Type::Named(name, args) if name == "str" && args.is_empty())
+        }
+        LayoutKind::Struct { fields, .. } => {
+            fields.iter().all(|field| fits_list(table, field.layout))
+        }
+        LayoutKind::Indirect(_) | LayoutKind::Tagged { .. } => false,
+    }
+}
+
+/// The temporaries of `function` that one `Construct` of a class fills and
+/// the next instruction appends to a list by moving them, and that nothing
+/// else names: `list.append(Class(...))`. Generated code may build such an
+/// instance straight into the list (see `push_constructed_instance`).
+pub(super) fn instance_append_temps(function: &MirFunction) -> HashSet<String> {
+    use crate::mir::{instruction_place_mentions, terminator_place_mentions};
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let mut places = Vec::new();
+            instruction_place_mentions(instruction, &mut places);
+            if let Instruction::Assign { target, .. } = instruction {
+                places.push(target);
+            }
+            for place in places {
+                *mentions.entry(place_root(place)).or_default() += 1;
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *mentions.entry(place_root(place)).or_default() += 1;
+        }
+    }
+    let mut temps = HashSet::new();
+    for block in &function.blocks {
+        for pair in block.instructions.windows(2) {
+            let [Instruction::Assign {
+                target: temp,
+                value: Rvalue::Construct { .. },
+            }, Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op:
+                                    crate::runtime_ops::RuntimeOp::List(
+                                        crate::runtime_ops::ListOp::Push,
+                                    ),
+                                receiver: Some(Operand::Place(_)),
+                                ..
+                            },
+                        args,
+                        ..
+                    },
+                ..
+            }] = pair
+            else {
+                continue;
+            };
+            let moved = matches!(
+                args.as_slice(),
+                [MirArg {
+                    value: Operand::MovePlace(moved),
+                    writeback_place: None,
+                    ..
+                }] if moved == temp
+            );
+            if moved && !temp.contains('.') && mentions.get(temp.as_str()) == Some(&2) {
+                temps.insert(temp.clone());
+            }
+        }
+    }
+    temps
+}
+
+/// The locals of `function` that hold an element of a list of instances
+/// of a class a list keeps in place, which generated code may read where
+/// the list keeps the element (see `emit_list_lend`). Each candidate,
+/// with its class, is one `lents` reads from a list, and `scalar_field`
+/// says whether a field of its class is a scalar. A local qualifies when
+/// its only assignment is one read, the only other mention of the bare
+/// local is its `Release`, and every other mention reads a scalar field
+/// (`local.field`), so nothing needs the element's box.
+pub(super) fn instance_element_locals(
+    function: &MirFunction,
+    candidates: &HashMap<String, String>,
+    scalar_field: impl Fn(&str, &str) -> bool,
+) -> HashSet<String> {
+    use crate::mir::{instruction_place_mentions, terminator_place_mentions};
+    let mut refused = HashSet::<String>::new();
+    let mut assigned = HashMap::<String, usize>::new();
+    let check = |place: &str, refused: &mut HashSet<String>| {
+        let root = place_root(place);
+        let Some(class) = candidates.get(root) else {
+            return;
+        };
+        let fine = match place.split_once('.') {
+            Some((_, field)) => !field.contains('.') && scalar_field(class, field),
+            None => false,
+        };
+        if !fine {
+            refused.insert(root.to_string());
+        }
+    };
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::Release { place } if candidates.contains_key(place.as_str()) => {
+                    continue
+                }
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::Call { callee, args, .. },
+                } if candidates.contains_key(target.as_str()) => {
+                    *assigned.entry(target.clone()).or_default() += 1;
+                    if let CallTarget::Runtime {
+                        receiver: Some(Operand::Place(place) | Operand::MovePlace(place)),
+                        ..
+                    } = callee
+                    {
+                        check(place, &mut refused);
+                    }
+                    for arg in args {
+                        if let Operand::Place(place) | Operand::MovePlace(place) = &arg.value {
+                            check(place, &mut refused);
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let mut places = Vec::new();
+            instruction_place_mentions(instruction, &mut places);
+            if let Instruction::Assign { target, .. } = instruction {
+                places.push(target);
+            }
+            for place in places {
+                check(place, &mut refused);
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            check(place, &mut refused);
+        }
+    }
+    candidates
+        .keys()
+        .filter(|local| {
+            !refused.contains(local.as_str()) && assigned.get(local.as_str()) == Some(&1)
+        })
+        .cloned()
+        .collect()
 }
 
 impl ClassRecord {
@@ -482,13 +652,217 @@ impl FunctionCompiler<'_> {
         let Some((root, slot, ty)) = self.class_place(place)? else {
             return Ok(None);
         };
-        let object = self.load_root(&root)?.values[0];
+        if let (Some(block_var), SlotKind::Leaves(leaves)) =
+            (self.instance_element_blocks.get(&root).copied(), &slot.kind)
+        {
+            // An element a list keeps in place is read where it lies.
+            let leaves = leaves.clone();
+            let element_block = self.builder.create_block();
+            let boxed_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            for abi in ty.abi_types() {
+                self.builder.append_block_param(join_block, abi);
+            }
+            let address = self.builder.use_var(block_var);
+            self.builder
+                .brif(address, element_block, &[], boxed_block, &[]);
+            self.builder.switch_to_block(element_block);
+            self.builder.seal_block(element_block);
+            let values = leaves
+                .iter()
+                .map(|leaf| self.load_leaf(*leaf, address))
+                .collect::<Vec<_>>();
+            self.builder.jump(join_block, &values);
+            self.builder.switch_to_block(boxed_block);
+            self.builder.seal_block(boxed_block);
+            let loaded = self.load_boxed_class_place(place, &root, &slot, ty.clone())?;
+            self.builder.jump(join_block, &loaded.values);
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            let values = self.builder.block_params(join_block).to_vec();
+            return Ok(Some(ValueRef { values, ty }));
+        }
+        self.load_boxed_class_place(place, &root, &slot, ty)
+            .map(Some)
+    }
+
+    /// [`Self::load_class_place`] for a root that holds an instance box.
+    fn load_boxed_class_place(
+        &mut self,
+        place: &str,
+        root: &str,
+        slot: &ClassSlot,
+        ty: DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let object = self.load_root(root)?.values[0];
         let slow_block = self.builder.create_block();
-        self.skip_class_check = self.confined_instances.contains(&root);
-        self.class_check_snapshot = self.instance_snapshot(&root);
-        let loaded = self.load_class_slot(place, object, slow_block, &slot, ty, false);
+        self.skip_class_check = self.confined_instances.contains(root);
+        self.class_check_snapshot = self.instance_snapshot(root);
+        let loaded = self.load_class_slot(place, object, slow_block, slot, ty, false);
         self.skip_class_check = false;
-        loaded.map(Some)
+        loaded
+    }
+
+    /// The list access code of a list that keeps instances of `ty` in
+    /// place, and the bytes one takes there, when its class may be kept so.
+    pub(super) fn instance_list_slot(
+        &mut self,
+        ty: &DirectType,
+    ) -> std::result::Result<Option<(i64, i64)>, String> {
+        let DirectType::Opaque(Type::Named(class_name, args)) = ty else {
+            return Ok(None);
+        };
+        if !args.is_empty() || !self.plain_records.keeps_in_list(class_name) {
+            return Ok(None);
+        }
+        let Some(record) = self
+            .plain_records
+            .class_record(class_name, self.builder.module())?
+        else {
+            return Ok(None);
+        };
+        let size = record.table.get(record.root).size as i64;
+        let access =
+            i64::from(FIRST_INSTANCE_LIST_ACCESS) + record.access - i64::from(FIRST_CLASS_ACCESS);
+        Ok(Some((access, (size + 7) / 8 * 8)))
+    }
+
+    /// Whether `instruction` is the `Construct` of one of
+    /// `instance_appends` for a list that may keep the class in place, which
+    /// then waits for the append that follows (see
+    /// [`Self::push_constructed_instance`]).
+    pub(super) fn defer_instance_construct(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<bool, String> {
+        let [Instruction::Assign {
+            target,
+            value: Rvalue::Construct { class_name, fields },
+        }, Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            receiver: Some(Operand::Place(list)),
+                            ..
+                        },
+                    ..
+                },
+            ..
+        }, ..] = instructions
+        else {
+            return Ok(false);
+        };
+        if !self.instance_appends.contains(target) {
+            return Ok(false);
+        }
+        let element = match self.type_of_place(list)? {
+            DirectType::Opaque(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
+                args[0].clone()
+            }
+            _ => return Ok(false),
+        };
+        let Some(class) = self.classes.get(class_name).cloned() else {
+            return Ok(false);
+        };
+        let named_once = fields.len() == class.fields.len()
+            && class
+                .fields
+                .iter()
+                .all(|field| fields.iter().filter(|init| init.name == field.name).count() == 1);
+        let built = Type::named(class_name);
+        if element != built
+            || !named_once
+            || !matches!(self.type_of_place(target)?, DirectType::Opaque(ty) if ty == built)
+            || sync::handle_class_field(&DirectType::Opaque(built.clone()), &self.classes).is_some()
+            || self
+                .instance_list_slot(&DirectType::Opaque(built))?
+                .is_none()
+        {
+            return Ok(false);
+        }
+        self.deferred_instance = Some((target.clone(), class_name.clone(), fields.clone()));
+        Ok(true)
+    }
+
+    /// Appends the instance a deferred `Construct` describes to `list`:
+    /// the fields go into a buffer laid out as the instance's block, each
+    /// box as the reference the instance would own, and one call hands the
+    /// buffer to the list (see `aura_direct_vec_push_instance`). `false`
+    /// when `temp` is not the deferred instance's temporary.
+    pub(super) fn push_constructed_instance(
+        &mut self,
+        list: Val,
+        temp: &str,
+    ) -> std::result::Result<bool, String> {
+        let Some((deferred, class_name, fields)) = self.deferred_instance.take() else {
+            return Ok(false);
+        };
+        if deferred != temp {
+            self.deferred_instance = Some((deferred, class_name, fields));
+            return Ok(false);
+        }
+        let class = self
+            .classes
+            .get(&class_name)
+            .cloned()
+            .ok_or(format!("direct backend does not know class `{class_name}`"))?;
+        let record = self
+            .plain_records
+            .class_record(&class_name, self.builder.module())?
+            .ok_or_else(|| format!("direct backend has no layout for class `{class_name}`"))?;
+        let size = record.table.get(record.root).size;
+        let words = size.div_ceil(8) as i32;
+        let slot = self.builder.create_sized_stack_slot((words * 8) as u32, 3);
+        let buffer = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        for word in 0..words {
+            self.builder
+                .store(MemFlags::trusted(), zero, buffer, word * 8);
+        }
+        for field in &fields {
+            let field_ty = class
+                .fields
+                .iter()
+                .find(|candidate| candidate.name == field.name)
+                .map(|candidate| candidate.ty.clone())
+                .expect("every field is named");
+            let field_ty = ensure_direct_type(
+                &field_ty,
+                &self.classes,
+                &format!("field `{}` on class `{}`", field.name, class_name),
+            )?;
+            let slot = record
+                .slot(&[field.name.as_str()], &field_ty)
+                .ok_or_else(|| {
+                    format!(
+                        "direct backend cannot place field `{}` of class `{class_name}`",
+                        field.name
+                    )
+                })?;
+            let loaded = self.load_operand_for_target(&field.value, &field_ty)?;
+            let loaded = self.coerce_value(loaded, &field_ty)?;
+            match slot.kind {
+                SlotKind::Leaves(leaves) => {
+                    for (leaf, word) in leaves.iter().zip(&loaded.values) {
+                        self.store_leaf(*leaf, *word, buffer);
+                    }
+                }
+                SlotKind::Handle => {
+                    let boxed = self.ensure_opaque(loaded)?;
+                    let boxed = self.transfer_owned_opaque_value(&boxed);
+                    self.builder
+                        .store(MemFlags::trusted(), boxed, buffer, slot.offset);
+                }
+            }
+        }
+        let cell = self.builder.import_data(record.cell);
+        let cell = self.builder.symbol_value(types::I64, cell);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecPushInstance],
+            &[list, cell, buffer],
+        );
+        Ok(true)
     }
 
     /// Reads the field at `slot` of the instance box `object` where it lies

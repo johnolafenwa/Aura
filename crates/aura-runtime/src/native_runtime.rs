@@ -151,6 +151,7 @@ pub use typed_layout::{
 use class_layouts::{celled_class_layout, registered_class_layout};
 pub use class_layouts::{
     register_class_layout, ClassLayout, ClassLayoutCell, TypedFields, FIRST_CLASS_ACCESS,
+    FIRST_INSTANCE_LIST_ACCESS,
 };
 pub use element_boxes::{ElementBox, ElementMut};
 use enum_layouts::{celled_enum_layout, registered_enum_layout};
@@ -9949,6 +9950,111 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     })
 }
 
+/// Appends a new instance of the class whose layout `cell` holds, built
+/// from the words at `words`: the instance's block bytes, with the box the
+/// running task owns of each field that lies in a box at its offset, which
+/// the call hands over. It is `list.append(Class(...))` without the
+/// instance's own box: a confined list that is empty or keeps instances of
+/// the class in place keeps the bytes (see
+/// [`crate::list_elements::ListElements::Instances`]), and any other list
+/// takes an instance built as [`aura_direct_instance_new_typed`] builds one,
+/// appended as [`aura_direct_vec_push_in_place`] appends it.
+///
+/// # Safety
+///
+/// `cell` is one of the cells the program registered as a class layout,
+/// `words` is aligned for `u64` and holds the layout's stride of words, and
+/// `vec` is as for [`aura_direct_vec_push_in_place`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_push_instance(
+    vec: *mut OpaqueValue,
+    cell: *const ClassLayoutCell,
+    words: *mut u64,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let bytes = words.cast::<u8>();
+        for offset in layout.box_offsets() {
+            // SAFETY: each offset is a box slot of the words, which holds a
+            // box the caller hands over.
+            unsafe {
+                let slot = bytes.add(*offset).cast::<*mut OpaqueValue>();
+                let field = *slot;
+                if field.is_null() {
+                    runtime_error("direct runtime received a null field value");
+                }
+                *slot = std::mem::ManuallyDrop::new(adopt_field_box(field)).as_ptr();
+            }
+        }
+        // SAFETY: the words now hold a live instance's bytes.
+        if unsafe { push_kept_instance(vec, layout, words) } {
+            return;
+        }
+        let boxed = aura_direct_instance_new_typed(cell);
+        // SAFETY: the box is new, and its block's bytes are dead, so they
+        // take the instance's bytes, field boxes and all.
+        unsafe {
+            if let Value::Instance(instance) = &*(*boxed).value.get() {
+                let typed = instance.fields.typed().expect("a new typed instance");
+                std::ptr::copy_nonoverlapping(bytes, typed.data(), layout.size());
+            }
+        }
+        aura_direct_vec_push_in_place(vec, boxed);
+    })
+}
+
+/// Appends the instance whose bytes lie at `words` to a confined list that
+/// is empty or keeps instances of `layout` in place, and knows its element
+/// type, and returns whether it did. Any other list is left alone.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress; `words` holds a live
+/// instance of `layout`, which the list takes over when this returns true.
+#[inline]
+unsafe fn push_kept_instance(
+    vec: *mut OpaqueValue,
+    layout: &'static ClassLayout,
+    words: *const u64,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    if !layout.keeps_in_list() || !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    if header.list_capacity.load(Ordering::Relaxed) != 0 {
+        header.adopt_appended_elements();
+    }
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    match &mut vector.elements {
+        ListElements::Instances(instances) if std::ptr::eq(instances.layout(), layout) => {
+            // SAFETY: the caller's contract.
+            if let Some((elements, len)) = unsafe { instances.push_unshared(words) } {
+                // The same class's instances keep the list's shape, and its
+                // view only moves.
+                header.list_elements.set(elements);
+                header.list_len.set(len);
+                return true;
+            }
+        }
+        elements if elements.is_empty() && !is_unknown_runtime_type(&vector.element_type) => {}
+        _ => return false,
+    }
+    // SAFETY: the caller's contract.
+    unsafe { vector.elements.push_instance(layout, words) };
+    header.refresh_list_view();
+    true
+}
+
 /// The whole of an append of `element` for a confined list that already
 /// keeps its elements in boxes, in storage no other list shares, and
 /// knows its element type: it appends the box and records where the boxes
@@ -14868,7 +14974,32 @@ fn direct_element_walk<'a>(
     selectors: &mut DirectElementSelectors<'_>,
 ) -> std::result::Result<Cow<'a, Value>, DirectElementPathError> {
     let mut current = Cow::Borrowed(value);
-    for step in steps {
+    let mut steps = steps.iter().peekable();
+    while let Some(step) = steps.next() {
+        // A field of an instance a list keeps in place is read where it
+        // lies, without a copy of the whole element.
+        let borrowed = match &current {
+            Cow::Borrowed(value) => Some(*value),
+            Cow::Owned(_) => None,
+        };
+        if let (
+            Some(Value::Vec(vector)),
+            DirectElementPathStep::Index,
+            Some(DirectElementPathStep::Projection(name)),
+        ) = (borrowed, step, steps.peek())
+        {
+            if vector.elements.instance_field(0, name).is_some() {
+                let index = selectors.next()?;
+                let len = vector.elements.len();
+                let field = normalize_vec_index(index, len)
+                    .and_then(|normalized| vector.elements.instance_field(normalized, name))
+                    .flatten()
+                    .ok_or(DirectElementPathError::OutOfBounds { index, len })?;
+                steps.next();
+                current = field;
+                continue;
+            }
+        }
         current = match current {
             Cow::Borrowed(value) => direct_element_step(value, step, selectors)?,
             Cow::Owned(value) => {
@@ -15067,6 +15198,7 @@ fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], 
             let converts = match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
                 ListElements::Boxes(_) => vector.elements.is_shared(),
+                ListElements::Instances(_) => true,
                 _ => return,
             };
             if converts {
@@ -15139,6 +15271,9 @@ fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: 
             };
             match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
+                // An element a loan cannot read in place moves the list to
+                // boxes, which loans read.
+                ListElements::Instances(_) => true,
                 ListElements::Boxes(boxes) => {
                     vector.elements.is_shared()
                         || (!rest.is_empty()

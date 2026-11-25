@@ -14578,6 +14578,45 @@ def main():
 }
 
 #[test]
+fn native_appended_instances_of_scalars_and_text_go_in_as_words() {
+    let source = r#"
+class Hit:
+    text: str
+    start: int64
+
+class Bag:
+    items: list[int64]
+
+def hits(line: str) -> int64:
+    mut found: list[Hit] = []
+    found.append(Hit(text=line[0:1], start=1))
+    mut bags: list[Bag] = []
+    bags.append(Bag(items=[1]))
+    mut total = 0
+    for hit in found:
+        total += hit.start
+    return total + bags.len()
+
+def main():
+    print(hits("ab"))
+"#;
+    let mir = lower_source_to_mir(source).expect("instance list source should lower");
+    let object = emit_host_object(&mir).expect("instance list source should emit directly");
+    let referenced = object_referenced_symbols(&object);
+    // The `Hit` goes in as its field words; a `Bag` holds a list, so it is
+    // built in its own box and pushed as one.
+    for symbol in [
+        "aura_direct_vec_push_instance",
+        "aura_direct_vec_push_in_place",
+    ] {
+        assert!(
+            referenced.iter().any(|name| name.ends_with(symbol)),
+            "instance list code should call `{symbol}`, referenced: {referenced:?}"
+        );
+    }
+}
+
+#[test]
 fn native_records_with_union_fields_keep_their_boxes() {
     let source = r#"
 copy class Slot:

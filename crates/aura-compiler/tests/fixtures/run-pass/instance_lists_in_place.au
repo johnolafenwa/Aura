@@ -1,0 +1,161 @@
+# Lists of instances of a class of scalars and text, which a list keeps in
+# place when the program appends new instances: every list operation reads
+# and changes them as it does instances in boxes.
+
+import control
+
+
+class Hit:
+    text: str
+    start: int64
+    end: int64
+
+
+class Tally:
+    hits: list[Hit]
+    label: str
+
+
+def hits(text: str, step: int64) -> list[Hit]:
+    mut found: list[Hit] = []
+    mut i = 0
+    while i + 2 <= text.len():
+        found.append(Hit(text=text[i:i + 2], start=i, end=i + 2))
+        i += step
+    return found
+
+
+def span_sum(found: list[Hit]) -> int64:
+    mut total = 0
+    for found_hit in found:
+        total += found_hit.end - found_hit.start + found_hit.start * 3
+    return total
+
+
+def text_of(found: list[Hit]) -> str:
+    mut joined = ""
+    for item in found:
+        joined = f"{joined}{item.text}@{item.start};"
+    return joined
+
+
+def describe(item: Hit) -> str:
+    return f"{item.text}:{item.start}-{item.end}"
+
+
+def later_first(item: Hit) -> int64:
+    return 0 - item.start
+
+
+def counter(input: Queue[list[Hit]], output: Queue[int64]):
+    for found in input:
+        _ = output.put(span_sum(found))
+    output.close()
+
+
+def keep(found: own list[Hit]) -> list[Hit]:
+    return found
+
+
+def past_the_end(size: int64) -> int64:
+    found = hits("abcdefgh", size)
+    return found[found.len()].start
+
+
+def main():
+    found = hits("abcdefghijklmn", 3)
+    print(found.len())
+    print(span_sum(found))
+    print(text_of(found))
+    print(found[1].text)
+    print(found[-1].start)
+    view first = found[0]
+    print(f"{first.text} {first.start} {first.end}")
+    print(found)
+
+    mut copy = found.copy()
+    copy.append(Hit(text="zz", start=100, end=102))
+    copy[0].start = 7
+    print(f"{found.len()} {copy.len()} {found[0].start} {copy[0].start}")
+    print(found == copy)
+    print(found == hits("abcdefghijklmn", 3))
+
+    piece = found[1:3]
+    print(text_of(piece))
+    stepped = found[::2]
+    print(text_of(stepped))
+
+    mut ordered = found.copy()
+    ordered.sort(key=later_first)
+    print(text_of(ordered))
+    ordered.reverse()
+    print(text_of(ordered))
+
+    print(found.index(found[2]))
+    print(found.count(found[1]))
+    print(found[3] in found)
+    print(Hit(text="no", start=0, end=0) in found)
+
+    mut table: dict[str, Hit] = {}
+    mut moved = found.copy()
+    while moved.len() > 0:
+        item = moved.pop()
+        table[item.text.clone()] = item
+    print(table["gh"].start)
+    print(describe(found[2]))
+    view seen = found[3]
+    print(describe(seen))
+
+    mut edited = keep(hits("abcdefgh", 2))
+    last = edited.pop()
+    print(f"{last.text} {edited.len()}")
+    edited.insert(0, Hit(text="aa", start=-1, end=0))
+    edited.remove(Hit(text="cd", start=2, end=4))
+    print(text_of(edited))
+    edited.extend(hits("xyz", 1))
+    print(text_of(edited))
+    edited.clear()
+    print(edited.len())
+
+    mut bumped = hits("abcdef", 2)
+    for item in mut bumped:
+        item.start += 10
+    print(text_of(bumped))
+    bumped[1] = Hit(text="qq", start=5, end=6)
+    print(text_of(bumped))
+
+    tally = Tally(hits=hits("mnopqr", 2), label="t")
+    print(f"{tally.label} {span_sum(tally.hits)} {tally.hits[2].text}")
+
+    mut nested: list[list[Hit]] = []
+    nested.append(hits("abcd", 1))
+    nested.append(hits("wxyz", 2))
+    print(f"{nested[0].len()} {nested[1][1].text}")
+
+    with TaskGroup() as group:
+        lists_in = Queue[list[Hit]](capacity=1)
+        sums_out = Queue[int64]()
+        group.start_soon(counter, lists_in, sums_out)
+        for size in range(3):
+            _ = lists_in.put(hits("abcdefghij", size + 1))
+        lists_in.close()
+        for total in sums_out:
+            print(total)
+
+    match control.recover(past_the_end, 2):
+        case Ok(start):
+            print(start)
+        case Err(trap):
+            print(trap.message)
+
+    long = hits("abcdefghijklmnopqrstuvwxyz", 1)
+    shared = long.copy()
+    mut names: list[str] = []
+    for item in long:
+        names.append(item.text.clone())
+    print(f"{names.len()} {names[24]} {shared[3].text} {long[-1].end} {span_sum(long)}")
+
+    mut empty: list[Hit] = []
+    print(span_sum(empty))
+    empty.append(Hit(text="e", start=1, end=2))
+    print(text_of(empty))
