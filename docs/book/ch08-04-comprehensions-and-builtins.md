@@ -240,10 +240,13 @@ One more note on `sum`: it uses the same checked `+` as the rest of the
 language, so adding up `int64` values that overflow stops with `AU4002`
 instead of wrapping around to a negative number.
 
-These one-liners have a cost if you use `aura verify`. The verifier doesn't
-model what a comprehension, `sum`, `min`, `max`, or `sorted` returns today, so
-a check that depends on one of those results is reported as unproved. When
-you want a proof about a total or a maximum, write the loop with an
+`aura verify` knows part of what these one-liners return. A comprehension
+that maps has the length of its source, and one that filters is no longer.
+`min` and `max` of a non-empty list return one of its elements, no larger or
+smaller than any other. `sorted` keeps the elements, and puts a list of
+integers in order. It doesn't know the elements a comprehension builds or
+what `sum` adds up to, so a check that depends on those is reported as not
+modeled. When you want a proof about a total, write the loop with an
 `invariant`, as `highest` did in [the lists
 section](/book/ch08-01-lists#proving-list-code).
 

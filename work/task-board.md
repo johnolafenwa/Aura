@@ -12,6 +12,18 @@ Last updated: 2026-11-24
   Rust's instructions (was 4.2) and `graph_paths` 2.6 (was 5.5).
 - Follow-up: scalar dictionary index results, other enums, list creation
   and growth, and generated code in numeric loops.
+## Dict and set speed (in progress)
+
+- Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
+  Details and measurements are in `2026-11-24-dict-and-set-speed.md`.
+- Done: one-call hashing, single-probe `int64` inserts, removes that build
+  no `Lookup`, and loops over `items()`, `keys()` and `values()` that walk
+  the dict and make no list. `dict_remove` went from 9.9 to 2.6 times
+  Rust's instructions and one entry of an `items()` loop from 4,046
+  instructions to 252.
+- Done: a `str` key read from a list is looked
+  up where the list holds it (`keys[i] in table` 4.2 to 1.4 times Rust).
+- Next: one probe and no copy for the counting idiom on a viewed key.
 
 ## Verification in the documentation (complete)
 
@@ -49,10 +61,15 @@ Last updated: 2026-11-24
   generator bodies assume their `requires`, trait implementation methods
   assume class invariants, and a call keeps the fields its callee cannot
   write.
-- Next: stage 2 models comprehensions, slices, `sort`, `sum`, `str`
-  methods, bit operations and closures. Stage 3 adds package mode, a
-  "must verify" marker, `aura test --verify`, failure recovery, shared
-  state, tensor shapes and a solver cross-check.
+- Stage 1 merged in #321.
+- Stage 2, coverage: lists (membership, slices, sort, comprehension
+  lengths, min/max, lists of lists), integer bit operations, shifts and
+  `math`, `str` methods and f-strings, closures called where they are made,
+  class invariants inside other values, `match` expressions, union calls,
+  package mode with `--deny` and `--must-verify` (`AU5122`),
+  `aura test --verify`, and module-level code.
+- Next: failure recovery, shared state, tensor shapes, fewer solver
+  timeouts, a solver watchdog and a second-solver cross-check.
 
 ## Combined feature verification
 

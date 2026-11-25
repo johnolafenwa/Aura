@@ -397,11 +397,9 @@ def main():
     clear_second(row)
     assert grid[0][1] == 2
 "#,
-        &[
-            "9 requires failed",
-            "10 assert failed",
-            "10 index in range failed",
-        ],
+        // The row is read through the view, and the call's write reaches
+        // it: the callee says nothing of the row's length or elements.
+        &["10 assert failed", "10 index in range failed"],
     );
     // A view a function returned, which the encoding does not follow.
     assert_open(
@@ -426,7 +424,7 @@ def main():
             // are open without a counterexample.
             "14 assert unsupported",
             "14 index in range unsupported",
-            "14 index in range failed",
+            "14 index in range unsupported",
         ],
     );
 }

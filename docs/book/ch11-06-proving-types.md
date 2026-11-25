@@ -454,45 +454,25 @@ the limit with `--timeout`, give the solver a stepping stone with an
 `AU5103` means no solver could be started, and the fix is to install Z3 or
 point `AURA_SMT_SOLVER` at one.
 
-`AU5104` means the check depends on an operation the verifier doesn't read
-yet. A left shift is one:
-
-```aura
-def bulk_units(packs: int64) -> int64:
-    requires 0 <= packs and packs <= 10
-    return 1 << packs
-
-def main():
-    print(bulk_units(3))
-```
-
-```console
-$ aura verify src/main.au
-error[AU5104]: cannot check operation outside the verified subset: `Shl` is not modeled yet
- --> src/main.au:3:12
-  |
-3 |     return 1 << packs
-  |            ^
-  = note: in `bulk_units` (overflow check)
-verified src/main.au: 1 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
-```
-
-Nothing is wrong with the code. The check is not proved, and it stays a
-run-time check as it always was.
+`AU5104` means the check depends on a step the verifier doesn't model, and
+the message names that step and its line. We'll meet one in the next
+section.
 
 ## What the verifier doesn't model yet
 
 Aura is a preview, and the verifier covers less of the language than the
-compiler does. It reasons exactly about integers of every width, `bool`,
-floats, strings, lists, dictionaries and sets with integer or string keys,
-tuples, classes, enums, and unions. It helps to know where the edges are
-before you run into them.
+compiler does. It reasons exactly about integers of every width, bit
+operations and shifts, `bool`, floats, strings and most of their methods,
+lists, slices, nested lists, spans, dictionaries and sets with integer or
+string keys, tuples, classes, enums, unions, `match`, and lambdas called
+where they are made. It helps to know where the edges are before you run
+into them.
 
 The edge you'll meet first is the unknown value. When the verifier doesn't
-model an operation, it treats the result as a value it knows nothing about,
-and a check that depends on that value is often reported as `AU5101` with a
-counterexample, not as `AU5104`. Here is the total from this chapter
-written with the built-in `sum`:
+model an operation, it treats the result as a value it knows nothing about.
+A check that could only fail because of that value is reported as `AU5104`,
+not as a failure. Here is the total from this chapter written with the
+built-in `sum`:
 
 ```aura
 def cart_total(prices: list[int64]) -> int64:
@@ -507,59 +487,51 @@ def main():
 
 ```console
 $ aura verify src/main.au
-error[AU5101]: cannot prove `ensures` clause `result >= 0`
+error[AU5104]: cannot check `ensures` clause `result >= 0`: it depends on a comprehension or built-in loop at line 5, which the verifier does not model
  --> src/main.au:4:13
   |
 4 |     ensures result >= 0
   |             ^
   = note: in `cart_total` (ensures check)
-  = note: counterexample: len(prices) = 540
-error[AU5101]: cannot prove integer result in range
+error[AU5104]: cannot check integer result in range: it depends on a comprehension or built-in loop at line 5, which the verifier does not model
  --> src/main.au:5:12
   |
 5 |     return sum(prices)
   |            ^
   = note: in `cart_total` (overflow check)
-  = note: counterexample: len(prices) = 541
 verified src/main.au: 2 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+not proved: 0 failed, 2 not modeled, 0 undecided
 ```
 
 The sum of non-negative prices is not negative, and this function is
-correct. The verifier doesn't know what `sum` computes, so to it `result`
-could be anything. A counterexample that makes no sense, on a line that
-calls into the library, usually means this and not a bug. The cure is the
-loop from Listing 11-11, whose invariant the verifier can follow.
+correct. The verifier doesn't know what `sum` computes, and says so instead
+of guessing. The checks stay in the program as run-time checks. The cure is
+the loop from Listing 11-11, whose invariant the verifier can follow.
 
 These are the unknown values and unmodeled features to expect today:
 
-- The results of comprehensions, slices such as `xs[0:2]`, `sum(xs)`,
-  `xs.sort()`, `k in xs` on a list, f-strings, `text.split(...)` and most
-  other `str` methods, and most library calls. Of strings, the verifier
-  reads `len`, `+`, comparisons, `contains`, `starts_with`, and `ends_with`.
-- The inner lengths of nested lists, so `grid[r][c]` doesn't prove, and of
-  lists stored as dictionary values.
-- Indexes into a `Span[T]`.
-- The bit operations `&`, `|`, and `^`, and the `saturating_` and
-  `wrapping_` integer methods. `<<` is reported as `AU5104`.
-- Lambdas and local `def` functions. Their bodies are checked with captured
-  values unknown, and callers learn nothing about what they return.
+- What `sum` adds up to, and the elements a comprehension builds. The
+  length of a comprehension is known.
+- The order of a list sorted with `key=`, or of `str` or `float` elements.
+- The letters of `trim`, `replace`, `to_lower`, and `to_upper`, of which the
+  verifier knows only the length bounds, and most library calls.
+- Lists stored as dictionary values, and the class invariant of an object
+  stored in a dictionary.
+- Lambdas and local `def` functions that escape the function that makes
+  them. A local `def` can't have a contract.
   [Chapter 13](/book/ch13-01-closures) shows the alternative that does
   verify.
-- Generators. A generator function's `requires` is not assumed in its body,
-  and the values it yields carry no contract.
-- Class invariants inside `impl` methods, as we saw with the discounts.
+- The values a generator yields, which carry no contract.
 - The result of `control.recover`, and the contents of queues, mutexes, and
   atomics, which other tasks can change. Starting a task is modeled;
   [Chapter 15](/book/ch15-01-tasks-and-task-groups) shows it.
 - Tensor shapes.
 
-Two more things are about how the tool works. `aura verify` takes one file
-and follows that file's imports, so a project is verified through its entry
-file or one module at a time. And a `requires` that can never be true
-proves everything after it: a function that requires `a > b and b > a` has
-no valid inputs, so every check in it is proved, silently. If a function
-proves with suspiciously little effort, check that a call to it from `main`
-proves too.
+Two more things are about how the tool works. Given one file, `aura verify`
+verifies that file and uses the contracts of what it imports. Given a
+directory or no path, it verifies every module of the package. And a
+`requires` that can never be true, such as `a > b and b > a`, would prove
+everything after it, so `aura verify` reports it as `AU5120`.
 
 None of this weakens what a proof means. A check counts as proved only when
 the solver shows that no input breaks it, and an unproved check stays in the

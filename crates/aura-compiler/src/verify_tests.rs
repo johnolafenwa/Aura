@@ -651,6 +651,7 @@ fn every_kind_and_status_has_a_report() {
                 status,
             })
             .collect(),
+        ..Report::default()
     };
     assert_eq!(report.proved(), 1);
     assert!(!report.is_proved());
@@ -1138,12 +1139,7 @@ def main():
     print(f1(5, 3))
     print(f2([3], ["a"], "A", P(x=1), (1, 2)))
 "#,
-        &[
-            "22 assert unsupported",
-            "34 requires unsupported",
-            "35 requires unsupported",
-            "35 requires unsupported",
-        ],
+        &["22 assert unsupported", "35 requires unsupported"],
     );
 }
 
@@ -1195,14 +1191,10 @@ def main():
     assert_eq!(
         open_checks(&report),
         [
-            "3 overflow failed",
             "27 overflow failed",
-            "27 overflow failed",
-            "31 requires unsupported",
             "32 requires unsupported",
             "33 requires unsupported",
             "34 requires unsupported",
-            "37 requires unsupported",
         ],
         "{report:#?}"
     );
@@ -2959,15 +2951,12 @@ def main():
     print(apply_twice(odd, 3))
 "#,
         &[
-            "20 overflow failed",
-            "21 overflow failed",
             "38 requires unsupported",
             "46 requires failed",
             "46 ensures failed",
             "48 requires unsupported",
             "48 overflow failed",
-            "51 requires unsupported",
-            "51 ensures unsupported",
+            "51 ensures failed",
         ],
     );
     for (source, message) in [
@@ -3066,11 +3055,7 @@ def main():
     ) else {
         return;
     };
-    assert_eq!(
-        open_checks(&report),
-        ["25 ensures unsupported"],
-        "{report:#?}"
-    );
+    assert_eq!(open_checks(&report), Vec::<String>::new(), "{report:#?}");
 }
 
 #[test]
@@ -3318,7 +3303,9 @@ def main():
         open,
         [
             "6 overflow unsupported",
-            "9 overflow unsupported",
+            "9 overflow failed",
+            "9 overflow failed",
+            "12 overflow failed",
             "12 overflow unsupported"
         ],
         "{first:#?}"
@@ -3731,7 +3718,7 @@ def impossible(n: int64) -> int64:
 def main():
     print(impossible(1))
 "#,
-        &["6 ensures failed", "7 assert failed"],
+        &["6 ensures unsupported", "7 assert unsupported"],
     );
 }
 
@@ -4111,7 +4098,11 @@ def main() -> None:
         assert!(report.is_proved(), "{report:#?}");
         assert_eq!(report.obligations.len(), 2);
     }
-    let bad = source.replace("assert value == 0", "assert value != 0");
+    // A local function is checked where it is called, so the call must
+    // reach the branch.
+    let bad = source
+        .replace("assert value == 0", "assert value != 0")
+        .replace("pick(2)", "pick(0)");
     if let Some(report) = verify(&bad) {
         assert!(!report.is_proved(), "the branch violates its assertion");
     }

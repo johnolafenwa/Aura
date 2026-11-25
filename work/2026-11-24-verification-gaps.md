@@ -38,3 +38,19 @@ hold).
 - A call on a union value proves nothing about the method it runs, not
   even its `requires`.
 - A function that returns a `view Span[T]` cannot say what range it has.
+
+## Stage 2 (2026-11-24)
+
+- New models live in their own files: `verify_collections.rs`,
+  `verify_integers.rs`, `verify_text.rs`, `verify_closures.rs`,
+  `verify_shapes.rs`, `verify_workflow.rs`, each with a
+  `verify_<topic>_tests.rs`.
+- Quantified or descriptive facts about made-up results are asserted only
+  for the checks that reach them (`lazy` facts in `verify_collections.rs`,
+  `described` facts in `verify_text.rs`), which keeps refuted checks fast.
+- 912 run-pass fixtures: main before stage 1 proved 2753 and failed 2228;
+  after stage 2, 3224 proved, 1695 failed, 52 undecided, 361 not modeled.
+  No check that proved before stage 1 stops proving.
+- Not done: contracts on local `def` functions and an in-source
+  must-verify marker both need parser changes; `match` and `is_ok()` in
+  contracts are rejected by sema (AU2048).

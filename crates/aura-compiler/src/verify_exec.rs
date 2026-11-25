@@ -87,7 +87,7 @@ pub(super) fn lit(value: i128) -> String {
 
 /// The SMT sort of a list's element store, when its elements are scalars
 /// the encoding models.
-fn element_sort(element: &Type) -> Option<&'static str> {
+pub(super) fn element_sort(element: &Type) -> Option<&'static str> {
     if let Some(float) = FloatTy::of(element) {
         Some(float.sort())
     } else if IntTy::of(element).is_some() {
@@ -196,7 +196,7 @@ impl FloatTy {
 
     /// The largest integer below which every integer has an exact value
     /// of this type.
-    fn exact_ints(self) -> u64 {
+    pub(super) fn exact_ints(self) -> u64 {
         match self {
             Self::F32 => 1 << 24,
             Self::F64 => 1 << 53,
@@ -228,7 +228,7 @@ impl FloatTy {
     }
 
     /// `term > value`, for an integer `value` this type may not hold.
-    fn above(self, term: &str, value: i128) -> String {
+    pub(super) fn above(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             // No value of the type lies between `value` and a nearest one
             // above it.
@@ -238,7 +238,7 @@ impl FloatTy {
     }
 
     /// `term < value`, for an integer `value` this type may not hold.
-    fn below(self, term: &str, value: i128) -> String {
+    pub(super) fn below(self, term: &str, value: i128) -> String {
         match self.nearest(value) {
             (near, std::cmp::Ordering::Less) => format!("(fp.leq {term} {near})"),
             (near, _) => format!("(fp.lt {term} {near})"),
@@ -298,6 +298,9 @@ pub(super) enum Val {
     /// A `Task[T]` handle, with the value its task returns when it
     /// finishes normally.
     Task(Box<Val>),
+    /// A closure made in the function being executed: the function it
+    /// runs, and the value of each capture it holds.
+    Closure(String, Vec<Val>),
     /// A function value of a callable alias with a contract, named by the
     /// alias: a call through it has that contract.
     Contracted(String),
@@ -351,6 +354,13 @@ pub(super) enum Store {
     /// `i` of the span is position `i` plus the span's start in the base.
     /// Only a contract reads one; the function's own steps run on the base.
     Shifted(Box<Store>, String),
+    /// The elements of a reversed list, read from the store it had:
+    /// position `i` is that store's position `last - i`.
+    Reversed(Box<Store>, String),
+    /// Elements that are lists: an `(Array Int Int)` of their lengths,
+    /// and an `(Array Int (Array Int S))` of their own scalar elements
+    /// when the encoding models those.
+    Lists(String, Option<(String, &'static str)>),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -380,6 +390,12 @@ pub(super) struct State {
 }
 
 impl State {
+    /// The state of a function entered on the path `pc` with `env`.
+    pub(super) fn at(pc: String, env: BTreeMap<String, Val>) -> Self {
+        let loans = BTreeMap::new();
+        Self { pc, env, loans }
+    }
+
     /// Whether `local` names a view of another place.
     pub(super) fn is_view(&self, local: &str) -> bool {
         self.loans.contains_key(local)
@@ -463,7 +479,7 @@ pub(super) struct Exec<'a> {
     pub(super) obligations: Vec<Obligation>,
     /// The entry value of each scalar parameter, for counterexamples.
     pub(super) inputs: Vec<(String, String)>,
-    counter: usize,
+    pub(super) counter: usize,
     local_types: BTreeMap<String, Type>,
     /// The source position of the statement being executed.
     pub(super) span: Span,
@@ -485,15 +501,15 @@ pub(super) struct Exec<'a> {
     /// Set while a call is made whose implementation is picked at run
     /// time, so nothing read from one implementation's body holds for it.
     pub(super) dynamic_call: bool,
-    labels: BTreeMap<&'a str, usize>,
+    pub(super) labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
-    captured: BTreeSet<String>,
+    pub(super) captured: BTreeSet<String>,
     /// The positions in a base list that a span index was checked to give.
     /// The base list's own check of such a position cannot fail.
-    span_positions: BTreeSet<String>,
+    pub(super) span_positions: BTreeSet<String>,
     /// Whether to add the stricter check of each element access a build
     /// can leave unchecked.
     pub(super) prove_sites: bool,
@@ -505,7 +521,7 @@ pub(super) struct Exec<'a> {
     /// `requires` clauses and what the parameters' types say.
     pub(super) entry_facts: usize,
     /// The constant each defined term is named by.
-    defined: BTreeMap<String, String>,
+    pub(super) defined: BTreeMap<String, String>,
     /// Whether specification evaluation is proving a goal rather than
     /// assuming an hypothesis.
     pub(super) proving: bool,
@@ -529,15 +545,25 @@ pub(super) struct Exec<'a> {
     origin: Option<usize>,
     /// The fact that defines each constant `define` made. A constant
     /// depends on its definition, and not the other way around.
-    definitions: BTreeMap<String, usize>,
+    pub(super) definitions: BTreeMap<String, usize>,
+    /// The facts that only say what constants made for them hold, each by
+    /// its position, with those constants. A check that reaches none of
+    /// them is asked without the fact: see `lazy_asserts`.
+    pub(super) lazy: BTreeMap<usize, Vec<String>>,
     /// Where the assumed term starts in each fact that holds only on some
     /// paths: the path condition before it is not what the fact is about.
-    guarded: BTreeMap<usize, usize>,
+    pub(super) guarded: BTreeMap<usize, usize>,
     /// The condition of the branch that last led to each block.
     branch_guards: BTreeMap<usize, String>,
+    /// What the `str` models remember.
+    pub(super) text: super::text::TextState,
+    /// What is known about the closures the function makes and calls.
+    pub(super) closures: super::closures::Closures<'a>,
+    /// What the models of shaped values remember.
+    pub(super) shapes: super::shapes::ShapeState,
 }
 
-const MAX_DEPTH: usize = 3;
+pub(super) const MAX_DEPTH: usize = 3;
 
 impl<'a> Exec<'a> {
     pub(super) fn new(cx: &'a VerifyContext<'a>, function: &'a MirFunction) -> Self {
@@ -588,8 +614,12 @@ impl<'a> Exec<'a> {
             unmodeled: BTreeMap::new(),
             origin: None,
             definitions: BTreeMap::new(),
+            lazy: BTreeMap::new(),
             guarded: BTreeMap::new(),
             branch_guards: BTreeMap::new(),
+            text: Default::default(),
+            closures: Default::default(),
+            shapes: Default::default(),
         }
     }
 
@@ -677,7 +707,7 @@ impl<'a> Exec<'a> {
                 // about this one.
                 let defines_other = names.first().is_some_and(|name| {
                     *name != symbol && self.definitions.get(*name) == Some(&index)
-                });
+                }) || self.text.describes_other(index, symbol);
                 if defines_other {
                     continue;
                 }
@@ -690,6 +720,27 @@ impl<'a> Exec<'a> {
             }
         }
         None
+    }
+
+    /// A fresh constant equal to `term`, with what `also` says of it as
+    /// part of its definition: a check that reads only an operand of
+    /// `term` does not depend on it.
+    pub(super) fn define_with(
+        &mut self,
+        sort: &str,
+        hint: &str,
+        term: String,
+        also: impl FnOnce(&str) -> String,
+    ) -> String {
+        if let Some(name) = self.defined.get(&term) {
+            return name.clone();
+        }
+        let name = self.fresh_const(sort, hint);
+        self.definitions.insert(name.clone(), self.facts.len());
+        self.facts
+            .push(format!("(and (= {name} {term}) {})", also(&name)));
+        self.defined.insert(term, name.clone());
+        name
     }
 
     /// A fresh constant equal to `term`, to keep terms small.
@@ -716,7 +767,7 @@ impl<'a> Exec<'a> {
     }
 
     /// A float `/` or `sqrt` result, defined by its own fact.
-    fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
+    pub(super) fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
         let (hint, term) = match &op {
             super::float::RoundedOp::Div(a, b) => ("arith", format!("(fp.div RNE {a} {b})")),
             super::float::RoundedOp::Add(a, b) => ("arith", format!("(fp.add RNE {a} {b})")),
@@ -1009,8 +1060,23 @@ impl<'a> Exec<'a> {
             let source = join_path(source, &rest.join("."));
             return self.read_place(state, &source);
         }
+        // A view of a part a `str` method returned reads the part.
+        if let Some(Loan::Element { list, index, .. }) = state.loans.get(&root).cloned() {
+            let list = self.read_place(state, &list);
+            if self.is_part_list(&list) {
+                return self.element(&list, &index, &root);
+            }
+        }
         if !state.env.contains_key(&root) {
-            let value = self.fresh_local(&root);
+            let lent = match state.loans.get(&root).cloned() {
+                Some(Loan::Element {
+                    list,
+                    index,
+                    projection,
+                }) => self.lent_element(state, &list, &index, &projection),
+                _ => None,
+            };
+            let value = lent.unwrap_or_else(|| self.fresh_local(&root));
             state.env.insert(root.clone(), value);
         }
         if rest.is_empty() {
@@ -1034,7 +1100,7 @@ impl<'a> Exec<'a> {
         current
     }
 
-    fn write_place(&mut self, state: &mut State, path: &str, value: Val) {
+    pub(super) fn write_place(&mut self, state: &mut State, path: &str, value: Val) {
         let value = match (&value, self.place_type(path)) {
             (Val::Float(..), Some(ty)) => fit(value, &ty),
             _ => value,
@@ -1050,6 +1116,11 @@ impl<'a> Exec<'a> {
                 let source = join_path(&source, &rest.join("."));
                 return self.write_place(state, &source, value);
             }
+            Some(Loan::Element {
+                list,
+                index,
+                projection,
+            }) if self.write_element(state, path, (&list, &index, &projection), &value) => {}
             Some(Loan::Element { list, .. }) | Some(Loan::Inside(list)) => {
                 self.havoc_inside(state, &list)
             }
@@ -1113,7 +1184,7 @@ impl<'a> Exec<'a> {
         );
     }
 
-    fn havoc_root(&mut self, state: &mut State, root: &str) {
+    pub(super) fn havoc_root(&mut self, state: &mut State, root: &str) {
         let value = self.fresh_local(root);
         state.env.insert(root.to_string(), value);
     }
@@ -1125,7 +1196,12 @@ impl<'a> Exec<'a> {
 
     // ----- Operands --------------------------------------------------------
 
-    fn operand(&mut self, state: &mut State, operand: &Operand, hint: Option<IntTy>) -> Val {
+    pub(super) fn operand(
+        &mut self,
+        state: &mut State,
+        operand: &Operand,
+        hint: Option<IntTy>,
+    ) -> Val {
         let value = self.operand_value(state, operand, hint);
         // A function value that goes where the verifier cannot follow it,
         // such as into a call or a collection, may be called with
@@ -1247,7 +1323,7 @@ impl<'a> Exec<'a> {
 
     /// `operand`, read where a function value stays one the verifier
     /// follows.
-    fn followed_operand(
+    pub(super) fn followed_operand(
         &mut self,
         state: &mut State,
         operand: &Operand,
@@ -1272,7 +1348,7 @@ impl<'a> Exec<'a> {
         }
     }
 
-    fn operand_type(&self, operand: &Operand) -> Option<Type> {
+    pub(super) fn operand_type(&self, operand: &Operand) -> Option<Type> {
         match operand {
             Operand::Place(place) | Operand::MovePlace(place) => self.place_type(place),
             Operand::Int(_) => Some(Type::named("int64")),
@@ -1378,16 +1454,8 @@ impl<'a> Exec<'a> {
             Val::Enum(name, tag, payloads) => {
                 self.inputs
                     .push((format!("variant of {label}"), tag.clone()));
-                let names = self
-                    .cx
-                    .enum_variants(name, &[])
-                    .map(|variants| {
-                        variants
-                            .into_iter()
-                            .map(|(name, _)| name)
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let names = self.cx.variant_names(name);
+                self.note_variants(&format!("variant of {label}"), &names);
                 for (variant, items) in payloads.iter().enumerate() {
                     let variant = names
                         .get(variant)
@@ -1774,6 +1842,13 @@ impl<'a> Exec<'a> {
                 self.assume(&havoc.pc.clone(), fact);
             }
         }
+        self.loop_facts(
+            (&lp.body, lp.header),
+            &lp.bounds,
+            &lp.writes,
+            &state,
+            &mut havoc,
+        );
         havoc.loans.retain(|loan, _| !lp.writes.contains(loan));
         let added: Vec<usize> = lp
             .check_fails
@@ -1820,7 +1895,7 @@ impl<'a> Exec<'a> {
 
     // ----- Merging ---------------------------------------------------------
 
-    fn merge(&mut self, mut states: Vec<State>) -> State {
+    pub(super) fn merge(&mut self, mut states: Vec<State>) -> State {
         states.retain(|state| state.pc != "false");
         match states.len() {
             0 => {
@@ -1844,6 +1919,9 @@ impl<'a> Exec<'a> {
             let values: Vec<Option<&Val>> =
                 states.iter().map(|state| state.env.get(&key)).collect();
             if values.iter().any(Option::is_none) {
+                if let Some(merged) = self.merge_assigned(&pcs, &values, &key) {
+                    env.insert(key, merged);
+                }
                 continue;
             }
             let values: Vec<&Val> = values.into_iter().flatten().collect();
@@ -1863,7 +1941,13 @@ impl<'a> Exec<'a> {
         State { pc, env, loans }
     }
 
-    fn merge_terms(&mut self, sort: &str, pcs: &[String], terms: &[&str], hint: &str) -> String {
+    pub(super) fn merge_terms(
+        &mut self,
+        sort: &str,
+        pcs: &[String],
+        terms: &[&str],
+        hint: &str,
+    ) -> String {
         if terms.iter().all(|term| *term == terms[0]) {
             return terms[0].to_string();
         }
@@ -1874,7 +1958,7 @@ impl<'a> Exec<'a> {
         self.define(sort, hint, merged)
     }
 
-    fn merge_vals(&mut self, pcs: &[String], values: &[&Val], hint: &str) -> Val {
+    pub(super) fn merge_vals(&mut self, pcs: &[String], values: &[&Val], hint: &str) -> Val {
         let first = values[0];
         if values.iter().all(|value| *value == first) {
             return first.clone();
@@ -1887,7 +1971,7 @@ impl<'a> Exec<'a> {
         // Values of different shapes, such as a havocked `Opaque` and a
         // modeled value, merge to a value the encoding knows nothing about.
         if !values.iter().all(|value| same_shape(first, value)) {
-            return Val::Opaque;
+            return self.merge_live(pcs, values, hint);
         }
         let scalars: Vec<&str> = values
             .iter()
@@ -2024,6 +2108,9 @@ impl<'a> Exec<'a> {
                 let mut merged = self.merge_children(pcs, values, hint);
                 Val::Held(held.clone(), Box::new(merged.remove(0)))
             }
+            Val::Closure(function, _) => {
+                Val::Closure(function.clone(), self.merge_children(pcs, values, hint))
+            }
             Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
                 Val::Opaque
             }
@@ -2062,6 +2149,7 @@ impl<'a> Exec<'a> {
                     None => self.operand(&mut state, value, None),
                 };
                 self.prove_return_invariants(&state, &result);
+                self.closure_returned(state, result);
                 Vec::new()
             }
             Terminator::Goto(label) => vec![(target(self, label), state)],
@@ -2112,6 +2200,7 @@ impl<'a> Exec<'a> {
                 otherwise,
             } => {
                 let value = self.operand(&mut state, scrutinee, None);
+                let value = self.match_scrutinee(&mut state, scrutinee, value);
                 let mut out = Vec::new();
                 let mut remaining = state.pc.clone();
                 for arm in arms {
@@ -2136,6 +2225,7 @@ impl<'a> Exec<'a> {
                     remaining = and(&remaining, &not(&condition));
                     out.push((target(self, &arm.label), arm_state));
                 }
+                self.note_match_end(&value, &remaining);
                 state.pc = remaining;
                 out.push((target(self, otherwise), state));
                 out
@@ -2245,6 +2335,8 @@ impl<'a> Exec<'a> {
                     (Val::List { .. } | Val::Map { .. }, _) => Loan::Inside(source.clone()),
                     _ => Loan::Unknown(root_of(source).to_string()),
                 };
+                // What an earlier loan under this name read is gone.
+                state.env.remove(loan);
                 state.loans.insert(loan.clone(), value);
             }
             Instruction::BeginReturnedLoan { loan, origin, .. } => {
@@ -2442,6 +2534,9 @@ impl<'a> Exec<'a> {
             let array = self.fresh_const(&format!("(Array Int {sort})"), hint);
             return Some(Store::Leaf(array, sort));
         }
+        if let Some(lists) = self.fresh_lists_store(elem, hint) {
+            return Some(lists);
+        }
         if depth > MAX_DEPTH {
             return None;
         }
@@ -2455,7 +2550,7 @@ impl<'a> Exec<'a> {
     }
 
     /// The items of a tuple or the fields of a class, in order.
-    fn element_items(&self, elem: &Type) -> Option<Vec<(Option<String>, Type)>> {
+    pub(super) fn element_items(&self, elem: &Type) -> Option<Vec<(Option<String>, Type)>> {
         match elem {
             Type::Tuple(items) => Some(items.iter().map(|item| (None, item.clone())).collect()),
             Type::Named(name, args) => self.cx.class_fields(name, args).map(|fields| {
@@ -2476,6 +2571,10 @@ impl<'a> Exec<'a> {
             Store::Shifted(base, start) => {
                 self.store_select(base, elem, &format!("(+ {index} {start})"))
             }
+            Store::Reversed(base, last) => {
+                self.store_select(base, elem, &format!("(- {last} {index})"))
+            }
+            Store::Lists(lens, rows) => super::collections::row(lens, rows, elem, index),
             Store::Items(stores) => {
                 let Some(items) = self.element_items(elem) else {
                     return Val::Opaque;
@@ -2501,7 +2600,7 @@ impl<'a> Exec<'a> {
 
     /// The store with `value` at `index`, when the store models each of
     /// its scalars.
-    fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
+    pub(super) fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
         match (store, value) {
             (Store::Leaf(array, sort), Val::Float(term, float)) => {
                 let term = FloatTy::of_sort(sort)?.convert(term, *float);
@@ -2534,6 +2633,11 @@ impl<'a> Exec<'a> {
                     .collect::<Option<Vec<_>>>()
                     .map(Store::Items)
             }
+            (Store::Shifted(..) | Store::Reversed(..), _) => {
+                let copy = self.copied_store(store);
+                self.store_put(&copy, index, value)
+            }
+            (Store::Lists(..), _) => self.put_row(store, index, value),
             _ => None,
         }
     }
@@ -2554,6 +2658,9 @@ impl<'a> Exec<'a> {
     }
 
     fn merge_stores(&mut self, pcs: &[String], stores: &[&Store], hint: &str) -> Option<Store> {
+        if let Some(Store::Lists(..)) = stores.first() {
+            return self.merge_rows(pcs, stores, hint);
+        }
         let Store::Items(first) = stores.first()? else {
             // Leaves merge as arrays. A span's store is never merged: it
             // exists only while a contract is read.
@@ -2612,6 +2719,7 @@ impl<'a> Exec<'a> {
                     })
                     .collect(),
             ),
+            row @ Val::List { .. } => self.named_row(row, hint),
             other => other,
         }
     }
@@ -2625,7 +2733,9 @@ impl<'a> Exec<'a> {
                 ..
             } => {
                 let value = self.store_select(data, elem, index);
-                self.name_scalars(value, hint)
+                let value = self.name_scalars(value, hint);
+                self.text_part_facts(data, index, &value);
+                value
             }
             Val::List { elem, .. } => {
                 let elem = elem.clone();
@@ -2743,10 +2853,11 @@ impl<'a> Exec<'a> {
         };
         match value {
             Rvalue::Use(operand) => self.followed_operand(state, operand, hint),
+            Rvalue::FormatString { parts } => self.format_string(state, parts),
             // An adapted function value still calls the function it names.
             Rvalue::CallableAdapt { value, .. } => {
                 match self.followed_operand(state, value, None) {
-                    value @ (Val::Func(_) | Val::Contracted(_)) => value,
+                    value @ (Val::Func(_) | Val::Contracted(_) | Val::Closure(..)) => value,
                     _ => fresh_target(self),
                 }
             }
@@ -2772,11 +2883,25 @@ impl<'a> Exec<'a> {
                     ),
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let ty = target_type.as_ref().and_then(IntTy::of).unwrap_or(ty);
-                        let result = self.define("Int", "neg", format!("(- {term})"));
+                        // A negated literal stays a literal.
+                        let result = match super::integers::literal(&term) {
+                            Some(value) => lit(-value),
+                            None => self.define("Int", "neg", format!("(- {term})")),
+                        };
                         if trap.checks_overflow() {
                             self.oblige_range(state, *span, &result, ty);
                         }
                         Val::Int(result, ty)
+                    }
+                    (UnaryOp::BitNot, Val::Int(term, _))
+                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                    {
+                        let ty = target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .expect("checked above");
+                        let flipped = super::integers::bitnot(&term, ty);
+                        Val::Int(self.define("Int", "bits", flipped), ty)
                     }
                     _ => {
                         if *trap == ArithmeticTrap::Runtime {
@@ -2867,7 +2992,7 @@ impl<'a> Exec<'a> {
             }
             Rvalue::Call { callee, args, .. } => {
                 let result = self.call(state, target, callee, args);
-                for root in self.captured.clone() {
+                for root in self.loose_captures() {
                     self.unmodeled(
                         format!("a closure that may change `{root}`, which it captures"),
                         |exec| exec.havoc_root(state, &root),
@@ -3198,6 +3323,11 @@ impl<'a> Exec<'a> {
                 }
                 Val::Task(Box::new(result))
             }
+            Rvalue::Closure {
+                function, captures, ..
+            } => self
+                .closure_value(state, function, captures)
+                .unwrap_or_else(|| fresh_target(self)),
             _ => fresh_target(self),
         }
     }
@@ -3217,6 +3347,7 @@ impl<'a> Exec<'a> {
         let right_ty = self.operand_int_ty(right);
         let target_int = target_type.and_then(IntTy::of);
         let hint = left_ty.or(right_ty).or(target_int);
+        let sized = hint.is_some();
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -3271,18 +3402,17 @@ impl<'a> Exec<'a> {
                         }
                         Val::Int(result, ty)
                     }
-                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
-                    BinaryOp::Pow if b.parse::<u32>().is_ok_and(|power| power <= 4) => {
-                        let power: u32 = b.parse().expect("matched above");
-                        let term = match power {
-                            0 => "1".to_string(),
-                            1 => a.clone(),
-                            _ => format!("(* {})", vec![a.as_str(); power as usize].join(" ")),
-                        };
-                        let result = self.define("Int", "pow", term);
-                        self.oblige_range_at(&pc, span, &result, ty);
-                        Val::Int(result, ty)
+                    // A literal of a type the encoding has no range for,
+                    // such as `int128`, reads as an `int64`; its bits and
+                    // width are not those.
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor if sized => {
+                        self.int_bitwise(op, a, b, hint.unwrap_or(ty))
                     }
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => fresh(self),
+                    BinaryOp::Shl | BinaryOp::Shr if sized => {
+                        self.int_shift(&pc, op, (a, b), hint.unwrap_or(ty), span)
+                    }
+                    BinaryOp::Pow if sized => self.int_pow(&pc, a, b, hint.unwrap_or(ty), span),
                     _ => {
                         if trap == ArithmeticTrap::Runtime {
                             self.oblige(
@@ -3420,7 +3550,7 @@ impl<'a> Exec<'a> {
 
     // ----- Calls -----------------------------------------------------------
 
-    fn havoc_writebacks(&mut self, state: &mut State, args: &[MirArg]) {
+    pub(super) fn havoc_writebacks(&mut self, state: &mut State, args: &[MirArg]) {
         for arg in args {
             if let Some(place) = &arg.writeback_place {
                 self.havoc_place(state, place);
@@ -3513,6 +3643,13 @@ impl<'a> Exec<'a> {
                 } else {
                     fresh_target(self)
                 }
+            }
+            // A local function cannot state what a call of itself returns.
+            CallTarget::Name(name) if super::closures::is_closure_function(name) => {
+                self.unmodeled("a recursive call of a local function", |exec| {
+                    exec.havoc_writebacks(state, args);
+                    fresh_target(exec)
+                })
             }
             CallTarget::Name(name) => {
                 if self.cx.function(name).is_some() {
@@ -3643,6 +3780,9 @@ impl<'a> Exec<'a> {
             }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
+                if let Some(result) = self.union_call(state, callee, args, target) {
+                    return result;
+                }
                 self.unmodeled(call_name(callee), |exec| {
                     if let Some(place) = receiver_place {
                         exec.havoc_place(state, place);
@@ -3652,6 +3792,9 @@ impl<'a> Exec<'a> {
                 })
             }
             CallTarget::Value(callee) => match self.followed_operand(state, callee, None) {
+                value if self.closure_callee(callee, &value) => {
+                    self.closure_call(state, target, callee, value, args)
+                }
                 Val::Contracted(alias) => {
                     let info = self.cx.alias_contract(&alias).expect("a contracted alias");
                     let mut pre = Vec::new();
@@ -3877,7 +4020,7 @@ impl<'a> Exec<'a> {
     /// `ensures` of a fresh result and fresh values for what it may
     /// change. A part of a `mut` argument the callee cannot write keeps
     /// its value.
-    fn user_call(
+    pub(super) fn user_call(
         &mut self,
         state: &mut State,
         name: &str,
@@ -4157,7 +4300,7 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
-                    ListOp::Reverse | ListOp::Sort | ListOp::Swap => {
+                    ListOp::Swap => {
                         let what = format!(
                             "the order of the elements after `{}`",
                             op.name().trim_start_matches("__")
@@ -4168,7 +4311,10 @@ impl<'a> Exec<'a> {
                         }
                         Some(Val::Unit)
                     }
-                    _ => None,
+                    _ => {
+                        let list = Val::List { len, data, elem };
+                        self.list_op(state, list_op, list, receiver_place, args)
+                    }
                 }
             }
             RuntimeOp::Str(str_op) => {
@@ -4197,7 +4343,13 @@ impl<'a> Exec<'a> {
                         let other = other(self, state)?;
                         Some(Val::Bool(format!("(str.suffixof {other} {text})")))
                     }
-                    _ => None,
+                    _ => {
+                        let values: Vec<Val> = (0..args.len())
+                            .map(|index| arg(self, state, index, Some(IntTy::INT64)))
+                            .collect();
+                        let span = span_of(self, 4);
+                        self.text_call(state, span, str_op, &text, &values)
+                    }
                 }
             }
             RuntimeOp::Dict(dict_op) => {
@@ -4785,6 +4937,24 @@ impl<'a> Exec<'a> {
                     }
                 }
             }
+            RuntimeOp::Host(_) if super::integers::math_function(op.name()).is_some() => {
+                let name = super::integers::math_function(op.name())?;
+                let values: Vec<Val> = (0..args.len())
+                    .map(|index| arg(self, state, index, None))
+                    .collect();
+                self.math_call(&pc, name, &values)
+            }
+            RuntimeOp::Scalar(op) if super::integers::fixed_width(op).is_some() => {
+                let kind = super::integers::fixed_width(op)?;
+                // The result has the receiver's type. Without a range
+                // for it, as for `int128`, the method is not modeled.
+                let ty = target
+                    .and_then(|target| self.place_type(target))
+                    .as_ref()
+                    .and_then(IntTy::of)?;
+                let rhs = arg(self, state, 0, Some(ty));
+                self.int_method(&pc, kind, ty, (receiver, rhs))
+            }
             RuntimeOp::Scalar(ScalarOp::ToFloat) => match receiver {
                 Some(Val::Int(term, _)) => {
                     let float = FloatTy::F64;
@@ -4810,6 +4980,11 @@ impl<'a> Exec<'a> {
                 }
             }
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => receiver,
+            RuntimeOp::Value(ValueOp::ToString) => self.text_of(receiver.as_ref()),
+            RuntimeOp::Host(host) if host.name() == "str.to_bytes" => {
+                let text = arg(self, state, 0, None);
+                self.text_bytes(&text)
+            }
             RuntimeOp::Print(_) => Some(Val::Unit),
             _ => None,
         }
@@ -4967,7 +5142,7 @@ pub(super) fn structural_eq(left: &Val, right: &Val) -> Option<String> {
                 .collect();
             Some(conjoin(&parts?))
         }
-        _ => None,
+        _ => super::shapes::shaped_eq(left, right),
     }
 }
 
@@ -4995,7 +5170,7 @@ pub(super) fn union_payload_index(segment: &str) -> Option<usize> {
         .ok()
 }
 
-fn project(value: &Val, segment: &str) -> Option<Val> {
+pub(super) fn project(value: &Val, segment: &str) -> Option<Val> {
     match value {
         Val::Union(_, members) => members.get(union_payload_index(segment)?).cloned(),
         Val::Record(_, fields) => fields
@@ -5010,7 +5185,7 @@ fn project(value: &Val, segment: &str) -> Option<Val> {
     }
 }
 
-fn set_in(value: &mut Val, segments: &[&str], new: Val) -> bool {
+pub(super) fn set_in(value: &mut Val, segments: &[&str], new: Val) -> bool {
     let Some((first, rest)) = segments.split_first() else {
         *value = new;
         return true;
@@ -5139,7 +5314,7 @@ pub(super) fn root_of(place: &str) -> &str {
 /// The constants an SMT term names, in order: every generated constant
 /// has a `!` in its name. A variable a quantifier binds is not one, and
 /// neither is text inside a string literal.
-fn symbols(term: &str) -> Vec<&str> {
+pub(super) fn symbols(term: &str) -> Vec<&str> {
     let mut names = Vec::new();
     let mut in_string = false;
     let mut start = None;
@@ -5209,7 +5384,7 @@ fn balanced(text: &str) -> bool {
     depth == 0
 }
 
-fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
+pub(super) fn terminator_targets(terminator: &Terminator) -> Vec<&str> {
     match terminator {
         Terminator::Goto(label) => vec![label],
         Terminator::Branch {
@@ -5261,11 +5436,21 @@ pub(super) fn closure_captures(function: &MirFunction) -> BTreeSet<String> {
             }
         }
     }
+    // A captured view writes the local it is a view of.
+    if !captured.is_empty() {
+        let loans = loan_roots(&function.blocks);
+        let viewed: Vec<String> = captured
+            .iter()
+            .filter_map(|root| loans.get(root).cloned())
+            .collect();
+        captured.extend(viewed);
+    }
+    captured.extend(super::closures::stateful_holders(function));
     captured
 }
 
 /// The root local each loan of `blocks` reaches, following reborrows.
-fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
+pub(super) fn loan_roots(blocks: &[BasicBlock]) -> BTreeMap<String, String> {
     let mut parents: BTreeMap<&str, &str> = BTreeMap::new();
     for block in blocks {
         for instruction in &block.instructions {
@@ -5489,11 +5674,12 @@ fn same_shape(a: &Val, b: &Val) -> bool {
         }
         (Val::Union(_, xs), Val::Union(_, ys)) => xs.len() == ys.len(),
         (Val::Held(x, _), Val::Held(y, _)) => x == y,
+        (Val::Closure(x, xs), Val::Closure(y, ys)) => x == y && xs.len() == ys.len(),
         _ => false,
     }
 }
 
-fn scalar_term(value: &Val) -> Option<&str> {
+pub(super) fn scalar_term(value: &Val) -> Option<&str> {
     match value {
         Val::Int(term, _) | Val::Bool(term) | Val::Str(term) | Val::Float(term, _) => Some(term),
         _ => None,
@@ -5518,7 +5704,7 @@ fn tag_term(value: &Val) -> Option<&str> {
 /// The components of a compound value, in a fixed order.
 fn children(value: &Val) -> Vec<&Val> {
     match value {
-        Val::Tuple(items) | Val::Union(_, items) => items.iter().collect(),
+        Val::Tuple(items) | Val::Union(_, items) | Val::Closure(_, items) => items.iter().collect(),
         Val::Held(_, inner) => vec![inner],
         Val::Record(_, fields) => fields.iter().map(|(_, value)| value).collect(),
         Val::Enum(_, _, payloads) => payloads.iter().flatten().collect(),

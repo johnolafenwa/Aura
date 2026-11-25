@@ -794,6 +794,91 @@ fn sip_hasher_matches_the_reference_vectors() {
     }
 }
 
+/// `insert_i64` stores as `insert` does under the same integer key, in a
+/// scanned dict and an indexed one, and keeps the first key and its slot.
+#[test]
+fn int64_inserts_agree_with_value_inserts() {
+    for size in [3i64, 40] {
+        let mut by_word = DictEntries::new();
+        let mut by_value = DictEntries::new();
+        for round in 0..2 {
+            for key in 0..size {
+                let stored = Value::Int(IntegerValue::from_i64(key + round));
+                assert_eq!(
+                    by_word.insert_i64(key * 11, stored.clone()),
+                    by_value.insert(Value::Int(IntegerValue::from_i64(key * 11)), stored),
+                    "key {key} in round {round}"
+                );
+            }
+        }
+        assert_eq!(by_word.len(), size as usize);
+        assert!(by_word.iter().eq(by_value.iter()));
+        for key in 0..size {
+            assert_eq!(by_word.position_i64(key * 11), Some(key as usize));
+            assert_eq!(by_word.position_i64(key * 11 + 1), None);
+        }
+    }
+}
+
+/// `remove_i64` removes what `remove` does under the same integer key.
+#[test]
+fn int64_removes_agree_with_value_removes() {
+    for size in [4i64, 40] {
+        let mut by_word = DictEntries::new();
+        let mut by_value = DictEntries::new();
+        for key in 0..size {
+            by_word.insert(int(key), int(key * 2));
+            by_value.insert(int(key), int(key * 2));
+        }
+        for key in [1, 1, size - 1, 0, size + 5, -3] {
+            assert_eq!(by_word.remove_i64(key), by_value.remove(&int(key)), "{key}");
+            assert_eq!(by_word.len(), by_value.len());
+            assert!(by_word.iter().eq(by_value.iter()));
+        }
+    }
+}
+
+/// The one-shot hashes of a `str` or integer key are the hashes a stream
+/// gives the same bytes, at every length around the word boundaries.
+#[test]
+fn one_shot_hashes_match_the_stream() {
+    use super::SipHasher;
+    use std::hash::Hasher;
+    let k0 = u64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]);
+    let k1 = u64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]);
+    let message: Vec<u8> = (0..80u8).map(|byte| byte.wrapping_mul(37) ^ 0x5a).collect();
+    for len in 0..=message.len() {
+        let mut stream = SipHasher::<1, 3>::with_keys(k0, k1);
+        stream.write(&message[..len]);
+        assert_eq!(
+            SipHasher::<1, 3>::hash_bytes(k0, k1, &message[..len]),
+            stream.finish(),
+            "message of {len} bytes"
+        );
+    }
+    let reference: Vec<u8> = (0..15).collect();
+    for (len, expected) in [
+        (0, 0x726f_db47_dd0e_0e31u64),
+        (1, 0x74f8_39c5_93dc_67fd),
+        (15, 0xa129_ca61_49be_45e5),
+    ] {
+        assert_eq!(
+            SipHasher::<2, 4>::hash_bytes(k0, k1, &reference[..len]),
+            expected,
+            "reference message of {len} bytes"
+        );
+    }
+    for word in [0, 1, u64::MAX, 0x0123_4567_89ab_cdef] {
+        let mut stream = SipHasher::<1, 3>::with_keys(k0, k1);
+        stream.write_u64(word);
+        assert_eq!(SipHasher::<1, 3>::hash_word(k0, k1, word), stream.finish());
+        assert_eq!(
+            SipHasher::<1, 3>::hash_bytes(k0, k1, &word.to_le_bytes()),
+            stream.finish()
+        );
+    }
+}
+
 #[test]
 fn keyed_hasher_hashes_split_writes_and_words_as_one_stream() {
     use super::KeyedHasher;

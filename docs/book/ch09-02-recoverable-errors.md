@@ -66,9 +66,9 @@ $ aura verify src/main.au
 verified src/main.au: 2 of 2 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
 ```
 
-The two checks are `parts[0]` and `parts[1]`. The verifier knows nothing
-about what `split` returns, so it can't assume there are two parts. It
-follows the `if` instead: any path that reaches the last line has tested
+The two checks are `parts[0]` and `parts[1]`. The verifier knows that
+`split` returns at least one part, but not that there are two. It
+follows the `if` for that: any path that reaches the last line has tested
 `parts.len() != 2` and not returned, so the list has exactly two elements
 there. Returning an error early and proving the code after it safe are the
 same act.

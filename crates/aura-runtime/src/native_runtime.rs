@@ -12218,6 +12218,71 @@ pub extern "C-unwind" fn aura_direct_map_next_slot(map: *mut OpaqueValue, slot: 
     })
 }
 
+/// A second handle to the entries `map` holds now, for a loop over its
+/// items, keys, or values that generated code walks by slot (see
+/// `native_codegen_entry_loops.rs` in the compiler) in place of the list
+/// `items()`, `keys()`, or `values()` would build. The handle shares the
+/// entries until either side writes, and a write copies them first, so the
+/// loop sees the entries of this moment whatever its body does to `map`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_snapshot(map: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Map(with_map(map, |map| MapValue {
+            key_type: map.key_type.clone(),
+            value_type: map.value_type.clone(),
+            entries: map.entries.clone(),
+        })))
+    })
+}
+
+/// The entry of `map` in `slot`, which [`aura_direct_map_next_slot`]
+/// found.
+fn with_map_entry<T>(
+    map: *mut OpaqueValue,
+    slot: i64,
+    read: impl FnOnce(&(Value, Value)) -> T,
+) -> T {
+    with_map(map, |map| {
+        match usize::try_from(slot)
+            .ok()
+            .and_then(|slot| map.entries.slot(slot))
+        {
+            Some(entry) => read(entry),
+            None => runtime_error("direct runtime walked past the entries of a `dict`"),
+        }
+    })
+}
+
+/// A box holding a copy of the key in `slot` of `map`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_key_at(
+    map: *mut OpaqueValue,
+    slot: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(with_map_entry(map, slot, |(key, _)| key.clone())))
+}
+
+/// A box holding a copy of the value in `slot` of `map`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_value_at(
+    map: *mut OpaqueValue,
+    slot: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| boxed_value(with_map_entry(map, slot, |(_, value)| value.clone())))
+}
+
+/// The `int64` key in `slot` of `map`, as its word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_key_int64_at(map: *mut OpaqueValue, slot: i64) -> i64 {
+    task_runtime_boundary(|| with_map_entry(map, slot, |(key, _)| unbox_int64_of(key)))
+}
+
+/// The `int64` value in `slot` of `map`, as its word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_value_int64_at(map: *mut OpaqueValue, slot: i64) -> i64 {
+    task_runtime_boundary(|| with_map_entry(map, slot, |(_, value)| unbox_int64_of(value)))
+}
+
 /// [`aura_direct_map_get_shadow`] for the entry in `slot`, which
 /// [`aura_direct_map_next_slot`] found, without a key: null when no entry
 /// is there.
@@ -13057,6 +13122,109 @@ pub extern "C-unwind" fn aura_direct_map_remove_in_place(
     })
 }
 
+/// A removed value's own box, or null when the key was missing.
+fn boxed_removed_payload(removed: Option<Value>) -> *mut OpaqueValue {
+    removed.map_or(std::ptr::null_mut(), |value| {
+        let boxed = boxed_value(value);
+        // SAFETY: the box is new.
+        unsafe { record_typed_variant_shape(boxed) };
+        boxed
+    })
+}
+
+/// `aura_direct_map_remove_in_place`, as the removed value's own box or
+/// null when the key was missing. Generated code keeps a `remove` whose
+/// result it only matches and unpacks in this form, so no `Lookup` is
+/// built.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_remove_payload(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_removed_payload(with_map_entries_mut(map, |entries| unsafe {
+            with_value(key, |key| entries.remove(key).map(|(_, value)| value))
+        }))
+    })
+}
+
+/// [`aura_direct_map_remove_payload`] for an `int64` key, which is hashed
+/// and compared without a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_remove_int64_payload(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_removed_payload(with_map_entries_mut(map, |entries| {
+            entries.remove_i64(key).map(|(_, value)| value)
+        }))
+    })
+}
+
+/// [`aura_direct_map_remove_payload`] for a `str` key generated code holds
+/// as `key_len` bytes at `key_ptr`, which is hashed and compared without a
+/// box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_remove_payload_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        boxed_removed_payload(with_map_entries_mut(map, |entries| {
+            entries.remove_str(key).map(|(_, value)| value)
+        }))
+    })
+}
+
+/// [`aura_direct_map_discard`] for a `str` key generated code holds as
+/// `key_len` bytes at `key_ptr`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_discard_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map_entries_mut(map, |entries| drop(entries.remove_str(key)));
+        std::ptr::null_mut()
+    })
+}
+
+/// `aura_direct_map_remove_in_place` for a `remove` whose result nothing
+/// reads: the entry is dropped where it is removed. It returns null, which
+/// releases as nothing.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_discard(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let removed = with_map_entries_mut(map, |entries| unsafe {
+            with_value(key, |key| entries.remove(key))
+        });
+        // Dropped outside the access, as a release of the result would be.
+        drop(removed);
+        std::ptr::null_mut()
+    })
+}
+
+/// [`aura_direct_map_discard`] for an `int64` key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_discard_int64(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let removed = with_map_entries_mut(map, |entries| entries.remove_i64(key));
+        drop(removed);
+        std::ptr::null_mut()
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_contains_key(
     map: *mut OpaqueValue,
@@ -13075,6 +13243,21 @@ pub extern "C-unwind" fn aura_direct_map_contains_key(
 pub extern "C-unwind" fn aura_direct_map_contains_int64(map: *mut OpaqueValue, key: i64) -> i64 {
     task_runtime_boundary(|| {
         i64::from(with_map(map, |map| map.entries.position_i64(key).is_some()))
+    })
+}
+
+/// `aura_direct_map_contains_key` for a `str` key generated code reads in
+/// place as `key_len` bytes at `key_ptr`, which is hashed and compared
+/// without a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_contains_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        i64::from(with_map(map, |map| map.entries.position_str(key).is_some()))
     })
 }
 
@@ -13317,8 +13500,7 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64_key(
     task_runtime_boundary(|| {
         let value = unsafe { consume_owned_value(value) };
         with_map_mut(map, |map| {
-            map.entries
-                .insert(Value::Int(IntegerValue::from_i64(key)), value);
+            map.entries.insert_i64(key, value);
         });
     })
 }
@@ -13340,6 +13522,42 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64(
     })
 }
 
+/// `map[key] = value` for a `str` key generated code holds as `key_len`
+/// bytes at `key_ptr`. The key is copied only when the dict does not hold
+/// it yet.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        let value = unsafe { consume_owned_value(value) };
+        with_map_entries_mut(map, |entries| {
+            entries.insert_str(key, value);
+        });
+    })
+}
+
+/// [`aura_direct_map_set_index_view`] for an `int64` value, which
+/// generated code passes as its word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map_entries_mut(map, |entries| {
+            entries.insert_str(key, Value::Int(IntegerValue::from_i64(value)));
+        });
+    })
+}
+
 /// Both operands of an `int64` to `int64` store fit in words. An existing
 /// slot keeps its original key and insertion order.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -13350,17 +13568,7 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64_pair(
 ) {
     task_runtime_boundary(|| {
         with_map_entries_mut(map, |entries| {
-            let value = IntegerValue::from_i64(value);
-            if let Some(slot) = entries.position_i64(key) {
-                let previous = entries.value_at_mut(slot);
-                if let Value::Int(previous) = previous {
-                    *previous = value;
-                } else {
-                    *previous = Value::Int(value);
-                }
-            } else {
-                entries.push_new((Value::Int(IntegerValue::from_i64(key)), Value::Int(value)));
-            }
+            entries.insert_i64(key, Value::Int(IntegerValue::from_i64(value)));
         })
     })
 }
@@ -14230,6 +14438,21 @@ pub extern "C-unwind" fn aura_direct_map_probe_slot_int64(
     task_runtime_boundary(|| map_probe_slot(map, mutable != 0, |entries| entries.position_i64(key)))
 }
 
+/// [`aura_direct_map_probe_slot`] for a `str` key generated code holds as
+/// `key_len` bytes at `key_ptr`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_probe_slot_view(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    mutable: i64,
+) -> *mut Value {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        map_probe_slot(map, mutable != 0, |entries| entries.position_str(key))
+    })
+}
+
 fn map_probe_slot(
     map: *mut OpaqueValue,
     mutable: bool,
@@ -14267,25 +14490,27 @@ fn map_value_slot(
     if !confined {
         return std::ptr::null_mut();
     }
+    // SAFETY: as above.
+    let header = unsafe { &*map };
+    // Only a dict's entry is reached, so there is no list to take appended
+    // elements from before the access, and no list view to refresh after.
+    let _access = header.access_unlisted(mutable);
     if mutable {
-        // SAFETY: as above.
-        unsafe {
-            value_mut(map, |value| match value {
-                Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
-                    std::ptr::from_mut(map.entries.value_at_mut(slot))
-                }),
-                _ => std::ptr::null_mut(),
-            })
+        // SAFETY: the box is confined, and generated code never nests a
+        // write inside another access to the same value.
+        match unsafe { &mut *header.value.get() } {
+            Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
+                std::ptr::from_mut(map.entries.value_at_mut(slot))
+            }),
+            _ => std::ptr::null_mut(),
         }
     } else {
         // SAFETY: as above. The slot is only read through.
-        unsafe {
-            with_value(map, |value| match value {
-                Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
-                    std::ptr::from_ref(&map.entries.at_slot(slot).1).cast_mut()
-                }),
-                _ => std::ptr::null_mut(),
-            })
+        match unsafe { &*header.value.get() } {
+            Value::Map(map) => position(&map.entries).map_or(std::ptr::null_mut(), |slot| {
+                std::ptr::from_ref(&map.entries.at_slot(slot).1).cast_mut()
+            }),
+            _ => std::ptr::null_mut(),
         }
     }
 }
@@ -14387,6 +14612,23 @@ pub extern "C-unwind" fn aura_direct_set_contains_int64(set: *mut OpaqueValue, v
     })
 }
 
+/// `aura_direct_set_contains` for a `str` needle generated code reads in
+/// place as `len` bytes at `ptr`, which is hashed and compared without a
+/// box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_contains_view(
+    set: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let needle = literal_str(ptr, len);
+        i64::from(with_set(set, |set| {
+            set.elements.position_str(needle).is_some()
+        }))
+    })
+}
+
 /// `aura_direct_set_insert_in_place` for an `int64` element, which is
 /// hashed and compared before it is built and never goes in a box.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -14420,6 +14662,27 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
                 }
             }
             set.elements.insert(value)
+        });
+        i64::from(inserted)
+    })
+}
+
+/// `aura_direct_set_insert_in_place` for a `str` generated code holds as
+/// `len` bytes at `ptr`, which is copied only when the set does not hold
+/// it yet.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_set_insert_view(
+    set: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let element = literal_str(ptr, len);
+        let inserted = with_set_mut(set, |set| {
+            if is_unknown_runtime_type(&set.element_type) {
+                set.element_type = SharedType::named("str");
+            }
+            set.elements.insert_str(element)
         });
         i64::from(inserted)
     })

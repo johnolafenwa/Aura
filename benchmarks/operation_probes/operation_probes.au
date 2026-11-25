@@ -177,6 +177,117 @@ def dict_get_str(n: int64, run: bool) -> int64:
     return total
 
 
+def dict_get_int(n: int64, run: bool) -> int64:
+    mut table: dict[int64, int64] = {}
+    for i in range(1000):
+        table[i * 7919] = i
+    mut total = 0
+    if run:
+        for i in range(n):
+            match table.get((i * 31 % 1000) * 7919):
+                case Lookup.Found(value):
+                    total += value
+                case Lookup.Missing:
+                    pass
+    return total
+
+
+def dict_set_int(n: int64, run: bool) -> int64:
+    mut table: dict[int64, int64] = {}
+    for i in range(1000):
+        table[i * 7919] = i
+    if run:
+        for i in range(n):
+            table[(i * 31 % 1000) * 7919] = i
+    return table.len() + table[0]
+
+
+def dict_insert_int(n: int64, run: bool) -> int64:
+    mut table: dict[int64, int64] = {}
+    if run:
+        for i in range(n):
+            table[i * 7919] = i
+    return table.len()
+
+
+def dict_count_str(n: int64, run: bool) -> int64:
+    mut keys = list[str]()
+    mut table: dict[str, int64] = {}
+    for i in range(1000):
+        keys.append(f"key{i}")
+        table[f"key{i}"] = 0
+    if run:
+        for i in range(n):
+            view key = keys[i * 31 % 1000]
+            match mut table.lookup(key):
+                case Lookup.Found(count):
+                    count += 1
+                case Lookup.Missing:
+                    pass
+    return table["key7"] + table.len()
+
+
+def dict_contains_str(n: int64, run: bool) -> int64:
+    mut keys = list[str]()
+    mut table: dict[str, int64] = {}
+    for i in range(1000):
+        keys.append(f"key{i}")
+        if i % 2 == 0:
+            table[f"key{i}"] = i
+    mut total = 0
+    if run:
+        for i in range(n):
+            if keys[i * 31 % 1000] in table:
+                total += 1
+    return total
+
+
+def set_add_int(n: int64, run: bool) -> int64:
+    mut seen: set[int64] = {}
+    if run:
+        for i in range(n):
+            seen.add(i * 7919 % 50021)
+    return seen.len()
+
+
+def set_contains_int(n: int64, run: bool) -> int64:
+    mut seen: set[int64] = {}
+    for i in range(1000):
+        seen.add(i * 2 * 7919)
+    mut total = 0
+    if run:
+        for i in range(n):
+            if (i * 31 % 2000) * 7919 in seen:
+                total += 1
+    return total
+
+
+def set_contains_str(n: int64, run: bool) -> int64:
+    mut keys = list[str]()
+    mut seen: set[str] = {}
+    for i in range(1000):
+        keys.append(f"key{i}")
+        if i % 2 == 0:
+            seen.add(f"key{i}")
+    mut total = 0
+    if run:
+        for i in range(n):
+            if keys[i * 31 % 1000] in seen:
+                total += 1
+    return total
+
+
+def dict_items_loop(n: int64, run: bool) -> int64:
+    mut table: dict[int64, int64] = {}
+    for i in range(n):
+        table[i * 7919] = i
+    mut total = 0
+    if run:
+        for key, value in table.items():
+            total += key + value
+    return total + table.len()
+
+
 def list_push(n: int64, run: bool) -> int64:
     mut xs = list[float64]()
     mut ps = list[Point]()
@@ -518,6 +629,24 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return dict_remove(n, run)
     elif operation == "dict_get_str":
         return dict_get_str(n, run)
+    elif operation == "dict_get_int":
+        return dict_get_int(n, run)
+    elif operation == "dict_set_int":
+        return dict_set_int(n, run)
+    elif operation == "dict_insert_int":
+        return dict_insert_int(n, run)
+    elif operation == "dict_count_str":
+        return dict_count_str(n, run)
+    elif operation == "dict_contains_str":
+        return dict_contains_str(n, run)
+    elif operation == "set_add_int":
+        return set_add_int(n, run)
+    elif operation == "set_contains_int":
+        return set_contains_int(n, run)
+    elif operation == "set_contains_str":
+        return set_contains_str(n, run)
+    elif operation == "dict_items_loop":
+        return dict_items_loop(n, run)
     elif operation == "list_push":
         return list_push(n, run)
     elif operation == "class_field_read":
