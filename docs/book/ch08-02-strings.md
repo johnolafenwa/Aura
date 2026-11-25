@@ -508,11 +508,11 @@ The `requires` clause says what a usable name is: not empty, and free of the
 colon we're about to use as a separator. The verifier proves that `main`'s
 literal meets it, and that every line `report_line` returns starts with the
 name and has exactly the length the pieces add up to. It knows `len`, `+`,
-`==` and the ordering comparisons, `in`, `contains`, `starts_with`, and
-`ends_with`. The results of the other methods in this section, such as
-`split`, `trim`, `find`, `replace`, and `to_upper`, and the text an f-string
-builds, are values it knows nothing about today, so a promise about
-`name.to_upper()` is reported as unproved.
+`==` and the ordering comparisons, `in`, `contains`, `starts_with`,
+`ends_with`, indexing and slicing, `split`, `find`, and the text an f-string
+builds. For `trim`, `replace`, `to_upper`, and `to_lower` it knows only how
+long the result can be, so a promise about the letters of
+`name.to_upper()` is reported as not modeled rather than proved.
 
 Strings compare with `==` and `!=`, and order with `<` and friends by their
 UTF-8 bytes, which is the same order `sort` uses. The full list of string

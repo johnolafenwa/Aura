@@ -15881,6 +15881,191 @@ def main():
 }
 
 #[test]
+fn removes_matched_or_dropped_build_no_lookup() {
+    let source = r#"
+def main():
+    mut names: dict[str, str] = {}
+    names["a"] = "Ada"
+    names["b"] = "Bo"
+    key = "a" + ""
+    names.remove(key)
+    other = "b" + ""
+    match names.remove(other):
+        case Lookup.Found(name):
+            print(name)
+        case Lookup.Missing:
+            print("missing")
+    print(names.len())
+"#;
+    let mir = lower_source_to_mir(source).expect("the removes should lower");
+    let object = emit_host_object(&mir).expect("the removes should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_remove_payload"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_map_remove_in_place"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn int64_removes_pass_the_key_as_a_word() {
+    let source = r#"
+def main():
+    mut sizes: dict[int64, str] = {}
+    sizes[1] = "one"
+    sizes[2] = "two"
+    sizes.remove(1)
+    match sizes.remove(2):
+        case Lookup.Found(name):
+            print(name)
+        case Lookup.Missing:
+            print("missing")
+"#;
+    let mir = lower_source_to_mir(source).expect("the removes should lower");
+    let object = emit_host_object(&mir).expect("the removes should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_map_discard_int64",
+        "aura_direct_map_remove_int64_payload",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for boxed in [
+        "aura_direct_map_remove_in_place",
+        "aura_direct_map_remove_payload",
+        "aura_direct_map_discard",
+    ] {
+        assert!(!referenced.contains(boxed), "{boxed}: {referenced:?}");
+    }
+}
+
+#[test]
+fn loops_over_plain_entries_walk_a_snapshot() {
+    let source = r#"
+def main():
+    mut counts: dict[str, int64] = {}
+    counts["a"] = 1
+    mut total = 0
+    for name, count in counts.items():
+        total += name.len() + count
+    for name in counts.keys():
+        total += name.len()
+    for count in counts.values():
+        total += count
+    print(total)
+"#;
+    let mir = lower_source_to_mir(source).expect("the loops should lower");
+    let object = emit_host_object(&mir).expect("the loops should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_map_snapshot",
+        "aura_direct_map_next_slot",
+        "aura_direct_map_key_at",
+        "aura_direct_map_value_int64_at",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for list in [
+        "aura_direct_map_items",
+        "aura_direct_map_keys",
+        "aura_direct_map_values",
+    ] {
+        assert!(!referenced.contains(list), "{list}: {referenced:?}");
+    }
+}
+
+#[test]
+fn str_keys_read_from_a_list_are_looked_up_in_place() {
+    let source = r#"
+def main():
+    keys = ["a", "b"]
+    mut table: dict[str, int64] = {}
+    table["a"] = 1
+    mut seen = set[str]()
+    seen.add("b")
+    mut total = 0
+    for i in range(len(keys)):
+        if keys[i] in table:
+            total += 1
+        if keys[i] in seen:
+            total += 10
+        match table.get(keys[i]):
+            case Lookup.Found(count):
+                total += count
+            case Lookup.Missing:
+                pass
+    print(total)
+"#;
+    let mir = lower_source_to_mir(source).expect("the lookups should lower");
+    let object = emit_host_object(&mir).expect("the lookups should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_map_contains_view",
+        "aura_direct_set_contains_view",
+        "aura_direct_map_get_str_payload",
+        "aura_direct_vec_str_element",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    assert!(
+        !referenced.contains("aura_direct_string_from_view"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn a_loop_over_entries_that_share_storage_makes_its_list() {
+    let source = r#"
+def main():
+    mut groups: dict[str, list[int64]] = {}
+    groups["a"] = [1]
+    mut total = 0
+    for name, group in groups.items():
+        total += name.len() + group.len()
+    print(total)
+"#;
+    let mir = lower_source_to_mir(source).expect("the loop should lower");
+    let object = emit_host_object(&mir).expect("the loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_items"),
+        "{referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_map_snapshot"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
+fn a_removed_lookup_kept_whole_is_built() {
+    let source = r#"
+def show(found: Lookup[str]):
+    match found:
+        case Lookup.Found(name):
+            print(name)
+        case Lookup.Missing:
+            print("missing")
+
+def main():
+    mut names: dict[str, str] = {}
+    names["a"] = "Ada"
+    key = "a" + ""
+    show(names.remove(key))
+"#;
+    let mir = lower_source_to_mir(source).expect("the remove should lower");
+    let object = emit_host_object(&mir).expect("the remove should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_remove_in_place"),
+        "{referenced:?}"
+    );
+}
+
+#[test]
 fn lookups_only_read_lend_their_found_value() {
     let source = r#"
 import json

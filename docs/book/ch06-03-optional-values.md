@@ -249,11 +249,10 @@ whether a value is there. A contract says which values the function has to
 be right for. A `match` with `case int64 as page:` and `case None:` arms is
 proved the same way.
 
-One limit applies today. A clause that talks about an optional value across
-a call, such as `ensures result is None or result < len(titles)` on `find`,
-is checked while the program runs, but the verifier does not yet hand that
-fact to the caller. A caller that wants a proved index compares the narrowed
-value with `len(titles)` itself before using it.
+A clause that talks about an optional value, such as
+`ensures result is None or result < len(titles)` on `find`, also reaches the
+caller. Once the caller has tested `index is not None`, the verifier knows
+`index < len(titles)`, and `titles[index]` is proved in range.
 
 ## No `Option`, no `T?`
 

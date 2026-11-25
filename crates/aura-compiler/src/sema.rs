@@ -1333,7 +1333,7 @@ pub(crate) fn membership_member_name(container_ty: &Type) -> Option<&'static str
 }
 
 /// The source spelling of a binary operator for diagnostics.
-fn binary_operator_symbol(op: BinaryOp) -> &'static str {
+pub(crate) fn binary_operator_symbol(op: BinaryOp) -> &'static str {
     match op {
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
