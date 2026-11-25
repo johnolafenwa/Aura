@@ -171,6 +171,12 @@ fn verification_follows_machine_calls_through_mem_imports() {
     assert_eq!(used.code, "AU4035");
     assert!(used.message.contains("assembly"));
 
+    let indirect = verify(
+        "import mem\ndef apply(operation: def() -> None) -> None:\n    operation()\nexport \"C\" def sample() -> None:\n    apply(mem.halt)\n",
+    );
+    assert_eq!(indirect.code, "AU4035");
+    assert!(indirect.notes.iter().any(|note| note.contains("mem::halt")));
+
     let unused = verify("import mem\nexport \"C\" def sample(address: uint64) -> uint8:\n    return mem.read_uint8(address)\n");
     assert_eq!(
         unused.code, "AU5103",
