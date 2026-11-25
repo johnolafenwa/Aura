@@ -222,6 +222,21 @@ fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
     });
 }
 
+/// Runs `f` and returns the first trap a generator raised while `f` dropped
+/// and closed it. The interpreter calls this around each instruction, so a
+/// failing `with` exit of a dropped generator traps the caller as it does on
+/// the native backend.
+pub fn capture_generator_drop_trap<T>(f: impl FnOnce() -> T) -> (T, Option<Diagnostic>) {
+    let value = {
+        let _scope = GeneratorDropTrapScope::enter();
+        f()
+    };
+    match take_pending_generator_drop_exit() {
+        Some(PendingGeneratorDropExit::Trap(diagnostic)) => (value, Some(diagnostic)),
+        Some(PendingGeneratorDropExit::Cancelled) | None => (value, None),
+    }
+}
+
 pub(crate) fn take_pending_generator_drop_exit() -> Option<PendingGeneratorDropExit> {
     PENDING_GENERATOR_DROP_EXIT.with(|slot| slot.borrow_mut().take())
 }
