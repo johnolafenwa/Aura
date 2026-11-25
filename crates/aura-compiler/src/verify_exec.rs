@@ -4290,8 +4290,13 @@ impl<'a> Exec<'a> {
                     })
                 }
             },
-            CallTarget::Extern(call) if self.cx.extern_decl(&call.symbol).is_some() => {
-                let decl = self.cx.extern_decl(&call.symbol).expect("checked above");
+            CallTarget::Extern(call)
+                if self.cx.extern_decl(&call.module_name, &call.name).is_some() =>
+            {
+                let decl = self
+                    .cx
+                    .extern_decl(&call.module_name, &call.name)
+                    .expect("checked above");
                 // The call proves the `requires` and the result and `mut`
                 // arguments have the `ensures`.
                 let mut pre = Vec::new();

@@ -263,7 +263,7 @@ pub(crate) struct VerifyContext<'a> {
     classes: BTreeMap<&'a str, &'a MirClass>,
     enums: BTreeMap<&'a str, &'a MirEnum>,
     decls: BTreeMap<String, &'a FunctionDecl>,
-    extern_decls: BTreeMap<String, &'a FunctionDecl>,
+    extern_decls: BTreeMap<(String, String), &'a FunctionDecl>,
     spec_defs: BTreeMap<String, &'a FunctionDecl>,
     decl_modules_by_ptr: BTreeMap<usize, &'a str>,
     spec_return_by_ptr: BTreeMap<usize, &'a Type>,
@@ -329,7 +329,7 @@ impl<'a> VerifyContext<'a> {
                         .or_insert(decl);
                 }
                 extern_decls
-                    .entry(function.decl.link_name().to_string())
+                    .entry((function.module_name.clone(), function.decl.name.clone()))
                     .or_insert(decl);
             }
         }
@@ -545,7 +545,7 @@ impl<'a> VerifyContext<'a> {
             module_paths: &mut BTreeSet<String>,
             module_aliases: &mut BTreeMap<(String, String), String>,
             decls: &mut BTreeMap<String, &'a FunctionDecl>,
-            extern_decls: &mut BTreeMap<String, &'a FunctionDecl>,
+            extern_decls: &mut BTreeMap<(String, String), &'a FunctionDecl>,
             spec_defs: &mut BTreeMap<String, &'a FunctionDecl>,
             decl_modules_by_ptr: &mut BTreeMap<usize, &'a str>,
             spec_return_by_ptr: &mut BTreeMap<usize, &'a Type>,
@@ -599,7 +599,7 @@ impl<'a> VerifyContext<'a> {
                         ))
                         .or_insert(decl);
                     extern_decls
-                        .entry(extern_fn.decl.link_name().to_string())
+                        .entry((extern_fn.module_name.clone(), extern_fn.decl.name.clone()))
                         .or_insert(decl);
                 }
             }
@@ -954,9 +954,12 @@ impl<'a> VerifyContext<'a> {
         }
     }
 
-    /// The contract declaration of an `extern` function by its C link symbol.
-    pub(crate) fn extern_decl(&self, symbol: &str) -> Option<&'a FunctionDecl> {
-        self.extern_decls.get(symbol).copied()
+    /// The contract declaration of an `extern` function by its qualified Aura
+    /// declaration identity `(module_name, name)`.
+    pub(crate) fn extern_decl(&self, module_name: &str, name: &str) -> Option<&'a FunctionDecl> {
+        self.extern_decls
+            .get(&(module_name.to_string(), name.to_string()))
+            .copied()
     }
 
     /// The module where `decl` was written, when recorded.

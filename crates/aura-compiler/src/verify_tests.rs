@@ -5588,3 +5588,147 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn extern_contracts_keyed_by_qualified_declaration_not_c_symbol() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "aura_verify_extern_symbol_collision_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"extsym\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/checked_mod.au"),
+        r#"public extern "C" def probe() -> int64 symbol "c_shared_probe":
+    ensures result == 0
+"#,
+    )
+    .expect("checked_mod.au");
+    std::fs::write(
+        dir.join("src/raw_mod.au"),
+        r#"public extern "C" def probe() -> int64 symbol "c_shared_probe"
+"#,
+    )
+    .expect("raw_mod.au");
+
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"import checked_mod
+import raw_mod
+
+extern "C" def checked_local() -> int64 symbol "c_local_probe":
+    ensures result == 0
+
+extern "C" def raw_local() -> int64 symbol "c_local_probe"
+
+def use_raw_local(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures result == 123
+    idx = raw_local()
+    return xs[idx]
+
+def use_checked_local(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = checked_local()
+    return xs[idx]
+
+def use_raw_imported(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = raw_mod.probe()
+    return xs[idx]
+
+def use_checked_imported(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = checked_mod.probe()
+    return xs[idx]
+
+def main():
+    pass
+"#,
+    )
+    .expect("main.au");
+
+    let program = crate::check_path(&main).expect("program checks");
+    let verified = crate::mir::lower_for_verification(&program);
+    let report = verify_module(
+        &program,
+        &verified,
+        &Options {
+            prove_sites: true,
+            ..Options::default()
+        },
+    )
+    .expect("verifies");
+
+    let raw_local_index_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_local"
+            && ob.kind == ObligationKind::IndexInRange
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_local_index_open,
+        "uncontracted `raw_local` must not inherit `checked_local` ensures: {report:#?}"
+    );
+    let raw_local_ensures_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_local"
+            && ob.kind == ObligationKind::Ensures
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_local_ensures_open,
+        "uncontracted `raw_local` must not prove ensures: {report:#?}"
+    );
+    let raw_imported_index_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_imported"
+            && ob.kind == ObligationKind::IndexInRange
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_imported_index_open,
+        "uncontracted `raw_mod.probe` must not inherit `checked_mod.probe` ensures: {report:#?}"
+    );
+    assert!(
+        report
+            .obligations
+            .iter()
+            .filter(|ob| ob.function == "use_checked_local" || ob.function == "use_checked_imported")
+            .all(|ob| ob.status == Status::Proved),
+        "contracted extern calls must still prove: {report:#?}"
+    );
+    assert!(
+        !report
+            .proved_sites
+            .iter()
+            .any(|(f, _, _)| f == "use_raw_local" || f == "use_raw_imported"),
+        "uncontracted extern callers must not record proved sites: {:?}",
+        report.proved_sites
+    );
+    let (lowered, _) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        verify_module(
+            &program,
+            module,
+            &Options {
+                prove_sites: true,
+                ..Options::default()
+            },
+        )
+        .map(|report| report.proved_sites)
+    })
+    .expect("lowers with proved checks");
+    let unchecked = unchecked_accesses(&lowered);
+    assert_eq!(unchecked.get("use_raw_local"), Some(&0));
+    assert_eq!(unchecked.get("use_raw_imported"), Some(&0));
+    assert_eq!(unchecked.get("use_checked_local"), Some(&1));
+    assert_eq!(unchecked.get("use_checked_imported"), Some(&1));
+    let _ = std::fs::remove_dir_all(&dir);
+}
