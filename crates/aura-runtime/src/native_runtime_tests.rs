@@ -29547,9 +29547,14 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
         super::aura_direct_vec_push_in_place(list, string_value(name));
     }
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
-    // One miss in eight elements builds the view.
+    // One miss in eight elements builds the view, and never fewer than
+    // four misses.
     assert_eq!(compare_element_with_literal(list, 7, 5, "user-7"), 1);
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    for _ in 0..2 {
+        assert_eq!(compare_element_with_literal(list, 3, 6, "user-7"), 1);
+        assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
+    }
     assert_eq!(compare_element_with_literal(list, 3, 6, "user-7"), 1);
     assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
     assert_eq!(str_view_texts(list), names);
@@ -29558,7 +29563,7 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
     // A write switches the view back until enough reads miss again.
     super::aura_direct_vec_push_in_place(list, string_value("ünïcode"));
     assert_eq!(list_view_access(list), DirectListAccess::Values as u32);
-    for index in 0..3 {
+    for index in 0..4 {
         compare_element_with_literal(list, index, 5, "x");
     }
     assert_eq!(list_view_access(list), DirectListAccess::Str as u32);
@@ -29588,8 +29593,12 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
     assert_eq!(list_view_access(shared), DirectListAccess::None as u32);
     unsafe { release_value(shared) };
 
-    // An empty list builds an empty view on its first miss.
+    // An empty list builds an empty view after four misses.
     let empty = super::aura_direct_vec_empty();
+    for _ in 0..3 {
+        unsafe { &*empty }.note_str_view_miss();
+    }
+    assert_eq!(list_view_access(empty), DirectListAccess::Values as u32);
     unsafe { &*empty }.note_str_view_miss();
     assert_eq!(list_view_access(empty), DirectListAccess::Str as u32);
     assert_eq!(super::aura_direct_vec_len(empty), 0);
