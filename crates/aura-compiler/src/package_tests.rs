@@ -2901,3 +2901,150 @@ fn git_checkout_cache_refuses_a_revision_that_names_a_path() {
     );
     assert!(victim.exists(), "nothing outside the cache is removed");
 }
+
+#[cfg(unix)]
+#[test]
+fn git_packages_depend_only_on_their_own_files_and_remote_sources() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-git-confined");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let outside = write_package(&temp, "outside", "outside", "");
+    let outside = aura_core::host_path::canonicalize(outside).expect("outside dir");
+    let repo = init_git_package_repo(&temp, "util-repo", "util");
+    let repo_source = aura_core::host_path::canonicalize(&repo)
+        .expect("repo")
+        .to_string_lossy()
+        .to_string();
+    let main_path = write_package(
+        &temp,
+        "app",
+        "app",
+        &format!(
+            "\n[dependencies]\nutil = {{ git = {}, branch = \"main\" }}\n",
+            toml_string(&repo_source)
+        ),
+    )
+    .join("src/main.au");
+    let set_util_dependencies = |dependencies: &str| {
+        fs::write(
+            repo.join(MANIFEST_NAME),
+            format!(
+                "[package]\nname = \"util\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\n{dependencies}"
+            ),
+        )
+        .expect("write util manifest");
+        run_git(&repo, &["add", "."]);
+        run_git(&repo, &["commit", "-m", "dependencies"]);
+    };
+
+    // A path inside the package's own repository is fine.
+    fs::create_dir_all(repo.join("helper/src")).expect("helper dir");
+    fs::write(
+        repo.join("helper/Aura.toml"),
+        "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("helper manifest");
+    fs::write(
+        repo.join("helper/src/lib.au"),
+        "public def one() -> int32:\n    return 1\n",
+    )
+    .expect("helper source");
+    set_util_dependencies("helper = { path = \"helper\" }\n");
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("a path inside the repository resolves")
+        .expect("a package graph");
+    assert!(graph.packages.contains_key("helper"));
+
+    // A path that leaves the checkout, given either way, is refused.
+    for path in [
+        toml_string(&outside.to_string_lossy()),
+        "\"../../../../../outside\"".to_string(),
+    ] {
+        set_util_dependencies(&format!("outside = {{ path = {path} }}\n"));
+        let error = expect_diag(
+            PackageGraph::discover_for_entry(&main_path),
+            "a git package's path dependency outside its checkout must be refused",
+        );
+        assert!(
+            error.message.contains("outside the git checkout"),
+            "unexpected error for {path}: {}",
+            error.message
+        );
+    }
+
+    // So is a local git source.
+    set_util_dependencies(&format!(
+        "outside = {{ git = {}, branch = \"main\" }}\n",
+        toml_string(&outside.to_string_lossy())
+    ));
+    let error = expect_diag(
+        PackageGraph::discover_for_entry(&main_path),
+        "a git package's local git source must be refused",
+    );
+    assert!(
+        error.message.contains("local git source"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn git_commands_run_in_a_neutral_directory_without_inherited_repositories() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-git-neutral");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let args = vec!["ls-remote".to_string()];
+    let command = configured_git_command(None, &args);
+    let cache_root = git_cache_root().expect("cache root");
+    assert_eq!(command.get_current_dir(), Some(cache_root.as_path()));
+    let envs = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().to_string(),
+                value.map(|value| value.to_string_lossy().to_string()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for removed in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+    ] {
+        assert_eq!(envs.get(removed), Some(&None), "{removed} is cleared");
+    }
+    assert_eq!(
+        envs.get("GIT_CEILING_DIRECTORIES"),
+        Some(&Some(cache_root.to_string_lossy().to_string()))
+    );
+    let count: usize = envs["GIT_CONFIG_COUNT"]
+        .as_deref()
+        .expect("count")
+        .parse()
+        .expect("number");
+    let config = (0..count)
+        .map(|index| {
+            (
+                envs[&format!("GIT_CONFIG_KEY_{index}")]
+                    .clone()
+                    .expect("key"),
+                envs[&format!("GIT_CONFIG_VALUE_{index}")]
+                    .clone()
+                    .expect("value"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(
+        config.get("submodule.recurse").map(String::as_str),
+        Some("false")
+    );
+    assert_eq!(
+        config.get("core.symlinks").map(String::as_str),
+        Some("false")
+    );
+
+    let checkout = temp.path.join("checkout");
+    let command = configured_git_command(Some(&checkout), &args);
+    assert_eq!(command.get_current_dir(), Some(checkout.as_path()));
+}

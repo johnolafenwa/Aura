@@ -695,6 +695,20 @@ impl PackageResolver {
         expected_name: Option<&str>,
         origin: PackageOrigin,
     ) -> Result<String> {
+        self.resolve_package_confined(manifest_dir, expected_name, origin, None)
+    }
+
+    /// `confined_to` is the checkout of the git package this package came
+    /// from, if any: its path dependencies must stay inside that checkout
+    /// and its git dependencies must name a remote, so a fetched package
+    /// cannot reach other files on this machine.
+    fn resolve_package_confined(
+        &mut self,
+        manifest_dir: &Path,
+        expected_name: Option<&str>,
+        origin: PackageOrigin,
+        confined_to: Option<&Path>,
+    ) -> Result<String> {
         let manifest_dir = canonicalize_dir(manifest_dir)?;
         if self.in_progress.contains(&manifest_dir) {
             return Err(Diagnostic::new(format!(
@@ -784,7 +798,24 @@ impl PackageResolver {
 
                     if let Some(path) = path {
                         let dependency_dir = canonicalize_dir(&manifest_dir.join(path))?;
-                        self.resolve_package(&dependency_dir, Some(&name), PackageOrigin::Path)?
+                        if let Some(checkout) = confined_to {
+                            if !dependency_dir.starts_with(checkout) {
+                                self.in_progress.pop();
+                                return Err(Diagnostic::new(format!(
+                                    "dependency `{}` of package `{}` has path `{}` outside the git checkout `{}` it came from; a git package can only depend on paths inside its own repository",
+                                    name,
+                                    manifest.package.name,
+                                    dependency_dir.display(),
+                                    checkout.display()
+                                )));
+                            }
+                        }
+                        self.resolve_package_confined(
+                            &dependency_dir,
+                            Some(&name),
+                            PackageOrigin::Path,
+                            confined_to,
+                        )?
                     } else {
                         let selector = GitSelector::from_manifest(&name, rev, tag, branch)?;
                         let should_refresh = self.refresh_policy.should_refresh(&name, &selector);
@@ -795,6 +826,13 @@ impl PackageResolver {
                         };
                         let git_source =
                             git.expect("validated git dependencies should carry a git source");
+                        if confined_to.is_some() && !is_explicit_git_url(&git_source) {
+                            self.in_progress.pop();
+                            return Err(Diagnostic::new(format!(
+                                "dependency `{}` of package `{}` names the local git source `{}`; a git package can only depend on remote git sources",
+                                name, manifest.package.name, git_source
+                            )));
+                        }
                         let resolved = resolve_git_dependency(
                             &manifest_dir,
                             &name,
@@ -811,14 +849,16 @@ impl PackageResolver {
                                 self.refreshed_packages.insert(name.clone());
                             }
                         }
-                        self.resolve_package(
-                            &resolved.checkout_dir,
+                        let checkout = canonicalize_dir(&resolved.checkout_dir)?;
+                        self.resolve_package_confined(
+                            &checkout,
                             Some(&name),
                             PackageOrigin::Git {
                                 source: resolved.normalized_source,
                                 rev: resolved.resolved_rev,
                                 selector: resolved.selector,
                             },
+                            Some(&checkout),
                         )?
                     }
                 }
@@ -1647,6 +1687,9 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             "core.symlinks=false".to_string(),
             "clone".to_string(),
             "--quiet".to_string(),
+            // A local source is fetched like a remote one, so its object
+            // store is copied, not linked.
+            "--no-local".to_string(),
             "--".to_string(),
             source.to_string(),
             temp_checkout.to_string_lossy().to_string(),
@@ -1721,24 +1764,49 @@ fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Comman
     command.env("GIT_ASKPASS", "");
     command.env("SSH_ASKPASS", "");
     command.env("GIT_ALLOW_PROTOCOL", git_allow_protocol_for_args(args));
-    command.env("GIT_CONFIG_KEY_0", "core.symlinks");
-    command.env("GIT_CONFIG_VALUE_0", "false");
-    // A checkout holds the bytes the repository holds on every platform:
-    // Git for Windows turns line endings into CRLF by default.
-    command.env("GIT_CONFIG_KEY_1", "core.autocrlf");
-    command.env("GIT_CONFIG_VALUE_1", "false");
+    let mut config = vec![
+        ("core.symlinks", "false"),
+        // A checkout holds the bytes the repository holds on every
+        // platform: Git for Windows turns line endings into CRLF by default.
+        ("core.autocrlf", "false"),
+        // A dependency is its own repository: a user's `submodule.recurse`
+        // does not fetch the submodules it names.
+        ("submodule.recurse", "false"),
+    ];
     if cfg!(windows) {
         // A checkout in the cache sits below two hash-named directories, so
         // its paths pass the 260 characters Git for Windows allows unless
         // long paths are on.
-        command.env("GIT_CONFIG_COUNT", "3");
-        command.env("GIT_CONFIG_KEY_2", "core.longpaths");
-        command.env("GIT_CONFIG_VALUE_2", "true");
-    } else {
-        command.env("GIT_CONFIG_COUNT", "2");
+        config.push(("core.longpaths", "true"));
     }
-    if let Some(current_dir) = current_dir {
-        command.current_dir(current_dir);
+    command.env("GIT_CONFIG_COUNT", config.len().to_string());
+    for (index, (key, value)) in config.into_iter().enumerate() {
+        command.env(format!("GIT_CONFIG_KEY_{index}"), key);
+        command.env(format!("GIT_CONFIG_VALUE_{index}"), value);
+    }
+    // Git runs in the checkout it works on, or else in the cache, and finds
+    // no other repository: not the one aura was started in, whose
+    // `.git/config` could name a command, nor one the environment names.
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_NAMESPACE",
+    ] {
+        command.env_remove(name);
+    }
+    let working_dir = match current_dir {
+        Some(current_dir) => Some(current_dir.to_path_buf()),
+        None => git_cache_root()
+            .ok()
+            .filter(|root| fs::create_dir_all(root).is_ok()),
+    };
+    if let Some(working_dir) = working_dir {
+        command.env("GIT_CEILING_DIRECTORIES", &working_dir);
+        command.current_dir(working_dir);
     }
     command
 }
@@ -1920,8 +1988,13 @@ fn reject_symlinks_in_tree(root: &Path) -> Result<()> {
 /// The per-user git checkout cache. A shared temporary directory is never
 /// used: another local user could pre-seed a checkout there.
 fn git_cache_root() -> Result<PathBuf> {
-    if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
-        return Ok(PathBuf::from(cache_home).join("aura").join("git"));
+    // A relative `XDG_CACHE_HOME` is ignored, as the XDG base directory
+    // specification asks: git runs in other directories than aura does.
+    if let Some(cache_home) = env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .filter(|cache_home| cache_home.is_absolute())
+    {
+        return Ok(cache_home.join("aura").join("git"));
     }
     if let Some(home) = aura_core::host_path::home_dir() {
         return Ok(PathBuf::from(home).join(".cache").join("aura").join("git"));
