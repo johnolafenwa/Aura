@@ -16260,6 +16260,73 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
     })
 }
 
+/// As [`aura_direct_enum_new_typed`], for a variant that takes payloads,
+/// with each payload kept in a box of its own already in its slot: `boxes`
+/// holds `count` boxes the running task owns, one for each such payload in
+/// order, and the variant takes each the way
+/// [`aura_direct_instance_put_field`] puts it. Generated code then stores
+/// each payload it keeps in place at its offset.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `boxes` the address of
+/// `count` live boxes the caller hands over a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed_boxes(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    boxes: *const *mut OpaqueValue,
+    count: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        let layout =
+            unsafe { registered_enum_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
+        let Some(variant_name) = usize::try_from(variant)
+            .ok()
+            .and_then(|variant| layout.variant_name(variant))
+        else {
+            runtime_error("direct runtime received an invalid enum variant index");
+        };
+        let index = variant as usize;
+        let offsets = layout.box_offsets(index);
+        if offsets.is_empty() || offsets.len() != count {
+            runtime_error("direct runtime received the wrong number of payload boxes");
+        }
+        let boxed = boxed_value_with_type(
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: layout.enum_name().clone(),
+                variant_name: variant_name.clone(),
+                payloads: VariantPayloads::Typed(TypedPayloads::new(layout, index)),
+            }),
+            Some(layout.runtime_type().clone()),
+        );
+        // SAFETY: `boxed_value_with_type` returns a live box, which is new
+        // and confined, so its view shows its block.
+        let header = unsafe { &*boxed };
+        header
+            .shape_tag
+            .store(layout.shape_tag(), Ordering::Relaxed);
+        let block = header.list_elements.get() as *mut u8;
+        for (position, &offset) in offsets.iter().enumerate() {
+            // SAFETY: the caller's contract.
+            let field = unsafe { *boxes.add(position) };
+            if field.is_null() {
+                runtime_error("direct runtime received a null field value");
+            }
+            // SAFETY: the caller hands over the reference, and the offset is
+            // a box slot of the new variant's block, which is null.
+            unsafe {
+                block
+                    .add(offset)
+                    .cast::<Option<ElementBox>>()
+                    .write(Some(adopt_field_box(field)));
+            }
+        }
+        boxed
+    })
+}
+
 /// The frozen box of variant `variant`, which takes no payloads, of the
 /// enum whose layout `cell` holds, as [`aura_direct_enum_new_typed`]
 /// builds it, kept in `slot`, a word of the program's data for that

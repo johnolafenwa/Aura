@@ -376,6 +376,15 @@ impl FunctionCompiler<'_> {
             return self.unit_variant_from_cell(cell, ty, variant).map(Some);
         }
         let index = self.builder.iconst(types::I64, variant as i64);
+        let handles = slots
+            .iter()
+            .filter(|(_, slot)| matches!(slot.kind, SlotKind::Handle))
+            .count();
+        if handles > 0 {
+            return self
+                .construct_variant_with_boxes(ty, cell, index, slots, handles, payload)
+                .map(Some);
+        }
         let init = self
             .builder
             .call(self.runtime[RuntimeFn::EnumNewTyped], &[cell, index]);
@@ -413,6 +422,65 @@ impl FunctionCompiler<'_> {
             crate::native_runtime::canonical_runtime_type_name(ty),
         ));
         Ok(Some(built))
+    }
+
+    /// As `construct_variant_in_place_with`, for a variant `index` in the
+    /// layout in `cell` that keeps `handles` of its payloads in boxes of
+    /// their own: the payloads are read first, and one call makes the block
+    /// and puts each box into its slot. Then each scalar payload is stored
+    /// at its offset.
+    fn construct_variant_with_boxes(
+        &mut self,
+        ty: &Type,
+        cell: Val,
+        index: Val,
+        slots: Vec<(DirectType, ClassSlot)>,
+        handles: usize,
+        mut payload: impl FnMut(&mut Self, usize, &DirectType) -> std::result::Result<ValueRef, String>,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxes = self
+            .builder
+            .create_sized_stack_slot((8 * handles) as u32, 3);
+        let mut leaves = Vec::new();
+        let mut position = 0;
+        for (index, (direct, slot)) in slots.into_iter().enumerate() {
+            let loaded = payload(self, index, &direct)?;
+            let loaded = self.coerce_value(loaded, &direct)?;
+            match slot.kind {
+                SlotKind::Leaves(slot_leaves) => leaves.push((slot_leaves, loaded)),
+                SlotKind::Handle => {
+                    let boxed = self.ensure_opaque(loaded)?;
+                    let boxed = self.transfer_owned_opaque_value(&boxed);
+                    let address = self
+                        .builder
+                        .stack_addr(types::I64, boxes, (8 * position) as i32);
+                    self.builder.store(MemFlags::trusted(), boxed, address, 0);
+                    position += 1;
+                }
+            }
+        }
+        let address = self.builder.stack_addr(types::I64, boxes, 0);
+        let count = self.builder.iconst(types::I64, handles as i64);
+        let init = self.builder.call(
+            self.runtime[RuntimeFn::EnumNewTypedBoxes],
+            &[cell, index, address, count],
+        );
+        let built = self.owned_opaque_result(init.results, ty.clone());
+        let object = built.values[0];
+        let block = self.class_block(object);
+        for (slot_leaves, loaded) in leaves {
+            for (leaf, word) in slot_leaves.iter().zip(&loaded.values) {
+                self.store_leaf(*leaf, *word, block);
+            }
+        }
+        // The box already carries the enum's type, so tagging it with that
+        // type again does nothing.
+        self.last_runtime_type_tag = Some((
+            init.inst,
+            object,
+            crate::native_runtime::canonical_runtime_type_name(ty),
+        ));
+        Ok(built)
     }
 
     /// Variant `variant` of the enum type `ty`, which takes no payloads, and

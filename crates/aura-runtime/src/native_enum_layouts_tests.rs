@@ -17,9 +17,9 @@ use super::{
 use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
-    aura_direct_enum_new_typed, aura_direct_enum_unit_cell, aura_direct_instance_put_field,
-    aura_direct_register_enum_layouts, aura_direct_release_value, aura_direct_variant_matches,
-    aura_direct_variant_payload, aura_direct_variant_payload_int64,
+    aura_direct_enum_new_typed, aura_direct_enum_new_typed_boxes, aura_direct_enum_unit_cell,
+    aura_direct_instance_put_field, aura_direct_register_enum_layouts, aura_direct_release_value,
+    aura_direct_variant_matches, aura_direct_variant_payload, aura_direct_variant_payload_int64,
     aura_direct_variant_take_payload, aura_direct_vec_push_in_place, boxed_value,
     empty_unit_variant_cells, list_view_of, share_direct_value, value_mut, value_ref,
     with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
@@ -1646,4 +1646,72 @@ fn a_unit_variant_cell_keeps_the_shared_box_until_the_program_ends() {
         assert_eq!(slot.load(Ordering::Acquire), 0);
         assert!(unsafe { &*point }.is_frozen());
     });
+}
+
+#[test]
+fn a_variant_takes_its_payload_boxes_as_it_is_built() {
+    in_task(|| {
+        let prefix = "Boxed";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 82);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        // A pair of a shared variant and a new one of its own.
+        let point = unsafe { aura_direct_enum_new_typed(cell, 0) };
+        let circle = unsafe { aura_direct_enum_new_typed(cell, 1) };
+        let boxes = [point, circle];
+        let pair = unsafe { aura_direct_enum_new_typed_boxes(cell, 3, boxes.as_ptr(), 2) };
+        let header = unsafe { &*pair };
+        assert_eq!(header.list_access.load(Ordering::Relaxed), layout.access());
+        assert_eq!(header.list_len.get(), 3);
+        assert_eq!(aura_direct_variant_take_payload(pair, 0), point);
+        let taken = aura_direct_variant_take_payload(pair, 1);
+        assert_eq!(taken, circle);
+        unsafe { aura_direct_release_value(taken) };
+        unsafe { aura_direct_release_value(pair) };
+    });
+    let failure = runtime_failure(|| {
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, std::ptr::null(), 0) };
+    });
+    assert!(failure.contains("before it was registered"), "{failure}");
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxIndex", FIRST_TEST_ACCESS + 85);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxIndex").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 9, std::ptr::null(), 0) };
+    });
+    assert!(failure.contains("invalid enum variant index"), "{failure}");
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxUnit", FIRST_TEST_ACCESS + 86);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxUnit").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 0, std::ptr::null(), 0) };
+    });
+    assert!(
+        failure.contains("wrong number of payload boxes"),
+        "{failure}"
+    );
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxCount", FIRST_TEST_ACCESS + 83);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxCount").as_bytes(), layout.access()) }
+            .expect("registered");
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, std::ptr::null(), 1) };
+    });
+    assert!(
+        failure.contains("wrong number of payload boxes"),
+        "{failure}"
+    );
+    let failure = runtime_failure(|| {
+        let layout = layout("BoxNull", FIRST_TEST_ACCESS + 84);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor("BoxNull").as_bytes(), layout.access()) }
+            .expect("registered");
+        let boxes = [std::ptr::null_mut(), std::ptr::null_mut()];
+        unsafe { aura_direct_enum_new_typed_boxes(cell, 3, boxes.as_ptr(), 2) };
+    });
+    assert!(failure.contains("null field value"), "{failure}");
 }

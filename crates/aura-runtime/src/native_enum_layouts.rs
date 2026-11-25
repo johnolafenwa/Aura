@@ -73,6 +73,8 @@ pub struct EnumLayout {
 struct VariantPlan {
     name: RuntimeName,
     payloads: Vec<Place>,
+    /// The offset of each payload kept in a box of its own, in order.
+    box_offsets: Vec<usize>,
     /// The block of a variant with payloads.
     block: Option<AllocLayout>,
     /// Whether every payload is held in place and needs no drop, so the
@@ -159,6 +161,12 @@ impl EnumLayout {
         }
     }
 
+    /// The offset in the block of each payload of variant `index` that is
+    /// kept in a box of its own, in payload order.
+    pub(crate) fn box_offsets(&self, index: usize) -> &[usize] {
+        &self.variants[index].box_offsets
+    }
+
     fn table(&self) -> &LayoutTable {
         self.layout.table()
     }
@@ -227,12 +235,18 @@ impl EnumLayout {
                         .expect("layouts keep sizes and alignments an allocation accepts")
                         .pad_to_align()
                 });
+                let box_offsets = payloads
+                    .iter()
+                    .filter(|place| matches!(table.get(place.layout).kind, LayoutKind::Handle))
+                    .map(|place| place.offset)
+                    .collect();
                 let bytes_only = payloads.iter().all(|place| !table.needs_drop(place.layout));
                 let inline = bytes_only
                     && block.is_some_and(|block| block.size() <= 8 && block.align() <= 8);
                 VariantPlan {
                     name: layout_name(variant.name.as_str()),
                     payloads,
+                    box_offsets,
                     block,
                     bytes_only,
                     inline,
