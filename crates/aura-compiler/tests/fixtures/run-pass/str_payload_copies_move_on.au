@@ -18,6 +18,16 @@ def label(cells: list[Cell], at: int64) -> str:
     return name
 
 
+def label_in_place(cells: list[Cell], at: int64) -> str:
+    mut name = ""
+    match cells[at]:
+        case Cell.Text(text):
+            name = text.clone()
+        case Cell.Int(value):
+            name = f"{value}"
+    return name
+
+
 def main():
     cells = [
         Cell.Text(value="short"),
@@ -31,6 +41,9 @@ def main():
             mut name = label(cells, at)
             if round == 1:
                 name += "!"
+            if round == 2:
+                name = label_in_place(cells, at)
+                name += "?"
             total += name.len()
             names.append(name)
     print(total)

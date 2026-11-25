@@ -297,9 +297,8 @@ enum Cell:
     Text(value: str)
 
 def named(cells: list[Cell]) -> str:
-    view cell = cells[0]
     mut name = ""
-    match cell:
+    match cells[0]:
         case Cell.Text(text):
             name = text.clone()
         case Cell.Int(value):
@@ -333,9 +332,12 @@ fn a_copy_that_is_the_last_read_of_a_str_local_may_move_its_reference() {
     // element outlives the copy's block.
     let moves = clone_moves(function("named"));
     assert_eq!(moves.len(), 1, "{moves:?}");
-    assert!(moves
-        .values()
-        .all(|(_, scrutinee)| matches!(scrutinee, Some((_, false)))));
+    assert!(
+        moves
+            .values()
+            .all(|(_, scrutinee)| matches!(scrutinee, Some((_, false)))),
+        "{moves:?}"
+    );
     let moves = clone_moves(function("plain"));
     assert_eq!(moves.len(), 1, "{moves:?}");
     assert!(moves.values().all(|(_, scrutinee)| scrutinee.is_none()));
