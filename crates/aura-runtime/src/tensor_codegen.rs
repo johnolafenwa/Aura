@@ -1920,7 +1920,13 @@ impl<'a> Generator<'a> {
         let lead_len = len(lead)?;
         let left_matrix = checked_mul(rows, inner, "matmul left matrix size")?;
         let right_matrix = checked_mul(inner, columns, "matmul right matrix size")?;
-        let mut pairs = Vec::with_capacity(lead_len);
+        let mut pairs = Vec::new();
+        pairs.try_reserve_exact(lead_len).map_err(|_| {
+            Diagnostic::coded(
+                "AU4007",
+                "matmul batch table exceeds host allocation capacity",
+            )
+        })?;
         for product in 0..lead_len {
             let left_offset = checked_mul(
                 broadcast_offset(lead, left_lead, product),
@@ -1939,10 +1945,17 @@ impl<'a> Generator<'a> {
         // matrices into the rows of its stack, which are all the heads
         // wide.
         let spread = if slot != product {
+            checked_byte_len(lead_len, 24, "matmul spread table")?;
             let heads = shape[1];
             let width = checked_mul(heads, columns, "matmul spread width")?;
             let row_stride = checked_mul(rows, width, "matmul spread stride")?;
-            let mut offsets = Vec::with_capacity(lead_len);
+            let mut offsets = Vec::new();
+            offsets.try_reserve_exact(lead_len).map_err(|_| {
+                Diagnostic::coded(
+                    "AU4007",
+                    "matmul spread table exceeds host allocation capacity",
+                )
+            })?;
             for at in 0..lead_len {
                 let batch_offset = checked_mul(at / heads, row_stride, "matmul spread offset")?;
                 let head_offset = checked_mul(at % heads, columns, "matmul spread offset")?;

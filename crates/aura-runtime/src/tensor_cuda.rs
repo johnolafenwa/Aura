@@ -1242,7 +1242,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     .iter_mut()
                     .map(|argument| std::ptr::from_mut(argument).cast())
                     .collect();
-                let blocks = threads.div_ceil(BLOCK_THREADS).max(1) as c_uint;
+                let blocks = checked_grid_blocks(*threads)?;
                 buffers[*output] = Some(Arc::new(made));
                 // SAFETY: the kernel takes one pointer for each entry of
                 // `addresses`, and every buffer is alive and large enough
@@ -1279,46 +1279,42 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             } => Buffer::new(*bytes).and_then(|made| {
                 let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
                 let element = if *double { 8 } else { 4 };
-                let (rows, inner, columns) = (*rows as c_int, *inner as c_int, *columns as c_int);
-                // cuBLAS reads a matrix stored with its rows and columns
-                // swapped when told so: the operation and how far apart
-                // its columns are, for the right and the left operand.
-                let (right_op, right_step): (c_int, c_int) =
-                    if swapped.1 { (1, inner) } else { (0, columns) };
-                let (left_op, left_step): (c_int, c_int) =
-                    if swapped.0 { (1, rows) } else { (0, inner) };
-                let product = (rows as usize) * (columns as usize) * element;
+                let params =
+                    plan_cublas_matmul(*rows, *inner, *columns, element, pairs, *swapped, spread)?;
+                let (rows, inner, columns) = (params.rows_i, params.inner_i, params.columns_i);
+                let (right_op, right_step) = (params.right_op, params.right_step);
+                let (left_op, left_step) = (params.left_op, params.left_step);
+                let product = params.product_bytes;
                 let mut status = 0;
                 let count = pairs.len();
-                let stepped = |side: fn(&(usize, usize)) -> usize, step: usize| {
-                    pairs
-                        .iter()
-                        .enumerate()
-                        .all(|(index, pair)| side(pair) == index * step)
-                };
-                let left_stacked = stepped(|pair| pair.0, (rows * inner) as usize);
-                let right_shared = pairs.iter().all(|pair| pair.1 == 0);
-                let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
-                let tall = rows as usize * count;
-                if let Some((step, starts)) = spread {
+                if let (Some((_, starts)), Some(spread_params)) = (spread, params.spread) {
                     // The products go beside each other in wider rows,
                     // so each has its own place: one batched call takes
                     // the address of every matrix. The offsets are the
                     // same on every run and their copy on the device is
                     // kept; a kernel adds the buffers of this run.
-                    let mut offsets = Vec::with_capacity(count * 24);
-                    let place = |offset: usize| ((offset * element) as u64).to_ne_bytes();
+                    let mut offsets = Vec::new();
+                    offsets
+                        .try_reserve_exact(spread_params.table_bytes)
+                        .map_err(|_| cuda_error("could not allocate matmul address offsets"))?;
+                    let place = |offset: usize| -> Result<[u8; 8]> {
+                        let byte_offset = offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul byte offset overflows 64 bits"))?;
+                        Ok(byte_offset.to_ne_bytes())
+                    };
                     for pair in pairs {
-                        offsets.extend(place(pair.1));
+                        offsets.extend(place(pair.1)?);
                     }
                     for pair in pairs {
-                        offsets.extend(place(pair.0));
+                        offsets.extend(place(pair.0)?);
                     }
                     for &start in starts {
-                        offsets.extend(place(start));
+                        offsets.extend(place(start)?);
                     }
                     let table = kept_constant(runtime, &offsets).and_then(|offsets| {
-                        let table = Buffer::new(count * 24)?;
+                        let table = Buffer::new(spread_params.table_bytes)?;
                         let mut arguments: [u64; 6] = [
                             table.pointer,
                             offsets.pointer,
@@ -1337,7 +1333,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         let status = unsafe {
                             (api.cuLaunchKernel)(
                                 compiled.functions[tensor_codegen::ADDRESSES_KERNEL] as *mut c_void,
-                                (3 * count).div_ceil(BLOCK_THREADS).max(1) as c_uint,
+                                spread_params.address_blocks,
                                 1,
                                 1,
                                 BLOCK_THREADS as c_uint,
@@ -1355,7 +1351,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     });
                     match table {
                         Ok(table) => {
-                            let each = (count * 8) as DevicePointer;
+                            let each = spread_params.each_bytes;
                             let (a, b, c) = (
                                 table.pointer,
                                 table.pointer + each,
@@ -1380,8 +1376,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                         left_step,
                                         &0.0,
                                         c,
-                                        *step as c_int,
-                                        count as c_int,
+                                        spread_params.step_i,
+                                        spread_params.count_i,
                                     )
                                 } else {
                                     (api.cublasSgemmBatched)(
@@ -1398,8 +1394,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                         left_step,
                                         &0.0,
                                         c,
-                                        *step as c_int,
-                                        count as c_int,
+                                        spread_params.step_i,
+                                        spread_params.count_i,
                                     )
                                 }
                             };
@@ -1410,15 +1406,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             return Err(error);
                         }
                     }
-                } else if count > 1
-                    && left_stacked
-                    && right_shared
-                    && !swapped.0
-                    && tall <= c_int::MAX as usize
-                {
+                } else if let Some(tall) = params.tall.filter(|_| {
+                    count > 1 && params.left_stacked && params.right_shared && !swapped.0
+                }) {
                     // A stack of matrices times one shared matrix is one
                     // product with the stack read as a single tall matrix.
-                    let tall = tall as c_int;
                     // SAFETY: the left buffer holds `count` matrices in a
                     // row and the output holds as many products.
                     status = unsafe {
@@ -1458,14 +1450,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             )
                         }
                     };
-                } else if count > 1 && left_stacked && right_stacked && count <= c_int::MAX as usize
+                } else if let Some((a_step, b_step, c_step, batch_count)) = params
+                    .strided_batch
+                    .filter(|_| count > 1 && params.left_stacked && params.right_stacked)
                 {
                     // Matching stacks on both sides are one batched call.
-                    let (a_step, b_step, c_step) = (
-                        i64::from(inner) * i64::from(columns),
-                        i64::from(rows) * i64::from(inner),
-                        i64::from(rows) * i64::from(columns),
-                    );
                     // SAFETY: every buffer holds `count` whole matrices
                     // spaced by its step.
                     status = unsafe {
@@ -1488,7 +1477,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                 made.pointer,
                                 columns,
                                 c_step,
-                                count as c_int,
+                                batch_count,
                             )
                         } else {
                             (api.cublasSgemmStridedBatched)(
@@ -1509,7 +1498,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                 made.pointer,
                                 columns,
                                 c_step,
-                                count as c_int,
+                                batch_count,
                             )
                         }
                     };
@@ -1518,9 +1507,21 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         // cuBLAS matrices are column-major. A row-major product
                         // A B is the column-major product of B and A as stored,
                         // which is the transpose of the same result.
-                        let a = right + (right_offset * element) as u64;
-                        let b = left + (left_offset * element) as u64;
-                        let c = made.pointer + (index * product) as u64;
+                        let a_bytes = right_offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul right offset overflows 64 bits"))?;
+                        let b_bytes = left_offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul left offset overflows 64 bits"))?;
+                        let c_bytes = index
+                            .checked_mul(product)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul output offset overflows 64 bits"))?;
+                        let a = right + a_bytes;
+                        let b = left + b_bytes;
+                        let c = made.pointer + c_bytes;
                         // SAFETY: each pointer addresses a whole matrix of the
                         // given size inside its buffer.
                         status = unsafe {
@@ -1908,6 +1909,215 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&base);
     }
+
+    #[test]
+    fn cuda_grid_and_cublas_limits_reject_truncation_and_overflow() {
+        // Grid block count exceeding i32::MAX must fail instead of truncating.
+        let overflow_threads = (i32::MAX as usize + 1) * BLOCK_THREADS;
+        assert_eq!(
+            checked_grid_blocks(overflow_threads).unwrap_err().code,
+            "AU4007"
+        );
+        assert_eq!(checked_grid_blocks(BLOCK_THREADS).unwrap(), 1);
+
+        // Large 46341 x 46341 matrices fit in c_int, while rows * inner > i32::MAX.
+        let side = 46_341_usize;
+        let stride = side * side;
+        let pairs = vec![(0, 0), (stride, side)];
+        let params = plan_cublas_matmul(side, side, 1, 4, &pairs, (false, false), &None).unwrap();
+        assert!(params.left_stacked);
+        assert!(params.right_stacked);
+
+        // cuBLAS dimensions above i32::MAX must fail with AU4007.
+        let too_large = i32::MAX as usize + 1;
+        assert_eq!(
+            plan_cublas_matmul(too_large, 1, 1, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(1, too_large, 1, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(1, 1, too_large, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(
+                1,
+                1,
+                1,
+                4,
+                &[(0, 0)],
+                (false, false),
+                &Some((too_large, vec![0])),
+            )
+            .unwrap_err()
+            .code,
+            "AU4007"
+        );
+    }
+}
+
+#[derive(Debug)]
+struct SpreadParams {
+    step_i: c_int,
+    count_i: c_int,
+    table_bytes: usize,
+    each_bytes: DevicePointer,
+    address_blocks: c_uint,
+}
+
+#[derive(Debug)]
+struct CublasParams {
+    rows_i: c_int,
+    inner_i: c_int,
+    columns_i: c_int,
+    right_op: c_int,
+    right_step: c_int,
+    left_op: c_int,
+    left_step: c_int,
+    product_bytes: usize,
+    left_stacked: bool,
+    right_shared: bool,
+    right_stacked: bool,
+    tall: Option<c_int>,
+    strided_batch: Option<(i64, i64, i64, c_int)>,
+    spread: Option<SpreadParams>,
+}
+
+fn checked_grid_blocks(threads: usize) -> Result<c_uint> {
+    let blocks = threads.div_ceil(BLOCK_THREADS).max(1);
+    if blocks > i32::MAX as usize {
+        return Err(cuda_error(format!(
+            "kernel launch requires {blocks} blocks, which exceeds the CUDA 1D grid limit"
+        )));
+    }
+    Ok(blocks as c_uint)
+}
+
+fn checked_cublas_dim(value: usize, label: &str) -> Result<c_int> {
+    c_int::try_from(value).map_err(|_| {
+        cuda_error(format!(
+            "matmul {label} {value} exceeds the cuBLAS 32-bit dimension limit"
+        ))
+    })
+}
+
+fn pairs_stepped(
+    pairs: &[(usize, usize)],
+    side: fn(&(usize, usize)) -> usize,
+    step: Option<usize>,
+) -> bool {
+    let Some(step) = step else {
+        return false;
+    };
+    pairs
+        .iter()
+        .enumerate()
+        .all(|(index, pair)| index.checked_mul(step) == Some(side(pair)))
+}
+
+fn plan_cublas_matmul(
+    rows: usize,
+    inner: usize,
+    columns: usize,
+    element: usize,
+    pairs: &[(usize, usize)],
+    swapped: (bool, bool),
+    spread: &Option<(usize, Vec<usize>)>,
+) -> Result<CublasParams> {
+    let rows_i = checked_cublas_dim(rows, "rows")?;
+    let inner_i = checked_cublas_dim(inner, "inner")?;
+    let columns_i = checked_cublas_dim(columns, "columns")?;
+    // cuBLAS reads a matrix stored with its rows and columns swapped when told
+    // so: the operation and how far apart its columns are, for the right and
+    // the left operand.
+    let (right_op, right_step): (c_int, c_int) = if swapped.1 {
+        (1, inner_i)
+    } else {
+        (0, columns_i)
+    };
+    let (left_op, left_step): (c_int, c_int) = if swapped.0 { (1, rows_i) } else { (0, inner_i) };
+    let out_matrix = rows
+        .checked_mul(columns)
+        .ok_or_else(|| cuda_error("matmul output matrix size overflows"))?;
+    let product_bytes = out_matrix
+        .checked_mul(element)
+        .ok_or_else(|| cuda_error("matmul output byte size overflows"))?;
+    let left_matrix = rows.checked_mul(inner);
+    let right_matrix = inner.checked_mul(columns);
+    let count = pairs.len();
+    let left_stacked = pairs_stepped(pairs, |pair| pair.0, left_matrix);
+    let right_shared = pairs.iter().all(|pair| pair.1 == 0);
+    let right_stacked = pairs_stepped(pairs, |pair| pair.1, right_matrix);
+    let tall = rows
+        .checked_mul(count)
+        .and_then(|total| c_int::try_from(total).ok());
+    let strided_batch = match (
+        right_matrix.and_then(|v| i64::try_from(v).ok()),
+        left_matrix.and_then(|v| i64::try_from(v).ok()),
+        i64::try_from(out_matrix).ok(),
+        c_int::try_from(count).ok(),
+    ) {
+        (Some(a_step), Some(b_step), Some(c_step), Some(batch_count)) => {
+            Some((a_step, b_step, c_step, batch_count))
+        }
+        _ => None,
+    };
+    let spread = match spread {
+        Some((step, starts)) => {
+            if starts.len() != count {
+                return Err(cuda_error(
+                    "matmul spread start count does not match batch count",
+                ));
+            }
+            let step_i = checked_cublas_dim(*step, "spread stride")?;
+            let count_i = checked_cublas_dim(count, "batch count")?;
+            let table_bytes = count
+                .checked_mul(24)
+                .filter(|&bytes| bytes <= isize::MAX as usize)
+                .ok_or_else(|| cuda_error("matmul spread address table size overflows"))?;
+            let each_bytes = count
+                .checked_mul(8)
+                .and_then(|bytes| DevicePointer::try_from(bytes).ok())
+                .ok_or_else(|| cuda_error("matmul spread table offset overflows"))?;
+            let address_threads = count
+                .checked_mul(3)
+                .ok_or_else(|| cuda_error("matmul spread thread count overflows"))?;
+            let address_blocks = checked_grid_blocks(address_threads)?;
+            Some(SpreadParams {
+                step_i,
+                count_i,
+                table_bytes,
+                each_bytes,
+                address_blocks,
+            })
+        }
+        None => None,
+    };
+    Ok(CublasParams {
+        rows_i,
+        inner_i,
+        columns_i,
+        right_op,
+        right_step,
+        left_op,
+        left_step,
+        product_bytes,
+        left_stacked,
+        right_shared,
+        right_stacked,
+        tall,
+        strided_batch,
+        spread,
+    })
 }
 
 /// Validates that a leaf buffer has the exact byte length required by `slot`.
