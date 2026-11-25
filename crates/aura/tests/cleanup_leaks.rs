@@ -351,6 +351,17 @@ fn class_fields_in_boxes_free_every_box() {
     assert_frees_everything("leak-class-field-boxes", source, expected, 0);
 }
 
+/// Lists that keep new instances in place, read, copied, edited, sorted,
+/// and sent to a task: the native run frees every box.
+#[test]
+fn instance_lists_in_place_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/instance_lists_in_place.au");
+    let expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/instance_lists_in_place.stdout");
+    assert_frees_everything("leak-instance-lists", source, expected, 0);
+}
+
 #[test]
 fn a_decorated_module_function_owns_its_captures_until_shutdown() {
     let source = r#"

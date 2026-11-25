@@ -4142,6 +4142,18 @@ pub fn slice_vec_owned(
         ListElements::Float32(values) => ListElements::Float32(copy_scalars(&values[start..end])?),
         ListElements::Bool(values) => ListElements::Bool(copy_scalars(&values[start..end])?),
         ListElements::Typed(typed) => ListElements::Typed(Box::new(typed.slice(start, end))),
+        ListElements::Instances(_) => {
+            let mut elements = try_array_buffer(end - start, "Array-containing Vec slice")?;
+            elements.extend(
+                vector
+                    .elements
+                    .iter()
+                    .skip(start)
+                    .take(end - start)
+                    .map(Cow::into_owned),
+            );
+            ListElements::from(elements)
+        }
         ListElements::Int8(values) => ListElements::Int8(copy_scalars(&values[start..end])?),
         ListElements::Int16(values) => ListElements::Int16(copy_scalars(&values[start..end])?),
         ListElements::Int32(values) => ListElements::Int32(copy_scalars(&values[start..end])?),

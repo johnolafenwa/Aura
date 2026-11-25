@@ -204,6 +204,7 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
     if elements.len() < 2 {
         return Ok(());
     }
+    elements.leave_instances();
     match elements {
         ListElements::Int64(values) => sort_integers(values, reverse),
         ListElements::Int8(values) => sort_integers(values, reverse),
@@ -228,6 +229,7 @@ pub fn sort_elements(elements: &mut ListElements, reverse: bool) -> Result<()> {
             return Err(Diagnostic::new("list sort cannot order `bool` values"));
         }
         ListElements::Typed(_) => return Err(unorderable()),
+        ListElements::Instances(_) => unreachable!("the list left the instance form"),
     }
     Ok(())
 }
@@ -254,6 +256,7 @@ fn sorted_positions(keys: &ListElements, reverse: bool) -> Result<Vec<usize>> {
             return Err(Diagnostic::new("list sort cannot order `bool` keys"));
         }
         ListElements::Typed(_) => return Err(unorderable()),
+        ListElements::Instances(_) => value_positions(&keys.to_vec(), itself, reverse)?,
     })
 }
 

@@ -292,7 +292,9 @@ impl fmt::Debug for EnumLayout {
 /// `access` on first use. A code another layout holds, or a descriptor
 /// registered under another code, is refused.
 pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static EnumLayout, String> {
-    if access < FIRST_ENUM_ACCESS || access == super::UNREGISTERED_PLAIN_ACCESS {
+    if !(FIRST_ENUM_ACCESS..super::FIRST_INSTANCE_LIST_ACCESS).contains(&access)
+        || access == super::UNREGISTERED_PLAIN_ACCESS
+    {
         return Err(format!("{access} is not an enum layout access code"));
     }
     static REGISTRY: OnceLock<RwLock<typed_layout::LayoutRegistry>> = OnceLock::new();

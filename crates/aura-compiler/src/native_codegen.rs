@@ -2697,6 +2697,50 @@ impl<'a> NativeCodegen<'a> {
             builder.def_var(variable, zero);
             lent_elements.insert(name, variable);
         }
+        // A lent element of a list of instances kept in place that is only
+        // read field by field is read where the list keeps it.
+        let element_candidates = lent_element_reads
+            .lists
+            .keys()
+            .filter(|local| {
+                !lent_element_reads
+                    .promotions
+                    .values()
+                    .any(|temps| temps.contains(local))
+            })
+            .filter_map(|local| match variable_types.get(local) {
+                Some(DirectType::Opaque(Type::Named(class, args)))
+                    if args.is_empty()
+                        && self.classes.contains_key(class)
+                        && self.plain_records.keeps_in_list(class) =>
+                {
+                    Some((local.clone(), class.clone()))
+                }
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        let mut element_locals =
+            classes::instance_element_locals(function, &element_candidates, |class, field| {
+                self.classes[class].fields.iter().any(|candidate| {
+                    candidate.name == field
+                        && matches!(
+                            ensure_direct_type(&candidate.ty, &self.classes, "field"),
+                            Ok(DirectType::Scalar(_))
+                        )
+                })
+            })
+            .into_iter()
+            .collect::<Vec<_>>();
+        element_locals.sort();
+        let mut instance_element_blocks = HashMap::new();
+        for local in element_locals {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            instance_element_blocks.insert(local, variable);
+        }
         let shadow_entry_copies = element_loans::shadow_entry_copy_loans(
             function,
             &entry_copy_loans,
@@ -3178,6 +3222,11 @@ impl<'a> NativeCodegen<'a> {
             lend_json_view: false,
             json_nests,
             lent_element_flag: None,
+            instance_element_blocks,
+            lend_instance_list: None,
+            lent_element_block: None,
+            instance_appends: classes::instance_append_temps(function),
+            deferred_instance: None,
             lookup_payload: None,
             lookup_word: None,
             lookup_word_found: None,
@@ -4803,6 +4852,24 @@ struct FunctionCompiler<'a> {
     /// The lent flag of the element read that just compiled, when it could
     /// lend.
     lent_element_flag: Option<Val>,
+    /// The lent locals whose every use reads a scalar field, each with the
+    /// variable that holds the address of the element's bytes while the
+    /// local reads an element a list keeps in place, and 0 otherwise. See
+    /// `classes::instance_element_locals`.
+    instance_element_blocks: HashMap<String, Var>,
+    /// Set while the element read for one of `instance_element_blocks`
+    /// compiles: the list access code of a list that keeps the element's
+    /// class in place, and the bytes one element takes.
+    lend_instance_list: Option<(i64, i64)>,
+    /// The element address the read for one of `instance_element_blocks`
+    /// left, 0 when it lent or copied a box.
+    lent_element_block: Option<Val>,
+    /// The temporaries of `classes::instance_append_temps`.
+    instance_appends: HashSet<String>,
+    /// A `Construct` whose temporary the next instruction appends: the
+    /// temporary, the class, and the field values, built into the list
+    /// there (see `push_constructed_instance`).
+    deferred_instance: Option<(String, String, Vec<crate::mir::MirFieldInit>)>,
     /// Set while a `get` for one of `lookup_slots` compiles: `Some(false)`
     /// asks for the payload form, and the helper that emits it sets
     /// `Some(true)`.
@@ -5492,9 +5559,19 @@ impl<'a> FunctionCompiler<'a> {
         let target_ty = self.type_of_place(target)?;
         self.lend_element = true;
         self.lend_json_view = self.json_views.contains(target);
+        let element_block = self.instance_element_blocks.get(target).copied();
+        if element_block.is_some() {
+            self.lend_instance_list = self.instance_list_slot(&target_ty)?;
+        }
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_element = false;
         self.lend_json_view = false;
+        self.lend_instance_list = None;
+        let address = self.lent_element_block.take();
+        if let Some(block_var) = element_block {
+            let address = address.unwrap_or_else(|| self.builder.iconst(types::I64, 0));
+            self.builder.def_var(block_var, address);
+        }
         let flag = self.lent_element_flag.take();
         let compiled = compiled?;
         let flag_var = self.lent_elements[target];
@@ -5629,6 +5706,10 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(flag_var) = self.lent_elements.get(name).copied() {
             let zero = self.builder.iconst(types::I64, 0);
             self.builder.def_var(flag_var, zero);
+        }
+        if let Some(block_var) = self.instance_element_blocks.get(name).copied() {
+            let zero = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(block_var, zero);
         }
         let ty = self.local_type(name)?;
         if !layout_owns_handles(&ty) {
@@ -5952,6 +6033,9 @@ impl<'a> FunctionCompiler<'a> {
                 self.checked_variant = None;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.defer_instance_construct(&block.instructions[instruction_index..])? {
+                continue;
+            }
             if self.compile_union_buffer_read(block, instruction_index)? {
                 skipped = 3;
                 continue;
@@ -6161,6 +6245,11 @@ impl<'a> FunctionCompiler<'a> {
         self.emptied_store_root = None;
         self.layout_scratch.consumers.clear();
         compiled?;
+        if self.deferred_instance.is_some() {
+            return Err(format!(
+                "direct backend left a deferred instance before {instruction:?}"
+            ));
+        }
         self.release_all_temporary_owned();
         self.cancel_unconsumed_retains();
         Ok(())
@@ -15275,6 +15364,37 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
         self.builder.append_block_param(join_block, types::I64);
+        let instances = self.lend_instance_list.take();
+        if instances.is_some() {
+            // The address of the element's bytes, or 0.
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        let null = self.builder.iconst(types::I64, 0);
+        let zero = instances.map(|_| null);
+        if let Some((access, stride)) = instances {
+            // A list that keeps the instances in place lends the element's
+            // bytes, and no box: the local only reads scalar fields.
+            let element_block = self.builder.create_block();
+            let boxes_block = self.builder.create_block();
+            let actual = self.emit_list_access(list, &layout);
+            let kept = self.builder.icmp_imm(IntCC::Equal, actual, access);
+            self.builder
+                .brif(kept, element_block, &[], boxes_block, &[]);
+            self.builder.switch_to_block(element_block);
+            self.builder.seal_block(element_block);
+            let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
+            let position = if proven {
+                index
+            } else {
+                self.emit_list_view_bounds_check(list, index, &layout, slow_block)
+            };
+            let offset = self.builder.imul_imm(position, stride);
+            let address = self.builder.iadd(elements, offset);
+            let lent = self.builder.iconst(types::I64, 1);
+            self.builder.jump(join_block, &[null, lent, address]);
+            self.builder.switch_to_block(boxes_block);
+            self.builder.seal_block(boxes_block);
+        }
         self.emit_list_access_check(
             list,
             DirectListAccess::Boxes,
@@ -15294,7 +15414,9 @@ impl<'a> FunctionCompiler<'a> {
         let element = self.scalar_list_element(elements, position, 8);
         let lent_box = self.builder.load(types::I64, flags, element, 0);
         let lent = self.builder.iconst(types::I64, 1);
-        self.builder.jump(join_block, &[lent_box, lent]);
+        let mut words = vec![lent_box, lent];
+        words.extend(zero);
+        self.builder.jump(join_block, &words);
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
@@ -15310,11 +15432,16 @@ impl<'a> FunctionCompiler<'a> {
         let word = word.results[0];
         let flag = self.builder.band_imm(word, 1);
         let element_box = self.builder.band_imm(word, !1);
-        self.builder.jump(join_block, &[element_box, flag]);
+        let mut words = vec![element_box, flag];
+        words.extend(zero);
+        self.builder.jump(join_block, &words);
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
-        let params = self.builder.block_params(join_block);
+        let params = self.builder.block_params(join_block).to_vec();
+        if instances.is_some() {
+            self.lent_element_block = Some(params[2]);
+        }
         Ok((params[0], params[1]))
     }
 
@@ -19121,6 +19248,13 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Push
                 if element_ty == Type::named("str")
                     && self.push_deferred_str_copy(list, &args[0].value) =>
+            {
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ListOp::Push
+                if matches!(&args[0].value, Operand::MovePlace(temp)
+                    if self.push_constructed_instance(list, temp)?) =>
             {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))

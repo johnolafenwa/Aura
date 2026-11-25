@@ -243,7 +243,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // borrowers read lends the value in a shadow box, a keys loop walks the
     // entries by slot, and a dict literal is sized once and filled entry by
     // entry. A callable element is called, or copied as its inline words,
-    // where the list keeps it.
+    // where the list keeps it. A constructed instance is appended from its
+    // words where the list keeps instances in place.
     let uncovered = RuntimeFn::ALL
         .iter()
         .copied()
@@ -276,6 +277,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecPushStrLiterals,
             RuntimeFn::VecPushStrView,
             RuntimeFn::VecExtendUtf8,
+            RuntimeFn::VecPushInstance,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,

@@ -974,3 +974,328 @@ fn an_instance_turns_its_layout_into_a_map_when_asked() {
     assert!(map.is_empty());
     assert_eq!(map.iter().next_back(), None);
 }
+
+/// A cell that holds `layout`, as the program's registration fills one.
+fn cell_of(layout: &'static ClassLayout) -> &'static ClassLayoutCell {
+    let cell: &'static ClassLayoutCell = Box::leak(Box::default());
+    cell.access.store(layout.access(), Ordering::Release);
+    cell.layout
+        .store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
+    cell
+}
+
+/// An empty `list[{prefix}Meta]` in a box.
+fn meta_list(prefix: &str) -> *mut OpaqueValue {
+    boxed_value(Value::Vec(VecValue {
+        element_type: crate::runtime_value::SharedType::from(Type::named(format!("{prefix}Meta"))),
+        elements: ListElements::new(),
+        str_view: Default::default(),
+    }))
+}
+
+/// Appends a new `Meta(name, count)` to `list` as generated code does for
+/// `list.append(Meta(...))`: the block's words, with the name's box.
+fn push_meta(list: *mut OpaqueValue, cell: &'static ClassLayoutCell, name: &str, count: i64) {
+    let layout = unsafe { super::registered_class_layout(cell) }.expect("a registered layout");
+    let mut words = vec![0u64; layout.stride_words()];
+    let name_at = layout.field("name").expect("a name").offset / 8;
+    let count_at = layout.field("count").expect("a count").offset / 8;
+    words[name_at] = boxed_value(text(name)) as u64;
+    words[count_at] = count as u64;
+    unsafe { crate::native_runtime::aura_direct_vec_push_instance(list, cell, words.as_mut_ptr()) };
+}
+
+/// A copy of the elements of `list`, which shares their storage.
+fn list_elements(list: *mut OpaqueValue) -> ListElements {
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => vector.elements,
+        other => panic!("a list, found {other:?}"),
+    }
+}
+
+#[test]
+fn classes_of_scalars_and_text_keep_their_instances_in_lists() {
+    let prefix = "InList";
+    let meta = register_class_layout(descriptor(prefix, "Meta"), FIRST_TEST_ACCESS + 80)
+        .expect("the class is laid out");
+    assert!(meta.keeps_in_list());
+    assert_eq!(meta.stride_words(), 2);
+    assert_eq!(meta.box_offsets().len(), 1);
+    assert_eq!(
+        meta.instance_list_access(),
+        super::FIRST_INSTANCE_LIST_ACCESS + 80 + 0x1000_0000
+    );
+    // A list field lies in a box no list may keep in place.
+    assert!(!layout(prefix, FIRST_TEST_ACCESS + 81).keeps_in_list());
+}
+
+#[test]
+fn appended_instances_lie_in_the_list_and_read_as_instances() {
+    in_task(|| {
+        let prefix = "Lying";
+        let meta = register_class_layout(descriptor(prefix, "Meta"), FIRST_TEST_ACCESS + 82)
+            .expect("the class is laid out");
+        let cell = cell_of(meta);
+        let list = meta_list(prefix);
+        push_meta(list, cell, "a", 1);
+        push_meta(list, cell, "b", 2);
+        push_meta(list, cell, "c", 3);
+        let header = unsafe { &*list };
+        assert_eq!(
+            header.list_access.load(Ordering::Relaxed),
+            meta.instance_list_access()
+        );
+        assert_eq!(header.list_len.get(), 3);
+        let elements = list_elements(list);
+        assert!(matches!(elements, ListElements::Instances(_)));
+        assert_eq!(
+            elements.form(),
+            crate::list_elements::ListForm::Instances(meta.instance_list_access())
+        );
+        let expected = vec![
+            meta_value(prefix, "a", 1),
+            meta_value(prefix, "b", 2),
+            meta_value(prefix, "c", 3),
+        ];
+        // Every read copies the element, which stays in the list.
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements.at(1).into_owned(), expected[1]);
+        assert_eq!(elements.get(3), None);
+        assert_eq!(elements.to_vec(), expected);
+        assert_eq!(
+            elements
+                .iter()
+                .rev()
+                .map(Cow::into_owned)
+                .collect::<Vec<_>>(),
+            expected.iter().rev().cloned().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            elements.iter().nth(2).map(Cow::into_owned),
+            Some(expected[2].clone())
+        );
+        assert_eq!(
+            elements.iter().nth_back(2).map(Cow::into_owned),
+            Some(expected[0].clone())
+        );
+        assert_eq!(elements.iter().len(), 3);
+        assert!(elements.contains(&expected[2]));
+        assert!(!elements.contains(&meta_value(prefix, "c", 4)));
+        assert_eq!(elements, ListElements::from(expected.clone()));
+        assert_eq!(elements, expected);
+        assert_eq!(
+            format!("{elements:?}"),
+            format!("{:?}", ListElements::from(expected.clone()))
+        );
+        assert!(elements.value_refs().is_none());
+        assert!(elements.capacity() >= 3);
+        // The copy shares the list's storage.
+        assert!(elements.is_shared());
+        assert_ne!(elements.as_ptr(), 0);
+        // A slice copies its elements.
+        let Value::Vec(vector) = (unsafe { value_ref(list) }) else {
+            panic!("a list");
+        };
+        let slice = crate::runtime_value::slice_vec_owned(&vector, Some(1), None)
+            .expect("the slice is in range");
+        assert_eq!(slice.elements, expected[1..].to_vec());
+        // A copy shares the elements until one of the two changes.
+        let mut copy = elements.clone();
+        copy.try_reserve(4).expect("room");
+        assert!(!copy.is_shared());
+        assert_ne!(copy.as_ptr(), elements.as_ptr());
+        assert_eq!(copy, expected);
+        let mut copy = elements.clone();
+        copy.push(meta_value(prefix, "d", 4));
+        assert!(matches!(copy, ListElements::Values(_)));
+        assert_eq!(copy.len(), 4);
+        assert_eq!(elements, expected);
+        // Lending an element moves the list to boxes.
+        let mut lent = elements.clone();
+        assert_eq!(
+            lent.lend(0).map(|element| element.value().clone()),
+            Some(expected[0].clone())
+        );
+        assert!(matches!(lent, ListElements::Boxes(_)));
+        let mut moved = elements.clone();
+        assert_eq!(std::mem::take(&mut moved).into_vec(), expected);
+        unsafe { aura_direct_release_value(list) };
+    });
+}
+
+#[test]
+fn edits_of_kept_instances_take_the_value_form_first() {
+    in_task(|| {
+        let prefix = "Edited";
+        let meta = register_class_layout(descriptor(prefix, "Meta"), FIRST_TEST_ACCESS + 84)
+            .expect("the class is laid out");
+        let cell = cell_of(meta);
+        let list = meta_list(prefix);
+        for (name, count) in [("x", 3), ("y", 1), ("z", 2)] {
+            push_meta(list, cell, name, count);
+        }
+        let kept = list_elements(list);
+        let values = ListElements::from(kept.to_vec());
+        type Edit = fn(&mut ListElements) -> Value;
+        let edits: Vec<(&str, Edit)> = vec![
+            ("pop", |list| list.pop().unwrap_or(Value::Unit)),
+            ("remove", |list| list.remove(1)),
+            ("replace", |list| list.replace(0, Value::Bool(true))),
+            ("insert", |list| {
+                list.insert(1, Value::Unit);
+                Value::Unit
+            }),
+            ("swap", |list| {
+                list.swap(0, 2);
+                Value::Unit
+            }),
+            ("reverse", |list| {
+                list.reverse();
+                Value::Unit
+            }),
+            ("keep_every", |list| {
+                list.keep_every(2);
+                Value::Unit
+            }),
+            ("truncate", |list| {
+                list.truncate(1);
+                Value::Unit
+            }),
+            ("take_range", |list| {
+                Value::Bool(list.take_range(0, 2).len() == 2)
+            }),
+            ("shuffle", |list| {
+                list.shuffle(&mut crate::randomness::DeterministicRng::from_seed(7));
+                Value::Unit
+            }),
+            ("get_mut", |list| {
+                list.get_mut(0)
+                    .map(|element| (*element).clone())
+                    .unwrap_or(Value::Unit)
+            }),
+            ("append", |list| {
+                let other = list.clone();
+                list.append(other);
+                Value::Unit
+            }),
+            ("insert_all", |list| {
+                let other = list.clone();
+                list.insert_all(1, other);
+                Value::Unit
+            }),
+        ];
+        for (name, edit) in edits {
+            let mut left = kept.clone();
+            let mut right = values.clone();
+            assert_eq!(edit(&mut left), edit(&mut right), "{name}");
+            assert_eq!(left, right, "{name}");
+            assert!(!matches!(left, ListElements::Instances(_)), "{name}");
+        }
+        // Sorting reports what sorting the values reports.
+        let mut left = kept.clone();
+        let mut right = values.clone();
+        assert_eq!(
+            crate::list_sort::sort_elements(&mut left, false).map_err(|error| error.message),
+            crate::list_sort::sort_elements(&mut right, false).map_err(|error| error.message),
+        );
+        let keys = kept.clone();
+        let mut left = values.clone();
+        let mut right = values.clone();
+        assert_eq!(
+            crate::list_sort::sort_elements_by_keys(&mut left, &keys, false)
+                .map_err(|error| error.message),
+            crate::list_sort::sort_elements_by_keys(&mut right, &values, false)
+                .map_err(|error| error.message),
+        );
+        // A clear drops the instances.
+        let mut cleared = kept.clone();
+        cleared.clear();
+        assert!(cleared.is_empty());
+        unsafe { aura_direct_release_value(list) };
+    });
+}
+
+#[test]
+fn other_lists_take_an_appended_instance_in_its_own_box() {
+    in_task(|| {
+        let prefix = "Elsewhere";
+        let meta = register_class_layout(descriptor(prefix, "Meta"), FIRST_TEST_ACCESS + 86)
+            .expect("the class is laid out");
+        let cell = cell_of(meta);
+        // A list that keeps other values takes a boxed instance.
+        let list = meta_list(prefix);
+        aura_direct_vec_push_in_place(list, boxed_value(meta_value(prefix, "a", 1)));
+        push_meta(list, cell, "b", 2);
+        assert!(!matches!(list_elements(list), ListElements::Instances(_)));
+        assert_eq!(
+            list_elements(list).to_vec(),
+            vec![meta_value(prefix, "a", 1), meta_value(prefix, "b", 2)]
+        );
+        unsafe { aura_direct_release_value(list) };
+        // So does a list that does not know its element type, a shared
+        // one, and one that keeps another class in place.
+        let untyped = boxed_value(Value::Vec(VecValue {
+            element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
+            elements: ListElements::new(),
+            str_view: Default::default(),
+        }));
+        push_meta(untyped, cell, "c", 3);
+        assert!(!matches!(
+            list_elements(untyped),
+            ListElements::Instances(_)
+        ));
+        assert_eq!(
+            list_elements(untyped).to_vec(),
+            vec![meta_value(prefix, "c", 3)]
+        );
+        unsafe { aura_direct_release_value(untyped) };
+        let shared = meta_list(prefix);
+        unsafe { share_direct_value(shared) };
+        push_meta(shared, cell, "d", 4);
+        assert!(!matches!(list_elements(shared), ListElements::Instances(_)));
+        unsafe { aura_direct_release_value(shared) };
+        let other =
+            register_class_layout(descriptor("ElsewhereOther", "Meta"), FIRST_TEST_ACCESS + 87)
+                .expect("the class is laid out");
+        let mixed = meta_list(prefix);
+        push_meta(mixed, cell_of(other), "e", 5);
+        push_meta(mixed, cell, "f", 6);
+        assert!(!matches!(list_elements(mixed), ListElements::Instances(_)));
+        assert_eq!(list_elements(mixed).len(), 2);
+        unsafe { aura_direct_release_value(mixed) };
+        // A class whose fields a list cannot keep takes the boxed path too.
+        let book = layout(prefix, FIRST_TEST_ACCESS + 88);
+        let books = meta_list(prefix);
+        let mut words = vec![0u64; book.stride_words()];
+        for offset in book.box_offsets() {
+            words[offset / 8] = boxed_value(text("t")) as u64;
+        }
+        unsafe {
+            crate::native_runtime::aura_direct_vec_push_instance(
+                books,
+                cell_of(book),
+                words.as_mut_ptr(),
+            )
+        };
+        assert!(!matches!(list_elements(books), ListElements::Instances(_)));
+        assert_eq!(list_elements(books).len(), 1);
+        unsafe { aura_direct_release_value(books) };
+    });
+    let failure = runtime_failure(|| {
+        let meta = register_class_layout(descriptor("NullField", "Meta"), FIRST_TEST_ACCESS + 89)
+            .expect("the class is laid out");
+        let mut words = vec![0u64; meta.stride_words()];
+        unsafe {
+            crate::native_runtime::aura_direct_vec_push_instance(
+                meta_list("NullField"),
+                cell_of(meta),
+                words.as_mut_ptr(),
+            )
+        };
+    });
+    assert!(failure.contains("null field value"), "{failure}");
+}
+
+fn meta_value(prefix: &str, name: &str, count: i64) -> Value {
+    meta(prefix, name, count)
+}
