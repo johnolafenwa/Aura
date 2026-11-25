@@ -79,6 +79,14 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(trigger.count(f"      - {path}\n"), 2)
 
+    def test_verify_keeps_both_workspace_build_profiles_within_runner_storage(self) -> None:
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        verify = workflow[workflow.index("  verify:\n"):workflow.index("  platform-tests:\n")]
+        self.assertIn("CARGO_PROFILE_DEV_DEBUG: 0", verify)
+        self.assertIn("CARGO_PROFILE_TEST_DEBUG: 0", verify)
+        self.assertIn("CARGO_INCREMENTAL: 0", verify)
+        self.assertIn("run: npm run ci", verify)
+
     def test_every_workflow_declares_a_read_only_default_token(self) -> None:
         for workflow_path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
             workflow = workflow_path.read_text(encoding="utf-8")

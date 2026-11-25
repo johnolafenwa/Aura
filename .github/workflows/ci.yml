@@ -51,6 +51,12 @@ jobs:
     # headroom. With the 0.17 features the macOS runner takes a little over
     # three hours, and one run was still making progress at 210 minutes.
     timeout-minutes: 270
+    env:
+      # Both test builds link LLVM. Keep their Rust debug and incremental
+      # artifacts off disk so the second build fits on the runner.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
 
     steps:
       - name: Checkout
