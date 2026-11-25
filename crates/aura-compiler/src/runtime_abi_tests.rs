@@ -210,6 +210,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::StringFromView
                     | RuntimeFn::StringBytes
                     | RuntimeFn::StringClone
+                    | RuntimeFn::StringWords
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
                     | RuntimeFn::TaskArgBufferDisarm

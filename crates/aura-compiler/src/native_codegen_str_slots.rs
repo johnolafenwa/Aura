@@ -1240,6 +1240,47 @@ impl FunctionCompiler<'_> {
         Ok(self.builder.block_params(join_block)[0])
     }
 
+    /// The `ptr` and `len` of the text in the `str` box `value`, which
+    /// stay valid while the box lives unchanged.
+    pub(super) fn str_box_words(&mut self, value: Val) -> (Val, Val) {
+        let slot = self.builder.create_sized_stack_slot(8, 3);
+        let len_at = self.builder.stack_addr(types::I64, slot, 0);
+        let ptr = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringWords], &[value, len_at])
+            .results[0];
+        let len = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), len_at, 0);
+        (ptr, len)
+    }
+
+    /// `left == right` or `left != right` on two `str` boxes, or on a `str`
+    /// box and `literal`, compared in their words, as 0 or 1.
+    pub(super) fn compile_str_box_equality(
+        &mut self,
+        op: BinaryOp,
+        left: Val,
+        right: Result<Val, &str>,
+    ) -> std::result::Result<ValueRef, String> {
+        let words = self.str_box_words(left);
+        let other = match right {
+            Ok(right) => {
+                let (ptr, len) = self.str_box_words(right);
+                ViewSide::Words(ptr, len)
+            }
+            Err(literal) => ViewSide::Literal(literal.to_string()),
+        };
+        let mut equal = self.emit_view_equality(words, &other)?;
+        if op == BinaryOp::NotEq {
+            equal = self.builder.bxor_imm(equal, 1);
+        }
+        Ok(ValueRef {
+            values: vec![equal],
+            ty: DirectType::Scalar(ScalarKind::Bool),
+        })
+    }
+
     /// `left == right` or `left != right` where one side is a `str` this
     /// twin holds as words and the other is one too, or a literal.
     pub(super) fn compile_str_view_comparison(

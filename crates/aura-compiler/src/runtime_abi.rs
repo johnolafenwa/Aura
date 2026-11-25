@@ -137,6 +137,7 @@ runtime_functions! {
     StringReplaceLiteral => ("aura_direct_string_replace_literal", [I64, I64, I64, I64, I64], Some(I64)),
     StringFromView => ("aura_direct_string_from_view", [I64, I64], Some(I64)),
     StringClone => ("aura_direct_string_clone", [I64], Some(I64)),
+    StringWords => ("aura_direct_string_words", [I64, I64], Some(I64)),
     VecStrElement => ("aura_direct_vec_str_element", [I64, I64, I64, I64], Some(I64)),
     StringSplit => ("aura_direct_string_split", [I64, I64], Some(I64)),
     StringReplace => ("aura_direct_string_replace", [I64, I64, I64], Some(I64)),

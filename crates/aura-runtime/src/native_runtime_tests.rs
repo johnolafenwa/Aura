@@ -8479,6 +8479,10 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
     // SAFETY: the box is live, and its text has nine bytes.
     let bytes = unsafe { std::slice::from_raw_parts(super::aura_direct_string_bytes(text), 9) };
     assert_eq!(bytes, "é🎉e\u{301}".as_bytes());
+    let mut len = 0_i64;
+    let words = super::aura_direct_string_words(text, &mut len);
+    assert_eq!(words, super::aura_direct_string_bytes(text));
+    assert_eq!(len, 9);
     let copy = super::aura_direct_string_clone(text);
     assert_ne!(copy, text);
     assert_eq!(
@@ -24252,6 +24256,13 @@ fn direct_scalar_wrappers_reject_out_of_range_values_and_wrong_receivers() {
     assert_eq!(
         capture_direct_boundary_error_message(|| {
             super::aura_direct_string_clone(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let mut len = 0_i64;
+            super::aura_direct_string_words(int_value(1), &mut len);
         }),
         "expected `str`, found `integer`"
     );

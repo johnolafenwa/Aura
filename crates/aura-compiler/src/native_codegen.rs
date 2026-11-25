@@ -8814,6 +8814,11 @@ impl<'a> FunctionCompiler<'a> {
                 .compile_binary(op, left, right, Some(span), ArithmeticTrap::None)
                 .map(Some);
         }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            return self
+                .compile_str_box_equality(op, loaded.values[0], Err(literal))
+                .map(Some);
+        }
         let (literal_ptr, literal_len) = self.string_constant(literal.as_bytes())?;
         let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
         let literal_on_left = self.builder.iconst(types::I64, literal_on_left);
@@ -8985,6 +8990,13 @@ impl<'a> FunctionCompiler<'a> {
             let right = self.ensure_opaque(right)?;
             let binary_opcode = Self::binary_opcode(op);
             let opcode = self.builder.iconst(types::I64, binary_opcode);
+            let str_ty = DirectType::Opaque(Type::named("str"));
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+                && left.ty == str_ty
+                && right.ty == str_ty
+            {
+                return self.compile_str_box_equality(op, left.values[0], Ok(right.values[0]));
+            }
             if is_comparison_op(op) {
                 // The result is a machine `bool`, so no box is built for it.
                 let (line, column) = self.span_values(span);

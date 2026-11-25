@@ -1,0 +1,58 @@
+# `==` and `!=` on `str` values compare their bytes: fields of instances,
+# parameters, and elements, against literals and each other, short texts
+# and texts too long to keep in place, the same text twice, and texts
+# that differ only in their last byte.
+
+class Rule:
+    tag: str
+    name: str
+
+
+def matching(rules: list[Rule], tag: str) -> int64:
+    mut count = 0
+    for rule in rules:
+        if rule.tag != "" and rule.tag != tag:
+            continue
+        count += 1
+    return count
+
+
+def same(left: str, right: str) -> bool:
+    return left == right
+
+
+def main():
+    long_a = "a long text that does not fit in place, number one"
+    long_b = "a long text that does not fit in place, number two"
+    rules = [
+        Rule(tag="div", name=long_a.clone()),
+        Rule(tag="", name=long_b.clone()),
+        Rule(tag="span", name="s"),
+        Rule(tag="div", name=long_a.clone()),
+    ]
+    print(matching(rules, "div"))
+    print(matching(rules, "spam"))
+    print(matching(rules, "span"))
+    mut equal = 0
+    mut unequal = 0
+    for left in rules:
+        for right in rules:
+            if left.name == right.name:
+                equal += 1
+            if left.tag != right.tag:
+                unequal += 1
+    print(f"{equal} {unequal}")
+    view first = rules[0]
+    print(first.name == first.name)
+    print(first.name == "a long text that does not fit in place, number one")
+    print(first.name != "a long text that does not fit in place, number onf")
+    print(first.tag == "div")
+    print(first.tag == "dix")
+    print("div" == first.tag)
+    print("" != first.tag)
+    print(same(long_a, long_b))
+    print(same(long_a, rules[3].name))
+    print(same("", rules[1].tag))
+    print(first.tag < rules[2].tag)
+    own_rule = Rule(tag="p", name=long_b.clone())
+    print(own_rule.tag == "p" and own_rule.name != long_a)

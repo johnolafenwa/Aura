@@ -10122,6 +10122,27 @@ pub unsafe extern "C-unwind" fn aura_direct_string_from_view(
     })
 }
 
+/// The address of the bytes of the `str` `value`, with their length
+/// stored at `len`. They stay valid while `value` lives unchanged.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_words(
+    value: *mut OpaqueValue,
+    len: *mut i64,
+) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        let (ptr, bytes) = with_value(value, |value| match value {
+            Value::String(text) => (text.as_str().as_ptr(), text.as_str().len()),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        });
+        // SAFETY: generated code passes a slot for one word.
+        len.write(bytes as i64);
+        ptr
+    })
+}
+
 /// A copy of the `str` `value`, as `aura_direct_clone_value` makes one,
 /// without the walk that looks for what else a value holds.
 #[cfg_attr(not(coverage), no_mangle)]
