@@ -29325,6 +29325,26 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
     }
     unsafe { release_value(list) };
 
+    // The literals of a list literal join it in one call, from their
+    // texts one after another and their lengths.
+    let list = super::aura_direct_vec_empty_tagged(&cell, descriptor.as_ptr(), descriptor.len());
+    let texts = "ab\u{e9}a much longer literal than fits inline";
+    let lens = [1u32, 0, 3, 38]
+        .iter()
+        .flat_map(|len| len.to_le_bytes())
+        .collect::<Vec<_>>();
+    super::aura_direct_vec_push_str_literals(list, texts.as_ptr(), lens.as_ptr(), 4);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => assert_eq!(
+            vector.elements.to_vec(),
+            ["a", "", "b\u{e9}", "a much longer literal than fits inline"]
+                .map(|text| Value::String(text.into()))
+                .to_vec()
+        ),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
     // A copy of a `str` joins a list from its bytes, which may be an
     // element of the same list, and an untyped list takes its type.
     let list = super::aura_direct_vec_empty();

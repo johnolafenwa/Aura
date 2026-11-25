@@ -195,6 +195,11 @@ runtime_functions! {
         Some(I64)
     ),
     VecPushStrLiteral => ("aura_direct_vec_push_str_literal", [I64, I64, I64], None),
+    VecPushStrLiterals => (
+        "aura_direct_vec_push_str_literals",
+        [I64, I64, I64, I64],
+        None
+    ),
     VecPushStrView => ("aura_direct_vec_push_str_view", [I64, I64, I64], None),
     VecExtendUtf8 => ("aura_direct_vec_extend_utf8", [I64, I64, I64], None),
     VecLen => ("aura_direct_vec_len", [I64], Some(I64)),

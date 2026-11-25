@@ -9429,6 +9429,34 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
     })
 }
 
+/// Appends the `count` `str` literals of a list literal, read where the
+/// program keeps them, in one call: their texts one after another at
+/// `texts`, and their lengths at `lens`, four little-endian bytes each.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_literals(
+    vec: *mut OpaqueValue,
+    texts: *const u8,
+    lens: *const u8,
+    count: usize,
+) {
+    task_runtime_boundary(|| {
+        let mut values = Vec::with_capacity(count);
+        let mut at = 0;
+        for index in 0..count {
+            // SAFETY: generated code passes `count` lengths, and texts that
+            // add up to them.
+            let len = unsafe { slice::from_raw_parts(lens.add(index * 4), 4) };
+            let len = u32::from_le_bytes([len[0], len[1], len[2], len[3]]) as usize;
+            let text = literal_str(unsafe { texts.add(at) }, len);
+            values.push(Value::String(text.into()));
+            at += len;
+        }
+        with_vector_mut(vec, |vector| {
+            vector.elements.append(ListElements::from(values))
+        });
+    })
+}
+
 /// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
 /// `append` of a copy in a box does, with no box made for the copy.
 #[cfg_attr(not(coverage), no_mangle)]

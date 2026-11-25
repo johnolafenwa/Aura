@@ -8187,6 +8187,9 @@ impl<'a> FunctionCompiler<'a> {
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        if resolved_is_str && !wildcard && self.push_str_literals(vector.values[0], elements)? {
+            return Ok(vector);
+        }
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
         let record = self.plain_record(&element_direct_ty)?;
@@ -8244,6 +8247,44 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
         Ok(vector)
+    }
+
+    /// Appends the elements of a literal of `str` literals to `list` in
+    /// one call, from one constant that holds their texts one after
+    /// another and one that holds their lengths, when there are two or
+    /// more of them and some text is not empty.
+    fn push_str_literals(
+        &mut self,
+        list: Val,
+        elements: &[Operand],
+    ) -> std::result::Result<bool, String> {
+        let texts = elements
+            .iter()
+            .map(|element| match element {
+                Operand::String(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(texts) = texts.filter(|texts| texts.len() >= 2) else {
+            return Ok(false);
+        };
+        let joined = texts.concat();
+        let Some(lens) = texts
+            .iter()
+            .map(|text| u32::try_from(text.len()).ok().map(u32::to_le_bytes))
+            .collect::<Option<Vec<_>>>()
+            .filter(|_| !joined.is_empty())
+        else {
+            return Ok(false);
+        };
+        let (texts_ptr, _) = self.string_constant(joined.as_bytes())?;
+        let (lens_ptr, _) = self.string_constant(&lens.concat())?;
+        let count = self.builder.iconst(types::I64, texts.len() as i64);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecPushStrLiterals],
+            &[list, texts_ptr, lens_ptr, count],
+        );
+        Ok(true)
     }
 
     fn compile_map_literal_for_target(
