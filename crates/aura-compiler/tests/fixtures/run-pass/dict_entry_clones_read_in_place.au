@@ -1,0 +1,36 @@
+def lookup(name: str, row: dict[str, str], context: dict[str, str]) -> str:
+    match row.get(name):
+        case Lookup.Found(value):
+            return value.clone()
+        case Lookup.Missing:
+            return context[name].clone()
+
+
+def tested(name: str, context: dict[str, str]) -> str:
+    if name in context:
+        return context[name].clone()
+    return "?"
+
+
+def counted(key: int64, totals: dict[int64, list[int64]]) -> list[int64]:
+    return totals[key].copy()
+
+
+def main():
+    mut context: dict[str, str] = {}
+    context["title"] = "Catalog"
+    context["user"] = "ada"
+    mut row: dict[str, str] = {}
+    row["name"] = "kalomi"
+    for name in ["name", "title", "user"]:
+        print(lookup(name, row, context))
+    print(tested("user", context))
+    print(tested("missing", context))
+    mut totals: dict[int64, list[int64]] = {}
+    totals[3] = [1, 2, 3]
+    mut copy = counted(3, totals)
+    copy.append(4)
+    print(copy)
+    print(totals[3])
+    context["title"] = "Changed"
+    print(lookup("title", row, context))

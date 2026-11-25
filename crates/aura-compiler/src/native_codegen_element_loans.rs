@@ -2902,6 +2902,8 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
 pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> {
     let mut mentions = HashMap::<&str, usize>::new();
     let mut reads = HashMap::<&str, usize>::new();
+    // A clone names its receiver twice, as the operand and its place.
+    let mut cloned = HashMap::<&str, usize>::new();
     for block in &function.blocks {
         let mut places = Vec::new();
         for instruction in &block.instructions {
@@ -2909,6 +2911,11 @@ pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> 
                 Instruction::BeginElementLoan { .. } | Instruction::EndLoan { .. } => continue,
                 Instruction::ReadLoan { loan, .. } => {
                     *reads.entry(loan.as_str()).or_default() += 1;
+                }
+                _ if clone_receiver(instruction).is_some() => {
+                    let loan = clone_receiver(instruction).expect("checked above");
+                    *reads.entry(loan).or_default() += 1;
+                    *cloned.entry(loan).or_default() += 1;
                 }
                 Instruction::Assign {
                     value: Rvalue::Call { args, .. },
@@ -2942,13 +2949,15 @@ pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> 
                 continue;
             };
             let read = reads.get(loan.as_str()).copied().unwrap_or(0);
+            let named = read + cloned.get(loan.as_str()).copied().unwrap_or(0);
             // Every mention is a read of the whole value.
-            if !projection.is_empty() || read == 0 || mentions.get(loan.as_str()) != Some(&read) {
+            if !projection.is_empty() || read == 0 || mentions.get(loan.as_str()) != Some(&named) {
                 continue;
             }
             let in_block = block.instructions[position + 1..]
                 .iter()
                 .any(|later| match later {
+                    _ if clone_receiver(later) == Some(loan.as_str()) => true,
                     Instruction::ReadLoan { loan: read, .. } => read == loan,
                     Instruction::Assign {
                         value: Rvalue::Call { args, .. },
@@ -2983,6 +2992,10 @@ pub(super) fn shadow_entry_copy_loans<'f>(
             Instruction::ReadLoan { loan, .. } => {
                 other_reads.insert(loan.as_str());
             }
+            // A clone reads its receiver while it copies it.
+            _ if clone_receiver(instruction).is_some() => {
+                borrowed_reads.insert(clone_receiver(instruction).expect("checked above"));
+            }
             Instruction::Assign {
                 value: Rvalue::Call { args, .. },
                 ..
@@ -3013,6 +3026,30 @@ pub(super) fn shadow_entry_copy_loans<'f>(
         })
         .cloned()
         .collect()
+}
+
+/// The place `instruction` clones or copies into a new value, when it is
+/// such a call: `d[k].clone()` lowers to one on the entry loan.
+fn clone_receiver(instruction: &Instruction) -> Option<&str> {
+    match instruction {
+        Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy),
+                            receiver: Some(Operand::Place(receiver)),
+                            receiver_place,
+                        },
+                    args,
+                    ..
+                },
+            ..
+        } if args.is_empty() && receiver_place.as_deref() == Some(receiver.as_str()) => {
+            Some(receiver)
+        }
+        _ => None,
+    }
 }
 
 /// The argument of `instruction` that a host builtin reads where it lies
