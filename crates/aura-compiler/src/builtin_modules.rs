@@ -1928,10 +1928,7 @@ fn regex_namespace() -> ModuleNamespace {
             ),
             search("__aura_matches", list_of(int64())),
             search("__aura_find_all", list_of(text())),
-            search(
-                "__aura_captures",
-                pair(list_of(text()), list_of(type_ref("bool", Vec::new()))),
-            ),
+            search("__aura_captures", list_of(text())),
             search("__aura_group_index", int64()),
             search("__aura_split", list_of(text())),
             substitute("__aura_replace"),

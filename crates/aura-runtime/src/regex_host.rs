@@ -277,26 +277,23 @@ pub fn evaluate_regex_builtin(
                 .map(|found| Value::string(found.as_str())),
         ),
         "regex::__aura_captures" => {
-            // Each group's text, and whether the group took part in the
-            // match. Both lists are empty when there is no match.
+            // Each group's text, then for each group `y` when it took part
+            // in the match and `` when it did not. Empty without a match.
             let mut groups = Vec::new();
-            let mut matched = Vec::new();
             if let Some(captures) = regex.captures(text) {
-                groups.reserve(captures.len());
-                matched.reserve(captures.len());
-                for group in captures.iter() {
-                    matched.push(group.is_some());
-                    groups.push(Value::string(group.map_or("", |group| group.as_str())));
-                }
+                groups.reserve(captures.len() * 2);
+                groups.extend(
+                    captures
+                        .iter()
+                        .map(|group| Value::string(group.map_or("", |group| group.as_str()))),
+                );
+                groups.extend(
+                    captures
+                        .iter()
+                        .map(|group| Value::string(if group.is_some() { "y" } else { "" })),
+                );
             }
-            let list_of = |item: &str| Type::Named("list".to_string(), vec![Type::named(item)]);
-            Value::Tuple(TupleValue {
-                element_types: vec![list_of("str"), list_of("bool")],
-                elements: vec![
-                    str_list(groups),
-                    scalar_list("bool", matched, ListElements::Bool),
-                ],
-            })
+            str_list(groups)
         }
         // `text` is a group name here: its index, or -1 without one.
         "regex::__aura_group_index" => Value::Int(IntegerValue::from_i64(

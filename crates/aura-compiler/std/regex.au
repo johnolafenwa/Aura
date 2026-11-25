@@ -22,21 +22,22 @@ public class Match:
 
 public class Captures:
     """The groups of one match. Group 0 is the whole match."""
+    # Each group's text, then for each group `y` when it took part in the
+    # match and `` when it did not.
     groups: list[str]
-    # Whether each group took part in the match.
-    matched: list[bool]
+    count: int64
     pattern: int64
 
     public def len(self) -> int64:
         """The number of groups, the whole match included."""
-        return self.groups.len()
+        return self.count
 
     public def get(self, index: int64) -> str | None:
         """The text group `index` matched, or `None` when the group took no
         part in the match or the pattern has no such group."""
-        if index < 0 or index >= self.groups.len():
+        if index < 0 or index >= self.count:
             return None
-        if not self.matched[index]:
+        if self.groups[self.count + index].len() == 0:
             return None
         return self.groups[index].clone()
 
@@ -93,10 +94,11 @@ public copy class Regex:
 
     public def captures(self, text: str) -> Captures | None:
         """The groups of the leftmost match in `text`, or `None`."""
-        (groups, matched) = regex.__aura_captures(self.number, text)
+        groups = regex.__aura_captures(self.number, text)
         if groups.len() == 0:
             return None
-        return Captures(groups=groups, matched=matched, pattern=self.number)
+        count = groups.len() // 2
+        return Captures(groups=groups, count=count, pattern=self.number)
 
     public def replace(self, text: str, replacement: str) -> str:
         """`text` with the leftmost match replaced. In `replacement`, `$1`
