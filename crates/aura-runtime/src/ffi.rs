@@ -1616,34 +1616,23 @@ fn parse_soname_version(suffix: &str) -> Option<Vec<u64>> {
 /// `libsqlite3.so.0` for `libsqlite3.so`, sorted by descending numeric version.
 fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     let prefix = format!("{file_name}.");
-    let mut files = std::fs::read_dir(directory)
+    let mut versioned = std::fs::read_dir(directory)
         .map(|entries| {
             entries
                 .filter_map(|entry| entry.ok())
-                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
-                .map(|entry| entry.path())
+                .filter_map(|entry| {
+                    let name = entry.file_name();
+                    let suffix = name.to_str()?.strip_prefix(&prefix)?;
+                    let version = parse_soname_version(suffix)?;
+                    Some((version, entry.path()))
+                })
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    files.sort_by(|left, right| {
-        let left_ver = left
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .and_then(parse_soname_version);
-        let right_ver = right
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_prefix(&prefix))
-            .and_then(parse_soname_version);
-        match (left_ver, right_ver) {
-            (Some(l), Some(r)) => r.cmp(&l).then(left.cmp(right)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => left.cmp(right),
-        }
+    versioned.sort_by(|(left_ver, left_path), (right_ver, right_path)| {
+        right_ver.cmp(left_ver).then_with(|| left_path.cmp(right_path))
     });
-    files
+    versioned.into_iter().map(|(_, path)| path).collect()
 }
 
 #[cfg(any(windows, test))]
@@ -3583,7 +3572,7 @@ mod tests {
     #[test]
     fn versioned_library_files_sort_numerically_descending() {
         let directory = scratch_directory("version-order");
-        for suffix in ["0", "1", "2", "10", "1.2", "1.10"] {
+        for suffix in ["0", "1", "2", "10", "1.2", "1.10", "bak", "disabled", "1.bak"] {
             std::fs::write(directory.join(format!("libver.so.{suffix}")), b"")
                 .expect("touch versioned file");
         }
