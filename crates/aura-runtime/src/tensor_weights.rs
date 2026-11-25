@@ -7,7 +7,94 @@ use super::*;
 use std::io::{Read, Seek, SeekFrom, Write};
 
 /// The largest header read. A header names tensors and holds no elements.
-const MAX_HEADER_BYTES: u64 = 256 << 20;
+/// The reference implementation reads at most 100 MB.
+const MAX_HEADER_BYTES: u64 = 100 << 20;
+
+/// The most axes a tensor's shape may name.
+const MAX_SHAPE_RANK: usize = 64;
+
+/// One tensor's description in the header, read straight into its fields
+/// so that a large header is not first built as a JSON tree.
+#[derive(serde::Deserialize)]
+struct RawEntry {
+    dtype: String,
+    shape: RawShape,
+    data_offsets: (u64, u64),
+}
+
+struct RawShape(Vec<usize>);
+
+impl<'de> serde::Deserialize<'de> for RawShape {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct Axes;
+        impl<'de> serde::de::Visitor<'de> for Axes {
+            type Value = RawShape;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "at most {MAX_SHAPE_RANK} axis lengths")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<RawShape, A::Error> {
+                let mut axes = Vec::new();
+                while let Some(axis) = seq.next_element::<u64>()? {
+                    if axes.len() == MAX_SHAPE_RANK {
+                        return Err(serde::de::Error::custom(format!(
+                            "a shape has more than {MAX_SHAPE_RANK} axes"
+                        )));
+                    }
+                    let axis = usize::try_from(axis)
+                        .map_err(|_| serde::de::Error::custom("an axis is too long"))?;
+                    axes.push(axis);
+                }
+                Ok(RawShape(axes))
+            }
+        }
+        deserializer.deserialize_seq(Axes)
+    }
+}
+
+/// Reads the tensors of a header, in the header's order, without
+/// `__metadata__`. The name of a tensor whose description cannot be read
+/// is left in the seed.
+struct RawHeader<'a>(&'a mut Option<String>);
+
+impl<'de> serde::de::DeserializeSeed<'de> for RawHeader<'_> {
+    type Value = Vec<(String, RawEntry)>;
+
+    fn deserialize<D: serde::Deserializer<'de>>(
+        self,
+        deserializer: D,
+    ) -> std::result::Result<Self::Value, D::Error> {
+        struct Fields<'a>(&'a mut Option<String>);
+        impl<'de> serde::de::Visitor<'de> for Fields<'_> {
+            type Value = Vec<(String, RawEntry)>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a safetensors header object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Self::Value, A::Error> {
+                let mut entries = Vec::new();
+                while let Some(name) = map.next_key::<String>()? {
+                    if name == "__metadata__" {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                        continue;
+                    }
+                    *self.0 = Some(name);
+                    let entry = map.next_value::<RawEntry>()?;
+                    let name = self.0.take().unwrap_or_default();
+                    entries.push((name, entry));
+                }
+                Ok(entries)
+            }
+        }
+        deserializer.deserialize_map(Fields(self.0))
+    }
+}
 
 struct Entry {
     name: String,
@@ -34,38 +121,38 @@ fn read_header(path: &str) -> std::result::Result<(std::fs::File, Vec<Entry>, u6
     if length > MAX_HEADER_BYTES || length > size.saturating_sub(8) {
         return Err(format!("`{path}` is not a safetensors file"));
     }
-    let mut header = vec![0_u8; length as usize];
+    let mut header = Vec::new();
+    header
+        .try_reserve_exact(length as usize)
+        .map_err(|error| failed("read", &error))?;
+    header.resize(length as usize, 0);
     file.read_exact(&mut header)
         .map_err(|error| failed("read", &error))?;
-    let header: serde_json::Value = serde_json::from_slice(&header)
+    // Checking the syntax first builds nothing, so that a header that
+    // is not JSON is told apart from one that describes tensors wrongly.
+    serde_json::from_slice::<serde::de::IgnoredAny>(&header)
         .map_err(|error| format!("`{path}` has a header that is not JSON: {error}"))?;
-    let Some(fields) = header.as_object() else {
-        return Err(format!("`{path}` is not a safetensors file"));
-    };
+    let mut failed_tensor = None;
+    let mut reader = serde_json::Deserializer::from_slice(&header);
+    let fields = serde::de::DeserializeSeed::deserialize(RawHeader(&mut failed_tensor), &mut reader)
+        .map_err(|error| match &failed_tensor {
+            Some(name) => format!("`{path}` describes tensor `{name}` wrongly: {error}"),
+            None => format!("`{path}` is not a safetensors file"),
+        })?;
     let data = 8 + length;
     let mut entries = Vec::new();
     for (name, field) in fields {
-        if name == "__metadata__" {
-            continue;
+        let (start, end) = field.data_offsets;
+        if start > end || end > size - data {
+            return Err(format!("`{path}` describes tensor `{name}` wrongly"));
         }
-        let entry = (|| {
-            let offsets = field.get("data_offsets")?.as_array()?;
-            Some(Entry {
-                name: name.clone(),
-                dtype: field.get("dtype")?.as_str()?.to_string(),
-                shape: field
-                    .get("shape")?
-                    .as_array()?
-                    .iter()
-                    .map(|dimension| usize::try_from(dimension.as_u64()?).ok())
-                    .collect::<Option<_>>()?,
-                start: offsets.first()?.as_u64()?,
-                end: offsets.get(1)?.as_u64()?,
-            })
-        })()
-        .filter(|entry| entry.start <= entry.end && entry.end <= size - data)
-        .ok_or_else(|| format!("`{path}` describes tensor `{name}` wrongly"))?;
-        entries.push(entry);
+        entries.push(Entry {
+            name,
+            dtype: field.dtype,
+            shape: field.shape.0,
+            start,
+            end,
+        });
     }
     entries.sort_by_key(|entry| entry.start);
     Ok((file, entries, data))
@@ -118,11 +205,25 @@ pub(super) fn load(
             ))
         }
     };
-    let count: usize = entry.shape.iter().product();
-    if (entry.end - entry.start) as usize != count * width {
-        return Err(format!("`{path}` describes tensor `{name}` wrongly"));
+    let wrongly = || format!("`{path}` describes tensor `{name}` wrongly");
+    // The byte range lies inside the file, so a size that matches it is
+    // one the file backs.
+    let byte_count = entry
+        .shape
+        .iter()
+        .try_fold(1usize, |count, &axis| count.checked_mul(axis))
+        .and_then(|count| count.checked_mul(width))
+        .ok_or_else(wrongly)?;
+    if u64::try_from(byte_count).ok() != Some(entry.end - entry.start) {
+        return Err(wrongly());
     }
-    let mut bytes = vec![0_u8; count * width];
+    let count = byte_count / width;
+    let out_of_memory = || format!("there is not enough memory to load tensor `{name}`");
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(byte_count)
+        .map_err(|_| out_of_memory())?;
+    bytes.resize(byte_count, 0);
     file.seek(SeekFrom::Start(data + entry.start))
         .and_then(|_| file.read_exact(&mut bytes))
         .map_err(|error| format!("cannot read `{path}`: {error}"))?;
@@ -154,24 +255,29 @@ pub(super) fn load(
             _ => chunk[0].into(),
         })
     };
+    // The elements can take up to four times the file's bytes, so they
+    // are reserved fallibly too.
     let storage = match dtype {
         ArrayDType::Float32 => ArrayStorage::Float32(
-            floats()
-                .map(|value| value as f32)
-                .collect::<Box<[f32]>>()
-                .into(),
+            gather(count, floats().map(|value| Ok(value as f32)), out_of_memory)?.into(),
         ),
-        ArrayDType::Float64 => ArrayStorage::Float64(floats().collect::<Box<[f64]>>().into()),
-        ArrayDType::Int64 => ArrayStorage::Int64(integers().collect::<Box<[i64]>>().into()),
+        ArrayDType::Float64 => {
+            ArrayStorage::Float64(gather(count, floats().map(Ok), out_of_memory)?.into())
+        }
+        ArrayDType::Int64 => {
+            ArrayStorage::Int64(gather(count, integers().map(Ok), out_of_memory)?.into())
+        }
         _ => ArrayStorage::Int32(
-            integers()
-                .map(|value| {
+            gather(
+                count,
+                integers().map(|value| {
                     i32::try_from(value).map_err(|_| {
                         format!("tensor `{name}` holds {value}, which `int32` cannot hold")
                     })
-                })
-                .collect::<std::result::Result<Box<[i32]>, String>>()?
-                .into(),
+                }),
+                out_of_memory,
+            )?
+            .into(),
         ),
     };
     // A tensor has at least one axis. The format's rank-zero tensor is
@@ -182,6 +288,22 @@ pub(super) fn load(
         entry.shape.clone().into()
     };
     ArrayValue::new(shape, storage).map_err(|error| error.message)
+}
+
+/// `count` values gathered into a slice reserved without aborting.
+fn gather<T>(
+    count: usize,
+    values: impl Iterator<Item = std::result::Result<T, String>>,
+    out_of_memory: impl Fn() -> String,
+) -> std::result::Result<Box<[T]>, String> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(count)
+        .map_err(|_| out_of_memory())?;
+    for value in values {
+        output.push(value?);
+    }
+    Ok(output.into_boxed_slice())
 }
 
 /// Writes `tensors` to the file at `path` and gives the file's length.
@@ -310,6 +432,56 @@ mod tests {
         let loaded = load(target.to_str().unwrap(), "w", ArrayDType::Float32).unwrap();
         assert_eq!(loaded.shape.as_ref(), &[2]);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn write_raw(path: &std::path::Path, header: &str, data: &[u8]) {
+        let mut file = (header.len() as u64).to_le_bytes().to_vec();
+        file.extend_from_slice(header.as_bytes());
+        file.extend_from_slice(data);
+        std::fs::write(path, file).unwrap();
+    }
+
+    #[test]
+    fn a_shape_whose_product_overflows_is_refused() {
+        let root =
+            std::env::temp_dir().join(format!("aura-weights-overflow-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("w.safetensors");
+        let text = path.to_str().unwrap();
+        // 2^62 * 4 * 4 bytes wraps to 0 in 64 bits, which matched the
+        // empty byte range.
+        write_raw(
+            &path,
+            r#"{"w":{"dtype":"F32","shape":[4611686018427387904,4],"data_offsets":[0,0]}}"#,
+            &[],
+        );
+        let error = load(text, "w", ArrayDType::Float32).err().unwrap();
+        assert!(error.contains("describes tensor `w` wrongly"), "{error}");
+        // A shape of more than 64 axes is refused while reading.
+        let axes = vec!["1"; 65].join(",");
+        write_raw(
+            &path,
+            &format!(r#"{{"w":{{"dtype":"F32","shape":[{axes}],"data_offsets":[0,4]}}}}"#),
+            &[0; 4],
+        );
+        let error = names(text).unwrap_err();
+        assert!(error.contains("describes tensor `w` wrongly"), "{error}");
+        assert!(error.contains("more than 64 axes"), "{error}");
+        // Metadata is skipped, and a header that is not an object is not a
+        // safetensors file.
+        write_raw(
+            &path,
+            r#"{"__metadata__":{"k":"v"},"w":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#,
+            &[0; 4],
+        );
+        assert_eq!(names(text).unwrap(), ["w"]);
+        assert_eq!(
+            load(text, "w", ArrayDType::Float32).unwrap().shape.as_ref(),
+            &[1]
+        );
+        write_raw(&path, "[1, 2]", &[]);
+        assert!(names(text).unwrap_err().contains("is not a safetensors file"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }
