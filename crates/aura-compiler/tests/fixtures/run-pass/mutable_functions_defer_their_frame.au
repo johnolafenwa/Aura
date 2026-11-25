@@ -1,0 +1,67 @@
+# Functions with `mut` parameters that are no leaves: a direct call that
+# hands no write-through sink over enters a second body that pushes its
+# frame record only where it first calls out.
+import control
+
+
+class Ring:
+    slots: list[int64]
+    names: list[str]
+    head: int64
+
+    def push(mut self, value: int64, name: str):
+        self.slots[self.head] = value
+        self.names[self.head] = name.clone()
+        self.head = (self.head + 1) % self.slots.len()
+
+    def push_twice(mut self, value: int64):
+        self.push(value, "a")
+        self.push(value + 1, "b")
+
+
+def scale(values: mut list[float64], by: float64):
+    for i in range(values.len()):
+        values[i] *= by
+
+
+def grow(values: mut list[int64], count: int64):
+    for i in range(count):
+        values.append(i * i)
+
+
+def take(values: mut list[int64], at: int64) -> int64:
+    values[at] += 1
+    return values[at]
+
+
+
+def poke(values: list[int64], at: int64) -> int64:
+    mut copy = values.copy()
+    return take(copy, at)
+
+
+def main():
+    mut ring = Ring(slots=[0, 0, 0], names=["", "", ""], head=0)
+    for i in range(5):
+        ring.push(i, f"n{i}")
+    ring.push_twice(10)
+    print(f"{ring.slots} {ring.names} {ring.head}")
+    # Through a bound method, the runtime enters the body with its frame.
+    mut push = ring.push_twice
+    push(20)
+    push(30)
+    mut floats = [1.0, 2.5, -3.0]
+    scale(floats, 2.0)
+    print(floats)
+    mut ints: list[int64] = []
+    grow(ints, 4)
+    grow(ints, 2)
+    print(ints)
+    print(take(ints, 1))
+    match control.recover(poke, ints.copy(), 9):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.describe().replace(trap.path, "site.au"))
+            print(trap.frames)
+    print(ints)

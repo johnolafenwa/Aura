@@ -1,0 +1,7 @@
+[11, 4, 10] [b, n4, a] 1
+[2.0, 5.0, -6.0]
+[0, 1, 4, 9, 0, 1]
+2
+error[AU4003]: list index `9` is out of bounds for length `6` (site.au:33:5)
+[take at 32:1, poke at 38:1]
+[0, 2, 4, 9, 0, 1]

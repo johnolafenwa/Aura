@@ -1158,7 +1158,7 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
-            let mutable_leaf = leaf_variant(function, &classes);
+            let mutable_leaf = leaf_variant(function, &classes) || mutable_twin(function);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
                 // through a thunk.
@@ -1864,7 +1864,7 @@ impl<'a> NativeCodegen<'a> {
         let defers_frame = !frameless
             && forwarding_frame.is_none()
             && function.name != "main"
-            && !takes_mutable(function)
+            && (!takes_mutable(function) || without_sinks)
             && !function.blocks.iter().any(|block| {
                 block
                     .instructions
@@ -21211,6 +21211,25 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
     takes_mutable(function)
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && leaf_body(function, classes)
+}
+
+/// Whether `function`, which has a `mut self` receiver or a `mut`
+/// parameter and is no leaf, gets a second body that reads no write-through
+/// sink and pushes its frame record only where it first calls out, as a
+/// function without `mut` parameters does (see `defers_frame`). A direct
+/// call that hands no sink over enters it, and so do the calls that body
+/// makes with its own `mut` parameters. A function with a cleanup action
+/// keeps one body, since its record holds the action from entry.
+fn mutable_twin(function: &MirFunction) -> bool {
+    takes_mutable(function)
+        && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
+        && function.name != "main"
+        && !function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+        })
 }
 
 /// Small closure bodies can forward mutations of an owned environment

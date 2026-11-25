@@ -18324,6 +18324,20 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
         assert!(!super::leaf_variant(function(name), &classes), "{name}");
         assert!(!super::frameless_leaf(function(name), &classes), "{name}");
     }
+    // A function with a `mut` receiver or parameter that is no leaf gets a
+    // second body too, which defers its frame record; `main` keeps one.
+    for name in [
+        "Counter.rename",
+        "Counter.reset",
+        "Counter.bump_twice",
+        "Pair.bump",
+        "forward",
+    ] {
+        assert!(super::mutable_twin(function(name)), "{name}");
+    }
+    for name in ["Tally.scaled", "Counter.label", "main"] {
+        assert!(!super::mutable_twin(function(name)), "{name}");
+    }
     assert_eq!(
         super::boxed_receiver_fields(function("Counter.bump"), &classes),
         Some(["count"].into_iter().collect())
@@ -18345,15 +18359,17 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     let object = crate::native_backend::without_optimization(|| emit_host_object(&mir))
         .expect("the leaf methods should emit");
     let defined = object_defined_aura_functions(&object);
-    for name in ["aura_fn_Tally_bump__leaf", "aura_fn_Counter_bump__leaf"] {
-        assert!(defined.contains(name), "{name}: {defined:?}");
-    }
     for name in [
-        "aura_fn_Tally_scaled__leaf",
+        "aura_fn_Tally_bump__leaf",
+        "aura_fn_Counter_bump__leaf",
         "aura_fn_Counter_rename__leaf",
         "aura_fn_Counter_reset__leaf",
         "aura_fn_Pair_bump__leaf",
+        "aura_fn_forward__leaf",
     ] {
+        assert!(defined.contains(name), "{name}: {defined:?}");
+    }
+    for name in ["aura_fn_Tally_scaled__leaf", "aura_fn_Counter_label__leaf"] {
         assert!(!defined.contains(name), "{name}: {defined:?}");
     }
     emit_host_object(&mir).expect("the leaf methods should emit optimized");
