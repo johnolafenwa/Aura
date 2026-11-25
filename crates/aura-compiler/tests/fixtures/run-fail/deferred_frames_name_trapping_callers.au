@@ -1,0 +1,12 @@
+MOD = 1000003
+
+def shift(value: int64) -> int64:
+    return (value + MOD) % MOD
+
+def outer(value: int64) -> int64:
+    return shift(value) + 1
+
+def main():
+    print(shift(5))
+    print(outer(-7))
+    print(outer(9223372036854775807))

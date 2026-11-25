@@ -801,8 +801,8 @@ pub(crate) trait FunctionBackend {
     /// is set, and then sets it: the function pushes its frame record only
     /// on the ways that call out.
     fn defer_frame(&mut self, framed: Var, descriptor: Val, enter: FuncRef, free: &[FuncRef]);
-    /// Whether a block the entry reaches without crossing a cold block
-    /// calls a callee not in `free`.
+    /// Whether a block the entry reaches without crossing a cold block,
+    /// and that does not end in a trap, calls a callee not in `free`.
     fn calls_when_warm(&self, free: &[FuncRef]) -> bool;
     /// Branches on `condition` to `then_block` or `else_block`, until
     /// `settle_frame`, which makes the branch a jump to `then_block`.

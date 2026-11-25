@@ -1702,6 +1702,15 @@ impl FunctionBackend for LlvmFunction<'_> {
         while let Some(block) = warm.get(index).copied() {
             index += 1;
             let entry = &ir.blocks[block as usize];
+            // A way that ends in a trap reports a failure, which no hot
+            // path does, so it pushes the record before its calls.
+            if entry
+                .insts
+                .last()
+                .is_some_and(|inst| matches!(ir.insts[*inst as usize].op, Op::Trap))
+            {
+                continue;
+            }
             for inst in &entry.insts {
                 let targets = match &ir.insts[*inst as usize].op {
                     Op::Call(callee, _) if !free.contains(callee) => return true,

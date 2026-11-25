@@ -298,6 +298,54 @@ fn a_test_holds_where_it_dominates_and_only_kept_calls_follow_it() {
 }
 
 #[test]
+fn a_call_on_a_way_that_ends_in_a_trap_leaves_the_frame_deferred() {
+    let mut module = module();
+    let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let enter = module
+        .declare_function("enter", Linkage::Import, &unary)
+        .unwrap();
+    let fail = module
+        .declare_function("fail", Linkage::Import, &unary)
+        .unwrap();
+    define(
+        &mut module,
+        "trapping",
+        Linkage::Export,
+        &unary,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let param = builder.block_params(entry)[0];
+            let (enter, fail) = (
+                builder.import_function(enter),
+                builder.import_function(fail),
+            );
+            let framed = Var(0);
+            builder.declare_var(framed, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.defer_frame(framed, param, enter, &[]);
+            let (failing, done) = (builder.create_block(), builder.create_block());
+            builder.brif(param, failing, &[], done, &[]);
+            builder.switch_to_block(failing);
+            builder.seal_block(failing);
+            builder.call(fail, &[param]);
+            builder.trap(TrapCode::User(1));
+            builder.switch_to_block(done);
+            builder.seal_block(done);
+            // The failing way is not cold, but it ends in the trap.
+            assert!(!builder.calls_when_warm(&[enter]));
+            builder.return_(&[param]);
+        },
+    );
+    let deferred = ir(&module);
+    assert_eq!(deferred.matches("call i64 @enter").count(), 1, "{deferred}");
+    assert_eq!(deferred.matches("call i64 @fail").count(), 1, "{deferred}");
+}
+
+#[test]
 fn a_deferred_frame_is_pushed_before_the_calls_that_need_it() {
     let mut module = module();
     let unary = signature(CallConv::C, &[types::I64], &[types::I64]);
