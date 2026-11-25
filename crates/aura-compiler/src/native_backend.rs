@@ -691,6 +691,9 @@ pub(crate) trait ModuleBackend {
     /// objects, which the code generator writes in parallel; a small one
     /// writes the one object `finish` would.
     fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String>;
+
+    #[cfg(test)]
+    fn llvm_ir(self: Box<Self>) -> Result<String, String>;
 }
 
 /// An entry to blocks a backend copies: the pad that jumps into them, the

@@ -18368,3 +18368,54 @@ def main():
         "extracting a handle payload from a typed enum must copy into a fresh box instead of retaining the container's ElementBox: {referenced:?}"
     );
 }
+
+#[test]
+fn array_holder_count_loads_atomically_on_direct_and_loop_writes() {
+    let source = r#"
+def single_write(xs: mut Array[int64], i: int64, v: int64) -> None:
+    xs[i] = v
+
+def loop_write(xs: mut Array[int64], n: int64) -> None:
+    for i in range(n):
+        xs[i] = i
+
+def main() -> None:
+    mut xs = Array[int64].zeros([4])
+    single_write(xs, 0, 7)
+    loop_write(xs, 4)
+"#;
+    let mir = lower_source_to_mir(source).expect("array writes should lower");
+    let validated = super::validated_for_emission(&mir).expect("MIR validates");
+    let ir = super::NativeCodegen::with_validated_loans(&validated, "<test>", source)
+        .expect("codegen initializes")
+        .emit_ir()
+        .expect("LLVM IR emits");
+
+    // Extract the IR definitions of single_write and loop_write and assert each
+    // performs an atomic i64 load of `ArrayOwner.holders`.
+    for fn_name in ["aura_fn_single_write", "aura_fn_loop_write"] {
+        let needle = format!("@{fn_name}(");
+        let def_start = ir
+            .match_indices(&needle)
+            .find_map(|(pos, _)| {
+                let line_start = ir[..pos].rfind('\n').map_or(0, |i| i + 1);
+                ir[line_start..pos].starts_with("define ").then_some(line_start)
+            })
+            .unwrap_or_else(|| panic!("missing definition for `{fn_name}` in IR"));
+        let rest = &ir[def_start..];
+        let end = rest.find("\n}\n").unwrap_or(rest.len());
+        let body = &rest[..end];
+        let atomic_loads = body.matches("load atomic i64").count();
+        assert!(
+            atomic_loads >= 1,
+            "expected atomic i64 load for ArrayOwner.holders in `{fn_name}`:\n{body}"
+        );
+        if fn_name == "aura_fn_loop_write" {
+            // Loop snapshot preheader + fallback element-write path both check `ArrayOwner.holders`.
+            assert!(
+                atomic_loads >= 2,
+                "expected atomic i64 loads in both loop snapshot preheader and direct write path in `{fn_name}` (got {atomic_loads}):\n{body}"
+            );
+        }
+    }
+}

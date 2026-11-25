@@ -1285,6 +1285,14 @@ impl<'a> NativeCodegen<'a> {
             .map_err(|error| format!("failed to emit direct backend object: {}", error))
     }
 
+    #[cfg(test)]
+    fn emit_ir(mut self) -> std::result::Result<String, String> {
+        self.define_program()?;
+        self.take_module_backend()?
+            .llvm_ir()
+            .map_err(|error| format!("failed to emit direct backend LLVM IR: {}", error))
+    }
+
     /// The program as the objects of its codegen units.
     fn emit_units(mut self) -> std::result::Result<Vec<Vec<u8>>, String> {
         self.define_program()?;
@@ -13619,7 +13627,14 @@ impl<'a> FunctionCompiler<'a> {
             self.builder.brif(holds, checked, &[], slow_block, &[]);
             self.builder.switch_to_block(checked);
             self.builder.seal_block(checked);
-            let mut count = self.builder.load(types::I64, flags, holders, 0);
+            let mut count = self
+                .builder
+                .memory_access(
+                    crate::native_backend::MemoryAccess::AtomicLoad,
+                    types::I64,
+                    &[holders],
+                )
+                .expect("atomic load returns a word");
             if let Some(index) = kept {
                 let alone = self.builder.iconst(types::I64, 1);
                 count = self.keep_in_copy(index, alone, count);

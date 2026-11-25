@@ -386,6 +386,14 @@ impl ModuleBackend for LlvmModule {
         module.inline_calls_copied_with_their_loops();
         module.unit_objects(&Partition::split(&module), threads)
     }
+
+    #[cfg(test)]
+    fn llvm_ir(self: Box<Self>) -> Result<String, String> {
+        let machine = self.target_machine()?;
+        let context = Context::create();
+        let lowered = self.lower(&context, &machine)?;
+        Ok(lowered.print_to_string().to_string())
+    }
 }
 
 /// A function of more recorded instructions is never marked for inlining

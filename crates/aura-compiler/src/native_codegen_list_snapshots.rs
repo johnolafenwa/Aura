@@ -690,7 +690,14 @@ impl FunctionCompiler<'_> {
             let holders = self
                 .builder
                 .load(types::I64, flags, handle, layout.holders_offset);
-            let count = self.builder.load(types::I64, flags, holders, 0);
+            let count = self
+                .builder
+                .memory_access(
+                    crate::native_backend::MemoryAccess::AtomicLoad,
+                    types::I64,
+                    &[holders],
+                )
+                .expect("atomic load returns a word");
             let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
             let alone = self.builder.uextend(types::I64, alone);
             qualifies = self.builder.band(qualifies, alone);
