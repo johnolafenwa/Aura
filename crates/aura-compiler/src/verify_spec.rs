@@ -1656,7 +1656,23 @@ fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
 
 /// A MIR function name without the type arguments of a specialized copy.
 pub(super) fn base_name(name: &str) -> &str {
-    name.split('[').next().unwrap_or(name)
+    let Some(without_close) = name.strip_suffix(']') else {
+        return name;
+    };
+    let mut depth = 1usize;
+    for (idx, ch) in without_close.char_indices().rev() {
+        match ch {
+            ']' => depth += 1,
+            '[' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &name[..idx];
+                }
+            }
+            _ => {}
+        }
+    }
+    name
 }
 
 fn public_name(name: &str) -> String {

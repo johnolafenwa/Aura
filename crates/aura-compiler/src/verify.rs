@@ -275,6 +275,11 @@ pub(crate) struct VerifyContext<'a> {
     /// The trait method each implementation method implements, by MIR
     /// function name.
     implemented: BTreeMap<String, &'a FunctionDecl>,
+    /// The module that wrote each `impl Trait for Type` method, by MIR base
+    /// function name. Inherited default methods lower in the trait's module
+    /// so their body resolves names there, while ownership belongs to the
+    /// implementation's module.
+    impl_owners: BTreeMap<String, &'a str>,
     /// The contract of each callable alias that states one, by name.
     callable_contracts: BTreeMap<String, &'a crate::sema::FunctionInfo>,
     /// The callable alias with a contract that each class field declared
@@ -299,6 +304,8 @@ impl<'a> VerifyContext<'a> {
         let mut field_contracts = BTreeMap::new();
         let mut trait_methods = BTreeMap::new();
         let mut impl_methods = BTreeMap::new();
+        let mut impl_methods_by_name = BTreeMap::new();
+        let mut impl_owners = BTreeMap::new();
         let mut module_paths = BTreeSet::new();
         let mut module_aliases = BTreeMap::new();
 
@@ -470,23 +477,61 @@ impl<'a> VerifyContext<'a> {
                 trait_methods.insert(format!("{trait_name}.{method}"), &method_info.decl);
             }
         }
+        fn resolve_trait_info<'a>(
+            program: &'a Program,
+            ns: Option<&'a crate::sema::ModuleNamespace>,
+            trait_name: &str,
+        ) -> Option<&'a crate::sema::TraitInfo> {
+            let short_trait = trait_name.rsplit('.').next().unwrap_or(trait_name);
+            if let Some(ns) = ns {
+                if let Some(info) = [
+                    ns.all_traits.get(trait_name),
+                    ns.traits.get(trait_name),
+                    ns.all_traits.get(short_trait),
+                    ns.traits.get(short_trait),
+                ]
+                .into_iter()
+                .flatten()
+                .next()
+                {
+                    return Some(info);
+                }
+            }
+            if let Some(info) = program.traits.get(trait_name) {
+                return Some(info);
+            }
+            if let Some((module_path, item)) = trait_name.rsplit_once('.') {
+                if let Some(target_ns) = program.module_registry.get(module_path) {
+                    return target_ns
+                        .all_traits
+                        .get(item)
+                        .or_else(|| target_ns.traits.get(item));
+                }
+            }
+            None
+        }
+
         for trait_impl in &program.trait_impls {
+            let trait_info = resolve_trait_info(program, None, &trait_impl.trait_name);
             for (method_name, method) in &trait_impl.methods {
-                decl_modules_by_ptr.insert(
-                    std::ptr::from_ref(&method.decl) as usize,
-                    trait_impl.module_name.as_str(),
-                );
-                let trait_method = program
-                    .traits
-                    .get(&trait_impl.trait_name)
+                let inherited = !trait_impl
+                    .decl
+                    .methods
+                    .iter()
+                    .any(|written| written.name == method.decl.name);
+                let trait_method = trait_info
                     .and_then(|info| info.methods.get(method_name))
                     .map(|info| &info.decl);
+                let decl_module = match trait_info {
+                    Some(info) if inherited => info.module_name.as_str(),
+                    _ => trait_impl.module_name.as_str(),
+                };
+                decl_modules_by_ptr.insert(std::ptr::from_ref(&method.decl) as usize, decl_module);
+                let qualified_name = crate::mir::trait_impl_method_name(trait_impl, method_name);
+                impl_owners.insert(qualified_name.clone(), trait_impl.module_name.as_str());
+                impl_methods_by_name.insert(qualified_name, (&method.decl, trait_method));
                 impl_methods.insert(
-                    (
-                        trait_impl.module_name.as_str(),
-                        method.decl.span.line,
-                        method.decl.span.column,
-                    ),
+                    (decl_module, method.decl.span.line, method.decl.span.column),
                     (&method.decl, trait_method),
                 );
             }
@@ -512,6 +557,11 @@ impl<'a> VerifyContext<'a> {
                 (&'a str, usize, usize),
                 (&'a FunctionDecl, Option<&'a FunctionDecl>),
             >,
+            impl_methods_by_name: &mut BTreeMap<
+                String,
+                (&'a FunctionDecl, Option<&'a FunctionDecl>),
+            >,
+            impl_owners: &mut BTreeMap<String, &'a str>,
         ) {
             if !visited.insert((ns.path.clone(), std::ptr::from_ref(ns) as usize)) {
                 return;
@@ -602,34 +652,32 @@ impl<'a> VerifyContext<'a> {
                 }
             }
             for trait_impl in &ns.trait_impls {
+                let trait_info = resolve_trait_info(program, Some(ns), &trait_impl.trait_name);
                 for (method_name, method) in &trait_impl.methods {
-                    decl_modules_by_ptr.insert(
-                        std::ptr::from_ref(&method.decl) as usize,
-                        trait_impl.module_name.as_str(),
-                    );
-                    let short_trait = trait_impl
-                        .trait_name
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or(&trait_impl.trait_name);
-                    let trait_method = [
-                        ns.all_traits.get(&trait_impl.trait_name),
-                        ns.traits.get(&trait_impl.trait_name),
-                        ns.all_traits.get(short_trait),
-                        ns.traits.get(short_trait),
-                        program.traits.get(&trait_impl.trait_name),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .next()
-                    .and_then(|info| info.methods.get(method_name))
-                    .map(|info| &info.decl);
+                    let inherited = !trait_impl
+                        .decl
+                        .methods
+                        .iter()
+                        .any(|written| written.name == method.decl.name);
+                    let trait_method = trait_info
+                        .and_then(|info| info.methods.get(method_name))
+                        .map(|info| &info.decl);
+                    let decl_module = match trait_info {
+                        Some(info) if inherited => info.module_name.as_str(),
+                        _ => trait_impl.module_name.as_str(),
+                    };
+                    decl_modules_by_ptr
+                        .insert(std::ptr::from_ref(&method.decl) as usize, decl_module);
+                    let qualified_name =
+                        crate::mir::trait_impl_method_name(trait_impl, method_name);
+                    impl_owners
+                        .entry(qualified_name.clone())
+                        .or_insert(trait_impl.module_name.as_str());
+                    impl_methods_by_name
+                        .entry(qualified_name)
+                        .or_insert((&method.decl, trait_method));
                     impl_methods
-                        .entry((
-                            trait_impl.module_name.as_str(),
-                            method.decl.span.line,
-                            method.decl.span.column,
-                        ))
+                        .entry((decl_module, method.decl.span.line, method.decl.span.column))
                         .or_insert((&method.decl, trait_method));
                 }
             }
@@ -650,6 +698,8 @@ impl<'a> VerifyContext<'a> {
                     field_contracts,
                     trait_methods,
                     impl_methods,
+                    impl_methods_by_name,
+                    impl_owners,
                 );
             }
         }
@@ -676,6 +726,8 @@ impl<'a> VerifyContext<'a> {
                 &mut field_contracts,
                 &mut trait_methods,
                 &mut impl_methods,
+                &mut impl_methods_by_name,
+                &mut impl_owners,
             );
         }
 
@@ -683,14 +735,19 @@ impl<'a> VerifyContext<'a> {
         for function in &module.functions {
             let name = spec::base_name(&function.name);
             if name.contains(" for ") {
-                if let Some((decl, trait_method)) = impl_methods.get(&(
-                    function.module_name.as_str(),
-                    function.span.line,
-                    function.span.column,
-                )) {
+                let matched = impl_methods_by_name.get(name).copied().or_else(|| {
+                    impl_methods
+                        .get(&(
+                            function.module_name.as_str(),
+                            function.span.line,
+                            function.span.column,
+                        ))
+                        .copied()
+                });
+                if let Some((decl, trait_method)) = matched {
                     decls.entry(name.to_string()).or_insert(decl);
                     if let Some(trait_method) = trait_method {
-                        implemented.insert(name.to_string(), *trait_method);
+                        implemented.insert(name.to_string(), trait_method);
                     }
                 }
             }
@@ -721,6 +778,7 @@ impl<'a> VerifyContext<'a> {
             module_aliases,
             trait_methods,
             implemented,
+            impl_owners,
             callable_contracts,
             field_contracts,
             frames: std::cell::OnceCell::new(),
@@ -765,7 +823,20 @@ impl<'a> VerifyContext<'a> {
             &candidates,
             &program.module_name,
             top_level.map(|function| function.name.as_str()),
+            |function| self.owner_module(function),
         )
+    }
+
+    pub(crate) fn impl_owner(&self, name: &str) -> Option<&'a str> {
+        self.impl_owners.get(spec::base_name(name)).copied()
+    }
+
+    pub(crate) fn owner_module<'b>(&self, function: &'b MirFunction) -> &'b str
+    where
+        'a: 'b,
+    {
+        self.impl_owner(&function.name)
+            .unwrap_or(function.module_name.as_str())
     }
 
     /// The class whose invariant the trait implementation method `name`
@@ -1102,7 +1173,7 @@ fn generator_frame_function(function: &MirFunction) -> bool {
 /// Whether `function` is one the report covers: a function of the entry
 /// module that is not a `spec def`.
 fn verified_function(program: &Program, cx: &VerifyContext<'_>, function: &MirFunction) -> bool {
-    if function.module_name != program.module_name {
+    if cx.owner_module(function) != program.module_name {
         return false;
     }
     if function.name.contains("::__default_") || generator_frame_function(function) {
@@ -1126,14 +1197,17 @@ fn auxiliary_verified_function(
     cx: &VerifyContext<'_>,
     function: &MirFunction,
 ) -> bool {
-    if function.module_name == program.module_name {
-        if let Some((owner, _)) = function.name.split_once("::__default_") {
-            return !cx.decl(owner).is_some_and(|decl| decl.spec);
-        }
+    if let Some((owner, _)) = function.name.split_once("::__default_") {
+        let owner_module = cx
+            .impl_owner(owner)
+            .unwrap_or(function.module_name.as_str());
+        return owner_module == program.module_name
+            && !cx.decl(owner).is_some_and(|decl| decl.spec);
+    }
+    if cx.owner_module(function) == program.module_name {
         return false;
     }
-    !function.name.contains("::__default_")
-        && cx.decl(&function.name).is_some_and(|decl| decl.lemma)
+    cx.decl(&function.name).is_some_and(|decl| decl.lemma)
 }
 
 /// Verifies every function of `program` whose MIR is `module`.
@@ -1171,7 +1245,7 @@ pub fn verify_module(
         let is_imported_erased = !is_primary
             && !is_auxiliary
             && options.prove_sites
-            && function.module_name != program.module_name
+            && cx.owner_module(function) != program.module_name
             && !generator_frame_function(function)
             && !spec::base_name(&function.name)
                 .ends_with(&format!(".{}", crate::ast::CLASS_INVARIANT_METHOD))

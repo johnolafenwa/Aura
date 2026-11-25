@@ -11554,6 +11554,18 @@ fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
     }
 }
 
+pub(crate) fn trait_impl_method_name(
+    trait_impl: &crate::sema::TraitImplInfo,
+    method_name: &str,
+) -> String {
+    format!(
+        "{}{} for {}.{method_name}",
+        trait_impl.trait_name,
+        format_trait_args(&trait_impl.trait_args),
+        trait_impl.for_type
+    )
+}
+
 fn lower_trait_impl(
     program: &Program,
     module_name: &str,
@@ -11563,13 +11575,7 @@ fn lower_trait_impl(
 ) -> MirTraitImpl {
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
-        let qualified_name = format!(
-            "{}{} for {}.{}",
-            trait_impl.trait_name,
-            format_trait_args(&trait_impl.trait_args),
-            trait_impl.for_type,
-            method.decl.name
-        );
+        let qualified_name = trait_impl_method_name(trait_impl, &method.decl.name);
         // A default body the implementation inherits names what its
         // trait's module sees, so it lowers in that module.
         let inherited = !trait_impl

@@ -5231,3 +5231,93 @@ def main():
 "#,
     );
 }
+
+#[test]
+fn inherited_default_methods_of_imported_traits_are_verified_for_local_impls() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "aura_verify_imported_trait_default_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("base.au"),
+        r#"public spec def nonneg(v: int64) -> bool:
+    return v >= 0
+
+public trait T:
+    def helper(self) -> int64
+
+    def f(self) -> int64:
+        ensures nonneg(result)
+        return self.helper()
+"#,
+    )
+    .expect("base.au");
+
+    let main_bad = dir.join("main.au");
+    std::fs::write(
+        &main_bad,
+        r#"import base
+
+class Bad:
+    x: int64
+
+impl base.T for Bad:
+    def helper(self) -> int64:
+        return -1
+
+def call_dyn(t: dyn base.T) -> int64:
+    ensures result >= 0
+    return t.f()
+
+def main():
+    b = Bad(x=0)
+    print(call_dyn(b))
+"#,
+    )
+    .expect("main.au bad");
+    let program = crate::check_path(&main_bad).expect("bad program checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    let failed_default = report.obligations.iter().any(|ob| {
+        ob.kind == ObligationKind::Ensures
+            && ob.function.contains("Bad.f")
+            && matches!(ob.status, Status::Failed { .. })
+    });
+    assert!(
+        failed_default,
+        "inherited default method `base.T for Bad.f` must fail verification: {report:#?}"
+    );
+
+    std::fs::write(
+        &main_bad,
+        r#"import base
+
+class Good:
+    x: int64
+
+impl base.T for Good:
+    def helper(self) -> int64:
+        ensures result >= 0
+        return 0
+
+def main():
+    g = Good(x=0)
+    print(g.f())
+"#,
+    )
+    .expect("main.au good");
+    let program = crate::check_path(&main_bad).expect("good program checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    assert!(
+        report.is_proved(),
+        "valid inherited default method should prove cleanly: {report:#?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
