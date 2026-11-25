@@ -1,0 +1,78 @@
+copy class Entry:
+    dist: int64
+    node: int64
+
+
+def sift_up(heap: mut list[int64], start: int64):
+    mut i = start
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent] <= heap[i]:
+            break
+        heap.swap(parent, i)
+        i = parent
+
+
+def sift_down(heap: mut list[int64]):
+    size = heap.len()
+    mut i = 0
+    while true:
+        left = 2 * i + 1
+        right = left + 1
+        mut smallest = i
+        if left < size and heap[left] < heap[smallest]:
+            smallest = left
+        if right < size and heap[right] < heap[smallest]:
+            smallest = right
+        if smallest == i:
+            break
+        heap.swap(smallest, i)
+        i = smallest
+
+
+def sift_entries(heap: mut list[Entry], start: int64):
+    mut i = start
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent].dist <= heap[i].dist:
+            break
+        heap.swap(parent, i)
+        i = parent
+
+
+def rotate_from_end(values: mut list[float64], rounds: int64):
+    mut k = 0
+    while k < rounds:
+        size = values.len()
+        values.swap(-1, k % size)
+        k += 1
+
+
+def main():
+    mut heap: list[int64] = []
+    for value in [9, 4, 7, 1, 8, 2, 6]:
+        heap.append(value)
+        last = heap.len() - 1
+        sift_up(heap, last)
+    print(heap)
+    before = heap.copy()
+    heap[0] = 10
+    sift_down(heap)
+    print(before)
+    print(heap)
+    mut shared = heap.copy()
+    tail = shared.len() - 1
+    sift_up(shared, tail)
+    shared[0] = 11
+    sift_down(shared)
+    print(heap)
+    print(shared)
+    mut entries: list[Entry] = []
+    for node in range(6):
+        entries.append(Entry(dist=(node * 7) % 5, node=node))
+        newest = entries.len() - 1
+        sift_entries(entries, newest)
+    print([entry.node for entry in entries])
+    mut floats = [0.5, 1.5, 2.5, 3.5]
+    rotate_from_end(floats, 3)
+    print(floats)

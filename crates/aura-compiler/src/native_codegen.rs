@@ -15224,9 +15224,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fast);
         let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
         let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let capacity = self.list_view_word(list, list_snapshots::ViewWord::Room);
         let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
         self.builder.brif(writable, write, &[], slow, &[]);
 

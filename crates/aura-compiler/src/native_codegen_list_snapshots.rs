@@ -152,8 +152,9 @@ fn view_use(instruction: &Instruction, list: &str) -> Option<ViewUse> {
                 | ListOp::Index
                 | ListOp::IndexUnchecked => Some(ViewUse::Reads),
                 // A store into unshared storage of the element's own kind
-                // keeps the storage, its form, and its length.
-                ListOp::SetIndexScalar(_) => Some(ViewUse::Writes),
+                // keeps the storage, its form, and its length, and so does
+                // an exchange of two elements.
+                ListOp::SetIndexScalar(_) | ListOp::Swap => Some(ViewUse::Writes),
                 _ => None,
             }
         }

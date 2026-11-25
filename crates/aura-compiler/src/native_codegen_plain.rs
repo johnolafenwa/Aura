@@ -782,16 +782,14 @@ impl FunctionCompiler<'_> {
         self.builder.seal_block(fast_block);
         let flags = MemFlags::trusted();
         // A view's room is 0 while another list shares the storage.
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
+        let capacity = self.list_view_word(list, super::list_snapshots::ViewWord::Room);
         let shared = self.builder.icmp_imm(IntCC::Equal, capacity, 0);
         self.builder
             .brif(shared, slow_block, &[], unshared_block, &[]);
 
         self.builder.switch_to_block(unshared_block);
         self.builder.seal_block(unshared_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, super::list_snapshots::ViewWord::Elements);
         let left = self.emit_list_view_bounds_check(list, first, &layout, slow_block);
         let right = self.emit_list_view_bounds_check(list, second, &layout, slow_block);
         let left = self.builder.imul_imm(left, record.stride);
