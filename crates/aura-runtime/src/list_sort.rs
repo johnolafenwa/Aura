@@ -77,6 +77,11 @@ fn directed(ordering: Ordering, reverse: bool) -> Ordering {
 /// Sorts `items` stably by the built-in order of the value each holds.
 fn sort_values<T>(items: &mut [T], value: impl Fn(&T) -> &Value, reverse: bool) -> Result<()> {
     check_orderable(items.iter().map(&value))?;
+    if let Some(texts) = str_bytes(items, &value) {
+        let order = str_positions(&texts, reverse);
+        apply_slice_positions(items, order);
+        return Ok(());
+    }
     items.sort_by(|left, right| {
         directed(
             value_sort_order(value(left), value(right)).unwrap_or(Ordering::Equal),
@@ -84,6 +89,61 @@ fn sort_values<T>(items: &mut [T], value: impl Fn(&T) -> &Value, reverse: bool) 
         )
     });
     Ok(())
+}
+
+/// The bytes of each of `items`' values when every one is a `str`.
+fn str_bytes<'a, T>(items: &'a [T], value: impl Fn(&'a T) -> &'a Value) -> Option<Vec<&'a [u8]>> {
+    items
+        .iter()
+        .map(|item| match value(item) {
+            Value::String(text) => Some(text.as_bytes()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The first eight bytes of `bytes` as a big-endian word, padded with
+/// zeros: words order as the byte strings they start do, up to a tie.
+fn str_prefix(bytes: &[u8]) -> u64 {
+    let mut word = [0u8; 8];
+    let len = bytes.len().min(8);
+    word[..len].copy_from_slice(&bytes[..len]);
+    u64::from_be_bytes(word)
+}
+
+/// The positions of the `str`s whose bytes `texts` holds, in the stable
+/// order of those bytes. Each position is sorted with the first eight
+/// bytes of its `str` beside it, so most comparisons read one word, and a
+/// tie on the whole `str` falls back to the position, so the faster
+/// unstable sort gives the stable order.
+fn str_positions(texts: &[&[u8]], reverse: bool) -> Vec<usize> {
+    let mut pairs = texts
+        .iter()
+        .enumerate()
+        .map(|(at, text)| (str_prefix(text), at))
+        .collect::<Vec<_>>();
+    pairs.sort_unstable_by(|(left, left_at), (right, right_at)| {
+        let order = match left.cmp(right) {
+            Ordering::Equal => texts[*left_at].cmp(texts[*right_at]),
+            order => order,
+        };
+        directed(order, reverse).then(left_at.cmp(right_at))
+    });
+    pairs.into_iter().map(|(_, position)| position).collect()
+}
+
+/// [`apply_positions`] for a slice.
+fn apply_slice_positions<T>(items: &mut [T], mut order: Vec<usize>) {
+    for start in 0..order.len() {
+        let mut current = start;
+        while order[current] != start {
+            let next = order[current];
+            items.swap(current, next);
+            order[current] = current;
+            current = next;
+        }
+        order[current] = current;
+    }
 }
 
 /// The positions of `keys` in the stable order of the built-in order of the
@@ -94,6 +154,9 @@ fn value_positions<T>(
     reverse: bool,
 ) -> Result<Vec<usize>> {
     check_orderable(keys.iter().map(&value))?;
+    if let Some(texts) = str_bytes(keys, &value) {
+        return Ok(str_positions(&texts, reverse));
+    }
     let mut order = (0..keys.len()).collect::<Vec<_>>();
     order.sort_by(|left, right| {
         directed(

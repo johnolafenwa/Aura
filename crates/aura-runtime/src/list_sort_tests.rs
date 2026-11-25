@@ -118,6 +118,45 @@ fn str_lists_sort_by_utf8_bytes() {
 }
 
 #[test]
+fn strs_that_share_their_first_eight_bytes_sort_by_the_rest() {
+    let mut values = list(vec![
+        text("prefix12b"),
+        text("prefix12"),
+        text("prefix12a"),
+        text("ab\0"),
+        text("ab"),
+        text("prefix12"),
+        text("prefix11zzzz"),
+    ]);
+    sort_elements(&mut values, false).unwrap();
+    assert_eq!(
+        rendered(&values),
+        [
+            "ab",
+            "ab\0",
+            "prefix11zzzz",
+            "prefix12",
+            "prefix12",
+            "prefix12a",
+            "prefix12b"
+        ]
+    );
+    sort_elements(&mut values, true).unwrap();
+    assert_eq!(
+        rendered(&values),
+        [
+            "prefix12b",
+            "prefix12a",
+            "prefix12",
+            "prefix12",
+            "prefix11zzzz",
+            "ab\0",
+            "ab"
+        ]
+    );
+}
+
+#[test]
 fn boxed_integers_and_durations_sort() {
     let mut values = list(vec![int32(5), int32(-7), int32(5), int32(1)]);
     sort_elements(&mut values, false).unwrap();
