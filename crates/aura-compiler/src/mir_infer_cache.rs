@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::ast::Expr;
+use crate::ast::{Expr, ExprKind};
 use crate::sema::Type;
 
 struct Memo {
@@ -62,6 +62,11 @@ pub(super) fn memoized(
             .as_ref()
             .is_some_and(|memo| memo.lowerer == lowerer)
     });
+    // Only calls and member reads re-infer their parts, and the outermost
+    // expression is not asked for again inside its own inference.
+    if started || !matches!(expr.kind, ExprKind::Call { .. } | ExprKind::Member { .. }) {
+        return infer();
+    }
     if !own {
         // Another lowerer, such as one made for a nested function, has
         // its own state: its results are not reused.
