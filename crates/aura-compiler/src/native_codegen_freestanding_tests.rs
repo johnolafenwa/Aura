@@ -959,3 +959,14 @@ export "C" def sample() -> uint64:
     assert_eq!(global, ["sample"]);
     assert_eq!(undefined, ["read_sensor"]);
 }
+
+#[test]
+fn freestanding_rejects_interior_nul_cstr_literal() {
+    let source = r#"
+extern "C" def log_line(text: cstr) -> None
+
+export "C" def entry() -> None:
+    log_line("hi\0there")
+"#;
+    assert_problem(source, "interior NUL");
+}

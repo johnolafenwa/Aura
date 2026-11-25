@@ -1025,6 +1025,19 @@ fn check_call(
         CallTarget::Value(_) => Some(("calls a function value".to_string(), "")),
         CallTarget::Extern(call) => {
             for (param, argument) in call.params.iter().zip(args) {
+                if param.c_string {
+                    if let Operand::String(text) = &argument.value {
+                        if text.contains('\0') {
+                            return Some((
+                                format!(
+                                    "passes a literal with an interior NUL byte for `{}` of the foreign function `{}`",
+                                    param.name, call.symbol
+                                ),
+                                "C strings end at the first NUL byte and cannot hold one inside",
+                            ));
+                        }
+                    }
+                }
                 let text = matches!(argument.value, Operand::String(_));
                 let callback = matches!(argument.value, Operand::Function { .. })
                     && crate::mir_runtime::callback_signature(&param.ty).is_some();
