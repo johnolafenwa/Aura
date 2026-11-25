@@ -152,6 +152,43 @@ A half product adds its terms in `float32`. With cuBLAS's own half
 product, which adds in half precision, GPT-2 named a different token
 from PyTorch on one row of the batch.
 
+### Whole Programs, Apple M2 Pro, Metal
+
+Apple M2 Pro with 16 GB, macOS 26.5, PyTorch 2.8 on MPS, 2026-11-24,
+on mains power. Milliseconds for the timed passes of a row, the range of
+four runs. One `mlp_train` run of 1,089 ms is left out of its range. A
+pass earlier the same day was about 10% faster on both sides.
+
+| Program | Aura, Metal device | PyTorch, MPS | Aura, CPU device | PyTorch, CPU |
+| --- | ---: | ---: | ---: | ---: |
+| `mlp_train`, 500 steps | 524 to 592 | 451 to 509 | 3,367 | 803 |
+| `mlp_infer`, 65,536 rows | 4,510 to 4,693 | 4,699 to 4,756 | 116,888 | 7,989 |
+| `kmeans`, 200,000 rows | 265 to 270 | 724 to 784 | 2,666 | 834 |
+| `conjugate_gradient`, 4,096 | 95 to 117 | 57 to 60 | 703 | 133 |
+| `transformer_train`, 4 layers of 256 | 1,067 to 1,212 | 942 to 958 | 47,194 | 2,567 |
+| `monte_carlo`, 10,000,000 paths | 729 to 770 | 124 to 134 | 3,340 | 1,956 |
+| `cnn_train`, 50 steps | 2,484 to 2,546 | 355 to 387 | 44,825 | 7,101 |
+| `gpt_infer`, 12 layers of 768 | 1,414 to 1,517 | 1,105 to 1,200 | 58,043 | 5,877 |
+
+What the numbers say:
+
+- Aura on Metal is ahead of PyTorch on MPS on `kmeans` by about 2.8
+  times and level on `mlp_infer`. It is 10 to 30% behind on
+  `mlp_train`, `transformer_train` and `gpt_infer`.
+- `cnn_train` is about 7 times behind. Aura builds a convolution from
+  an index select and a matrix product, and a training step is one
+  MPSGraph of 812 steps that runs in about 45 ms. PyTorch calls the
+  library's own convolution.
+- `monte_carlo` is about 6 times behind. Aura makes its normal floats
+  from a 64-bit hash, so a run on Metal gives the CPU device's floats.
+  The hash is integer arithmetic that MPSGraph runs as many separate
+  steps.
+- `conjugate_gradient` is about 1.7 times behind, and PyTorch on MPS
+  prints `nan` for its residual at this size.
+- Each Metal result equals the CPU device's to the last digits. `kmeans`
+  and `cnn_train` differ in the last digits between runs, because a float
+  `index_add` adds repeated indices in an order the GPU does not fix.
+
 ### Single Expressions
 
 ### NVIDIA A40, CUDA
