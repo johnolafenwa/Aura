@@ -18901,3 +18901,45 @@ fn a_value_tagged_once_is_not_tagged_again_where_the_check_joins() {
     let tags = object_referenced_symbol_occurrences(&object, "aura_direct_tag_value_type_cell");
     assert_eq!(tags, 3);
 }
+
+#[test]
+fn direct_int64_parse_slots_keep_the_number_as_a_word() {
+    let source = r#"
+def to_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def to_i32(text: str) -> int32:
+    match parse_int32(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def main() -> int32:
+    print(to_int("4"))
+    return to_i32("5")
+"#;
+    let mir = lower_source_to_mir(source).expect("the parse program should lower");
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}`"))
+    };
+    let (slots, words) = super::lookups::lookup_slots(function("to_int"));
+    assert_eq!(words.len(), 1, "{words:?}");
+    assert!(words.is_subset(&slots));
+    // Only an int64 parse keeps a word; an int32 parse keeps its box.
+    let (slots, words) = super::lookups::lookup_slots(function("to_i32"));
+    assert_eq!(slots.len(), 1, "{slots:?}");
+    assert!(words.is_empty(), "{words:?}");
+    let views = super::str_slots::plan_views(&mir);
+    assert!(views.contains_key("to_int"), "{views:?}");
+    assert!(!views.contains_key("to_i32"), "{views:?}");
+}

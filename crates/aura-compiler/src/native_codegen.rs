@@ -16824,6 +16824,9 @@ impl<'a> FunctionCompiler<'a> {
             if lookups::is_dict_get(value) {
                 return self.compile_dict_word_lookup(target, value, address);
             }
+            if lookups::is_int64_parse(value) {
+                return self.compile_parse_word(value, address);
+            }
             return self.compile_map_word_lookup(value, address);
         }
         let target_ty = self.type_of_place(target)?;

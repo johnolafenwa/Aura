@@ -9233,6 +9233,39 @@ pub extern "C-unwind" fn aura_direct_parse_number_ok(
     })
 }
 
+/// `parse_int64` of the `len` UTF-8 bytes at `bytes` for a `Result` slot
+/// that keeps the number as a word: 1 with the number at `out[0]`, or 0
+/// where the parse would give `Err`. No box, `Result` or error text is
+/// built.
+///
+/// # Safety
+///
+/// `bytes` points to `len` bytes of valid UTF-8, and `out` to one
+/// writable word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_parse_int64_word(
+    bytes: *const u8,
+    len: usize,
+    out: *mut i64,
+) -> i64 {
+    let bytes: &[u8] = if len == 0 {
+        &[]
+    } else {
+        // SAFETY: the caller hands over the bytes of a `str`.
+        unsafe { slice::from_raw_parts(bytes, len) }
+    };
+    // SAFETY: the bytes of a `str` are UTF-8.
+    let text = unsafe { str::from_utf8_unchecked(bytes) };
+    match text.parse::<i64>() {
+        Ok(value) => {
+            // SAFETY: the caller hands over one writable word.
+            unsafe { out.write(value) };
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_range_new(start: i64, end: i64) -> *mut OpaqueValue {
     task_runtime_boundary(|| {

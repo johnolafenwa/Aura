@@ -30518,6 +30518,29 @@ fn a_number_parse_for_a_slot_keeps_the_number_or_null() {
 }
 
 #[test]
+fn an_int64_parse_for_a_word_slot_writes_the_number_or_reports_none() {
+    let parse = |text: &str| {
+        let mut out = -1_i64;
+        let found =
+            unsafe { super::aura_direct_parse_int64_word(text.as_ptr(), text.len(), &mut out) };
+        (found == 1).then_some(out)
+    };
+    assert_eq!(parse("-12"), Some(-12));
+    assert_eq!(parse("+7"), Some(7));
+    assert_eq!(parse("9223372036854775807"), Some(i64::MAX));
+    assert_eq!(parse("9223372036854775808"), None);
+    assert_eq!(parse(" 1"), None);
+    assert_eq!(parse("x"), None);
+    assert_eq!(parse(""), None);
+    let mut out = 5_i64;
+    assert_eq!(
+        unsafe { super::aura_direct_parse_int64_word(std::ptr::null(), 0, &mut out) },
+        0
+    );
+    assert_eq!(out, 5);
+}
+
+#[test]
 fn one_byte_replace_count_and_split_match_the_substring_search() {
     use crate::text::Text;
     let cases = [

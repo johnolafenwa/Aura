@@ -122,6 +122,7 @@ fn param_uses(
     // (see `element_slots`), compare from their bytes.
     let mut loans = read_str_loans(function);
     loans.extend(str_element_reads(function));
+    let parse_words = lookups::lookup_slots(function).1;
     let views = |operand: &Operand| {
         matches!(operand, Operand::String(_))
             || matches!(operand, Operand::Place(place)
@@ -179,6 +180,12 @@ fn param_uses(
                 },
                 // The bytes of a `str` are copied from its words.
                 Instruction::Assign { value, .. } if str_to_bytes(value).is_some() => true,
+                // A number parse for a word slot reads the text's bytes.
+                Instruction::Assign { target, value }
+                    if lookups::is_int64_parse(value) && parse_words.contains(target) =>
+                {
+                    true
+                }
                 // The entry loan of a dict under the key a fused test
                 // probed reads the probe's slot.
                 Instruction::BeginElementLoan {

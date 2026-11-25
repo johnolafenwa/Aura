@@ -109,6 +109,44 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
+    /// A `parse_int64` for a slot that keeps the number at `address` and
+    /// whether the text parsed beside it. The text is read from its words:
+    /// a `str` parameter a view twin holds, a literal, or the bytes of its
+    /// box.
+    pub(super) fn compile_parse_word(
+        &mut self,
+        value: &Rvalue,
+        address: Val,
+    ) -> std::result::Result<(), String> {
+        let Rvalue::Call { args, .. } = value else {
+            return Err("direct backend expected a number parse".to_owned());
+        };
+        let [argument] = args.as_slice() else {
+            return Err("direct backend expected one argument for `parse_int64`".to_owned());
+        };
+        let (ptr, len) = match &argument.value {
+            Operand::String(text) => self.string_constant(text.as_bytes())?,
+            operand => match self.str_slot_words(operand) {
+                Some(words) => words,
+                None => {
+                    let text = self.load_operand(operand)?;
+                    let text = self.ensure_opaque(text)?;
+                    self.str_box_words(text.values[0])
+                }
+            },
+        };
+        let found = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::ParseInt64Word],
+                &[ptr, len, address],
+            )
+            .results[0];
+        self.builder.store(MemFlags::new(), found, address, 8);
+        self.release_all_temporary_owned();
+        Ok(())
+    }
+
     /// The found value's own box, or null for a missing key, of a lookup
     /// that compiled to `compiled`: `compiled` itself when it is in the
     /// payload form, and otherwise what is in the `Lookup` it is.
