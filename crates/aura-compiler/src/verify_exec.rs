@@ -53,7 +53,7 @@ impl IntTy {
         IntegerKind::from_runtime_type_name(name).map(Self)
     }
 
-    fn bounds(self) -> (i128, u128) {
+    pub(super) fn bounds(self) -> (i128, u128) {
         match self.0.bounds() {
             IntegerBounds::Signed { min, max } => (min, max as u128),
             IntegerBounds::Unsigned { max } => (0, max),
@@ -2920,7 +2920,10 @@ impl<'a> Exec<'a> {
                         Val::Int(result, ty)
                     }
                     (UnaryOp::BitNot, Val::Int(term, _))
-                        if target_type.as_ref().and_then(IntTy::of).is_some() =>
+                        if target_type
+                            .as_ref()
+                            .and_then(IntTy::of)
+                            .is_some_and(IntTy::modeled) =>
                     {
                         let ty = target_type
                             .as_ref()
@@ -3371,7 +3374,8 @@ impl<'a> Exec<'a> {
         let right_ty = self.operand_int_ty(right);
         let target_int = target_type.and_then(IntTy::of);
         let hint = left_ty.or(right_ty).or(target_int);
-        let sized = hint.is_some();
+        // A 128-bit type's bits and width are not modeled.
+        let sized = hint.is_some_and(IntTy::modeled);
         let lhs = self.operand(state, left, hint);
         let rhs = self.operand(state, right, hint);
         let fresh = |exec: &mut Self| match target_type {
@@ -5008,7 +5012,8 @@ impl<'a> Exec<'a> {
                 let ty = target
                     .and_then(|target| self.place_type(target))
                     .as_ref()
-                    .and_then(IntTy::of)?;
+                    .and_then(IntTy::of)
+                    .filter(|ty| ty.modeled())?;
                 let rhs = arg(self, state, 0, Some(ty));
                 self.int_method(&pc, kind, ty, (receiver, rhs))
             }

@@ -658,7 +658,7 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, ty))
                     }
-                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                    (UnaryOp::BitNot, Val::Int(term, ty)) if ty.modeled() => {
                         Ok(Val::Int(super::integers::bitnot(&term, ty), ty))
                     }
                     _ => Err("this unary operator is not modeled in contracts yet".into()),

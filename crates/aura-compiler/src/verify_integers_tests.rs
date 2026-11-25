@@ -1851,7 +1851,13 @@ fn bounds_of_math_functions_allow_the_interpreter_results() {
     for x in [
         0.0_f64, -0.0, 0.5, -0.5, 1.0, 1.5, 3.0, -3.0, 100.0, 700.0, -750.0,
     ] {
-        let results = [("sin", x.sin()), ("cos", x.cos()), ("exp", x.exp())];
+        // The run time computes these with `libm`, whose last bit can
+        // differ from the host's.
+        let results = [
+            ("sin", libm::sin(x)),
+            ("cos", libm::cos(x)),
+            ("exp", libm::exp(x)),
+        ];
         for (name, value) in results {
             let value = if value < 0.0 {
                 format!("({value:?})")
