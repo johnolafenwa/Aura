@@ -2981,6 +2981,7 @@ impl<'a> NativeCodegen<'a> {
                 None => str_slots::clone_moves(function),
             },
             appended_copies: str_slots::appended_copies(function),
+            extended_bytes: str_slots::extended_bytes(function),
             spliced_plan: str_slots::spliced_formats(function, &formatted_reads),
             formatted_reads,
             spliced_formats: HashMap::new(),
@@ -4475,6 +4476,9 @@ struct FunctionCompiler<'a> {
     /// The temporaries that hold a copy of a `str` only for the next
     /// operation to append it to a list.
     appended_copies: HashMap<String, String>,
+    /// The temporaries that hold the bytes of a `str` only to extend a
+    /// list with them (see [`str_slots::extended_bytes`]).
+    extended_bytes: HashSet<String>,
     /// The words of each such copy between the two operations, when this
     /// body has the copied `str` as words.
     deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
@@ -6868,6 +6872,8 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
+            Instruction::Assign { target, value }
+                if self.defer_extended_bytes(target, value)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();
@@ -7428,11 +7434,14 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        if self.borrow_field_reads || !reads_operands_only(rvalue) {
+        if self.borrow_field_reads
+            || !(reads_operands_only(rvalue) || makes_text_from_operands(rvalue))
+        {
             return self.compile_rvalue_for_target_directly(rvalue, target);
         }
-        // The rvalue gives back a scalar and keeps none of its operands, so
-        // a field box it reads stays the instance's for the whole read.
+        // The rvalue gives back a scalar or a new value and keeps none of
+        // its operands, so a field box it reads stays the instance's for
+        // the whole read.
         if self.field_read_copies.is_empty() {
             self.field_read_copies = (0..FIELD_READS_PER_RVALUE)
                 .map(|_| self.declare_word_var())
@@ -8192,6 +8201,9 @@ impl<'a> FunctionCompiler<'a> {
             call
         };
         let vector = self.owned_opaque_result(init.results, list_type);
+        if resolved_is_str && !wildcard && self.push_str_literals(vector.values[0], elements)? {
+            return Ok(vector);
+        }
         // A scalar or a record goes in as its bits, with no box, by the
         // calls `append` falls back to.
         let record = self.plain_record(&element_direct_ty)?;
@@ -8249,6 +8261,44 @@ impl<'a> FunctionCompiler<'a> {
             );
         }
         Ok(vector)
+    }
+
+    /// Appends the elements of a literal of `str` literals to `list` in
+    /// one call, from one constant that holds their texts one after
+    /// another and one that holds their lengths, when there are two or
+    /// more of them and some text is not empty.
+    fn push_str_literals(
+        &mut self,
+        list: Val,
+        elements: &[Operand],
+    ) -> std::result::Result<bool, String> {
+        let texts = elements
+            .iter()
+            .map(|element| match element {
+                Operand::String(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(texts) = texts.filter(|texts| texts.len() >= 2) else {
+            return Ok(false);
+        };
+        let joined = texts.concat();
+        let Some(lens) = texts
+            .iter()
+            .map(|text| u32::try_from(text.len()).ok().map(u32::to_le_bytes))
+            .collect::<Option<Vec<_>>>()
+            .filter(|_| !joined.is_empty())
+        else {
+            return Ok(false);
+        };
+        let (texts_ptr, _) = self.string_constant(joined.as_bytes())?;
+        let (lens_ptr, _) = self.string_constant(&lens.concat())?;
+        let count = self.builder.iconst(types::I64, texts.len() as i64);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecPushStrLiterals],
+            &[list, texts_ptr, lens_ptr, count],
+        );
+        Ok(true)
     }
 
     fn compile_map_literal_for_target(
@@ -11576,7 +11626,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => None,
         };
-        let results = if let Some((source, code)) = literal_codec {
+        let from_words = match (name, args) {
+            ("str.to_bytes", [text]) => self.str_to_bytes_from_words(&text.value)?,
+            _ => None,
+        };
+        let results = if let Some(results) = from_words {
+            results
+        } else if let Some((source, code)) = literal_codec {
             let source = self.load_place(source)?;
             let code = self.builder.iconst(types::I64, code as i64);
             let decode = self
@@ -18708,6 +18764,10 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            ListOp::Extend if self.extend_deferred_bytes(list, &args[0].value) => {
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ListOp::Push
                 if element_ty == Type::named("str")
                     && self.push_deferred_str_copy(list, &args[0].value) =>
@@ -21693,6 +21753,42 @@ fn cannot_be_callable(ty: &Type) -> bool {
         Type::Unit => true,
         _ => false,
     }
+}
+
+/// Whether `rvalue` is a `str` operation that makes a new value from its
+/// text and its arguments and only reads them, so a box field it reads may
+/// stay where it lies, as for [`reads_operands_only`].
+fn makes_text_from_operands(rvalue: &Rvalue) -> bool {
+    matches!(
+        rvalue,
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Str(
+                    StrOp::Split
+                        | StrOp::Replace
+                        | StrOp::ToLower
+                        | StrOp::ToUpper
+                        | StrOp::StripPrefix
+                        | StrOp::StripSuffix
+                        | StrOp::Trim
+                        | StrOp::Join
+                        | StrOp::TrimStart
+                        | StrOp::TrimEnd
+                        | StrOp::SplitOnce
+                        | StrOp::RsplitOnce
+                        | StrOp::Lines
+                        | StrOp::SplitWhitespace
+                        | StrOp::Find
+                        | StrOp::Count
+                        | StrOp::Repeat
+                        | StrOp::Chars
+                        | StrOp::CharAt
+                ),
+                ..
+            },
+            ..
+        }
+    )
 }
 
 /// The box field reads one rvalue reads in place; a comparison reads two,

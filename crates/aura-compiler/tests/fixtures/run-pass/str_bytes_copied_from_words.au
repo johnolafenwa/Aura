@@ -1,0 +1,33 @@
+# `text.to_bytes()` copies the bytes of a text this body holds as words
+# with no box made for the text: a literal, a parameter a view twin holds
+# as words, and a loop variable over a list of strings. A field's text
+# makes its bytes as before.
+class Doc:
+    title: str
+
+
+def size(text: str) -> int64:
+    bytes = text.to_bytes()
+    return bytes.len()
+
+
+def weigh(text: str) -> int64:
+    mut total = 0
+    for line in text.split("\n"):
+        data = line.to_bytes()
+        for byte in data:
+            total += byte as int64
+        total += data.len() * 1000
+    return total
+
+
+def main():
+    print(size("h\u{e9}llo"))
+    print(size(""))
+    print(weigh("ab\ncd\n\nlast line"))
+    literal = "xyz".to_bytes()
+    print(literal.len())
+    doc = Doc(title="title")
+    print(doc.title.to_bytes().len())
+    for word in ["one", "three"]:
+        print(size(word))
