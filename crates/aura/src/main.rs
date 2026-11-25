@@ -1,3 +1,5 @@
+mod freestanding_args;
+
 use std::fs;
 use std::io::Write;
 use std::io::{self, BufRead, Read};
@@ -70,10 +72,12 @@ fn main() {
         "check" => {
             let (diagnostic_format, input_args) = parse_diagnostic_format(args.collect::<Vec<_>>());
             let freestanding = input_args.iter().any(|arg| arg == "--freestanding");
-            let input_args = input_args
-                .into_iter()
-                .filter(|arg| arg != "--freestanding")
-                .collect::<Vec<_>>();
+            let (_target_scope, input_args) = if freestanding {
+                let (target, rest) = freestanding_args::take_target(input_args);
+                (Some(aura_compiler::enter_freestanding_target(target)), rest)
+            } else {
+                (None, input_args)
+            };
             let input = read_input(&mut input_args.into_iter());
             if freestanding {
                 checked_freestanding_program(&input, diagnostic_format);
@@ -1777,6 +1781,17 @@ impl TestRecord {
 }
 
 fn handle_lsp_service() {
+    // A language-server restart selects a new target for every open buffer.
+    let _target = std::env::var("AURA_LSP_FREESTANDING_TARGET")
+        .ok()
+        .filter(|name| !name.is_empty())
+        .map(|name| {
+            let target = aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
+                eprintln!("aura lsp: unknown freestanding target `{name}`");
+                process::exit(2);
+            });
+            aura_compiler::enter_freestanding_target(target)
+        });
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut writer = stdout.lock();
@@ -1858,10 +1873,17 @@ fn lsp_result_for_request(request: &JsonValue) -> Result<JsonValue, String> {
         .ok_or_else(|| "LSP compiler request requires string field `source`".to_string())?;
     let overlays = lsp_source_overlays(request)?;
 
-    let freestanding = request
-        .get("freestanding")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
+    let selected = aura_compiler::freestanding_check_target();
+    let freestanding = selected.is_some()
+        || request
+            .get("freestanding")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+    let _target = if freestanding && selected.is_none() {
+        aura_compiler::FreestandingTarget::host().map(aura_compiler::enter_freestanding_target)
+    } else {
+        None
+    };
     aura_compiler::analysis::with_freestanding_analysis(freestanding, || {
         aura_compiler::with_source_overlays(overlays, || {
             lsp_method_result(method, path, source, request)
@@ -4519,8 +4541,14 @@ fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
 /// reports each check it could not prove. Exits 1 unless every check was
 /// proved.
 fn handle_verify_command(args: Vec<String>) {
-    let mut freestanding = false;
     let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let freestanding = args.iter().any(|arg| arg == "--freestanding");
+    let (_target_scope, args) = if freestanding {
+        let (target, args) = freestanding_args::take_target(args);
+        (Some(aura_compiler::enter_freestanding_target(target)), args)
+    } else {
+        (None, args)
+    };
     let mut options = aura_compiler::verify::Options {
         cache_dir: verify_cache_root(),
         ..aura_compiler::verify::Options::default()
@@ -4534,10 +4562,6 @@ fn handle_verify_command(args: Vec<String>) {
                 .unwrap_or_else(|| print_usage_and_exit(2))
         };
         match args[index].as_str() {
-            "--freestanding" => {
-                freestanding = true;
-                index += 1;
-            }
             "--solver" => {
                 options.solver = Some(value());
                 index += 2;
@@ -4758,41 +4782,13 @@ fn emit_diagnostics(format: DiagnosticFormat, path: &str, source: &str, errors: 
 /// machine with no operating system, and links nothing (ADR-0094).
 fn build_freestanding(args: Vec<String>) {
     let (diagnostic_format, args) = parse_diagnostic_format(args);
-    let mut target = None;
-    let mut remove_proved_checks = false;
-    let mut rest = Vec::new();
-    let mut args = args.into_iter();
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--freestanding" => {}
-            "--remove-proved-checks" => remove_proved_checks = true,
-            "--target" => target = Some(args.next().unwrap_or_else(|| print_usage_and_exit(2))),
-            _ => rest.push(arg),
-        }
-    }
-    let known = || {
-        aura_compiler::FreestandingTarget::ALL
-            .iter()
-            .map(|target| format!("`{}`", target.name()))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let target = match target {
-        Some(name) => aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
-            eprintln!(
-                "aura: unknown freestanding target `{name}`; the targets are {}",
-                known()
-            );
-            process::exit(2);
-        }),
-        None => aura_compiler::FreestandingTarget::host().unwrap_or_else(|| {
-            eprintln!(
-                "aura: no freestanding target matches this machine; pass `--target` with one of {}",
-                known()
-            );
-            process::exit(2);
-        }),
-    };
+    let (target, args) = freestanding_args::take_target(args);
+    let _target_scope = aura_compiler::enter_freestanding_target(target);
+    let remove_proved_checks = args.iter().any(|arg| arg == "--remove-proved-checks");
+    let rest = args
+        .into_iter()
+        .filter(|arg| arg != "--remove-proved-checks")
+        .collect();
     let (output_path, debug, _, input_args) = parse_build_args(rest);
     if debug {
         eprintln!("aura: `--debug` does not apply to a freestanding build");
@@ -6098,8 +6094,8 @@ fn usage_text() -> &'static str {
        or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
        or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
        or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
-       or: aura build -o <output> --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
-       or: aura check --freestanding [--format human|json] <file.au>\n\
+       or: aura build -o <output> --freestanding [--target <name>] [--kernel] [--remove-proved-checks] [--format human|json] <file.au>\n\
+       or: aura check --freestanding [--target <name>] [--kernel] [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -6108,7 +6104,7 @@ fn usage_text() -> &'static str {
        or: aura fmt [--check] [path ...]\n\
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
-       or: aura verify [--freestanding] [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
+       or: aura verify [--freestanding [--target <name>] [--kernel]] [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
        or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\
@@ -7472,7 +7468,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             libraries: vec!["sqlite3".to_string(), "stdc++".to_string()],
             library_paths: vec![PathBuf::from("/pkg/native,lib")],
             frameworks: vec!["Accelerate".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7567,7 +7563,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             library_paths: vec![PathBuf::from("C:/deps/lib")],
             libraries: vec!["sqlite3".to_string()],
             frameworks: vec!["Metal".to_string()],
-            exports: Vec::new(),
+            ..Default::default()
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -7659,7 +7655,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 libraries,
                 library_paths: Vec::new(),
                 frameworks,
-                exports: Vec::new(),
+                ..Default::default()
             };
             for os in ["linux", "macos"] {
                 assert_eq!(

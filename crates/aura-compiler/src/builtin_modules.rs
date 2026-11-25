@@ -212,6 +212,7 @@ fn builtin_float_constant(module_name: &str, name: &str, bits: u64) -> crate::se
         state: None,
         module_name: module_name.to_string(),
         decl: ConstantDecl {
+            placement: None,
             mutable: false,
             public: true,
             name: name.to_string(),
@@ -275,6 +276,7 @@ fn function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,
@@ -327,6 +329,7 @@ fn generic_function_info(
             span: builtin_span(),
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc: None,
             contracts: Vec::new(),
             spec: false,
@@ -3821,6 +3824,7 @@ pub(crate) fn builtin_imported_binding(
     if let Some(trait_info) = namespace.traits.get(name) {
         return Ok(ImportedBinding::Trait(trait_info.clone()));
     }
+    crate::hardware::check_missing_member(&namespace.path, name, span)?;
     Err(Diagnostic::at(
         span,
         format!(

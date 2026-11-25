@@ -966,12 +966,82 @@ fn auxiliary_verified_function(
         && cx.decl(&function.name).is_some_and(|decl| decl.lemma)
 }
 
+pub(crate) fn assembly_boundary(span: Span) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU4035",
+        span,
+        "the verifier cannot reason through assembly",
+    )
+}
+
+/// A builtin module can supply target-specific assembly routines alongside
+/// portable functions. Importing the portable part must still allow proofs.
+fn reached_assembly(program: &Program, module: &MirModule) -> Option<Diagnostic> {
+    let assembly: BTreeMap<_, _> = module
+        .functions
+        .iter()
+        .chain(&module.top_level)
+        .filter_map(|function| {
+            let span = function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.instructions)
+                .find_map(|instruction| match instruction {
+                    crate::mir::Instruction::InlineAsm { span, .. } => Some(*span),
+                    _ => None,
+                })?;
+            Some((function.name.as_str(), span))
+        })
+        .collect();
+    if assembly.is_empty() {
+        return None;
+    }
+    let (functions, callees) = crate::mir::recursion::call_graph(module);
+    let mut pending: Vec<_> = functions
+        .iter()
+        .enumerate()
+        .filter(|(_, function)| function.module_name == program.module_name)
+        .collect();
+    let mut visited = vec![false; callees.len()];
+    while let Some((index, root)) = pending.pop() {
+        if std::mem::replace(&mut visited[index], true) {
+            continue;
+        }
+        if let Some((function, span)) = functions.get(index).and_then(|function| {
+            assembly
+                .get(function.name.as_str())
+                .map(|span| (*function, span))
+        }) {
+            if function.module_name == program.module_name {
+                return Some(assembly_boundary(*span));
+            }
+            return Some(assembly_boundary(root.span).with_note(format!(
+                "`{}` reaches assembly in `{}`",
+                root.name, function.name
+            )));
+        }
+        pending.extend(callees[index].iter().map(|&callee| (callee, root)));
+    }
+    None
+}
+
 /// Verifies every function of `program` whose MIR is `module`.
 pub fn verify_module(
     program: &Program,
     module: &MirModule,
     options: &Options,
 ) -> std::result::Result<Report, Diagnostic> {
+    // Assembly can change memory that an Aura contract describes. An imported
+    // routine can affect a caller even when a function filter hides its body.
+    if let Some(span) = program.module.asm_span {
+        return Err(assembly_boundary(span));
+    }
+    if !module.foreign_link.module_asm.is_empty() {
+        return Err(assembly_boundary(Span::new(1, 1)));
+    }
+    if let Some(diagnostic) = reached_assembly(program, module) {
+        return Err(diagnostic);
+    }
     let command = smt::SolverCommand::find(options.solver.as_deref())
         .map_err(|message| Diagnostic::coded("AU5103", message))?;
     let cx = VerifyContext::new(program, module);

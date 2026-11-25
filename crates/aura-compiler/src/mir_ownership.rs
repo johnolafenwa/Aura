@@ -503,6 +503,9 @@ pub(crate) fn kept_arguments(module: &MirModule) -> BTreeMap<String, BorrowingCa
 pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> {
     let mut roles = Vec::new();
     match instruction {
+        Instruction::InlineAsm { inputs, .. } => {
+            roles.extend(inputs.iter().map(|value| (value, OperandRole::Borrow)))
+        }
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::ArmDrop { .. }
@@ -964,6 +967,9 @@ pub(crate) fn instruction_accesses_with<'a>(
         accesses[0] = (place, Access::TakePart);
     }
     match instruction {
+        Instruction::InlineAsm { outputs, .. } => {
+            accesses.extend(outputs.iter().map(|name| (name.as_str(), Access::Assign)))
+        }
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. }
@@ -2335,6 +2341,7 @@ fn apply_move_pairs(function: &mut MirFunction, pairs: &[MovePair]) {
 fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option<&'a mut Operand> {
     let mut operands = Vec::new();
     match instruction {
+        Instruction::InlineAsm { inputs, .. } => operands.extend(inputs),
         Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
             rvalue_operands_mut(value, &mut operands)
         }

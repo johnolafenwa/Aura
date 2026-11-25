@@ -352,6 +352,7 @@ fn desugar(
         value = call(decorator.expr.clone(), value, decorator.span);
     }
     let constant = ConstantDecl {
+        placement: None,
         mutable: false,
         public: class.is_none() && function.public,
         name: if class.is_some() {

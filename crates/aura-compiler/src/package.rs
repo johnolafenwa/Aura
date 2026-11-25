@@ -135,6 +135,13 @@ impl GitSelector {
 /// one.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ForeignLinkPlan {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub module_asm: Vec<String>,
+    /// Target and permitted native references for source-level assembly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asm_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asm_externs: Vec<String>,
     /// Library names as the linker's `-l` option takes them: `sqlite3` for
     /// `libsqlite3.so` or `libsqlite3.dylib`.
     pub libraries: Vec<String>,
@@ -146,6 +153,10 @@ pub struct ForeignLinkPlan {
     /// defines as C symbols. Lowering fills it in, not a manifest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exports: Vec<ForeignExport>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub machine: BTreeMap<String, crate::machine_attributes::MachineAttributes>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub placed_data: Vec<crate::machine_data::PlacedData>,
 }
 
 /// One `export "C"` function: the MIR function and the C symbol a
@@ -164,7 +175,12 @@ impl ForeignLinkPlan {
 
     /// Whether the plan names nothing at all, so MIR leaves it out.
     pub fn is_blank(&self) -> bool {
-        self.is_empty() && self.exports.is_empty()
+        self.is_empty()
+            && self.exports.is_empty()
+            && self.machine.is_empty()
+            && self.placed_data.is_empty()
+            && self.module_asm.is_empty()
+            && self.asm_arch.is_none()
     }
 
     /// Adds what `other` names and this plan does not, keeping the order.

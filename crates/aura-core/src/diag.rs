@@ -355,6 +355,46 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid rotation count type",
     },
     DiagnosticCodeInfo {
+        code: "AU2090",
+        band: "names/types",
+        title: "assembly requires a freestanding target",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2091",
+        band: "names/types",
+        title: "invalid assembly operand type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2092",
+        band: "names/types",
+        title: "invalid assembly register or clobber",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2093",
+        band: "names/types",
+        title: "invalid assembly syntax or option",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2094",
+        band: "names/types",
+        title: "machine attributes in a hosted build",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2095",
+        band: "names/types",
+        title: "invalid machine attribute or declaration",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2096",
+        band: "names/types",
+        title: "invalid interrupt target or call",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2097",
+        band: "names/types",
+        title: "hardware operation unavailable on this target",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",
@@ -445,6 +485,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "borrow of a C bit-field",
     },
     DiagnosticCodeInfo {
+        code: "AU3035",
+        band: "ownership",
+        title: "invalid assembly output destination",
+    },
+    DiagnosticCodeInfo {
         code: "AU4001",
         band: "runtime",
         title: "runtime trap",
@@ -518,6 +563,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         code: "AU4034",
         band: "runtime",
         title: "invalid integer operation argument",
+    },
+    DiagnosticCodeInfo {
+        code: "AU4035",
+        band: "verify",
+        title: "assembly is outside the verified subset",
     },
     DiagnosticCodeInfo {
         code: "AU5001",

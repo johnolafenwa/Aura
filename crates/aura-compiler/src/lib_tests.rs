@@ -1370,7 +1370,7 @@ fn module_constant_plan_reports_an_entry_missing_from_the_loader_cache() {
     let loader = ModuleLoader::new(&main_path).expect("package loader should initialize");
 
     let error = loader
-        .build_constant_init_plan(&main_path)
+        .build_constant_init_plan(&main_path, &mut |_, _| {})
         .expect_err("an unloaded entry must not produce a partial constant plan");
     assert!(
         error
@@ -4587,6 +4587,192 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     ))
     .expect_err("the store definition is internal even in a type annotation");
     assert!(error.message.contains("collections.__Store"));
+}
+
+#[test]
+fn verification_names_assembly_in_an_import_and_in_editor_source() {
+    let temp = TempDir::new("aura-verify-machine-source");
+    let main = temp.path().join("main.au");
+    let driver = temp.path().join("driver.au");
+    fs::write(&main, "import driver\n").unwrap();
+    fs::write(&driver, "module_asm(\"nop\")\n").unwrap();
+    let options = crate::verify::Options::default();
+    let imported = crate::verify_path(&main, &options).expect_err("assembly is opaque to proof");
+    assert_eq!(imported.code, "AU4035");
+    let reported_path = imported
+        .render_path
+        .as_deref()
+        .expect("imported source path");
+    assert_eq!(
+        fs::canonicalize(reported_path).unwrap(),
+        fs::canonicalize(&driver).unwrap()
+    );
+    assert_eq!(imported.span.unwrap().line, 1);
+    let direct =
+        crate::verify_path_with_source(&main, "def f() -> None:\n    asm(\"nop\")\n", &options)
+            .unwrap_err();
+    assert_eq!(direct.code, "AU4035");
+    assert_eq!(direct.span.unwrap().line, 2);
+}
+
+#[test]
+fn machine_code_in_lowered_imports_stops_proof_before_solver_or_cache() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+    let program = check_source("def f() -> None:\n    pass\n").unwrap();
+    let mut mir = crate::mir::lower_for_verification(&program);
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-assembly-boundary".to_owned()),
+        ..Default::default()
+    };
+    mir.foreign_link.module_asm.push("nop".into());
+    assert_eq!(
+        crate::verify::verify_module(&program, &mir, &options)
+            .unwrap_err()
+            .code,
+        "AU4035"
+    );
+
+    mir.foreign_link.module_asm.clear();
+    let span = Span::new(3, 5);
+    mir.functions[0].blocks[0]
+        .instructions
+        .push(Instruction::InlineAsm {
+            asm: MachineAsm {
+                arch: "x86_64".into(),
+                noreturn: false,
+                template: "nop".into(),
+                constraints: "~{memory}".into(),
+                pure: false,
+                input_widths: vec![],
+                output_widths: vec![],
+            },
+            inputs: vec![],
+            outputs: vec![],
+            span,
+        });
+    let error = crate::verify::verify_module(&program, &mir, &options).unwrap_err();
+    assert_eq!(error.code, "AU4035");
+    assert_eq!(error.span, Some(span));
+}
+
+#[test]
+fn diamond_import_adds_module_assembly_once_and_checks_its_package_grant() {
+    let temp = TempDir::new("aura-shared-assembly");
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    let manifest = "[package]\nname = \"bits\"\nversion = \"1.0.0\"\nedition = \"2026\"\n";
+    let path = temp.path().join("Aura.toml");
+    fs::write(&path, format!("{manifest}allow_ffi = true\n")).unwrap();
+    fs::write(
+        src.join("common.au"),
+        "module_asm(\".text\\n.globl single_noop\\nsingle_noop: ret\")\n",
+    )
+    .unwrap();
+    for name in ["left", "right"] {
+        fs::write(src.join(format!("{name}.au")), "import common\n").unwrap();
+    }
+    let entry = src.join("main.au");
+    fs::write(&entry, "import left\nimport right\n").unwrap();
+    let target = crate::FreestandingTarget::X86_64;
+    let mir = crate::with_freestanding_target(target, || {
+        crate::lower_path_to_mir_with_source_locations(&entry)
+    })
+    .unwrap();
+    assert_eq!(mir.foreign_link.module_asm.len(), 1);
+    crate::emit_freestanding_object(&mir, "main.au", "", target).unwrap();
+    fs::write(path, manifest).unwrap();
+    let error = crate::with_freestanding_target(target, || crate::check_path(&entry)).unwrap_err();
+    assert!(error.message.contains("allow_ffi"), "{error:?}");
+}
+
+pub(super) fn disassemble_asm_entry(bytes: &[u8]) -> String {
+    use std::process::Command;
+    let temp = TempDir::new("aura-asm-disassembly");
+    let obj = temp.path().join("entry.o");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let libdir = Command::new(rustc)
+        .args(["--print", "target-libdir"])
+        .output()
+        .unwrap();
+    assert!(libdir.status.success());
+    let libdir = String::from_utf8(libdir.stdout).unwrap();
+    let objdump = Path::new(libdir.trim())
+        .parent()
+        .unwrap()
+        .join("bin")
+        .join(format!("llvm-objdump{}", std::env::consts::EXE_SUFFIX));
+    fs::write(&obj, bytes).unwrap();
+    let output = Command::new(&objdump)
+        .args(["-d", "--disassemble-symbols=entry"])
+        .arg(&obj)
+        .output()
+        .expect("rustup llvm-tools-preview supplies llvm-objdump");
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn disassembles_inline_assembly_in_the_export_on_each_target() {
+    for (target, instruction) in [
+        (crate::FreestandingTarget::X86_64, "pause"),
+        (crate::FreestandingTarget::Aarch64, "yield"),
+        (crate::FreestandingTarget::Riscv64, "wfi"),
+    ] {
+        let source = format!("export \"C\" def entry() -> None:\n    asm(\"{instruction}\")\n");
+        let program = crate::with_freestanding_target(target, || {
+            crate::check_module_with_builtin_imports(parse_source(&source).unwrap())
+        })
+        .unwrap();
+        let module = crate::mir::lower_with_source_locations(&program);
+        let bytes = crate::emit_freestanding_object(&module, "entry.au", &source, target).unwrap();
+        let listing = disassemble_asm_entry(&bytes);
+        assert!(
+            listing
+                .lines()
+                .any(|line| line.split_whitespace().last() == Some(instruction)),
+            "{listing}"
+        );
+    }
+}
+
+#[test]
+fn unused_imported_machine_routines_do_not_block_proof() {
+    use crate::inline_asm::MachineAsm;
+    use crate::mir::Instruction;
+
+    let program = check_source("def entry() -> None:\n    assert true\n").unwrap();
+    let mut module = crate::mir::lower_for_verification(&program);
+    let mut routine = module.functions[0].clone();
+    routine.module_name = "mem".into();
+    routine.name = "mem::halt".into();
+    routine.blocks[0].instructions = vec![Instruction::InlineAsm {
+        asm: MachineAsm {
+            arch: "x86_64".into(),
+            noreturn: false,
+            template: "hlt".into(),
+            constraints: "~{memory}".into(),
+            pure: false,
+            input_widths: vec![],
+            output_widths: vec![],
+        },
+        inputs: vec![],
+        outputs: vec![],
+        span: Span::new(1, 1),
+    }];
+    module.functions.push(routine);
+
+    // Reaching the normal solver lookup proves the unused routine was ignored.
+    let options = crate::verify::Options {
+        solver: Some("missing-solver-for-unused-routine".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        crate::verify::verify_module(&program, &module, &options)
+            .unwrap_err()
+            .code,
+        "AU5103"
+    );
 }
 
 #[test]

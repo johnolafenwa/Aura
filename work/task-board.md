@@ -2,6 +2,12 @@
 
 Last updated: 2026-11-24
 
+## Freestanding machine code
+
+The three freestanding targets support typed assembly, interrupt entries
+and privileged operations. The x86-64 kernel board checks two interrupt
+returns in QEMU. [Design and local results](2026-11-24-freestanding-machine-code.md)
+
 ## Release 0.18 systems data
 
 The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)

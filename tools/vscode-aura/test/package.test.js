@@ -884,6 +884,36 @@ test("local function capture lists have a declaration scope", () => {
   assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });
 
+test("machine attributes and assembly clauses have contextual scopes", async () => {
+  const tokenized = await tokenizeAura([
+    '@machine.section(".irq")',
+    'export "C" def copy_word(word: uint64) -> None:',
+    '    asm("""',
+    '        input("reg", word)',
+    '        ret',
+    '    """, output("reg", word), input("reg", input(word)), clobber("memory"), options("pure"))',
+    'module_asm("ret")',
+    'def input(value: uint64) -> uint64:',
+    '    return value'
+  ].join("\n"));
+
+  assert.ok(scopesAt(tokenized, 0, "@machine.section").includes("storage.modifier.machine.aura"));
+  assert.ok(scopesAt(tokenized, 2, "asm").includes("keyword.control.assembly.aura"));
+  assert.ok(scopesAt(tokenized, 6, "module_asm").includes("keyword.control.assembly.aura"));
+  for (const clause of ["output", "input", "clobber", "options"]) {
+    assert.ok(scopesAt(tokenized, 5, clause).includes("keyword.other.assembly-clause.aura"), clause);
+  }
+  assert.ok(scopesAt(tokenized, 3, "input").some(scope => scope.startsWith("string.")));
+  assert.ok(!scopesAt(tokenized, 5, "input", 1).includes("keyword.other.assembly-clause.aura"));
+  assert.ok(!scopesAt(tokenized, 7, "input").includes("keyword.other.assembly-clause.aura"));
+});
+
+test("workspace can choose a freestanding target for the compiler language service", () => {
+  const target = require("../package.json").contributes.configuration.properties["aura.freestandingTarget"];
+  assert.equal(target.default, "");
+  assert.deepEqual(target.enum, ["", "x86_64-unknown-none", "aarch64-unknown-none", "riscv64gc-unknown-none-elf"]);
+});
+
 test("systems data uses layout modifiers only in declarations", async () => {
   const source = [
     'public extern "C" packed align(8) class Header:',

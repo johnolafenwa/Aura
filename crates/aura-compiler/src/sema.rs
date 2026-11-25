@@ -91,6 +91,7 @@ pub use program::{
 };
 mod aliases;
 mod assoc_bounds;
+mod inline_asm;
 mod iterator_fast;
 mod iterator_fast_args;
 #[cfg(test)]
@@ -3893,6 +3894,7 @@ impl<'a> FunctionChecker<'a> {
         function_info: &FunctionInfo,
         contracts_only: bool,
     ) -> Result<()> {
+        crate::machine_attributes::check_function(function_info)?;
         let function = &function_info.decl;
         self.validate_view_return_contract(function)?;
         let type_param_scope = type_param_scope(&function.type_params);
@@ -3979,6 +3981,13 @@ impl<'a> FunctionChecker<'a> {
             return Ok(());
         }
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
+        if function
+            .machine
+            .as_ref()
+            .is_some_and(|attrs| attrs.naked.is_some())
+        {
+            return Ok(());
+        }
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {
             return Err(Diagnostic::at(
                 function.span,
@@ -5266,6 +5275,11 @@ impl<'a> FunctionChecker<'a> {
                                 ),
                             ));
                         }
+                    }
+                }
+                Stmt::Expr(stmt) if crate::inline_asm::is_asm(&stmt.expr) => {
+                    if self.check_inline_asm(&stmt.expr, locals)? {
+                        flow = BlockFlow::AlwaysReturns;
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
@@ -13751,6 +13765,7 @@ impl<'a> FunctionChecker<'a> {
                         return Ok(recover::raw_result_type(child_return));
                     }
                     if let Some(function) = namespace.functions.get(field) {
+                        crate::machine_attributes::check_callable(function, span)?;
                         atomic_order::check(function, args, span)?;
                         let closure_argument_policy =
                             if namespace.path == "control" && field == "retry" {
@@ -13888,6 +13903,7 @@ impl<'a> FunctionChecker<'a> {
                             "mark `{field}` as `public` in `{module_path}` to call it from another module"
                         )));
                     }
+                    crate::hardware::check_missing_member(&namespace.path, field, span)?;
                     return Err(Diagnostic::coded_at(
                         "AU2001",
                         span,
@@ -17963,6 +17979,7 @@ impl<'a> FunctionChecker<'a> {
                         Vec::new(),
                     ));
                 }
+                crate::hardware::check_missing_member(&namespace.path, field, span)?;
                 return Err(Diagnostic::at(
                     span,
                     format!("module `{}` has no member `{}`", path, field),

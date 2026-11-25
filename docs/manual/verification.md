@@ -388,6 +388,18 @@ wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
 
+An assembly template can change registers and memory outside the verifier's
+model. When an entry file or an imported module contains `asm` or
+`module_asm`, verification reports `AU4035` at the assembly. The
+`pure` option is a promise to the optimizer and supplies no proof of the
+template's result. A freestanding build with `--remove-proved-checks`
+keeps the runtime checks when its program contains assembly. Put the logic
+you want to prove in a module you can verify on its own.
+
+Use `aura verify --freestanding --target <name> file.au` to check a
+freestanding function with a placement or inlining attribute. Its section,
+alignment and inlining policy provide no assumptions about its values.
+
 A contract on an `extern "C"` function is the other boundary a proof relies on
 without reading its body. The verifier cannot read C, so it proves each
 `requires` at the call and assumes each `ensures` after it:

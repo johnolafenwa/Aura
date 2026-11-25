@@ -48,6 +48,9 @@ use inkwell::{
     OptimizationLevel,
 };
 
+#[path = "native_backend_llvm_machine.rs"]
+mod machine_attributes;
+
 use units::{Partition, Placement};
 
 use super::{
@@ -92,6 +95,7 @@ const UNIT_THREAD_STACK: usize = 8 << 20;
 
 /// One object built with LLVM for the host.
 pub(super) struct LlvmModule {
+    module_asm: String,
     functions: Vec<FunctionDecl>,
     data: Vec<DataDecl>,
     names: HashMap<String, Symbol>,
@@ -116,6 +120,7 @@ struct FunctionDecl {
     task_invariant: bool,
     inline: bool,
     weak_routine: bool,
+    machine: Option<Box<crate::machine_attributes::MachineAttributes>>,
     source: Option<FunctionSource>,
 }
 
@@ -132,6 +137,7 @@ impl LlvmModule {
         // LLVM target.
         host_target_machine()?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -143,6 +149,7 @@ impl LlvmModule {
     pub(super) fn for_freestanding(target: super::FreestandingTarget) -> Result<Self, String> {
         freestanding_target_machine(target)?;
         Ok(Self {
+            module_asm: String::new(),
             functions: Vec::new(),
             data: Vec::new(),
             names: HashMap::new(),
@@ -177,6 +184,9 @@ impl LlvmModule {
             _ => format!("aura_direct.{unit}"),
         };
         let module = context.create_module(&name);
+        if unit == 0 && !self.module_asm.is_empty() {
+            module.set_inline_assembly(&self.module_asm);
+        }
         module.set_source_file_name(&name);
         module.set_triple(&machine.get_triple());
         module.set_data_layout(&machine.get_target_data().get_data_layout());
@@ -185,6 +195,9 @@ impl LlvmModule {
             .then(|| DebugInfo::new(context, &module, self));
         let lowerer = ObjectLowerer::new(context, &module, self, partition, unit, debug)?;
         lowerer.lower_bodies(self)?;
+        if self.freestanding.is_some() {
+            machine_attributes::apply(&lowerer, self)?;
+        }
         if self.freestanding.is_some()
             && module
                 .get_function(crate::native_codegen::wide_numbers::SYMBOL)
@@ -219,6 +232,17 @@ fn merge_linkage(previous: Linkage, declared: Linkage) -> Linkage {
 }
 
 impl ModuleBackend for LlvmModule {
+    fn mark_machine(
+        &mut self,
+        id: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    ) {
+        self.functions[id.0 as usize].machine = Some(Box::new(attrs));
+    }
+    fn set_module_asm(&mut self, fragments: &[String]) {
+        self.module_asm = fragments.join("\n");
+    }
+
     fn declare_function(
         &mut self,
         name: &str,
@@ -248,6 +272,7 @@ impl ModuleBackend for LlvmModule {
                     task_invariant: false,
                     inline: false,
                     weak_routine: false,
+                    machine: None,
                     source: None,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
@@ -569,9 +594,15 @@ impl LlvmModule {
                 return Err(format!("LLVM failed to optimize the module: {error}"));
             }
         }
+        if self.freestanding == Some(super::FreestandingTarget::X86_64Kernel) {
+            x86_kernel::disable_red_zone(&context, &module);
+        }
         place_functions_in_own_sections(&module, &machine.get_triple());
         if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
             dump_unit_ir(&module, prefix, unit)?;
+        }
+        if self.freestanding.is_some() {
+            return inline_asm::write_object(machine, &module);
         }
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
@@ -593,6 +624,10 @@ fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
     let coff = triple.contains("windows");
     let mut function = module.get_first_function();
     while let Some(current) = function {
+        if current.get_section().is_some() {
+            function = current.get_next_function();
+            continue;
+        }
         if current.count_basic_blocks() > 0 {
             if coff {
                 set_own_comdat(module, current);
@@ -686,6 +721,9 @@ fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, Str
 /// while the system control register forbids it. RISC-V is RV64GC with
 /// the `lp64d` calling convention, and reaches every symbol relative to
 /// the program counter.
+///
+/// On x86-64 only the kernel profile enforces the no-red-zone rule. That
+/// profile also uses static relocation and the kernel code model (ADR-0148).
 fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<TargetMachine, String> {
     use super::FreestandingTarget;
     static INITIALIZED: OnceLock<()> = OnceLock::new();
@@ -696,6 +734,7 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         Target::initialize_riscv(&config);
     });
     let (triple, cpu, features, abi, code_model) = match target {
+        FreestandingTarget::X86_64Kernel => x86_kernel::TARGET,
         FreestandingTarget::X86_64 => (
             "x86_64-unknown-none-elf",
             "x86-64",
@@ -727,6 +766,9 @@ fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<Targ
         .set_level(OptimizationLevel::Default)
         .set_reloc_mode(RelocMode::PIC)
         .set_code_model(code_model);
+    if target == FreestandingTarget::X86_64Kernel {
+        options = options.set_reloc_mode(RelocMode::Static);
+    }
     if let Some(abi) = abi {
         options = options.set_abi(abi);
     }
@@ -802,6 +844,7 @@ fn target_machine_at(
 /// What a recorded instruction does. Result types live with its results.
 #[derive(Clone, Debug)]
 enum Op {
+    InlineAsm(crate::inline_asm::MachineAsm, Vec<Val>),
     Nop,
     Copy(Val),
     Iconst(i64),
@@ -995,6 +1038,7 @@ enum VarSource {
 /// The values `op` reads.
 fn op_operands(op: &Op) -> Vec<Val> {
     match op {
+        Op::InlineAsm(_, inputs) => inputs.clone(),
         Op::Nop
         | Op::Iconst(_)
         | Op::Fconst(_)
@@ -1045,6 +1089,7 @@ fn op_targets(op: &Op) -> Vec<Blk> {
 fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op {
     let values = |args: &[Val]| args.iter().map(|arg| value(*arg)).collect::<Vec<_>>();
     match op {
+        Op::InlineAsm(asm, inputs) => Op::InlineAsm(asm.clone(), values(inputs)),
         Op::Nop => Op::Nop,
         Op::Copy(source) => Op::Copy(value(*source)),
         Op::Iconst(constant) => Op::Iconst(*constant),
@@ -1888,6 +1933,17 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.overflow(OverflowOp::Umul, left, right)
     }
 
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val> {
+        self.ir
+            .push(Op::InlineAsm(asm.clone(), operands.to_vec()), results)
+            .1
+    }
+
     fn memory_access(
         &mut self,
         access: MemoryAccess,
@@ -2623,6 +2679,13 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
     fn lower_bodies(&self, object: &LlvmModule) -> Result<(), String> {
         for index in &self.bodies {
             let decl = &object.functions[*index];
+            if decl
+                .machine
+                .as_ref()
+                .is_some_and(|attrs| attrs.naked.is_some())
+            {
+                continue;
+            }
             if let Some(body) = &decl.body {
                 let mut lowerer = FunctionLowerer::new(self, self.functions[*index], body);
                 if let (Some(debug), Some(source)) = (&self.debug, &decl.source) {
@@ -3312,6 +3375,7 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     fn lower_inst(&mut self, inst: &InstIr) -> Result<(), String> {
         let context = self.context;
         match &inst.op {
+            Op::InlineAsm(asm, inputs) => self.lower_inline_asm(inst, asm, inputs)?,
             Op::Nop => {}
             Op::Copy(value) => {
                 let value = self.value(*value)?;
@@ -3939,6 +4003,12 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         Ok(built(value)?.into())
     }
 }
+
+#[path = "native_backend_llvm_asm.rs"]
+mod inline_asm;
+
+#[path = "native_backend_x86_kernel.rs"]
+mod x86_kernel;
 
 #[path = "native_backend_llvm_units.rs"]
 mod units;

@@ -271,6 +271,12 @@ fn load_foreign_libraries(plan: &crate::package::ForeignLinkPlan) -> Result<()> 
 }
 
 fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
+    if module.foreign_link.asm_arch.is_some() {
+        return Err(Diagnostic::coded(
+            "AU2090",
+            "machine assembly requires freestanding native code",
+        ));
+    }
     // Loading a library runs its initializers, so only MIR lowered from a
     // package whose manifest opted in may name one.
     if !module.foreign_link.is_empty() {
@@ -294,6 +300,7 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
                 } => Some(call.symbol.as_str()),
                 _ => None,
             },
+            Instruction::InlineAsm { .. } => Some("asm"),
             Instruction::Safepoint
             | Instruction::SourceLocation { .. }
             | Instruction::ArmDrop { .. }
@@ -354,6 +361,7 @@ fn function_uses_lightweight_tasks(function: &MirFunction) -> bool {
             .iter()
             .any(|instruction| match instruction {
                 Instruction::Assign { value, .. } => rvalue_uses_lightweight_tasks(value),
+                Instruction::InlineAsm { .. } => false,
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::ArmDrop { .. }
@@ -4136,6 +4144,11 @@ impl MirRuntime {
                 }
                 Ok(None)
             }
+            Instruction::InlineAsm { span, .. } => Err(Diagnostic::coded_at(
+                "AU2090",
+                *span,
+                "machine assembly requires freestanding native code",
+            )),
             Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => Ok(None),
             Instruction::Safepoint => {
                 if self.safepoints_enabled {

@@ -4,6 +4,8 @@
 // recovery exists only to keep a few editor affordances alive when `aura lsp`
 // cannot be started at all.
 
+const { machineCompletions, machineHover, maskAssemblyTemplates } = require("./machine_syntax");
+
 const KEYWORDS = [
   "as",
   "assert",
@@ -146,7 +148,7 @@ function recoverSymbols(text) {
     /^(?:public[ \t]+)?(?:export[ \t]+"C"[ \t]+def\b|def[ \t]+main\b)/m.test(text);
   const roots = [];
   const containers = [];
-  for (const [lineNumber, line] of text.split(/\r?\n/).entries()) {
+  for (const [lineNumber, line] of maskAssemblyTemplates(text).split(/\r?\n/).entries()) {
     const symbol = declarationForLine(line, lineNumber);
     if (!symbol || (symbol.kind === "variable" && !moduleStorage && !line.startsWith("public"))) {
       continue;
@@ -217,6 +219,8 @@ function linePrefix(text, line, character) {
 }
 
 function completionsForDocument(text, line, character, triggerCharacter) {
+  const machine = machineCompletions(text, line, character);
+  if (machine) return machine;
   if (triggerCharacter === "." || /\.\s*$/.test(linePrefix(text, line, character))) {
     return [];
   }
@@ -243,7 +247,7 @@ function completionsForDocument(text, line, character, triggerCharacter) {
 }
 
 function wordAtPosition(text, line, character) {
-  const lines = text.split(/\r?\n/);
+  const lines = maskAssemblyTemplates(text).split(/\r?\n/);
   if (line < 0 || line >= lines.length) {
     return null;
   }
@@ -280,6 +284,8 @@ function definitionForPosition(text, line, character) {
 }
 
 function hoverForPosition(text, line, character) {
+  const machine = machineHover(text, line, character);
+  if (machine) return machine;
   const word = wordAtPosition(text, line, character);
   if (!word) {
     return null;

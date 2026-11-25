@@ -357,6 +357,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         span: Span::new(1, 1),
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -11669,6 +11670,68 @@ fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
 
 #[path = "analysis/systems_data_tests.rs"]
 mod systems_data_tests;
+
+#[test]
+fn assembly_visits_operand_expressions_without_resolving_clause_names() {
+    let project = TempDir::new("assembly-operand-analysis");
+    let path = project.path().join("src/main.au");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        project.path().join("Aura.toml"),
+        "[package]\nname = \"kernel\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .unwrap();
+    let source = concat!(
+        "def input(value: uint64) -> uint64:\n",
+        "    return value\n",
+        "export \"C\" def copy_word(word: uint64) -> uint64:\n",
+        "    mut result: uint64 = 0\n",
+        "    asm(\"movq $1, $0 # word\", output(\"reg\", result), input(\"reg\", input(word)))\n",
+        "    return result\n",
+    );
+    fs::write(&path, source).unwrap();
+    let analysis = crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
+        analyze_path_source(&path, source)
+    });
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let assembly = source.lines().nth(4).unwrap();
+    let bound_to = |column| {
+        analysis
+            .occurrences
+            .iter()
+            .find(|item| item.line == 4 && item.start_character == column)
+            .and_then(|item| item.definition.as_ref())
+            .map(|definition| definition.line)
+    };
+    assert_eq!(bound_to(assembly.find("input").unwrap()), None);
+    assert_eq!(bound_to(assembly.rfind("input").unwrap()), Some(0));
+    assert_eq!(bound_to(assembly.find("word").unwrap()), None);
+    assert_eq!(bound_to(assembly.rfind("word").unwrap()), Some(2));
+    assert_eq!(bound_to(assembly.find("result").unwrap()), Some(3));
+}
+
+#[test]
+fn assembly_form_completion_uses_statement_scope_and_target() {
+    let source = "export \"C\" def entry() -> None:\n    pass\n";
+    let offers = |line, column, name| {
+        complete_source(source, line, column, None)
+            .unwrap()
+            .iter()
+            .any(|item| item.name == name)
+    };
+    assert!(!offers(0, 0, "module_asm"));
+    crate::with_freestanding_target(crate::FreestandingTarget::X86_64, || {
+        assert!(offers(0, 0, "module_asm"));
+        assert!(!offers(0, 0, "asm"));
+        assert!(offers(1, 4, "asm"));
+        assert!(!offers(1, 4, "module_asm"));
+        assert!(!offers(1, 6, "asm"));
+    });
+}
 
 #[test]
 fn property_setter_edits_navigate_to_source_names_and_hide_cleanup_hooks() {

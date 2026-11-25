@@ -138,6 +138,18 @@ impl NativeCodegen<'_> {
         // An export is declared before any body is built, so a body that
         // names the same symbol, as a check names the trap hook, calls the
         // export.
+        self.define_machine_items()?;
+        if self
+            .module
+            .foreign_link
+            .asm_arch
+            .as_deref()
+            .is_some_and(|arch| arch != crate::inline_asm::profile(target))
+        {
+            return Err("assembly requires the freestanding target it was checked for".into());
+        }
+        let fragments = &self.module.foreign_link.module_asm;
+        self.module_backend()?.set_module_asm(fragments);
         let mut exports = Vec::new();
         for export in &self.module.foreign_link.exports {
             let function = self
@@ -167,6 +179,9 @@ impl NativeCodegen<'_> {
                 "failed to declare export `{}`: {}",
                 export.symbol
             );
+            if let Some(attrs) = self.module.foreign_link.machine.get(&export.function) {
+                self.module_backend()?.mark_machine(entry, attrs.clone());
+            }
             exports.push((export, callback, signature, entry));
         }
         for function in &self.module.functions {
@@ -253,6 +268,7 @@ fn declared_symbols(module: &MirModule) -> HashSet<&str> {
         .iter()
         .map(|export| export.symbol.as_str())
         .collect::<HashSet<_>>();
+    symbols.extend(module.foreign_link.asm_externs.iter().map(String::as_str));
     for instruction in module
         .functions
         .iter()
@@ -562,6 +578,16 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
                 "a freestanding object has no `main`: the code that links it calls its exported functions",
             ),
         );
+        // Assembly entry points, retained functions and placed data can
+        // supply the object roots in place of an ordinary C export.
+        if !module.foreign_link.module_asm.is_empty()
+            || !module.foreign_link.placed_data.is_empty()
+            || module.foreign_link.machine.values().any(|attrs| attrs.used)
+        {
+            problems.clear();
+        }
+    }
+    if !problems.is_empty() {
         return Err(problems);
     }
     let mut symbols = HashSet::new();
@@ -627,6 +653,14 @@ fn keep_reached_functions(module: &mut MirModule) {
         .collect::<HashMap<_, _>>();
     let mut kept = HashSet::new();
     let mut pending = Vec::new();
+    for (name, attrs) in &module.foreign_link.machine {
+        if attrs.used {
+            if let Some(&function) = by_name.get(name.as_str()) {
+                kept.insert(name.clone());
+                pending.push(function);
+            }
+        }
+    }
     for export in &module.foreign_link.exports {
         if let Some(function) = by_name.get(export.function.as_str()) {
             if kept.insert(export.function.clone()) {
@@ -672,6 +706,14 @@ fn keep_reached_functions(module: &mut MirModule) {
             _ => None,
         })
         .collect::<HashSet<_>>();
+    let mut read = read;
+    read.extend(
+        module
+            .foreign_link
+            .placed_data
+            .iter()
+            .filter_map(|data| data.state_key.clone()),
+    );
     module
         .constants
         .retain(|constant| read.contains(&constant.key));
@@ -832,6 +874,7 @@ fn check_function(
                     span = crate::diag::Span::new(*line as usize, *column as usize);
                     continue;
                 }
+                Instruction::InlineAsm { .. } => continue,
                 Instruction::Safepoint
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
@@ -1148,6 +1191,7 @@ pub(crate) fn check_object(bytes: &[u8], module: &MirModule) -> std::result::Res
         .filter(|name| {
             !name.is_empty()
                 && *name != TRAP_HOOK
+                && !crate::freestanding_mode::is_soft_float_helper(name)
                 && !MEMORY_ROUTINES.contains(name)
                 && !declared.contains(name)
         })

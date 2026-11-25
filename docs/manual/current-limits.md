@@ -150,6 +150,15 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
+### Kernel code
+
+Machine assembly, hardware access and machine attributes require a
+64-bit freestanding target. The assembly checker validates declared
+operands and clobbers. The target assembler checks instruction text.
+Proof stops at assembly. The x86-64 kernel profile uses integer registers
+for floating-point values and may need software arithmetic helpers at link
+time. [Freestanding Builds](/manual/freestanding)
+
 ### Tasks
 
 - A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.

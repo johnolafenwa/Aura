@@ -90,6 +90,7 @@ pub fn emit_freestanding_object(
     program_source: &str,
     target: FreestandingTarget,
 ) -> std::result::Result<Vec<u8>, Vec<crate::diag::Diagnostic>> {
+    let _target_scope = crate::enter_freestanding_target(target);
     let module = freestanding::prepare(module)?;
     let internal = |error: String| vec![freestanding::emitter_diagnostic(error)];
     let module = validated_for_emission(&module).map_err(internal)?;
@@ -992,6 +993,9 @@ impl<'a> NativeCodegen<'a> {
         program_source: &str,
         freestanding: Option<FreestandingTarget>,
     ) -> std::result::Result<Self, String> {
+        if freestanding.is_none() && module.foreign_link.asm_arch.is_some() {
+            return Err("machine assembly requires a freestanding target".into());
+        }
         let reachable_blocks = validate_module(module)?;
         // A program with no task-start operation cannot have a runnable sibling
         // for a loop to starve. Keep explicit MIR markers for portability, but
@@ -5842,6 +5846,12 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::SourceLocation { line, column } => {
                 self.builder.set_source_location(*line, *column);
             }
+            Instruction::InlineAsm {
+                asm,
+                inputs,
+                outputs,
+                ..
+            } => self.compile_inline_asm(asm, inputs, outputs)?,
             Instruction::ArmDrop { place, function } => self.arm_drop_hook(place, function)?,
             Instruction::EndOwner { .. } => {}
             Instruction::SourceName { .. } => {}
@@ -21010,6 +21020,11 @@ fn validate_function_in_reachable(
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
                 | Instruction::EndLend { .. } => {}
+                Instruction::InlineAsm { inputs, .. } => {
+                    for input in inputs {
+                        validate_operand(input)?;
+                    }
+                }
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }
@@ -22633,6 +22648,8 @@ mod freestanding;
 #[cfg(test)]
 #[path = "native_codegen_freestanding_tests.rs"]
 mod freestanding_tests;
+#[path = "native_codegen_inline_asm.rs"]
+mod inline_asm;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]
@@ -22643,6 +22660,8 @@ mod key_loops;
 mod list_snapshots;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+#[path = "native_codegen_machine.rs"]
+mod machine;
 #[path = "native_codegen_math.rs"]
 mod math;
 #[path = "native_codegen_module_state.rs"]
