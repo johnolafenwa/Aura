@@ -412,6 +412,7 @@ runtime_functions! {
     InstanceEmpty => ("aura_direct_instance_empty", [I64, I64], Some(I64)),
     InstanceNewTyped => ("aura_direct_instance_new_typed", [I64], Some(I64)),
     EnumNewTyped => ("aura_direct_enum_new_typed", [I64, I64], Some(I64)),
+    EnumUnitCell => ("aura_direct_enum_unit_cell", [I64, I64, I64], Some(I64)),
     InstancePutField => ("aura_direct_instance_put_field", [I64, I64], None),
     InstanceRestoreField => ("aura_direct_instance_restore_field", [I64, I64], None),
     InstanceCopyField => ("aura_direct_instance_copy_field", [I64], Some(I64)),

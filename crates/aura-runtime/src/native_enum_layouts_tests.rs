@@ -3,7 +3,7 @@
 //! the rest of the runtime reach them through.
 
 use std::borrow::Cow;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aura_core::layout::{
     encode_descriptor, encode_layouts, EnumDefinition, LayoutBuilder, LayoutEnv,
@@ -17,12 +17,13 @@ use super::{
 use crate::collection_index::hash_value;
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::native_runtime::{
-    aura_direct_enum_new_typed, aura_direct_instance_put_field, aura_direct_register_enum_layouts,
-    aura_direct_release_value, aura_direct_variant_matches, aura_direct_variant_payload,
-    aura_direct_variant_payload_int64, aura_direct_variant_take_payload,
-    aura_direct_vec_push_in_place, boxed_value, list_view_of, share_direct_value, value_mut,
-    value_ref, with_direct_task_runtime_scope, with_task_runtime_error_capture,
-    DirectPlainLayoutEntry, ElementBox, UNREGISTERED_PLAIN_ACCESS,
+    aura_direct_enum_new_typed, aura_direct_enum_unit_cell, aura_direct_instance_put_field,
+    aura_direct_register_enum_layouts, aura_direct_release_value, aura_direct_variant_matches,
+    aura_direct_variant_payload, aura_direct_variant_payload_int64,
+    aura_direct_variant_take_payload, aura_direct_vec_push_in_place, boxed_value,
+    empty_unit_variant_cells, list_view_of, share_direct_value, value_mut, value_ref,
+    with_direct_task_runtime_scope, with_task_runtime_error_capture, DirectPlainLayoutEntry,
+    ElementBox, UNREGISTERED_PLAIN_ACCESS,
 };
 use crate::runtime_value::{
     run_lightweight_root_task, EnumVariantValue, RuntimeName, Value, VariantPayloads,
@@ -1610,5 +1611,39 @@ fn appended_typed_variants_keep_their_own_boxes() {
         assert_eq!(boxes().len(), 2);
         assert_ne!(boxes()[1], first);
         unsafe { aura_direct_release_value(list) };
+    });
+}
+
+#[test]
+fn a_unit_variant_cell_keeps_the_shared_box_until_the_program_ends() {
+    in_task(|| {
+        let prefix = "Celled";
+        let layout = layout(prefix, FIRST_TEST_ACCESS + 81);
+        let cell: &'static EnumLayoutCell = Box::leak(Box::default());
+        unsafe { celled_enum_layout(cell, descriptor(prefix).as_bytes(), layout.access()) }
+            .expect("registered");
+        let slot: &'static AtomicUsize = Box::leak(Box::default());
+        // The first build fills the word with the variant's one box, and a
+        // later one leaves it as it is.
+        let point = unsafe { aura_direct_enum_unit_cell(cell, 0, slot) };
+        assert!(unsafe { &*point }.is_frozen());
+        assert_eq!(slot.load(Ordering::Acquire), point as usize);
+        assert_eq!(unsafe { aura_direct_enum_unit_cell(cell, 0, slot) }, point);
+        assert_eq!(unsafe { aura_direct_enum_new_typed(cell, 0) }, point);
+        // Without a word, or for a variant with payloads, nothing is kept.
+        assert_eq!(
+            unsafe { aura_direct_enum_unit_cell(cell, 0, std::ptr::null()) },
+            point
+        );
+        let other: &'static AtomicUsize = Box::leak(Box::default());
+        let circle = unsafe { aura_direct_enum_unit_cell(cell, 1, other) };
+        assert!(!unsafe { &*circle }.is_frozen());
+        assert_eq!(other.load(Ordering::Acquire), 0);
+        unsafe { aura_direct_release_value(circle) };
+        // The program's end empties the word and leaves the box to its
+        // layout.
+        empty_unit_variant_cells();
+        assert_eq!(slot.load(Ordering::Acquire), 0);
+        assert!(unsafe { &*point }.is_frozen());
     });
 }

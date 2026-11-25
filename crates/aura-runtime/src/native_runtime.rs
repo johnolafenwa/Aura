@@ -7174,7 +7174,27 @@ fn frozen_program_value_slots() -> &'static Mutex<Vec<&'static std::sync::atomic
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// The words of the program's data that keep a shared variant box for
+/// generated code (see [`aura_direct_enum_unit_cell`]). The box belongs to
+/// its layout's slot, so the program's end only empties them.
+fn unit_variant_cells() -> &'static Mutex<Vec<&'static AtomicUsize>> {
+    static CELLS: OnceLock<Mutex<Vec<&'static AtomicUsize>>> = OnceLock::new();
+    CELLS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Empties every word [`aura_direct_enum_unit_cell`] filled.
+fn empty_unit_variant_cells() {
+    for cell in unit_variant_cells()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        cell.store(0, Ordering::Release);
+    }
+}
+
 fn clear_direct_module_constants() {
+    empty_unit_variant_cells();
     for slot in frozen_program_value_slots()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -16238,6 +16258,42 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
         }
         build()
     })
+}
+
+/// The frozen box of variant `variant`, which takes no payloads, of the
+/// enum whose layout `cell` holds, as [`aura_direct_enum_new_typed`]
+/// builds it, kept in `slot`, a word of the program's data for that
+/// variant. Generated code reads the word and calls this only while it is
+/// zero, so building a variant with no payloads costs no call. The program's
+/// end empties the word before it frees the box.
+///
+/// # Safety
+///
+/// As for [`aura_direct_enum_new_typed`], with `slot` null or a word of the
+/// program's data that only this function writes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_enum_unit_cell(
+    cell: *const EnumLayoutCell,
+    variant: i64,
+    slot: *const AtomicUsize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let boxed = unsafe { aura_direct_enum_new_typed(cell, variant) };
+    // SAFETY: the caller's contract: the word lives as long as the program.
+    let slot: Option<&'static AtomicUsize> = unsafe { slot.as_ref() };
+    if let Some(slot) = slot {
+        if direct_value_is_frozen(boxed)
+            && slot
+                .compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+        {
+            unit_variant_cells()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(slot);
+        }
+    }
+    boxed
 }
 
 /// Whether `boxed` holds an instance kept in its class's layout. Its view

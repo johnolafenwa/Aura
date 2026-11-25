@@ -372,6 +372,9 @@ impl FunctionCompiler<'_> {
         }
         let cell = self.builder.import_data(record.cell);
         let cell = self.builder.symbol_value(types::I64, cell);
+        if payload_count == 0 {
+            return self.unit_variant_from_cell(cell, ty, variant).map(Some);
+        }
         let index = self.builder.iconst(types::I64, variant as i64);
         let init = self
             .builder
@@ -410,6 +413,51 @@ impl FunctionCompiler<'_> {
             crate::native_runtime::canonical_runtime_type_name(ty),
         ));
         Ok(Some(built))
+    }
+
+    /// Variant `variant` of the enum type `ty`, which takes no payloads, and
+    /// whose layout is in `cell`: the one frozen box every build of it
+    /// shares, read from a word of the program's data that the runtime
+    /// fills on first use. The box carries the enum's type, and retains and
+    /// releases skip it.
+    fn unit_variant_from_cell(
+        &mut self,
+        cell: Val,
+        ty: &Type,
+        variant: usize,
+    ) -> std::result::Result<ValueRef, String> {
+        let type_name = crate::native_runtime::canonical_runtime_type_name(ty);
+        let slot = super::word_cell(
+            self.tag_cells,
+            &mut *self.builder,
+            &format!("\0unit variant {type_name} {variant}"),
+        )?;
+        let kept = self
+            .builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::AtomicLoad,
+                types::I64,
+                &[slot],
+            )
+            .expect("an atomic load gives a word");
+        let fill_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder
+            .brif(kept, join_block, &[kept], fill_block, &[]);
+        self.builder.switch_to_block(fill_block);
+        self.builder.seal_block(fill_block);
+        self.builder.set_cold_block(fill_block);
+        let index = self.builder.iconst(types::I64, variant as i64);
+        let filled = self
+            .builder
+            .call(self.runtime[RuntimeFn::EnumUnitCell], &[cell, index, slot]);
+        self.builder.jump(join_block, &filled.results);
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let built = self.owned_opaque_result(self.builder.block_params(join_block), ty.clone());
+        self.shaped_boxes.insert(built.values[0]);
+        Ok(built)
     }
 
     /// Tests whether the variant box `variant`, of static type `ty`, is

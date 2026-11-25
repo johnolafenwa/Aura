@@ -1780,9 +1780,7 @@ impl<T: Clone> SharedVec<T> {
 
     pub fn into_vec(self) -> Vec<T> {
         let mut this = ManuallyDrop::new(self);
-        let copy = this
-            .is_shared()
-            .then(|| Vec::clone(&this.values));
+        let copy = this.is_shared().then(|| Vec::clone(&this.values));
         // SAFETY: the handle is forgotten.
         match (unsafe { this.release() }, copy) {
             (Some(values), _) => values,
