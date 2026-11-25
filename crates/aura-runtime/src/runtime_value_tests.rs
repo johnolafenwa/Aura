@@ -17406,11 +17406,11 @@ fn tls_and_websocket_validation_fail_before_remote_protocol_io() {
         "custom://example.com/socket",
         Some(StdDuration::from_secs(1)),
     )
-    .expect_err("a websocket URL without a known scheme port must fail before resolution");
+    .expect_err("a websocket URL with another scheme must fail before resolution");
     assert_eq!(websocket_error.kind(), io::ErrorKind::InvalidInput);
     assert_eq!(
         websocket_error.to_string(),
-        "websocket URL is missing a known port"
+        "websocket URL scheme must be `ws` or `wss`, not `custom`"
     );
 }
 
@@ -21562,7 +21562,11 @@ fn float_precision_past_the_rust_formatter_limit_pads_with_zeros() {
     assert_eq!(third.len(), 70002);
     let scientific = format_runtime_value(&Value::Float(-2.5), &float, ".65536e").unwrap();
     assert!(scientific.starts_with("-2.5000"), "{}", &scientific[..8]);
-    assert!(scientific.ends_with("0e+00"), "{}", &scientific[scientific.len() - 8..]);
+    assert!(
+        scientific.ends_with("0e+00"),
+        "{}",
+        &scientific[scientific.len() - 8..]
+    );
     assert_eq!(scientific.len(), 65536 + 7);
     let percent = format_runtime_value(&Value::Float(0.5), &float, ".65536%").unwrap();
     assert!(percent.starts_with("50.000") && percent.ends_with("0%"));
@@ -21598,8 +21602,8 @@ fn chunked_request_bodies_are_framed_strictly_and_read_once() {
         b"0\r\nnot a field\r\n\r\n",
         b"0\r\nBad Name: x\r\n\r\n",
     ] {
-        let error = super::try_decode_chunked_http_body(refused, 0)
-            .expect_err("strict chunk framing");
+        let error =
+            super::try_decode_chunked_http_body(refused, 0).expect_err("strict chunk framing");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{refused:?}");
     }
     assert_eq!(
@@ -21619,7 +21623,10 @@ fn chunked_request_bodies_are_framed_strictly_and_read_once() {
     let body = b"3\r\nabc\r\n2\r\nde\r\n0\r\nX: y\r\n\r\n";
     let mut decoder = super::ChunkedBodyDecoder::default();
     for end in 0..body.len() {
-        assert!(decoder.step(&body[..end], 0, 1 << 20).unwrap().is_none(), "{end}");
+        assert!(
+            decoder.step(&body[..end], 0, 1 << 20).unwrap().is_none(),
+            "{end}"
+        );
     }
     assert_eq!(
         decoder.step(body, 0, 1 << 20).unwrap(),
@@ -21646,9 +21653,11 @@ fn request_framing_headers_must_agree() {
             .kind(),
         io::ErrorKind::InvalidData
     );
-    assert!(super::parse_http_request_head(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
-        .unwrap()
-        .is_some());
+    assert!(
+        super::parse_http_request_head(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+            .unwrap()
+            .is_some()
+    );
 
     let url = url::Url::parse("http://127.0.0.1:1/").unwrap();
     let request = |headers: &[(&str, &str)]| {
@@ -21675,4 +21684,180 @@ fn request_framing_headers_must_agree() {
             "{refused:?}"
         );
     }
+}
+
+#[test]
+fn a_socket_wait_leaves_the_socket_free_for_other_tasks_on_its_worker() {
+    // One worker: a task that waits while it holds a socket's lock blocks
+    // every other task that touches the socket, and the worker with them.
+    let timeout = StdDuration::from_secs(5);
+    let result = super::run_lightweight_root_task_with_worker_count(1, move || {
+        let error = |error: io::Error| Diagnostic::new(error.to_string());
+        let socket = UdpSocketValue::bind("127.0.0.1:0").map_err(error)?;
+        let receiver = socket.clone();
+        let waiting = spawn_lightweight_task(move || {
+            let datagram = receiver.recv(16, Some(timeout), None).map_err(error)?;
+            assert_eq!(datagram.as_deref(), Some(&b"ping"[..]));
+            Ok(Value::Unit)
+        })?;
+        sleep_with_runtime_scheduler(StdDuration::from_millis(20), None).map_err(error)?;
+        let address = socket.local_addr().map_err(error)?;
+        socket
+            .send_to_bytes(&address, b"ping", Some(timeout), None)
+            .map_err(error)?;
+        wait_task_ready(&waiting)?;
+
+        let listener = TcpListenerValue::bind("127.0.0.1:0").map_err(error)?;
+        let accepting = listener.clone();
+        let accepted = spawn_lightweight_task(move || {
+            accepting.accept(Some(timeout), None).map_err(error)?;
+            Ok(Value::Unit)
+        })?;
+        sleep_with_runtime_scheduler(StdDuration::from_millis(20), None).map_err(error)?;
+        let address = listener.local_addr().map_err(error)?;
+        let _client = TcpStreamValue::connect(&address, Some(timeout), None).map_err(error)?;
+        wait_task_ready(&accepted)?;
+        Ok(Value::Unit)
+    });
+    assert!(result.is_ok(), "{result:?}");
+}
+
+#[test]
+fn an_http_listener_goes_on_past_a_client_that_fails() {
+    let timeout = StdDuration::from_secs(5);
+    let listener = HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        let exchange = listener
+            .accept(Some(timeout), None)
+            .expect("the good client is reached");
+        let path = exchange.path();
+        exchange
+            .respond_text(200, "ok", Vec::new())
+            .expect("a response");
+        path
+    });
+    // A client that connects and sends nothing.
+    drop(std::net::TcpStream::connect(&address).expect("connect"));
+    // A client that asks for a framing the server does not read.
+    let mut unsupported = std::net::TcpStream::connect(&address).expect("connect");
+    unsupported
+        .write_all(b"POST /a HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: gzip, chunked\r\n\r\n")
+        .expect("write");
+    let mut reply = String::new();
+    unsupported
+        .read_to_string(&mut reply)
+        .expect("the server answers and closes");
+    assert!(reply.starts_with("HTTP/1.1 501"), "{reply}");
+    // A client with a good request.
+    let mut good = std::net::TcpStream::connect(&address).expect("connect");
+    good.write_all(b"GET /good HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\n\r\n")
+        .expect("write");
+    let mut reply = String::new();
+    good.read_to_string(&mut reply).expect("a reply");
+    assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+    assert_eq!(server.join().expect("the server"), "/good");
+}
+
+#[test]
+fn a_websocket_listener_goes_on_past_a_failed_handshake() {
+    let timeout = StdDuration::from_secs(5);
+    let listener = WebSocketListenerValue::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        let socket = listener.accept(Some(timeout)).expect("the good client");
+        socket.recv_text(Some(timeout)).expect("a message")
+    });
+    let mut bad = std::net::TcpStream::connect(&address).expect("connect");
+    bad.write_all(b"GET / HTTP/1.1\r\nHost: a\r\n\r\n")
+        .expect("write");
+    let mut ignored = Vec::new();
+    let _ = bad.read_to_end(&mut ignored);
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    client.send_text("hi", Some(timeout)).expect("send");
+    assert_eq!(server.join().expect("the server").as_deref(), Some("hi"));
+}
+
+#[test]
+fn a_websocket_url_must_use_a_websocket_scheme() {
+    let error = super::WebSocketValue::connect("http://127.0.0.1:1/", None)
+        .err()
+        .expect("an http URL is refused");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("`ws` or `wss`"), "{error}");
+}
+
+#[test]
+fn websocket_reads_pass_over_control_frames_and_writes_are_sent_once() {
+    use tungstenite::Message;
+    let timeout = StdDuration::from_secs(10);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let address = listener.local_addr().expect("address");
+    let big = 12 << 20;
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("accept");
+        let mut socket = tungstenite::accept(stream).expect("handshake");
+        socket
+            .send(Message::Ping(b"p".to_vec().into()))
+            .expect("ping");
+        socket.send(Message::Text("hi".into())).expect("text");
+        // Read late, so the client's large write fills the socket.
+        thread::sleep(StdDuration::from_millis(200));
+        let mut sizes = Vec::new();
+        loop {
+            match socket.read().expect("a message") {
+                Message::Binary(bytes) => sizes.push(bytes.len()),
+                Message::Text(text) if text.as_str() == "end" => break,
+                _ => {}
+            }
+        }
+        sizes
+    });
+    let client = super::WebSocketValue::connect(&format!("ws://{address}"), Some(timeout))
+        .expect("websocket client should connect");
+    assert_eq!(
+        client.recv_text(Some(timeout)).expect("a read").as_deref(),
+        Some("hi")
+    );
+    client
+        .send_bytes(&vec![7u8; big], Some(timeout))
+        .expect("a large send");
+    client.send_text("end", Some(timeout)).expect("send");
+    assert_eq!(server.join().expect("the server"), vec![big]);
+}
+
+#[test]
+fn a_websocket_close_ends_while_a_read_waits() {
+    let listener = WebSocketListenerValue::bind("127.0.0.1:0").expect("listener should bind");
+    let address = listener.local_addr().expect("listener address");
+    let server = thread::spawn(move || {
+        listener
+            .accept(Some(StdDuration::from_secs(5)))
+            .expect("accept")
+    });
+    let client =
+        super::WebSocketValue::connect(&format!("ws://{address}"), Some(StdDuration::from_secs(5)))
+            .expect("websocket client should connect");
+    let _server_socket = server.join().expect("the server");
+    let reader = client.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let reading = thread::spawn(move || {
+        let _ = reader.recv_text(None);
+        done.send(()).expect("report");
+    });
+    thread::sleep(StdDuration::from_millis(100));
+    let closer = client.clone();
+    let (closed, close_finished) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = closer.close();
+        closed.send(()).expect("report");
+    });
+    close_finished
+        .recv_timeout(StdDuration::from_secs(20))
+        .expect("close ends");
+    finished
+        .recv_timeout(StdDuration::from_secs(20))
+        .expect("the waiting read ends");
+    reading.join().expect("the reader");
 }

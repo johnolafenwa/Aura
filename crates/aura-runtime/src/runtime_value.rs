@@ -7105,6 +7105,14 @@ const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 64 << 20;
 const MAX_WEBSOCKET_FRAME_BYTES: usize = 16 << 20;
 const MAX_WEBSOCKET_WRITE_BUFFER_BYTES: usize = 16 << 20;
 const DEFAULT_TLS_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+/// The longest a WebSocket listener waits for one client's handshake.
+const WEBSOCKET_HANDSHAKE_TIMEOUT: StdDuration = StdDuration::from_secs(10);
+/// The longest an HTTP listener waits for one client to send its request,
+/// and an exchange waits for its response to be written.
+const HTTP_SERVER_CLIENT_TIMEOUT: StdDuration = StdDuration::from_secs(30);
+/// How long `close` waits for an operation in progress on the same stream
+/// to hand the stream back before it shuts the socket down under it.
+const PROTOCOL_CLOSE_WAIT: StdDuration = StdDuration::from_secs(5);
 const MIN_SUPERVISOR_RESTART_BACKOFF: StdDuration = StdDuration::from_millis(10);
 const TASK_GROUP_CLEANUP_PROBE_TIMEOUT: StdDuration = StdDuration::from_millis(1);
 /// While every worker is busy, a worker checks its own stealable inbox this
@@ -13418,6 +13426,68 @@ fn acquire_protocol_operation<'a>(
     }
 }
 
+/// The earlier of `deadline` and `limit` from now.
+fn deadline_capped(deadline: Option<Instant>, limit: StdDuration) -> Option<Instant> {
+    match Instant::now().checked_add(limit) {
+        Some(cap) => Some(deadline.map_or(cap, |deadline| deadline.min(cap))),
+        None => deadline,
+    }
+}
+
+/// Takes a protocol stream for `close`. When no other operation holds it,
+/// this returns the stream with the operation guard, for an orderly close.
+/// When one does, the stream is marked closed and its socket is shut down
+/// as soon as it is back in its slot, which wakes the operation's wait so
+/// that it ends; `close` then returns `None` and never waits unbounded.
+fn take_protocol_stream_for_close<'a, T>(
+    busy: &'a AtomicBool,
+    closed: &AtomicBool,
+    slot: &Mutex<Option<T>>,
+    shutdown: impl Fn(&T),
+) -> Option<(ProtocolOperationGuard<'a>, T)> {
+    let limit = Instant::now().checked_add(PROTOCOL_CLOSE_WAIT);
+    loop {
+        if busy
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            let operation = ProtocolOperationGuard { busy };
+            let stream = lock_mutex(slot).take();
+            closed.store(true, Ordering::Release);
+            return stream.map(|stream| (operation, stream));
+        }
+        closed.store(true, Ordering::Release);
+        if let Some(stream) = lock_mutex(slot).as_ref() {
+            shutdown(stream);
+            return None;
+        }
+        if limit.is_some_and(|limit| Instant::now() >= limit) {
+            return None;
+        }
+        if yield_now_current_lightweight_task().is_none() {
+            thread::yield_now();
+        }
+    }
+}
+
+fn shutdown_tls_stream(stream: &TlsStreamKind) {
+    let _ = match stream {
+        TlsStreamKind::Client(stream) => stream.sock.shutdown(Shutdown::Both),
+        TlsStreamKind::Server(stream) => stream.sock.shutdown(Shutdown::Both),
+    };
+}
+
+fn shutdown_websocket(socket: &WebSocketStateKind) {
+    let _ = match socket {
+        WebSocketStateKind::Plain(socket) => socket.get_ref().shutdown(Shutdown::Both),
+        WebSocketStateKind::MaybeTls(socket) => match socket.get_ref() {
+            MaybeTlsStream::Plain(stream) => stream.shutdown(Shutdown::Both),
+            MaybeTlsStream::Rustls(stream) => stream.get_ref().shutdown(Shutdown::Both),
+            _ => Ok(()),
+        },
+    };
+}
+
 fn tls_handshake_deadline_with<F>(
     deadline: Option<Instant>,
     now: Instant,
@@ -13476,6 +13546,45 @@ fn next_wait_slice(
         }
         None if cancellation.is_some() => Ok(Some(poll_slice)),
         None => Ok(None),
+    }
+}
+
+/// Whether an accept failed for the one connection it took, which the
+/// peer gave up on before it was accepted, so the listener goes on.
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::Interrupted
+    )
+}
+
+fn is_would_block_or_timed_out(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
+}
+
+/// A duplicate of a socket handle for a wait with its lock released. While
+/// the task waits, another task on the same worker may use or close the
+/// socket; the duplicate keeps the descriptor the wait polls open, so it
+/// is never closed and reused under the wait. A Windows duplicate starts
+/// in blocking mode, and a wait only polls it.
+trait WaitHandle: Sized {
+    fn wait_handle(&self) -> io::Result<Self>;
+}
+
+impl WaitHandle for StdTcpListener {
+    fn wait_handle(&self) -> io::Result<Self> {
+        self.try_clone()
+    }
+}
+
+impl WaitHandle for StdUdpSocket {
+    fn wait_handle(&self) -> io::Result<Self> {
+        self.try_clone()
     }
 }
 
@@ -14532,9 +14641,9 @@ impl ChunkedBodyDecoder {
                 Some(colon) => {
                     colon > 0
                         && line[..colon].iter().all(|byte| is_http_tchar(*byte))
-                        && line[colon + 1..]
-                            .iter()
-                            .all(|byte| *byte == b'\t' || (0x20..0x7f).contains(byte) || *byte >= 0x80)
+                        && line[colon + 1..].iter().all(|byte| {
+                            *byte == b'\t' || (0x20..0x7f).contains(byte) || *byte >= 0x80
+                        })
                 }
                 None => false,
             };
@@ -16397,29 +16506,22 @@ impl TcpListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<TcpStreamValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
-        };
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            match listener.accept() {
-                Ok((stream, _)) => return TcpStreamValue::from_std(stream),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    wait_for_fd_event(
-                        listener.as_raw_fd(),
-                        host_io::POLLIN,
-                        deadline,
-                        cancellation,
-                    )?;
+            // The lock is not held across the wait (see `WaitHandle`).
+            let waiter = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                match listener.accept() {
+                    Ok((stream, _)) => return TcpStreamValue::from_std(stream),
+                    Err(error) if is_would_block_or_timed_out(&error) => listener.wait_handle()?,
+                    Err(error) if is_transient_accept_error(&error) => continue,
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
         }
     }
 
@@ -16927,25 +17029,19 @@ impl UdpSocketValue {
                 format!("`{address}` did not resolve to any socket addresses"),
             )
         })?;
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
-            return Err(closed_resource_error());
-        };
-        {
-            loop {
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.send_to(bytes, target) {
                     Ok(_) => return Ok(()),
-                    Err(error) if is_retryable_network_error(&error) => {
-                        wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLOUT,
-                            deadline,
-                            cancellation,
-                        )?;
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(normalize_udp_send_error(error)),
                 }
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLOUT, deadline, cancellation)?;
         }
     }
 
@@ -16955,36 +17051,31 @@ impl UdpSocketValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<Vec<u8>>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
+        if lock_mutex(&self.inner.socket).is_none() {
             return Err(closed_resource_error());
-        };
-        {
-            let deadline = deadline_from_timeout(timeout)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            loop {
+        }
+        let deadline = deadline_from_timeout(timeout)?;
+        let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.recv(&mut buffer) {
                     Ok(0) => return Ok(None),
                     Ok(bytes) => {
                         buffer.truncate(bytes);
                         return Ok(Some(buffer));
                     }
-                    Err(error) if is_retryable_network_error(&error) => {
-                        match wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLIN,
-                            deadline,
-                            cancellation,
-                        ) {
-                            Ok(()) => {}
-                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                                return Ok(None);
-                            }
-                            Err(error) => return Err(error),
-                        }
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(error),
                 }
+            };
+            match wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
+                Err(error) => return Err(error),
             }
         }
     }
@@ -16995,14 +17086,17 @@ impl UdpSocketValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<UdpDatagramValue>> {
-        let mut socket = lock_mutex(&self.inner.socket);
-        let Some(socket) = socket.as_mut() else {
+        if lock_mutex(&self.inner.socket).is_none() {
             return Err(closed_resource_error());
-        };
-        {
-            let deadline = deadline_from_timeout(timeout)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            loop {
+        }
+        let deadline = deadline_from_timeout(timeout)?;
+        let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
+        loop {
+            let waiter = {
+                let mut socket = lock_mutex(&self.inner.socket);
+                let Some(socket) = socket.as_mut() else {
+                    return Err(closed_resource_error());
+                };
                 match socket.recv_from(&mut buffer) {
                     Ok((bytes, address)) => {
                         buffer.truncate(bytes);
@@ -17011,22 +17105,14 @@ impl UdpSocketValue {
                             data: buffer,
                         }));
                     }
-                    Err(error) if is_retryable_network_error(&error) => {
-                        match wait_for_fd_event(
-                            socket.as_raw_fd(),
-                            host_io::POLLIN,
-                            deadline,
-                            cancellation,
-                        ) {
-                            Ok(()) => {}
-                            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                                return Ok(None);
-                            }
-                            Err(error) => return Err(error),
-                        }
-                    }
+                    Err(error) if is_retryable_network_error(&error) => socket.wait_handle()?,
                     Err(error) => return Err(error),
                 }
+            };
+            match wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => return Ok(None),
+                Err(error) => return Err(error),
             }
         }
     }
@@ -17090,29 +17176,22 @@ impl UnixListenerValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<UnixStreamValue> {
-        let mut listener = lock_mutex(&self.inner.listener);
-        let Some(listener) = listener.as_mut() else {
-            return Err(closed_resource_error());
-        };
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            match listener.accept() {
-                Ok((stream, _)) => return UnixStreamValue::from_std(stream),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    wait_for_fd_event(
-                        listener.as_raw_fd(),
-                        host_io::POLLIN,
-                        deadline,
-                        cancellation,
-                    )?;
+            // The lock is not held across the wait (see `WaitHandle`).
+            let waiter = {
+                let mut listener = lock_mutex(&self.inner.listener);
+                let Some(listener) = listener.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                match listener.accept() {
+                    Ok((stream, _)) => return UnixStreamValue::from_std(stream),
+                    Err(error) if is_would_block_or_timed_out(&error) => listener.try_clone()?,
+                    Err(error) if is_transient_accept_error(&error) => continue,
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
-            }
+            };
+            wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
         }
     }
 
@@ -17284,28 +17363,23 @@ impl TlsListenerValue {
         let deadline = deadline_from_timeout(timeout)?;
         let mut pending = VecDeque::new();
         loop {
-            let (listener_fd, accepted) = {
+            // The wait below polls a duplicate, so a `close` from another
+            // task cannot close the descriptor under it.
+            let (waiter, accepted) = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
                     return Err(closed_resource_error());
                 };
-                let listener_fd = listener.as_raw_fd();
                 let mut accepted = Vec::new();
                 loop {
                     match listener.accept() {
                         Ok((stream, _)) => accepted.push(stream),
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            break;
-                        }
+                        Err(error) if is_would_block_or_timed_out(&error) => break,
+                        Err(error) if is_transient_accept_error(&error) => {}
                         Err(error) => return Err(error),
                     }
                 }
-                (listener_fd, accepted)
+                (listener.wait_handle()?, accepted)
             };
             for stream in accepted {
                 let config = self.inner.config.clone();
@@ -17357,7 +17431,7 @@ impl TlsListenerValue {
             }
 
             wait_for_tls_listener_progress(
-                listener_fd,
+                waiter.as_raw_fd(),
                 pending.is_empty(),
                 deadline,
                 cancellation,
@@ -17797,13 +17871,17 @@ impl TlsStreamValue {
     }
 
     pub fn close(&self) {
-        let Ok(_operation) = acquire_protocol_operation(&self.inner.busy, None, None) else {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return;
+        }
+        let Some((_operation, stream)) = take_protocol_stream_for_close(
+            &self.inner.busy,
+            &self.inner.closed,
+            &self.inner.stream,
+            shutdown_tls_stream,
+        ) else {
             return;
         };
-        let Ok(stream) = self.take_stream_for_step() else {
-            return;
-        };
-        self.inner.closed.store(true, Ordering::Release);
         let _ = run_protocol_step(move || {
             match stream {
                 TlsStreamKind::Client(mut stream) => {
@@ -17845,79 +17923,68 @@ impl HttpListenerValue {
     ) -> io::Result<HttpExchangeValue> {
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            let stream = {
-                let mut listener = lock_mutex(&self.inner.listener);
-                let Some(listener) = listener.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                loop {
+            let stream = loop {
+                // The lock is not held across the wait (see `WaitHandle`).
+                let waiter = {
+                    let mut listener = lock_mutex(&self.inner.listener);
+                    let Some(listener) = listener.as_mut() else {
+                        return Err(closed_resource_error());
+                    };
                     match listener.accept() {
                         Ok((stream, _)) => break TcpStreamValue::from_std(stream)?,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            wait_for_fd_event(
-                                listener.as_raw_fd(),
-                                host_io::POLLIN,
-                                deadline,
-                                cancellation,
-                            )?;
+                        Err(error) if is_would_block_or_timed_out(&error) => {
+                            listener.wait_handle()?
                         }
+                        Err(error) if is_transient_accept_error(&error) => continue,
                         Err(error) => return Err(error),
                     }
-                }
+                };
+                wait_for_fd_event(waiter.as_raw_fd(), host_io::POLLIN, deadline, cancellation)?;
             };
+            // One client has a bounded time to send its request, so a slow
+            // client delays the next one by at most that long. What goes
+            // wrong with one client closes that client only: the accept
+            // fails for its own timeout or cancellation alone.
+            let client_deadline = deadline_capped(deadline, HTTP_SERVER_CLIENT_TIMEOUT);
             let mut raw_stream_guard = lock_mutex(&stream.inner.stream);
             let Some(mut raw_stream) = raw_stream_guard.take() else {
                 return Err(closed_resource_error());
             };
             drop(raw_stream_guard);
-            let request = read_http_request_from_stream(&mut raw_stream, deadline, cancellation);
+            let request =
+                read_http_request_from_stream(&mut raw_stream, client_deadline, cancellation);
             *lock_mutex(&stream.inner.stream) = Some(raw_stream);
             let (method, path, headers, body) = match request {
                 Ok(request) => request,
-                Err(error)
-                    if is_http_message_too_large_error(&error)
-                        || is_http_headers_too_large_error(&error) =>
-                {
+                Err(error) => {
                     let status = if is_http_message_too_large_error(&error) {
-                        413
+                        Some(413)
+                    } else if is_http_headers_too_large_error(&error) {
+                        Some(431)
+                    } else if is_http_bad_request_error(&error) {
+                        Some(400)
+                    } else if error.kind() == io::ErrorKind::InvalidInput {
+                        // A framing this server does not read, such as a
+                        // transfer coding other than chunked.
+                        Some(501)
                     } else {
-                        431
+                        None
                     };
                     let raw_stream = lock_mutex(&stream.inner.stream).take();
-                    if let Some(mut raw_stream) = raw_stream {
+                    if let (Some(status), Some(mut raw_stream)) = (status, raw_stream) {
                         let _ = write_http_response_to_stream(
                             &mut raw_stream,
                             status,
                             Vec::new(),
                             b"",
-                            deadline,
+                            client_deadline,
                             cancellation,
                         );
                     }
                     stream.close();
+                    check_deadline_and_cancellation(deadline, cancellation)?;
                     continue;
                 }
-                Err(error) if is_http_bad_request_error(&error) => {
-                    let raw_stream = lock_mutex(&stream.inner.stream).take();
-                    if let Some(mut raw_stream) = raw_stream {
-                        let _ = write_http_response_to_stream(
-                            &mut raw_stream,
-                            400,
-                            Vec::new(),
-                            b"",
-                            deadline,
-                            cancellation,
-                        );
-                    }
-                    stream.close();
-                    continue;
-                }
-                Err(error) => return Err(error),
             };
             return Ok(HttpExchangeValue {
                 inner: Arc::new(HttpExchangeState {
@@ -17991,8 +18058,17 @@ impl HttpExchangeValue {
             return Err(closed_resource_error());
         };
         drop(raw_stream_guard);
-        let result =
-            write_http_response_to_stream(&mut raw_stream, status, headers, body, None, None);
+        // A client that stops reading cannot hold the writer forever.
+        let deadline = deadline_capped(None, HTTP_SERVER_CLIENT_TIMEOUT);
+        let cancellation = current_lightweight_task_cancellation();
+        let result = write_http_response_to_stream(
+            &mut raw_stream,
+            status,
+            headers,
+            body,
+            deadline,
+            cancellation.as_ref(),
+        );
         stream.close();
         result
     }
@@ -18029,8 +18105,20 @@ impl WebSocketListenerValue {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    let mut state =
-                        accept_websocket_stream(stream, deadline, cancellation.as_ref())?;
+                    // A client whose handshake fails or stalls is dropped,
+                    // and the listener goes on to the next one.
+                    let handshake_deadline = deadline_capped(deadline, WEBSOCKET_HANDSHAKE_TIMEOUT);
+                    let mut state = match accept_websocket_stream(
+                        stream,
+                        handshake_deadline,
+                        cancellation.as_ref(),
+                    ) {
+                        Ok(state) => state,
+                        Err(_) => {
+                            check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
+                            continue;
+                        }
+                    };
                     websocket_set_nonblocking(&mut state, true)?;
                     return Ok(WebSocketValue {
                         inner: Arc::new(WebSocketState {
@@ -18053,6 +18141,7 @@ impl WebSocketListenerValue {
                         cancellation.as_ref(),
                     )?;
                 }
+                Err(error) if is_transient_accept_error(&error) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -18089,6 +18178,17 @@ impl WebSocketValue {
             let (request, address) = run_protocol_step_before(
                 move || {
                     let parsed = url::Url::parse(&url).map_err(io::Error::other)?;
+                    // Checked before dialing, so no other scheme opens a
+                    // connection.
+                    if !matches!(parsed.scheme(), "ws" | "wss") {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!(
+                                "websocket URL scheme must be `ws` or `wss`, not `{}`",
+                                parsed.scheme()
+                            ),
+                        ));
+                    }
                     let request = websocket_client_request(&parsed)?;
                     let host = parsed.host_str().ok_or_else(|| {
                         io::Error::new(
@@ -18140,19 +18240,25 @@ impl WebSocketValue {
     }
 
     #[allow(clippy::result_large_err)]
-    fn send_message(&self, mut message: Message, timeout: Option<StdDuration>) -> io::Result<()> {
+    fn send_message(&self, message: Message, timeout: Option<StdDuration>) -> io::Result<()> {
         let deadline = deadline_from_timeout(timeout)?;
         let cancellation = current_lightweight_task_cancellation();
         let _operation =
             acquire_protocol_operation(&self.inner.busy, deadline, cancellation.as_ref())?;
+        // The message until it is queued in the socket's write buffer. A
+        // write that would block has queued it already, so the next step
+        // only flushes; sending it again would send it twice.
+        let mut message = Some(message);
         loop {
             check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
             let socket = self.take_socket_for_step()?;
             let ((returned_socket, returned_message), result) = run_protocol_state_step(
                 (socket, message),
-                |(socket, message)| match socket {
-                    WebSocketStateKind::Plain(socket) => socket.send(message.clone()),
-                    WebSocketStateKind::MaybeTls(socket) => socket.send(message.clone()),
+                |(socket, message)| match (socket, message.take()) {
+                    (WebSocketStateKind::Plain(socket), Some(message)) => socket.send(message),
+                    (WebSocketStateKind::Plain(socket), None) => socket.flush(),
+                    (WebSocketStateKind::MaybeTls(socket), Some(message)) => socket.send(message),
+                    (WebSocketStateKind::MaybeTls(socket), None) => socket.flush(),
                 },
                 deadline,
                 cancellation.as_ref(),
@@ -18166,7 +18272,7 @@ impl WebSocketValue {
             match result {
                 Ok(()) => return Ok(()),
                 Err(tungstenite::Error::WriteBufferFull(returned)) => {
-                    message = returned;
+                    message = Some(returned);
                     wait_for_fd_event(fd, host_io::POLLOUT, deadline, cancellation.as_ref())?;
                 }
                 Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
@@ -18228,6 +18334,9 @@ impl WebSocketValue {
             let result = result?;
             match result {
                 Ok(Message::Close(_)) => return Ok(None),
+                // A control frame is not a message to hand out: the socket
+                // answers a ping itself, and the read goes on.
+                Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => {}
                 Ok(message) => return Ok(Some(message)),
                 Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                     return Ok(None);
@@ -18246,9 +18355,17 @@ impl WebSocketValue {
     }
 
     pub fn close(&self) -> io::Result<()> {
-        let _operation = acquire_protocol_operation(&self.inner.busy, None, None)?;
-        let socket = self.take_socket_for_step()?;
-        self.inner.closed.store(true, Ordering::Release);
+        if self.inner.closed.load(Ordering::Acquire) {
+            return Err(closed_resource_error());
+        }
+        let Some((_operation, socket)) = take_protocol_stream_for_close(
+            &self.inner.busy,
+            &self.inner.closed,
+            &self.inner.socket,
+            shutdown_websocket,
+        ) else {
+            return Ok(());
+        };
         let (_socket, result) = run_protocol_state_step(
             socket,
             |socket| match socket {

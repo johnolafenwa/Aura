@@ -232,6 +232,9 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 ### Networking
 
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
+- A `WebSocketListener` gives each client 10 seconds to finish its handshake. A client whose handshake fails or stalls is dropped, and `accept` waits for the next client.
+- An `HttpListener` gives each client 30 seconds to send its request, and `respond_text`/`respond_bytes` 30 seconds to write the response. A client that sends a malformed request gets 400, 413 or 431, and one that asks for a transfer coding other than `chunked` gets 501; either way, and when a client disconnects or runs out of time, `accept` closes that client and waits for the next one. It fails only for its own timeout, cancellation or a listener error. One slow client still delays the clients behind it by up to its 30 seconds.
+- `websocket_connect` accepts only `ws://` and `wss://` URLs. Ping and pong frames are answered and skipped by `recv_text` and `recv_bytes`, which return `None` only at a close.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.17 contract.
