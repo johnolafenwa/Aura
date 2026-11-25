@@ -1165,7 +1165,10 @@ impl<'a> NativeCodegen<'a> {
                 if small_leaf(function) {
                     object.mark_inline(func_id);
                 }
-            } else if mutable_leaf || sinkless_closure(function) {
+            } else if mutable_leaf
+                || sinkless_closure(function)
+                || deferring_variant(function, &classes)
+            {
                 let symbol = if mutable_leaf {
                     mangle_leaf_symbol(&function.name)
                 } else {
@@ -1864,7 +1867,7 @@ impl<'a> NativeCodegen<'a> {
         let defers_frame = !frameless
             && forwarding_frame.is_none()
             && function.name != "main"
-            && !takes_mutable(function)
+            && (without_sinks || !takes_mutable(function))
             && !function.blocks.iter().any(|block| {
                 block
                     .instructions
@@ -15254,6 +15257,10 @@ impl<'a> FunctionCompiler<'a> {
         let fast_block = self.builder.create_block();
         let room_block = self.builder.create_block();
         let join_block = self.builder.create_block();
+        // Growing the storage is rare once a list has room, so the call is
+        // cold, and a function that only calls out there pushes its frame
+        // record there (see `defers_frame`).
+        self.builder.set_cold_block(slow_block);
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
@@ -21211,6 +21218,26 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
     takes_mutable(function)
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && leaf_body(function, classes)
+}
+
+/// Whether `function` gets a second body that reads no write-through sink
+/// although it is no leaf (see `leaf_variant`): it has a `mut self`
+/// receiver or `mut` parameters, so its own body keeps its frame record on
+/// entry to learn whether the runtime entered it with sinks. A direct call
+/// that hands no sink over enters the second body, which pushes its record
+/// only where it first calls out, as a function with no `mut` parameter
+/// does (see `defers_frame`). A body with cleanup keeps its record.
+fn deferring_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    takes_mutable(function)
+        && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
+        && function.name != "main"
+        && !leaf_body(function, classes)
+        && !function.blocks.iter().any(|block| {
+            block
+                .instructions
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+        })
 }
 
 /// Small closure bodies can forward mutations of an owned environment

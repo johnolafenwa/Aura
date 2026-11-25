@@ -1,0 +1,21 @@
+class Marks:
+    seen: list[int64]
+    generation: int64
+
+    def visit(mut self, states: mut list[int64], start: int64, limit: int64):
+        mut s = start
+        while s < limit and self.seen[s] != self.generation:
+            self.seen[s] = self.generation
+            states.append(s)
+            s += 1
+
+    def sweep(mut self, limit: int64) -> int64:
+        self.generation += 1
+        mut current: list[int64] = []
+        self.visit(current, 0, limit)
+        return current.len()
+
+def main():
+    mut marks = Marks(seen=[0, 0, 0, 0], generation=0)
+    print(marks.sweep(3))
+    print(marks.sweep(6))
