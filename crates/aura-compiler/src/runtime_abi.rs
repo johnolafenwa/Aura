@@ -195,6 +195,16 @@ runtime_functions! {
         Some(I64)
     ),
     VecPushStrLiteral => ("aura_direct_vec_push_str_literal", [I64, I64, I64], None),
+    ConcatStrWords => (
+        "aura_direct_concat_str_words",
+        [I64, I64, I64, I64, I64, I64],
+        Some(I64)
+    ),
+    VecStrElementWords => (
+        "aura_direct_vec_str_element_words",
+        [I64, I64, I64, I64, I64],
+        Some(I64)
+    ),
     VecPushStrLiterals => (
         "aura_direct_vec_push_str_literals",
         [I64, I64, I64, I64],

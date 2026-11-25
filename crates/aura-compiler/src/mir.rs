@@ -10376,7 +10376,7 @@ impl InitializerSlotCheck<'_> {
     }
 }
 
-fn terminator_successors(terminator: &Terminator) -> Vec<&str> {
+pub(crate) fn terminator_successors(terminator: &Terminator) -> Vec<&str> {
     match terminator {
         Terminator::Goto(label) => vec![label],
         // `while true` tests a constant: only the taken edge executes.

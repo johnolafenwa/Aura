@@ -8,3 +8,10 @@
 [] 0
 [1, 2, 3, 9, 8]
 0
+[72, 65, 0, 65, 0, 1, 66, 2, 66, 105]
+thethe|the |<the
+anda much longer word than fits inline, twice over|and |<a much longer word than fits inline, twice over
+datadata|data |<data
+a much longer word than fits inline, twice overand|a much longer word than fits inline, twice over |<and
+thethe|the |<the
+anda much longer word than fits inline, twice over|and |<a much longer word than fits inline, twice over

@@ -7821,6 +7821,11 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(result);
                     }
                 }
+                if *op == BinaryOp::Add {
+                    if let Some(result) = self.compile_str_slot_concat(left, right, *span)? {
+                        return Ok(result);
+                    }
+                }
                 // The result of nested Array arithmetic is read here and
                 // released next. The runtime may compute into its buffer.
                 let reusable = |operand: &Operand| {

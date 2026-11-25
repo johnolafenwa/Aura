@@ -738,6 +738,13 @@ fn reads_words(
             right,
             ..
         } => is_local(left) || is_local(right),
+        // `+` joins the words (see `compile_str_slot_concat`).
+        Rvalue::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+            ..
+        } => concat_side(left) && concat_side(right) && (is_local(left) || is_local(right)),
         Rvalue::Call {
             callee:
                 CallTarget::Runtime {
@@ -767,6 +774,16 @@ fn reads_words(
                 })
             })
         }),
+    }
+}
+
+/// Whether `operand` can be a side of a `+` that joins words: a literal,
+/// or a local that holds its own `str`, not a part of one.
+fn concat_side(operand: &Operand) -> bool {
+    match operand {
+        Operand::String(_) => true,
+        Operand::Place(place) => !place.contains('.'),
+        _ => false,
     }
 }
 
@@ -1329,6 +1346,41 @@ impl FunctionCompiler<'_> {
         }))
     }
 
+    /// `left + right` on `str` values where a side is an element this
+    /// function holds as words: both sides join from their words, so the
+    /// element gets no box of its own. The other side is a literal, another
+    /// such element, or a local's box, which stays its local's.
+    pub(super) fn compile_str_slot_concat(
+        &mut self,
+        left: &Operand,
+        right: &Operand,
+        span: Span,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let slots = &self.str_slots;
+        let held = |operand: &Operand| matches!(operand, Operand::Place(place) if slots.contains_key(place.as_str()));
+        let sides = [(left, held(left)), (right, held(right))];
+        if !(sides[0].1 || sides[1].1) || !concat_side(left) || !concat_side(right) {
+            return Ok(None);
+        }
+        let mut words = Vec::new();
+        for (side, held) in sides {
+            let (ptr, len) = match side {
+                Operand::String(text) => self.string_constant(text.as_bytes())?,
+                _ if held => self.str_slot_words(side).expect("a held side has words"),
+                _ => {
+                    let value = self.load_operand(side)?;
+                    let value = self.ensure_opaque(value)?;
+                    self.str_box_words(value.values[0])
+                }
+            };
+            words.extend([ptr, len]);
+        }
+        let (line, column) = self.span_values(Some(span));
+        words.extend([line, column]);
+        let results = self.runtime_call_results(self.runtime[RuntimeFn::ConcatStrWords], &words);
+        Ok(Some(self.owned_opaque_result(results, Type::named("str"))))
+    }
+
     /// A runtime operation on a `str` receiver this twin holds as words,
     /// run on the bytes (see [`receiver_view_read`]).
     pub(super) fn compile_str_view_read(
@@ -1426,6 +1478,33 @@ impl FunctionCompiler<'_> {
         self.builder.jump(join_block, &[ptr, len, borrowed]);
     }
 
+    /// Jumps to `join_block` with the words of element `index` of the
+    /// `list[str]` `list`, which has no view: read where the list keeps
+    /// them when it can, as the view would give them, and otherwise those of
+    /// a copy, with the copy's box as their owner.
+    fn jump_with_element_words(
+        &mut self,
+        list: Val,
+        index: Val,
+        line: Val,
+        column: Val,
+        join_block: Blk,
+    ) {
+        let slot = self.builder.create_sized_stack_slot(16, 3);
+        let out = self.builder.stack_addr(types::I64, slot, 0);
+        let ptr = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::VecStrElementWords],
+                &[list, index, line, column, out],
+            )
+            .results[0];
+        let flags = MemFlags::trusted();
+        let len = self.builder.load(types::I64, flags, out, 0);
+        let owner = self.builder.load(types::I64, flags, out, 8);
+        self.builder.jump(join_block, &[ptr, len, owner]);
+    }
+
     /// Jumps to `join_block` with the words of the `str` in the box
     /// `owner`, which owns them.
     fn jump_with_owned_str(&mut self, owner: Val, join_block: Blk) {
@@ -1482,14 +1561,7 @@ impl FunctionCompiler<'_> {
             self.builder.switch_to_block(miss_block);
             self.builder.seal_block(miss_block);
             let (line, column) = self.span_operands(selector.span);
-            let copy = self
-                .builder
-                .call(
-                    self.runtime[RuntimeFn::VecStrElement],
-                    &[list, index, line, column],
-                )
-                .results[0];
-            self.jump_with_owned_str(copy, join_block);
+            self.jump_with_element_words(list, index, line, column, join_block);
             self.builder.switch_to_block(slow_block);
             self.builder.seal_block(slow_block);
             let (collection, projection) = self.load_element_path_root(&selection.place)?;
@@ -1502,14 +1574,7 @@ impl FunctionCompiler<'_> {
                 self.builder.switch_to_block(slow_block);
                 self.builder.seal_block(slow_block);
                 let (line, column) = self.span_operands(selector.span);
-                let copy = self
-                    .builder
-                    .call(
-                        self.runtime[RuntimeFn::VecStrElement],
-                        &[collection.values[0], index, line, column],
-                    )
-                    .results[0];
-                self.jump_with_owned_str(copy, join_block);
+                self.jump_with_element_words(collection.values[0], index, line, column, join_block);
             } else {
                 // A list the runtime walks to.
                 self.builder.jump(slow_block, &[]);
@@ -1852,14 +1917,7 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         // The runtime reports an index out of range as a read of it does.
-        let copy = self
-            .builder
-            .call(
-                self.runtime[RuntimeFn::VecStrElement],
-                &[list, index, line, column],
-            )
-            .results[0];
-        self.jump_with_owned_str(copy, join_block);
+        self.jump_with_element_words(list, index, line, column, join_block);
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         let words = self.builder.block_params(join_block).to_vec();

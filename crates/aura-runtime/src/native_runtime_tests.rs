@@ -30065,7 +30065,62 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
         expect_string(super::aura_direct_vec_str_element(list, -2, 1, 1)),
         "a"
     );
+    // The words of an element are read where the list keeps them; any other
+    // element is read from a copy, which owns them.
+    let words = |list, index| {
+        let mut out = [0_i64; 2];
+        let ptr = unsafe {
+            super::aura_direct_vec_str_element_words(list, index, 1, 1, out.as_mut_ptr())
+        };
+        let text = if ptr.is_null() {
+            None
+        } else {
+            let bytes = unsafe { std::slice::from_raw_parts(ptr, out[0] as usize) };
+            Some(String::from_utf8(bytes.to_vec()).unwrap())
+        };
+        (text, out[1] as *mut OpaqueValue)
+    };
+    let (text, owner) = words(list, -1);
+    assert_eq!((text.as_deref(), owner), (Some("bc"), std::ptr::null_mut()));
     unsafe { release_value(list) };
+    let mixed = boxed_value(Value::Vec(VecValue::new(
+        Type::named("str"),
+        vec![
+            Value::String("a".into()),
+            Value::Int(IntegerValue::from_i64(4)),
+        ]
+        .into(),
+    )));
+    let (text, owner) = words(mixed, 1);
+    assert_eq!(text, None, "a value that is not a `str` has no words");
+    assert!(!owner.is_null());
+    unsafe { release_value(owner) };
+    unsafe { release_value(mixed) };
+    let message = capture_direct_boundary_error_message(move || {
+        let list = string_vec(&["a"]);
+        words(list, 3);
+    });
+    assert!(message.contains("out of bounds"), "{message}");
+
+    // `+` on words joins them in place, short or long, up to the limit.
+    let concat = |left: &str, right: &str| {
+        expect_string(super::aura_direct_concat_str_words(
+            left.as_ptr(),
+            left.len(),
+            right.as_ptr(),
+            right.len(),
+            1,
+            1,
+        ))
+    };
+    assert_eq!(concat("ab", "c"), "abc");
+    let long = "z".repeat(40);
+    assert_eq!(concat(&long, "é"), format!("{long}é"));
+    let message = capture_direct_boundary_error_message(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1);
+        concat(&half, &half);
+    });
+    assert!(message.contains("allocation limit"), "{message}");
 
     let limit = crate::runtime_value::MAX_STRING_BYTES;
     let left = crate::text::Text::from("x".repeat(limit));

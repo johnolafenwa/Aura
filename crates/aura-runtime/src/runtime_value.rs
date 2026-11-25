@@ -4697,6 +4697,8 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
         }
     }
     match value {
+        // The most common element, a `str`, copies its text.
+        Value::String(text) => return Ok(Value::String(text.clone())),
         // A variant kept in its layout copies its block, and each payload
         // box it copies shares its collection's storage.
         Value::EnumVariant(EnumVariantValue {

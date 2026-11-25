@@ -56,6 +56,42 @@ def fill(counter: mut Counter, profile: mut Profile, rounds: int64) -> str:
     return ",".join(words)
 
 
+def expand(prefixes: list[int64], start: int64) -> list[uint8]:
+    mut bytes: list[uint8] = []
+    mut code = start
+    while code >= 256:
+        bytes.append((code % 256) as uint8)
+        code = prefixes[code - 256]
+    bytes.append(code as uint8)
+    bytes.reverse()
+    return bytes
+
+
+def decode(codes: list[int64]) -> list[uint8]:
+    # Each `entry` starts empty, but only the first branch reads it so.
+    prefixes = [65, 256, 66]
+    mut out: list[uint8] = []
+    for code in codes:
+        mut entry: list[uint8] = []
+        if code < 256:
+            entry.append(code as uint8)
+        elif code < 259:
+            entry = expand(prefixes, code)
+        else:
+            entry = expand(prefixes, 258)
+            first = entry[0]
+            entry.append(first)
+        out.extend(entry)
+    return out
+
+
+def joined(words: list[str], left: int64, right: int64) -> str:
+    # Elements read where the list keeps them join with `+`.
+    pair = words[left] + words[right]
+    spaced = words[left] + " "
+    return pair + "|" + spaced + "|" + "<" + words[right]
+
+
 def main():
     mut counter = Counter(total=0)
     mut profile = Profile(name="ada", visits=0)
@@ -80,3 +116,7 @@ def main():
     print(bytes)
     bytes.clear()
     print(bytes.len())
+    print(decode([72, 256, 257, 300, 105]))
+    pool = ["the", "and", "data", "a much longer word than fits inline, twice over"]
+    for i in range(6):
+        print(joined(pool, i % 4, (i * 3) % 4))

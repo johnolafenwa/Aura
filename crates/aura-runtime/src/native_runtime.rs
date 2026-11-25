@@ -1753,11 +1753,14 @@ impl OpaqueValue {
         // holds its view.
         let view = unsafe { vector.str_view.get_or_create() };
         view.misses += 1;
-        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
+        if view.misses < STR_VIEW_MIN_MISSES
+            || view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len()
+        {
             return;
         }
         view.misses = 0;
         view.entries.clear();
+        view.entries.reserve(values.len());
         for element in values.iter() {
             let Value::String(text) = element else {
                 view.entries.clear();
@@ -3530,6 +3533,11 @@ pub const DIRECT_STR_VIEW_LEN_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEn
 /// A string or callable list builds its lookup table once the number of
 /// misses times this factor reaches its length.
 const LIST_VIEW_MISSES_PER_ELEMENT: usize = 8;
+
+/// A string list also waits for this many misses, so a short list read
+/// once or twice before it is dropped, such as the fields of one `split`,
+/// never pays for a table.
+const STR_VIEW_MIN_MISSES: usize = 4;
 
 /// Where generated code finds the list view in a boxed value. The offsets
 /// hold for one build of the runtime, so the compiler records
@@ -9478,6 +9486,43 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literals(
     })
 }
 
+/// `left + right` on two `str` values generated code holds as words, such
+/// as an element it reads where its list keeps it, in a new box. A result
+/// over the string limit stops the program as `+` on boxes does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_concat_str_words(
+    left_ptr: *const u8,
+    left_len: usize,
+    right_ptr: *const u8,
+    right_len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let left = literal_str(left_ptr, left_len);
+        let right = literal_str(right_ptr, right_len);
+        let len = left.len().saturating_add(right.len());
+        if len > crate::runtime_value::MAX_STRING_BYTES {
+            let error = concat_text_checked(left.into(), right)
+                .expect_err("a text over the limit does not concatenate");
+            runtime_diagnostic_error_at(error, runtime_span(line, column));
+        }
+        let text = if len <= crate::text::INLINE_CAPACITY {
+            let mut bytes = [0_u8; crate::text::INLINE_CAPACITY];
+            bytes[..left.len()].copy_from_slice(left.as_bytes());
+            bytes[left.len()..len].copy_from_slice(right.as_bytes());
+            // SAFETY: two UTF-8 texts joined are UTF-8.
+            crate::text::Text::from(unsafe { str::from_utf8_unchecked(&bytes[..len]) })
+        } else {
+            let mut text = String::with_capacity(len);
+            text.push_str(left);
+            text.push_str(right);
+            text.into()
+        };
+        boxed_value(Value::String(text))
+    })
+}
+
 /// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
 /// `append` of a copy in a box does, with no box made for the copy.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10414,6 +10459,69 @@ pub extern "C-unwind" fn aura_direct_vec_str_element(
         // SAFETY: `with_vec_element` checked the handle.
         unsafe { &*list }.note_str_view_miss();
         boxed_value(element)
+    })
+}
+
+/// The words of element `index` of a `list[str]` with no
+/// [`DirectListAccess::Str`] view: the address of its bytes, with their
+/// length at `out[0]` and 0 at `out[1]` when they are read where the list
+/// keeps them, as the view would give them, and otherwise those of a copy
+/// whose box is at `out[1]`, as [`aura_direct_vec_str_element`] makes. The
+/// read counts as a miss of the view.
+///
+/// # Safety
+///
+/// `out` points to two writable words.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_vec_str_element_words(
+    list: *mut OpaqueValue,
+    index: i64,
+    line: i64,
+    column: i64,
+    out: *mut i64,
+) -> *const u8 {
+    task_runtime_boundary(|| {
+        // SAFETY: `with_vector` below checks the handle before any read of
+        // the header matters.
+        let confined =
+            unsafe { list.as_ref() }.is_some_and(|header| header.shared_lock().is_none());
+        let in_place = with_vector(list, |vector| {
+            let len = vector.elements.len();
+            let Some(position) = normalize_vec_index(index, len).filter(|position| *position < len)
+            else {
+                direct_vec_index_error(index, len, line, column)
+            };
+            match (&vector.elements, vector.elements.value_at(position)) {
+                (ListElements::Values(_), Some(Value::String(text))) if confined => {
+                    Some((text.as_ptr(), text.len()))
+                }
+                _ => None,
+            }
+        });
+        let (ptr, len, owner) = match in_place {
+            Some((ptr, len)) => (ptr, len, std::ptr::null_mut()),
+            None => {
+                crate::runtime_value::representation_stats::note_clone();
+                let copy = boxed_value(with_vec_element(list, index, line, column, Value::clone));
+                // SAFETY: the box was just made, and its text stays where it
+                // is while the box lives.
+                let (ptr, len) = unsafe {
+                    with_value(copy, |value| match value {
+                        Value::String(text) => (text.as_ptr(), text.len()),
+                        _ => (std::ptr::null(), 0),
+                    })
+                };
+                (ptr, len, copy)
+            }
+        };
+        // SAFETY: `with_vector` checked the handle.
+        unsafe { &*list }.note_str_view_miss();
+        // SAFETY: the caller's contract.
+        unsafe {
+            out.write(len as i64);
+            out.add(1).write(owner as i64);
+        }
+        ptr
     })
 }
 

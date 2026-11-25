@@ -150,3 +150,67 @@ fn a_shared_callable_loop_binding_is_lent_only_for_direct_calls() {
     callable.call_kind = crate::sema::ClosureCallKind::MutableRepeatable;
     assert!(!borrows(source, &Type::Callable(Box::new(callable)))[0].1);
 }
+
+#[test]
+fn an_empty_list_a_branch_releases_unread_is_made_only_on_the_other_branch() {
+    use crate::mir::{Instruction, Rvalue};
+    let source = r#"
+def other(code: int64) -> list[uint8]:
+    return [1, (code % 256) as uint8]
+
+def pick(code: int64) -> list[uint8]:
+    mut entry: list[uint8] = []
+    if code < 256:
+        entry.append(code as uint8)
+    elif code < 512:
+        entry = other(code)
+    else:
+        entry = other(7)
+    return entry
+
+def kept(code: int64) -> list[uint8]:
+    mut entry: list[uint8] = []
+    if code < 256:
+        entry.append(code as uint8)
+    print(entry.len())
+    return entry
+
+def main():
+    print(pick(3))
+    print(pick(300))
+    print(kept(4))
+"#;
+    let module = crate::lower_source_to_mir(source).expect("the cases lower");
+    let empty_literals = |name: &str| {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function lowers");
+        function
+            .blocks
+            .iter()
+            .map(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .filter(|instruction| {
+                        matches!(
+                            instruction,
+                            Instruction::Assign {
+                                value: Rvalue::VecLiteral { elements, .. },
+                                ..
+                            } if elements.is_empty()
+                        )
+                    })
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+    // `pick` makes its empty list where it appends, in the branch's block.
+    let pick = empty_literals("pick");
+    assert_eq!(pick.iter().sum::<usize>(), 1);
+    assert_eq!(pick[0], 0, "the entry block no longer makes the list");
+    // `kept` reads the list after the `if`, so it keeps it in the entry.
+    assert_eq!(empty_literals("kept")[0], 1);
+}
