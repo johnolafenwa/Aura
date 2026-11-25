@@ -13,6 +13,23 @@ in this file.
   evaluated together, such as the weights of an optimizer step, run as
   one MPSGraph, so a training step computes its forward and backward
   pass once. `AURA_TENSOR_TRACE=1` prints one line for each Metal run.
+- Performance: text-heavy programs do less work. Making and freeing a `str`
+  costs about half as much; each later step of a chain of literal `replace`
+  calls reuses the string the step before it made; `split` with a literal
+  separator makes no value for the separator; appending a string that was
+  just built to a list moves it; `out.extend(text.to_bytes())` appends the
+  bytes without a list in between; and `{value:02}`-style padded integers
+  format without allocating. On the cross-language programs,
+  `markdown_render` runs 47% fewer instructions, `template_render` 26%,
+  `csv_aggregate` 16% and `word_freq` 14%.
+- Speed: `d.remove(key)` builds no `Lookup` value when its result is
+  matched or dropped, and takes about a quarter of the instructions. A loop
+  over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`
+  keys and values walks the dict and makes no list: one entry of an
+  `items()` loop went from about 4,000 instructions to about 250.
+- Speed: a `str` read from a list only to be looked up, as in
+  `words[i] in seen` or `table.get(words[i])`, is no longer copied first.
+  A membership test takes about a third of the instructions.
 - `aura verify` no longer reports a made-up counterexample for a check that
   reads the result of a step it does not model, such as `split`, an
   f-string, a slice, `sort`, a comprehension, `sum`, or a bit operation.
@@ -41,6 +58,47 @@ in this file.
   fields.
 - `aura verify` proves the body of a generator function with its `requires`
   clauses known, and reports its checks under the generator's name.
+- `aura verify` models more of the language, in code and in contracts:
+  - lists: `in` and `contains` on `int`, `bool`, and `str` elements; slices
+    without a step, whose bounds are now a check; `sorted`, `sort`, and
+    `reverse`; the length of a comprehension; `min` and `max` of a
+    non-empty list; lists of lists, including writes inside a row;
+  - integers: `&`, `|`, `^`, `~`, `<<`, and `>>` on every width up to 64
+    bits, with a check that a shift count is in range and that `<<` loses no
+    bits; the `wrapping_` and `saturating_` methods; `**`; and `as`
+    conversions in contracts; `math.floor`, `ceil`, `trunc`, `sqrt`,
+    `isqrt`, `factorial`, and the `is_nan` family;
+  - text: `split`, `lines`, `find`, indexing and slicing (now checked),
+    `strip_prefix`, `strip_suffix`, `split_once`, f-strings, and `str(x)`,
+    with length bounds for `trim`, `replace`, and the case methods;
+  - lambdas and local `def` functions called where they are made, with the
+    values they captured, by value or by reference, and bound methods;
+  - class invariants of objects stored in fields, tuples, optional values,
+    `Result` and enum payloads, and lists; `match` as an expression and
+    every decidable arm pattern; calls on a union-typed value, whose
+    members' contracts now apply; `==` between unions and enum variants.
+- `aura verify` names an enum variant in a counterexample instead of its
+  index, and reports a recursive spec function that needs more than eight
+  levels as not modeled instead of failed.
+- `aura verify` no longer proves an assertion about a local that a lambda
+  changed through a view it captured.
+- `aura verify` with no path, a directory, or several files verifies every
+  module of a package and prints each file's summary and one line of
+  totals. Such a run fails only when a check failed, a file does not
+  compile, or a `--must-verify` function is open. `--deny not-modeled`,
+  `--deny undecided` and `--deny all` make the other outcomes fail it too.
+  A run on one file is unchanged: it fails unless every check is proved.
+- `aura verify --must-verify <function>` reports `AU5122` when the named
+  function has a check that is not proved.
+- `aura test --verify` verifies the package before it runs the tests.
+- `aura verify` on one file says how many imported modules it did not
+  check.
+- `aura verify` verifies the statements a module writes outside every
+  function, and reports them as `<module>`. Before, they were not checked.
+- `aura verify` reports a check in a copy of a function made for a
+  generator argument once, under the function's own name. Before, it was
+  reported a second time under a name starting with `__aura_with_`. A
+  module constant's initializer is reported under the constant's name.
 
 ## VS Code extension 0.17.0 — 2026-11-24
 

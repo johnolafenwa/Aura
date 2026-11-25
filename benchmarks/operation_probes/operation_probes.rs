@@ -4,7 +4,7 @@
 // then performs the operation `count` times. `... setup` only sets up. Each
 // operation is written the way Rust code would do the same work, and prints
 // the same line as the Aura version.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 
 struct Point {
@@ -192,6 +192,142 @@ fn dict_get_str(n: i64, run: bool) -> i64 {
         }
     }
     total
+}
+
+fn dict_get_int(n: i64, run: bool) -> i64 {
+    let mut table: HashMap<i64, i64> = HashMap::new();
+    for i in 0..1000 {
+        table.insert(i * 7919, i);
+    }
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            if let Some(value) = table.get(&((i * 31 % 1000) * 7919)) {
+                total += value;
+            }
+        }
+    }
+    total
+}
+
+fn dict_set_int(n: i64, run: bool) -> i64 {
+    let mut table: HashMap<i64, i64> = HashMap::new();
+    for i in 0..1000 {
+        table.insert(i * 7919, i);
+    }
+    if run {
+        for i in 0..n {
+            table.insert((i * 31 % 1000) * 7919, i);
+        }
+    }
+    table.len() as i64 + table[&0]
+}
+
+fn dict_insert_int(n: i64, run: bool) -> i64 {
+    let mut table: HashMap<i64, i64> = HashMap::new();
+    if run {
+        for i in 0..n {
+            table.insert(i * 7919, i);
+        }
+    }
+    table.len() as i64
+}
+
+fn dict_count_str(n: i64, run: bool) -> i64 {
+    let mut keys: Vec<String> = Vec::new();
+    let mut table: HashMap<String, i64> = HashMap::new();
+    for i in 0..1000 {
+        keys.push(format!("key{i}"));
+        table.insert(format!("key{i}"), 0);
+    }
+    if run {
+        for i in 0..n {
+            if let Some(count) = table.get_mut(&keys[(i * 31 % 1000) as usize]) {
+                *count += 1;
+            }
+        }
+    }
+    table["key7"] + table.len() as i64
+}
+
+fn dict_contains_str(n: i64, run: bool) -> i64 {
+    let mut keys: Vec<String> = Vec::new();
+    let mut table: HashMap<String, i64> = HashMap::new();
+    for i in 0..1000 {
+        keys.push(format!("key{i}"));
+        if i % 2 == 0 {
+            table.insert(format!("key{i}"), i);
+        }
+    }
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            if table.contains_key(&keys[(i * 31 % 1000) as usize]) {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
+fn set_add_int(n: i64, run: bool) -> i64 {
+    let mut seen: HashSet<i64> = HashSet::new();
+    if run {
+        for i in 0..n {
+            seen.insert(i * 7919 % 50021);
+        }
+    }
+    seen.len() as i64
+}
+
+fn set_contains_int(n: i64, run: bool) -> i64 {
+    let mut seen: HashSet<i64> = HashSet::new();
+    for i in 0..1000 {
+        seen.insert(i * 2 * 7919);
+    }
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            if seen.contains(&((i * 31 % 2000) * 7919)) {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
+fn set_contains_str(n: i64, run: bool) -> i64 {
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for i in 0..1000 {
+        keys.push(format!("key{i}"));
+        if i % 2 == 0 {
+            seen.insert(format!("key{i}"));
+        }
+    }
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            if seen.contains(&keys[(i * 31 % 1000) as usize]) {
+                total += 1;
+            }
+        }
+    }
+    total
+}
+
+fn dict_items_loop(n: i64, run: bool) -> i64 {
+    let mut table: HashMap<i64, i64> = HashMap::new();
+    for i in 0..n {
+        table.insert(i * 7919, i);
+    }
+    let mut total = 0i64;
+    if run {
+        for (key, value) in &table {
+            total += key + value;
+        }
+    }
+    total + table.len() as i64
 }
 
 fn list_push(n: i64, run: bool) -> i64 {
@@ -552,6 +688,15 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "str_slice" => str_slice(n, run),
         "dict_remove" => dict_remove(n, run),
         "dict_get_str" => dict_get_str(n, run),
+        "dict_get_int" => dict_get_int(n, run),
+        "dict_set_int" => dict_set_int(n, run),
+        "dict_insert_int" => dict_insert_int(n, run),
+        "dict_count_str" => dict_count_str(n, run),
+        "dict_contains_str" => dict_contains_str(n, run),
+        "set_add_int" => set_add_int(n, run),
+        "set_contains_int" => set_contains_int(n, run),
+        "set_contains_str" => set_contains_str(n, run),
+        "dict_items_loop" => dict_items_loop(n, run),
         "list_push" => list_push(n, run),
         "class_field_read" => class_field_read(n, run),
         "field_write" => field_write(n, run),
