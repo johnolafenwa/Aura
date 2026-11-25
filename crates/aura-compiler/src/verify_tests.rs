@@ -4125,3 +4125,1630 @@ def main():
         );
     }
 }
+
+#[test]
+fn trait_weakened_requires_does_not_leak_into_impl_body() {
+    let source = r#"
+trait Reader:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x > 0
+        requires len(xs) > x
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x >= -10
+        requires len(xs) > 0
+        ensures x > 0
+        return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else { return };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::IndexInRange
+                && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body bounds check must fail under weakened requires: {report:#?}",
+    );
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::Ensures && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body ensures must fail under weakened requires: {report:#?}",
+    );
+    let program = crate::check_source(source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unproved bounds check must not be removed"
+    );
+    assert_eq!(
+        removed.assertions, 0,
+        "unproved ensures check must not be removed"
+    );
+
+    // Weakening all the way to `requires true` must keep the trait's
+    // `requires` out of the body's assumptions.
+    let trivial_requires = r#"
+trait Reader:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires x >= 0 and x < len(xs)
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64, xs: list[int64]) -> int64:
+        requires true
+        return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(trivial_requires) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::IndexInRange
+                && matches!(check.status, Status::Failed { .. })
+        }),
+        "impl body with `requires true` must not inherit trait requires: {report:#?}",
+    );
+
+    // Strengthening `requires` in an impl must still fail the weakening obligation.
+    let strengthened = r#"
+trait Reader:
+    def pick(self, x: int64) -> int64:
+        requires x >= 0
+
+class Boxed:
+    pass
+
+impl Reader for Boxed:
+    def pick(self, x: int64) -> int64:
+        requires x > 10
+        return x
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(strengthened) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|check| {
+            check.kind == ObligationKind::Requires && matches!(check.status, Status::Failed { .. })
+        }),
+        "strengthened impl requires must fail weakening check: {report:#?}",
+    );
+}
+
+#[test]
+fn loan_aliasing_and_framing_subcases() {
+    let cases: [(&str, usize, &str); 9] = [
+        (
+            "whole-place view mut clear",
+            0,
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = xs
+    v.clear()
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "mut call on list element",
+            // Only the two `idx[0]` accesses may be proved (`len(idx) > 0`); `ys[idx[0]]` must remain checked.
+            2,
+            r#"
+def set_neg(x: mut int64):
+    x = -1
+
+def f(idx: mut list[int64], ys: list[int64]) -> int64:
+    requires len(idx) > 0 and len(ys) > 0 and idx[0] == 0
+    set_neg(idx[0])
+    return ys[idx[0]]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "element view append then WriteLoan reset then pop",
+            // Only `grid[0]` may be proved (`len(grid) > 0`); `v.pop()` must remain open.
+            1,
+            r#"
+def f(grid: mut list[list[int64]]) -> int64:
+    requires len(grid) > 0
+    view mut v = grid[0]
+    v.append(1)
+    v = []
+    return v.pop()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "element view append then WriteLoan reset then is_empty",
+            1,
+            r#"
+def f(grid: mut list[list[int64]]):
+    requires len(grid) > 0
+    view mut v = grid[0]
+    v.append(1)
+    v = []
+    assert not v.is_empty()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure capturing live view mut",
+            0,
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = xs
+    mut clear_it: def(int64) -> None = lambda [mut v] _: v.clear()
+    clear_it(0)
+    _ = len(v)
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure capturing returned view mut",
+            0,
+            r#"
+def pick(xs: mut list[int64]) -> view mut list[int64] from xs:
+    return view mut xs
+
+def f(xs: mut list[int64]) -> int64:
+    requires len(xs) > 0
+    view mut v = pick(xs)
+    mut clear_it: def(int64) -> None = lambda [mut v] _: v.clear()
+    clear_it(0)
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "merged loan WriteLoan via or-pattern",
+            0,
+            r#"
+enum Two:
+    A(int64 | str)
+    B(int64 | str)
+
+def f(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    mut t = Two.A(0)
+    match mut t:
+        case Two.A(int64 as v) | Two.B(int64 as v):
+            v = -10
+        case _:
+            pass
+    match t:
+        case Two.A(int64 as idx):
+            return xs[idx]
+        case _:
+            return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "loop multi-origin loan",
+            0,
+            r#"
+def f(flag: bool, xs: mut list[int64], ys: mut list[int64]) -> int64:
+    requires len(xs) > 0 and len(ys) > 0
+    mut i = 0
+    while i < 2:
+        if flag:
+            view mut v = xs
+            v = []
+        else:
+            view mut v = ys
+            v = []
+        i = i + 1
+    return xs[0] + ys[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "callee frame multi-origin loan",
+            0,
+            r#"
+def maybe_clear(flag: bool, xs: mut list[int64], ys: mut list[int64]):
+    if flag:
+        view mut v = xs
+        v = []
+    else:
+        view mut v = ys
+        v = []
+
+def caller(flag: bool, xs: mut list[int64], ys: mut list[int64]) -> int64:
+    requires len(xs) > 0 and len(ys) > 0
+    maybe_clear(flag, xs, ys)
+    return xs[0] + ys[0]
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, max_removed_bounds, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        assert!(!report.is_proved(), "{label} must not prove: {report:#?}");
+        let program = crate::check_source(source).expect("checks");
+        let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        assert!(
+            removed.bounds <= max_removed_bounds,
+            "{label} removed too many bounds checks: {removed:?} (max {max_removed_bounds})"
+        );
+    }
+}
+
+#[test]
+fn float32_literal_comparison_and_arithmetic_match_verifier_and_runtime() {
+    let source = r#"
+def check_all(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    x: float32 = 0.1
+    assert x <= 0.1
+    assert 0.1 <= x <= 0.1
+    y: float32 = -0.1
+    assert y + 0.1 == 0.0
+    assert y >= -0.1
+    if x > 0.1:
+        return xs[999]
+    return xs[0]
+
+def main():
+    print(check_all([42]))
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    assert!(
+        report.is_proved(),
+        "verifier should prove float32 literal checks: {report:#?}"
+    );
+    let output = crate::run_source(source).expect("runtime must agree with verifier on float32");
+    assert_eq!(output.stdout.trim(), "42");
+}
+
+#[test]
+fn loop_counter_monotonicity_rejects_preloop_and_captured_mutations() {
+    let cases: [(&str, &str); 4] = [
+        (
+            "pre-loop negative step variable assigned after use",
+            r#"
+def f(n: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    mut i = 0
+    mut k = -100
+    while i < n:
+        i = i + k
+        k = 1
+    assert i >= 0
+    return xs[0]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "pre-loop negative temp variable assigned after use",
+            r#"
+def f(n: int64) -> int64:
+    mut i = 0
+    mut t = -999
+    while i < n:
+        i = t + 1
+        t = i
+    assert i >= 0
+    return i
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "conditionally assigned step variable",
+            r#"
+def f(n: int64, flag: bool) -> int64:
+    mut i = 0
+    mut k = -100
+    while i < n:
+        if flag:
+            k = 1
+        i = i + k
+    assert i >= 0
+    return i
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "closure-mutated loop counter",
+            r#"
+def set_neg(x: mut int64):
+    x = -100
+
+def f(n: int64, xs: list[int64]) -> int64:
+    requires n >= 0 and len(xs) == n
+    mut i = 0
+    mut total = 0
+    while i < n:
+        assert i >= 0
+        total = xs[i]
+        mut corrupt: def(int64) -> None = lambda [mut i] _: set_neg(i)
+        corrupt(0)
+        i = i + 1
+    return total
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    let mut falsely_proved = Vec::new();
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let assert_open = report
+            .obligations
+            .iter()
+            .any(|ob| ob.kind == ObligationKind::Assert && !matches!(ob.status, Status::Proved));
+        if !assert_open {
+            falsely_proved.push(label);
+        }
+    }
+    assert!(
+        falsely_proved.is_empty(),
+        "loop counter monotonicity falsely proved: {falsely_proved:?}"
+    );
+}
+
+#[test]
+fn recover_and_task_start_do_not_assume_trapping_callee_ensures() {
+    let recover_source = r#"
+import control
+
+def guard(x: int64) -> int64:
+    ensures x > 0
+    assert x > 0
+    return x
+
+def caller_assert(x: int64) -> int64:
+    _ = control.recover(guard, x)
+    assert x > 0
+    return x
+
+def caller_index(x: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0 and x < len(xs)
+    _ = control.recover(guard, x)
+    return xs[x]
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(recover_source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "caller_assert"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert after control.recover must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "caller_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "bounds check after control.recover must fail: {report:#?}"
+    );
+    let program = crate::check_source(recover_source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "bounds check after control.recover must not be removed"
+    );
+
+    let task_source = r#"
+def guard(x: int64) -> int64:
+    ensures x > 0
+    assert x > 0
+    return x
+
+def before_ready_assert(x: int64) -> int64:
+    with group = TaskGroup():
+        _ = group.start(guard, x)
+        assert x > 0
+    return x
+
+def before_ready_index(x: int64, xs: list[int64]) -> int64:
+    requires len(xs) > 0 and x < len(xs)
+    with group = TaskGroup():
+        _ = group.start(guard, x)
+        return xs[x]
+    return 0
+
+def on_failure(x: int64) -> int64:
+    with group = TaskGroup():
+        task = group.start(guard, x)
+        match task.result():
+            case TaskResult.Ready(v):
+                assert x > 0
+                return v
+            case _:
+                assert x > 0
+                return 0
+    return 0
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(task_source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "before_ready_assert"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert before TaskResult.Ready must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "before_ready_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "bounds check before TaskResult.Ready must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "on_failure"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "assert in non-Ready arm must fail: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "on_failure"
+                && ob.kind == ObligationKind::Assert
+                && matches!(ob.status, Status::Proved)
+        }),
+        "assert in Ready arm should still prove: {report:#?}"
+    );
+}
+
+#[test]
+fn contracted_callable_keyword_arguments_bind_by_name() {
+    let source = r#"
+type PickFirst = def(a: int64, b: int64) -> int64:
+    requires b > 0
+    ensures result == a
+
+def bad_index(f: PickFirst, xs: list[int64]) -> int64:
+    requires len(xs) > 1
+    idx = f(b=1, a=-10)
+    return xs[idx]
+
+def bad_requires(f: PickFirst) -> int64:
+    return f(b=-1, a=10)
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "bad_index"
+                && ob.kind == ObligationKind::IndexInRange
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "reordered kwargs must bind `a = -10` so `xs[idx]` fails: {report:#?}"
+    );
+    assert!(
+        report.obligations.iter().any(|ob| {
+            ob.function == "bad_requires"
+                && ob.kind == ObligationKind::Requires
+                && matches!(ob.status, Status::Failed { .. })
+        }),
+        "reordered kwargs must bind `b = -1` so `requires b > 0` fails: {report:#?}"
+    );
+    let program = crate::check_source(source).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unproved bounds check after reordered kwargs must not be removed"
+    );
+}
+
+#[test]
+fn callable_alias_contracts_enforce_erased_open_writeloan_toplevel_and_imports() {
+    // 1. Failed callable refinement must mark `erased_open` so `--remove-proved-checks`
+    //    does not remove bounds checks inside the callee assuming the alias contract.
+    let bad_call = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+def main():
+    print(read(bad, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let program = crate::check_source(bad_call).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "failed callable refinement must block bounds check removal: {removed:?}"
+    );
+
+    // 2. Writing a non-conforming function to a contracted field through `view mut` (`WriteLoan`)
+    //    must fail verification and block check removal.
+    let write_loan = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def good(x: int64) -> int64:
+    ensures result == 0
+    return 0
+
+def bad(x: int64) -> int64:
+    return -10
+
+class Holder:
+    cb: PosFn
+
+def use_holder(h: mut Holder, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    view mut slot = h.cb
+    slot = bad
+    idx = h.cb(0)
+    return xs[idx]
+
+def main():
+    mut h = Holder(cb=good)
+    print(use_holder(h, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(write_loan) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "WriteLoan storing non-conforming callable must fail verification: {report:#?}"
+    );
+    let program = crate::check_source(write_loan).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "WriteLoan callable failure must block bounds check removal: {removed:?}"
+    );
+
+    // 3. Top-level code passing a non-conforming function must be verified and block removal.
+    let top_level = r#"
+type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+print(read(bad, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(top_level) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "top-level non-conforming callable call must fail verification: {report:#?}"
+    );
+    let program = crate::check_source(top_level).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "top-level callable failure must block bounds check removal: {removed:?}"
+    );
+
+    // 4. Cross-module imported function supplying a non-conforming callable must block removal.
+    let dir = script_dir("callable-cross-module");
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"cbmod\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/helper.au"),
+        r#"public type PosFn = def(x: int64) -> int64:
+    ensures result >= 0 and result < 10
+
+def bad(x: int64) -> int64:
+    return -10
+
+public def supply() -> PosFn:
+    return bad
+"#,
+    )
+    .expect("helper.au");
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"from helper import PosFn, supply
+
+def read(f: PosFn, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    idx = f(0)
+    return xs[idx]
+
+def main():
+    print(read(supply(), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#,
+    )
+    .expect("main.au");
+    let program = crate::check_path(&main).expect("cross-module checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "unverified imported callable supplier must block bounds check removal: {removed:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn class_invariants_and_function_escapes_are_enforced() {
+    // 1. Escaping function whose parameter has a class invariant (and no `requires`)
+    //    called indirectly on a broken object.
+    let indirect_inv = r#"
+class Pos:
+    n: int64
+    invariant self.n >= 0 and self.n < 10
+
+def read_at(p: Pos) -> int64:
+    xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    return xs[p.n]
+
+def invoke(f: def(Pos) -> int64) -> int64:
+    mut p = Pos(n=0)
+    p.n = -10
+    return f(p)
+
+def main():
+    print(invoke(read_at))
+"#;
+    let Some(report) = verify(indirect_inv) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "indirect call to function assuming parameter class invariant must not prove: {report:#?}"
+    );
+    let program = crate::check_source(indirect_inv).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "indirect class-invariant escape must block bounds check removal: {removed:?}"
+    );
+
+    // 2. Function with `requires` escaping inside an uncontracted struct field (via field assignment).
+    let field_escape = r#"
+def needs_pos(x: int64) -> int64:
+    requires x > 0
+    return x
+
+def nop(x: int64) -> int64:
+    return x
+
+class Boxed:
+    cb: def(int64) -> int64
+
+def run_box(b: Boxed) -> int64:
+    return b.cb(-5)
+
+def main():
+    mut b = Boxed(cb=nop)
+    b.cb = needs_pos
+    print(run_box(b))
+"#;
+    let Some(report) = verify(field_escape) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "`requires` function escaping in struct field must not prove: {report:#?}"
+    );
+
+    // 3. Top-level code mutating a class field to break its invariant before calling a function.
+    let top_level_inv = r#"
+class Pos:
+    n: int64
+    invariant self.n >= 0 and self.n < 10
+
+def read_at(p: Pos, xs: list[int64]) -> int64:
+    requires len(xs) >= 10
+    return xs[p.n]
+
+mut p = Pos(n=0)
+p.n = -10
+print(read_at(p, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+"#;
+    let Some(report) = verify(top_level_inv) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "top-level broken class invariant must not prove: {report:#?}"
+    );
+    let program = crate::check_source(top_level_inv).expect("checks");
+    let (_, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert_eq!(
+        removed.bounds, 0,
+        "top-level broken invariant must block bounds check removal: {removed:?}"
+    );
+
+    // 4. `with` block cleanup (`PopCleanup`) must check `__exit__` contracts/invariants
+    //    and havoc captured locals.
+    let cleanup_contract = r#"
+class Guard:
+    n: int64
+    invariant self.n >= 0
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        requires self.n > 0
+        pass
+
+def f():
+    with g = Guard(n=0):
+        pass
+
+def main():
+    f()
+"#;
+    let Some(report) = verify(cleanup_contract) else {
+        return;
+    };
+    assert!(
+        !report.is_proved(),
+        "`PopCleanup` must prove `__exit__` requires: {report:#?}"
+    );
+}
+
+#[test]
+fn narrow_integer_widths_are_preserved_in_specs_minmax_and_writeloan() {
+    let cases: [(&str, &str); 5] = [
+        (
+            "negated literal + int8 in callee requires",
+            r#"
+def callee(x: int8) -> int8:
+    requires (-1) + x <= 127
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "grouped literal + int8 in callee requires",
+            r#"
+def callee(x: int8) -> int8:
+    requires (1) + x >= -128
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "min(0, x) - 1 via spec def returning int8",
+            r#"
+spec def clamp_zero(x: int8) -> int8:
+    return min(x, 0)
+
+def callee(x: int8) -> int8:
+    requires clamp_zero(x) - 1 <= 127
+    return x
+
+def caller(x: int8) -> int8:
+    return callee(x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "conditional (0 if flag else x) - 1 with int8 in callee requires",
+            r#"
+def callee(flag: bool, x: int8) -> int8:
+    requires (0 if flag else x) - 1 <= 127
+    return x
+
+def caller(flag: bool, x: int8) -> int8:
+    return callee(flag, x)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "WriteLoan literal addition overflowing int8",
+            r#"
+def f() -> int8:
+    mut x: int8 = 0
+    view mut v = x
+    v = 100 + 100
+    return x
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let open = report.obligations.iter().any(|ob| {
+            (ob.function == "caller" || ob.function == "f") && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            open,
+            "narrow integer width overflow `{label}` must stay open: {report:#?}"
+        );
+    }
+}
+
+#[test]
+fn spec_def_cutoff_inside_assumed_quantifier_does_not_prove_false_ensures() {
+    let cases: [(&str, &str); 3] = [
+        (
+            "recursive spec def past depth limit in assumed quantifier",
+            r#"
+spec def id_rec(n: int64) -> int64:
+    return 0 if n <= 0 else 1 + id_rec(n - 1)
+
+def f(xs: list[int64]) -> int64:
+    requires all([id_rec(i) == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "cyclic spec def in assumed quantifier",
+            r#"
+spec def loop_rec(n: int64) -> int64:
+    return loop_rec(n)
+
+def f(xs: list[int64]) -> int64:
+    requires all([loop_rec(i) == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "tuple-returning recursive spec def in assumed quantifier",
+            r#"
+spec def pair_rec(n: int64) -> (int64, int64):
+    return (0, 0) if n <= 0 else (1 + pair_rec(n - 1)[0], 0)
+
+def f(xs: list[int64]) -> int64:
+    requires all([pair_rec(i)[0] == i for i in range(9, 11)])
+    ensures result == 999
+    _ = xs[999]
+    return 0
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        let ensures_open = report.obligations.iter().any(|ob| {
+            ob.function == "f"
+                && ob.kind == ObligationKind::Ensures
+                && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            ensures_open,
+            "`{label}` must not prove `ensures result == 999`: {report:#?}"
+        );
+        let index_open = report.obligations.iter().any(|ob| {
+            ob.function == "f"
+                && ob.kind == ObligationKind::IndexInRange
+                && !matches!(ob.status, Status::Proved)
+        });
+        assert!(
+            index_open,
+            "`{label}` must not prove `xs[999]`: {report:#?}"
+        );
+        assert!(
+            report.obligations.iter().all(|ob| {
+                ob.function != "f"
+                    || ob.kind != ObligationKind::Satisfiable
+                    || matches!(ob.status, Status::Proved)
+            }),
+            "`{label}` must not turn a satisfiable `requires` into UNSAT: {report:#?}"
+        );
+    }
+
+    assert_proved(
+        r#"
+spec def id_rec(n: int64) -> int64:
+    return 0 if n <= 0 else 1 + id_rec(n - 1)
+
+def f(x: int64) -> int64:
+    requires all([id_rec(i) == i for i in range(0, 5)])
+    requires 0 <= x and x < 5
+    ensures result == x
+    return x
+
+def main():
+    pass
+"#,
+    );
+}
+
+#[test]
+fn inherited_default_methods_of_imported_traits_are_verified_for_local_impls() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "aura_verify_imported_trait_default_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("base.au"),
+        r#"public spec def nonneg(v: int64) -> bool:
+    return v >= 0
+
+public trait T:
+    def helper(self) -> int64
+
+    def f(self) -> int64:
+        ensures nonneg(result)
+        return self.helper()
+"#,
+    )
+    .expect("base.au");
+
+    let main_bad = dir.join("main.au");
+    std::fs::write(
+        &main_bad,
+        r#"import base
+
+class Bad:
+    x: int64
+
+impl base.T for Bad:
+    def helper(self) -> int64:
+        return -1
+
+def call_dyn(t: dyn base.T) -> int64:
+    ensures result >= 0
+    return t.f()
+
+def main():
+    b = Bad(x=0)
+    print(call_dyn(b))
+"#,
+    )
+    .expect("main.au bad");
+    let program = crate::check_path(&main_bad).expect("bad program checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    let failed_default = report.obligations.iter().any(|ob| {
+        ob.kind == ObligationKind::Ensures
+            && ob.function.contains("Bad.f")
+            && matches!(ob.status, Status::Failed { .. })
+    });
+    assert!(
+        failed_default,
+        "inherited default method `base.T for Bad.f` must fail verification: {report:#?}"
+    );
+
+    std::fs::write(
+        &main_bad,
+        r#"import base
+
+class Good:
+    x: int64
+
+impl base.T for Good:
+    def helper(self) -> int64:
+        ensures result >= 0
+        return 0
+
+def main():
+    g = Good(x=0)
+    print(g.f())
+"#,
+    )
+    .expect("main.au good");
+    let program = crate::check_path(&main_bad).expect("good program checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    assert!(
+        report.is_proved(),
+        "valid inherited default method should prove cleanly: {report:#?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn trapping_swap_and_opaque_collection_or_arithmetic_ops_emit_obligations() {
+    let cases: [(&str, &str); 17] = [
+        (
+            "ListOp::Swap out of bounds",
+            r#"
+def f(xs: mut list[int64]) -> None:
+    xs.swap(999, 999)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "dict[bool, int64] index on opaque dict",
+            r#"
+def f(d: dict[bool, int64]) -> int64:
+    return d[true]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "set[bool] remove on opaque set",
+            r#"
+def f(s: mut set[bool]) -> None:
+    s.remove(true)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested list index on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> int64:
+    return a.b.c.d.xs[999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested list pop on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: mut A) -> int64:
+    return a.b.c.d.xs.pop()
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested BeginElementLoan on Val::Opaque",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> bool:
+    view v = a.b.c.d.xs[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ReborrowElement on Val::Opaque list",
+            r#"
+class D:
+    xs: list[int64]
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> bool:
+    view xs_ref = a.b.c.d.xs
+    view v = xs_ref[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "BeginElementLoan on modeled dict missing key",
+            r#"
+def f(d: dict[int64, int64]) -> bool:
+    view v = d[999]
+    return v == 0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Remove",
+            r#"
+def f(xs: mut list[int64]) -> None:
+    xs.remove(999)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Set out of bounds",
+            r#"
+def f(xs: mut list[int64]) -> int64:
+    return xs.set(999, 1)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "ListOp::Slice out of bounds",
+            r#"
+def f(xs: list[int64]) -> list[int64]:
+    return xs[0:999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "StrOp::Slice out of bounds",
+            r#"
+def f(s: str) -> str:
+    return s[0:999]
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Array division by zero",
+            r#"
+def f(arr: Array[float64]) -> Array[float64]:
+    return arr / 0.0
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Array reshape unmodeled precondition",
+            r#"
+def f(arr: Array[float64]) -> Array[float64]:
+    return arr.reshape([999])
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "Duration negative constructor",
+            r#"
+def f(n: int64) -> Duration:
+    return Duration.ms(n)
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested integer overflow on Val::Opaque",
+            r#"
+class D:
+    x: int64
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> int64:
+    return a.b.c.d.x + 1
+
+def main():
+    pass
+"#,
+        ),
+        (
+            "deeply nested integer unary neg and int-to-float cast on Val::Opaque",
+            r#"
+class D:
+    x: int64
+class C:
+    d: D
+class B:
+    c: C
+class A:
+    b: B
+
+def f(a: A) -> float32:
+    y = -a.b.c.d.x
+    return y as float32
+
+def main():
+    pass
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let Some(report) = verify(source) else {
+            return;
+        };
+        assert!(
+            !report.is_proved(),
+            "`{label}` must emit an open obligation and not report proved: {report:#?}"
+        );
+    }
+
+    assert_proved(
+        r#"
+def safe_swap(xs: mut list[int64]) -> None:
+    requires len(xs) >= 2
+    xs.swap(0, 1)
+
+def safe_dict_loan(d: dict[int64, int64], k: int64) -> bool:
+    requires k in d
+    view v = d[k]
+    return v == 0
+
+def safe_array_mean(a: Array[float64]) -> float64:
+    requires len(a) > 0
+    return a.mean()
+
+def safe_duration() -> Duration:
+    return Duration.ms(10)
+
+def main():
+    pass
+"#,
+    );
+}
+
+#[test]
+fn extern_contracts_keyed_by_qualified_declaration_not_c_symbol() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "aura_verify_extern_symbol_collision_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"extsym\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/checked_mod.au"),
+        r#"public extern "C" def probe() -> int64 symbol "c_shared_probe":
+    ensures result == 0
+"#,
+    )
+    .expect("checked_mod.au");
+    std::fs::write(
+        dir.join("src/raw_mod.au"),
+        r#"public extern "C" def probe() -> int64 symbol "c_shared_probe"
+"#,
+    )
+    .expect("raw_mod.au");
+
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"import checked_mod
+import raw_mod
+
+extern "C" def checked_local() -> int64 symbol "c_local_probe":
+    ensures result == 0
+
+extern "C" def raw_local() -> int64 symbol "c_local_probe"
+
+def use_raw_local(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    ensures result == 123
+    idx = raw_local()
+    return xs[idx]
+
+def use_checked_local(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = checked_local()
+    return xs[idx]
+
+def use_raw_imported(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = raw_mod.probe()
+    return xs[idx]
+
+def use_checked_imported(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    idx = checked_mod.probe()
+    return xs[idx]
+
+def main():
+    pass
+"#,
+    )
+    .expect("main.au");
+
+    let program = crate::check_path(&main).expect("program checks");
+    let verified = crate::mir::lower_for_verification(&program);
+    let report = verify_module(
+        &program,
+        &verified,
+        &Options {
+            prove_sites: true,
+            ..Options::default()
+        },
+    )
+    .expect("verifies");
+
+    let raw_local_index_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_local"
+            && ob.kind == ObligationKind::IndexInRange
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_local_index_open,
+        "uncontracted `raw_local` must not inherit `checked_local` ensures: {report:#?}"
+    );
+    let raw_local_ensures_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_local"
+            && ob.kind == ObligationKind::Ensures
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_local_ensures_open,
+        "uncontracted `raw_local` must not prove ensures: {report:#?}"
+    );
+    let raw_imported_index_open = report.obligations.iter().any(|ob| {
+        ob.function == "use_raw_imported"
+            && ob.kind == ObligationKind::IndexInRange
+            && !matches!(ob.status, Status::Proved)
+    });
+    assert!(
+        raw_imported_index_open,
+        "uncontracted `raw_mod.probe` must not inherit `checked_mod.probe` ensures: {report:#?}"
+    );
+    assert!(
+        report
+            .obligations
+            .iter()
+            .filter(|ob| ob.function == "use_checked_local" || ob.function == "use_checked_imported")
+            .all(|ob| ob.status == Status::Proved),
+        "contracted extern calls must still prove: {report:#?}"
+    );
+    assert!(
+        !report
+            .proved_sites
+            .iter()
+            .any(|(f, _, _)| f == "use_raw_local" || f == "use_raw_imported"),
+        "uncontracted extern callers must not record proved sites: {:?}",
+        report.proved_sites
+    );
+    let (lowered, _) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        verify_module(
+            &program,
+            module,
+            &Options {
+                prove_sites: true,
+                ..Options::default()
+            },
+        )
+        .map(|report| report.proved_sites)
+    })
+    .expect("lowers with proved checks");
+    let unchecked = unchecked_accesses(&lowered);
+    assert_eq!(unchecked.get("use_raw_local"), Some(&0));
+    assert_eq!(unchecked.get("use_raw_imported"), Some(&0));
+    assert_eq!(unchecked.get("use_checked_local"), Some(&1));
+    assert_eq!(unchecked.get("use_checked_imported"), Some(&1));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn len_after_add_assumption_is_guarded_by_path_condition() {
+    let source = r#"
+def f(d: mut dict[int64, int64], flag: bool) -> int64:
+    requires len(d) == 9223372036854775807
+    requires not (1 in d)
+    if flag:
+        d[1] = 2
+    if not flag:
+        assert false
+    return 0
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else {
+        return;
+    };
+    let assert_failed = report.obligations.iter().any(|ob| {
+        ob.function == "f"
+            && ob.kind == ObligationKind::Assert
+            && matches!(ob.status, Status::Failed { .. })
+    });
+    assert!(
+        assert_failed,
+        "`assert false` in the else branch must fail when `d[1] = 2` only runs in the then branch: {report:#?}"
+    );
+}

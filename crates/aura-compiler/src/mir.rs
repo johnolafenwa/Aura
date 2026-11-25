@@ -223,7 +223,22 @@ fn is_float_literal_expr(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Float(_) => true,
         ExprKind::Group(inner) => is_float_literal_expr(inner),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => is_float_literal_expr(inner),
         _ => false,
+    }
+}
+
+fn sibling_literal_expected<'a>(expr: &Expr, sibling_ty: &'a Type) -> Option<&'a Type> {
+    if (is_integer_literal_expr(expr)
+        && (is_float_type(sibling_ty) || crate::sema::integer_type_bounds(sibling_ty).is_some()))
+        || (is_float_literal_expr(expr) && is_float_type(sibling_ty))
+    {
+        Some(sibling_ty)
+    } else {
+        None
     }
 }
 
@@ -412,12 +427,9 @@ fn adjusted_binary_operand_types(
             left_ty = right_ty.clone();
         } else if is_integer_literal_expr(right_expr) && is_float_type(&left_ty) {
             right_ty = left_ty.clone();
-        } else if is_integer_literal_expr(left_expr) || matches!(left_expr.kind, ExprKind::Float(_))
-        {
+        } else if is_integer_literal_expr(left_expr) || is_float_literal_expr(left_expr) {
             left_ty = right_ty.clone();
-        } else if is_integer_literal_expr(right_expr)
-            || matches!(right_expr.kind, ExprKind::Float(_))
-        {
+        } else if is_integer_literal_expr(right_expr) || is_float_literal_expr(right_expr) {
             right_ty = left_ty.clone();
         }
     }
@@ -1453,9 +1465,12 @@ impl CallTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirExternCall {
+    /// The module that declares this `extern "C"` function.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub module_name: String,
     /// The name of the Aura declaration, which is not the C symbol when
     /// the declaration has a `symbol` clause. Its trusted contract is
-    /// found by this name.
+    /// found by `(module_name, name)`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub symbol: String,
@@ -11542,6 +11557,18 @@ fn push_display_wrappers(program: &Program, functions: &mut Vec<MirFunction>) {
     }
 }
 
+pub(crate) fn trait_impl_method_name(
+    trait_impl: &crate::sema::TraitImplInfo,
+    method_name: &str,
+) -> String {
+    format!(
+        "{}{} for {}.{method_name}",
+        trait_impl.trait_name,
+        format_trait_args(&trait_impl.trait_args),
+        trait_impl.for_type
+    )
+}
+
 fn lower_trait_impl(
     program: &Program,
     module_name: &str,
@@ -11551,13 +11578,7 @@ fn lower_trait_impl(
 ) -> MirTraitImpl {
     let mut methods = Vec::new();
     for method in trait_impl.methods.values() {
-        let qualified_name = format!(
-            "{}{} for {}.{}",
-            trait_impl.trait_name,
-            format_trait_args(&trait_impl.trait_args),
-            trait_impl.for_type,
-            method.decl.name
-        );
+        let qualified_name = trait_impl_method_name(trait_impl, &method.decl.name);
         // A default body the implementation inherits names what its
         // trait's module sees, so it lowers in that module.
         let inherited = !trait_impl
@@ -13244,6 +13265,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
+            module_name: function.module_name.clone(),
             name: function.decl.name.clone(),
             symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
@@ -15560,26 +15582,12 @@ impl<'a> Lowerer<'a> {
         let shared_equality_expected = matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
             .then(|| self.infer_equality_hint(left, right))
             .flatten();
-        let left_expected = shared_equality_expected.as_ref().or_else(|| {
-            if is_integer_literal_expr(left)
-                && (is_float_type(&inferred_right_ty)
-                    || crate::sema::integer_type_bounds(&inferred_right_ty).is_some())
-            {
-                Some(&inferred_right_ty)
-            } else {
-                None
-            }
-        });
-        let right_expected = shared_equality_expected.as_ref().or_else(|| {
-            if is_integer_literal_expr(right)
-                && (is_float_type(&inferred_left_ty)
-                    || crate::sema::integer_type_bounds(&inferred_left_ty).is_some())
-            {
-                Some(&inferred_left_ty)
-            } else {
-                None
-            }
-        });
+        let left_expected = shared_equality_expected
+            .as_ref()
+            .or_else(|| sibling_literal_expected(left, &inferred_right_ty));
+        let right_expected = shared_equality_expected
+            .as_ref()
+            .or_else(|| sibling_literal_expected(right, &inferred_left_ty));
 
         let left_value = self.lower_expr_at_sequence_point(left, left_expected);
         let right_value = self.lower_expr_at_sequence_point(right, right_expected);
@@ -21913,26 +21921,14 @@ impl<'a> Lowerer<'a> {
                     .then(|| self.infer_equality_hint(left, right))
                     .flatten();
                 let left_expected = shared_equality_expected.as_ref().or_else(|| {
-                    if is_integer_literal_expr(left)
-                        && right_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })
-                    {
-                        right_ty.as_ref()
-                    } else {
-                        None
-                    }
+                    right_ty
+                        .as_ref()
+                        .and_then(|ty| sibling_literal_expected(left, ty))
                 });
                 let right_expected = shared_equality_expected.as_ref().or_else(|| {
-                    if is_integer_literal_expr(right)
-                        && left_ty.as_ref().is_some_and(|ty| {
-                            is_float_type(ty) || crate::sema::integer_type_bounds(ty).is_some()
-                        })
-                    {
-                        left_ty.as_ref()
-                    } else {
-                        None
-                    }
+                    left_ty
+                        .as_ref()
+                        .and_then(|ty| sibling_literal_expected(right, ty))
                 });
                 let left = self.lower_expr_at_sequence_point(left, left_expected);
                 let right = self.lower_expr_with_expected(right, right_expected);
@@ -23628,9 +23624,14 @@ impl<'a> Lowerer<'a> {
         let short_circuit_block = self.new_block("compare_chain_false");
 
         let first_expected = links.first().and_then(|link| {
-            matches!(link.op.as_binary_op(), Some(BinaryOp::Eq | BinaryOp::NotEq))
-                .then(|| self.infer_equality_hint(first, &link.operand))
-                .flatten()
+            let op = link.op.as_binary_op()?;
+            if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                if let Some(hint) = self.infer_equality_hint(first, &link.operand) {
+                    return Some(hint);
+                }
+            }
+            let right_ty = self.infer_expr_type(&link.operand)?;
+            sibling_literal_expected(first, &right_ty).cloned()
         });
         let mut left_ty = first_expected
             .clone()
@@ -23640,16 +23641,17 @@ impl<'a> Lowerer<'a> {
         for (index, link) in links.iter().enumerate() {
             let link_value = match link.op.as_binary_op() {
                 Some(op) => {
-                    let shared_equality_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+                    let right_expected = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
                         self.infer_equality_hint(left_expr, &link.operand)
                             .or_else(|| left_ty.clone())
                     } else {
-                        None
+                        left_ty
+                            .as_ref()
+                            .and_then(|ty| sibling_literal_expected(&link.operand, ty))
+                            .cloned()
                     };
-                    let right = self.lower_expr_at_sequence_point(
-                        &link.operand,
-                        shared_equality_expected.as_ref(),
-                    );
+                    let right =
+                        self.lower_expr_at_sequence_point(&link.operand, right_expected.as_ref());
                     let compared = self.new_typed_temp(Type::named("bool"));
                     self.emit(Instruction::Assign {
                         target: compared.clone(),
@@ -23662,8 +23664,7 @@ impl<'a> Lowerer<'a> {
                         },
                     });
                     left = right;
-                    left_ty =
-                        shared_equality_expected.or_else(|| self.infer_expr_type(&link.operand));
+                    left_ty = right_expected.or_else(|| self.infer_expr_type(&link.operand));
                     Operand::Place(compared)
                 }
                 None => {
@@ -23829,7 +23830,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Unary {
                 op: UnaryOp::Neg,
                 expr: inner,
-            } => match &inner.kind {
+            } => match &grouped_mir_expr(inner).kind {
                 ExprKind::Float(value) if expected.is_some_and(is_float32_type) => {
                     Operand::Float(f64::from(-*value as f32))
                 }

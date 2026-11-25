@@ -3515,6 +3515,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
 fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
     let call = Rvalue::Call {
         callee: CallTarget::Extern(MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "getpid".to_string(),
             abi: "C".to_string(),
@@ -3598,6 +3599,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "read_count".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
@@ -3643,6 +3645,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "handle".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "malloc".to_string(),
                                 abi: "C".to_string(),
@@ -3671,6 +3674,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "released".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "free".to_string(),
                                 abi: "C".to_string(),
@@ -3699,6 +3703,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "narrow".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "htons".to_string(),
                                 abi: "C".to_string(),
@@ -3762,6 +3767,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let invalid_abi = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "Rust".to_string(),
@@ -3782,6 +3788,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let wrong_arity = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3811,6 +3818,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let unexpected_writeback = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
@@ -3881,6 +3889,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                         target: "%t0".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                module_name: String::new(),
                                 name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),

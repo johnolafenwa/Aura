@@ -674,6 +674,10 @@ def main():
     d: dict[float64, int64] = {1.0: 1}
     print(count(d))
 "#,
-        &["12 requires unsupported", "14 requires unsupported"],
+        &[
+            "2 index in range failed",
+            "12 requires unsupported",
+            "14 requires unsupported",
+        ],
     );
 }

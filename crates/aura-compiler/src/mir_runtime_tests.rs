@@ -2821,6 +2821,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                     target: "process_id".to_string(),
                     value: Rvalue::Call {
                         callee: CallTarget::Extern(MirExternCall {
+                            module_name: String::new(),
                             name: String::new(),
                             symbol: "getpid".to_string(),
                             abi: "C".to_string(),
@@ -2944,6 +2945,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
     );
 
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_exchange".to_string(),
         abi: "C".to_string(),
@@ -3065,6 +3067,7 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "bad_bool".to_string(),
         abi: "C".to_string(),
@@ -3312,6 +3315,7 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ),
     ];
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_observe_all".to_string(),
         abi: "C".to_string(),
@@ -3399,6 +3403,7 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
         returned: crate::ffi::FfiValue,
     ) -> Value {
         let call = MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "aura_test_scalar_result".to_string(),
             abi: "C".to_string(),
@@ -3563,6 +3568,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
 
     fn call() -> MirExternCall {
         MirExternCall {
+            module_name: String::new(),
             name: String::new(),
             symbol: "aura_test_writeback_order".to_string(),
             abi: "C".to_string(),
@@ -3707,6 +3713,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
     let unsupported_abi = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_bad_abi".to_string(),
                 abi: "stdcall".to_string(),
@@ -3734,6 +3741,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
     let unknown_argument = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_bad_binding".to_string(),
                 abi: "C".to_string(),
@@ -3786,6 +3794,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         runtime
             .evaluate_extern_call_with(
                 &MirExternCall {
+                    module_name: String::new(),
                     name: String::new(),
                     symbol: "aura_test_shape_guard".to_string(),
                     abi: "C".to_string(),
@@ -3874,6 +3883,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let mutated_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_mutable_shape_guard".to_string(),
                 abi: "C".to_string(),
@@ -3914,6 +3924,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let binding_error = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_binding_guard".to_string(),
                 abi: "C".to_string(),
@@ -3955,6 +3966,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let missing_writeback = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_missing_writeback".to_string(),
                 abi: "C".to_string(),
@@ -3996,6 +4008,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let foreign_failure = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_foreign_failure".to_string(),
                 abi: "C".to_string(),
@@ -4018,6 +4031,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let result_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_result_shape_guard".to_string(),
                 abi: "C".to_string(),
@@ -4040,6 +4054,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let unit = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                module_name: String::new(),
                 name: String::new(),
                 symbol: "aura_test_success".to_string(),
                 abi: "C".to_string(),
@@ -22212,6 +22227,7 @@ fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
         ),
     );
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_pointers".to_string(),
         abi: "C".to_string(),
@@ -22285,6 +22301,7 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
         crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_handle),
     );
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "aura_test_out".to_string(),
         abi: "C".to_string(),
