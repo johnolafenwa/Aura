@@ -32006,3 +32006,114 @@ fn dropping_list_of_trapping_generators_completes_all_drops_and_reports_trap() {
     );
 }
 
+#[test]
+fn generator_suspending_inside_cleanup_isolates_cleanup_stack_from_caller() {
+    use crate::runtime_value::{generator_yield, GeneratorValue, DIRECT_GENERATOR_STACK_BYTES};
+
+    static CALLER_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static GEN_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn caller_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        CALLER_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+    unsafe extern "C-unwind" fn gen_exit(_: *const i64, _: usize) -> *mut OpaqueValue {
+        GEN_EXIT_COUNT.fetch_add(1, Ordering::SeqCst);
+        std::ptr::null_mut()
+    }
+
+    CALLER_EXIT_COUNT.store(0, Ordering::SeqCst);
+    GEN_EXIT_COUNT.store(0, Ordering::SeqCst);
+
+    let result = run_lightweight_root_task(|| {
+        super::with_direct_task_runtime_scope(|| {
+            super::with_task_runtime_error_capture(|| {
+                let _caller_cleanup = super::aura_direct_register_cleanup(
+                    caller_exit as *const () as usize as i64,
+                    std::ptr::null_mut(),
+                    0,
+                );
+                let generator = GeneratorValue::new(
+                    || {
+                        let gen_cleanup = super::aura_direct_register_cleanup(
+                            gen_exit as *const () as usize as i64,
+                            std::ptr::null_mut(),
+                            0,
+                        );
+                        let keep_going =
+                            generator_yield(Value::Int(IntegerValue::from_i64(42)))?;
+                        if !keep_going {
+                            // Normal close path runs the generator's own cleanup once.
+                            super::aura_direct_unregister_cleanup(gen_cleanup);
+                            unsafe { gen_exit(std::ptr::null(), 0) };
+                        }
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::default())),
+                );
+
+                assert!(generator.resume().expect("generator yields 42"));
+                // While the generator is suspended, the caller's cleanup_stack must
+                // contain only the caller's own cleanup registration.
+                let caller_cleanup_len =
+                    super::with_direct_task_runtime_state(|state| state.cleanup_stack.len());
+                assert_eq!(
+                    caller_cleanup_len, 1,
+                    "suspended generator cleanup registration must not remain on caller cleanup_stack"
+                );
+
+                // Draining the caller's cleanups (as on a caller trap) must run only
+                // the caller's cleanup, leaving the suspended generator's cleanup untouched.
+                super::drain_direct_cleanup_stack();
+                assert_eq!(CALLER_EXIT_COUNT.load(Ordering::SeqCst), 1);
+                assert_eq!(
+                    GEN_EXIT_COUNT.load(Ordering::SeqCst),
+                    0,
+                    "caller cleanup drain must not invoke suspended generator cleanup"
+                );
+
+                // Closing the generator afterwards runs its cleanup exactly once.
+                generator.close().expect("generator closes cleanly");
+                assert_eq!(GEN_EXIT_COUNT.load(Ordering::SeqCst), 1);
+
+                // Dropping DirectGeneratorFrames with saved owned frames and a
+                // live body_box releases both cleanly.
+                let body_raw = super::untracked_boxed_value(Value::Unit, None);
+                let body_box = Arc::new(AtomicUsize::new(body_raw as usize));
+                let discarded = GeneratorValue::new(
+                    || {
+                        super::with_direct_task_runtime_state(|state| {
+                            state.frames_mut().push_owned(Box::new(
+                                super::DirectRuntimeCallFrame {
+                                    function: super::DirectFrameText::shared(
+                                        "gen_body".to_string(),
+                                    ),
+                                    span: super::DirectRuntimeSourceSpan::point(
+                                        None,
+                                        Span::new(1, 1),
+                                    ),
+                                },
+                            ));
+                        });
+                        let _ = generator_yield(Value::Int(IntegerValue::from_i64(7)))?;
+                        Ok(())
+                    },
+                    DIRECT_GENERATOR_STACK_BYTES,
+                    false,
+                    Some(Box::new(super::DirectGeneratorFrames::with_body_box(
+                        Arc::clone(&body_box),
+                    ))),
+                );
+                assert!(discarded.resume().expect("discarded yields"));
+                crate::runtime_value::without_generator_drop_close(|| drop(discarded));
+                assert_eq!(body_box.load(Ordering::Acquire), 0);
+                Ok(Value::Unit)
+            })
+        })
+    });
+    assert_eq!(result.expect("task succeeds"), Value::Unit);
+}
+
+

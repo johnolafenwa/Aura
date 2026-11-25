@@ -451,7 +451,7 @@ fn frame_from_word(word: usize) -> DirectRuntimeCallFrame {
     }
 }
 
-fn release_frame_word(word: usize) {
+pub(super) fn release_frame_word(word: usize) {
     if word & DIRECT_OWNED_FRAME_TAG != 0 {
         let frame = (word & !DIRECT_OWNED_FRAME_TAG) as *mut DirectRuntimeCallFrame;
         // SAFETY: the entry owned the record, and it was just removed.

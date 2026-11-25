@@ -16972,23 +16972,87 @@ host_builtin_entries! {
     borrowed "iter::__aura_generator_close" => aura_host_iter_generator_close(|args| direct_generator_handle("iter::__aura_generator_close", args));
 }
 
-/// Moves a generator body's frame-stack entries and Rust-boundary tracking out
-/// of the task's stack while the body is suspended, so the caller's calls stay
-/// isolated on top.
+/// Moves a generator body's per-call runtime state out of the task's state
+/// while the body is suspended, so the caller's frames, cleanups, views, and
+/// mutable sinks stay isolated on top.
 #[derive(Default)]
 struct DirectGeneratorFrames {
     base: usize,
     saved: Vec<usize>,
+    cleanup_stack: Vec<DirectCleanupRegistration>,
+    cleanup_draining: bool,
+    primary_runtime_diagnostic: Option<Diagnostic>,
+    manager_exit_failures: Vec<String>,
+    returned_views: DirectReturnedViewStack,
+    pending_mutable_sinks: Option<DirectPendingMutableSinks>,
+    mutable_sinks: HashMap<i64, DirectMutableWritebackSink>,
+    foreign_callback_cleanup_base: Option<usize>,
+    foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
     boundary_depth: usize,
     drop_trap_depth: usize,
     drop_trap_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
+    body_box: Option<Arc<AtomicUsize>>,
+}
+
+impl DirectGeneratorFrames {
+    fn with_body_box(body_box: Arc<AtomicUsize>) -> Self {
+        let mut frames = Self::default();
+        frames.body_box = Some(body_box);
+        frames
+    }
+
+    fn swap_task_state(&mut self) {
+        with_direct_task_runtime_state(|state| {
+            mem::swap(&mut state.cleanup_stack, &mut self.cleanup_stack);
+            mem::swap(&mut state.cleanup_draining, &mut self.cleanup_draining);
+            mem::swap(
+                &mut state.primary_runtime_diagnostic,
+                &mut self.primary_runtime_diagnostic,
+            );
+            mem::swap(
+                &mut state.manager_exit_failures,
+                &mut self.manager_exit_failures,
+            );
+            mem::swap(&mut state.returned_views, &mut self.returned_views);
+            mem::swap(
+                &mut state.pending_mutable_sinks,
+                &mut self.pending_mutable_sinks,
+            );
+            mem::swap(&mut state.mutable_sinks, &mut self.mutable_sinks);
+            mem::swap(
+                &mut state.foreign_callback_cleanup_base,
+                &mut self.foreign_callback_cleanup_base,
+            );
+            mem::swap(
+                &mut state.foreign_callback_failure,
+                &mut self.foreign_callback_failure,
+            );
+            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
+            state.refresh_frame_flags();
+            state.refresh_stack_limit();
+        });
+    }
+}
+
+impl Drop for DirectGeneratorFrames {
+    fn drop(&mut self) {
+        for word in self.saved.drain(..) {
+            frame_stack::release_frame_word(word);
+        }
+        if let Some(body_box) = self.body_box.take() {
+            let raw = body_box.swap(0, Ordering::AcqRel);
+            if raw != 0 {
+                // SAFETY: `raw` was created by `untracked_boxed_value` in
+                // `direct_generator_start` and has not yet been released.
+                unsafe { release_untracked_value(raw as *mut OpaqueValue) };
+            }
+        }
+    }
 }
 
 impl GeneratorHooks for DirectGeneratorFrames {
     fn before_resume(&mut self) {
-        with_direct_task_runtime_state(|state| {
-            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
-        });
+        self.swap_task_state();
         crate::runtime_value::swap_generator_drop_trap_state(
             &mut self.drop_trap_depth,
             &mut self.drop_trap_exit,
@@ -17013,9 +17077,7 @@ impl GeneratorHooks for DirectGeneratorFrames {
             &mut self.drop_trap_depth,
             &mut self.drop_trap_exit,
         );
-        with_direct_task_runtime_state(|state| {
-            mem::swap(&mut state.rust_boundary_depth, &mut self.boundary_depth);
-        });
+        self.swap_task_state();
     }
 }
 
@@ -17027,23 +17089,28 @@ fn direct_generator_start(
         .pop()
         .filter(|body| matches!(body, Value::Function(_)))
         .ok_or_else(|| Diagnostic::new("generator start expects one closure argument"))?;
+    let body_box = Arc::new(AtomicUsize::new(untracked_boxed_value(body, None) as usize));
+    let body_box_for_run = Arc::clone(&body_box);
     let run = move || {
-        let function = untracked_boxed_value(body, None);
+        let function = body_box_for_run.load(Ordering::Acquire) as *mut OpaqueValue;
         let result = aura_direct_function_call(function, std::ptr::null_mut(), 0);
         if !result.is_null() {
             unregister_direct_owned_value(result);
             // SAFETY: the call returned an owned box.
             unsafe { release_untracked_value(result) };
         }
-        // SAFETY: the box was created above and nothing else holds it.
-        unsafe { release_untracked_value(function) };
+        let raw = body_box_for_run.swap(0, Ordering::AcqRel);
+        if raw != 0 {
+            // SAFETY: the box was created above and nothing else holds it.
+            unsafe { release_untracked_value(raw as *mut OpaqueValue) };
+        }
         Ok(())
     };
     Ok(Value::Generator(GeneratorValue::new(
         run,
         DIRECT_GENERATOR_STACK_BYTES,
         false,
-        Some(Box::new(DirectGeneratorFrames::default())),
+        Some(Box::new(DirectGeneratorFrames::with_body_box(body_box))),
     )))
 }
 
