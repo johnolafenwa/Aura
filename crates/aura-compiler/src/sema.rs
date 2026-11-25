@@ -88,6 +88,8 @@ mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, ManagerEntry, ManagerExit,
 };
+#[cfg(test)]
+mod ownership_soundness_tests;
 mod patterns;
 mod structural_patterns;
 mod unions;
@@ -3725,6 +3727,22 @@ impl<'a> FunctionChecker<'a> {
     /// ancestor survives: a place below a narrowed union is reached through
     /// its proven payload, so writing it cannot change the member.
     fn invalidate_narrowing(
+        &self,
+        place: &PlacePath,
+        invalidated_at: crate::diag::Span,
+        operation: &'static str,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) {
+        // A write through a view changes the place the view borrows, so the
+        // facts recorded on that source place go stale too.
+        let canonical = self.canonicalize_view_place(place.clone(), locals);
+        if canonical != *place {
+            self.invalidate_narrowing_at(&canonical, invalidated_at, operation, locals);
+        }
+        self.invalidate_narrowing_at(place, invalidated_at, operation, locals);
+    }
+
+    fn invalidate_narrowing_at(
         &self,
         place: &PlacePath,
         invalidated_at: crate::diag::Span,
@@ -17913,7 +17931,13 @@ impl<'a> FunctionChecker<'a> {
                             receiver,
                         )
                     }
-                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
+                    _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) =>
+                    {
+                        if matches!(callee_ty, Type::Union(_)) {
+                            if let Some(path) = self.member_access_path(base_callee) {
+                                self.reject_stale_narrowing(&path, span, locals)?;
+                            }
+                        }
                         Err(Diagnostic::at(span, "unsupported call target"))
                     }
                     _ => Err(self.unsupported_call_target_diagnostic(callee, span)),

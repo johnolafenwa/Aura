@@ -1508,6 +1508,7 @@ impl<'a> FunctionChecker<'a> {
         }
 
         let mut captures = Vec::new();
+        let mut mutable_capture_places = Vec::new();
         let mut lambda_locals = HashMap::new();
         for (name, _) in &capture_uses {
             if is_module(name) {
@@ -1652,6 +1653,9 @@ impl<'a> FunctionChecker<'a> {
                 let source = self.canonicalize_view_place(PlacePath::root(name.clone()), locals);
                 let parent = binding.view.as_ref().map(|_| name.as_str());
                 self.ensure_view_loan_available(&source, kind, parent, capture_span, locals)?;
+                if mode == ClosureCaptureMode::MutableView {
+                    mutable_capture_places.push((PlacePath::root(name.clone()), capture_span));
+                }
             }
             captures.push(ClosureCapture {
                 name: name.clone(),
@@ -1704,6 +1708,11 @@ impl<'a> FunctionChecker<'a> {
                     stale_narrowing: BTreeMap::new(),
                 },
             );
+        }
+        // A `mut` capture lets every later call of the closure write the
+        // captured place, so a union test made before it no longer holds.
+        for (place, capture_span) in mutable_capture_places {
+            self.invalidate_narrowing(&place, capture_span, "a `mut` closure capture", locals);
         }
 
         let expected_params = expected_signature.map(|(params, _)| params);
