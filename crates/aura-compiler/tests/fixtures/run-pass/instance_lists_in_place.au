@@ -43,6 +43,13 @@ def describe(item: Hit) -> str:
     return f"{item.text}:{item.start}-{item.end}"
 
 
+def text_list(found: list[Hit]) -> list[str]:
+    mut texts: list[str] = []
+    for item in found:
+        texts.append(item.text.clone())
+    return texts
+
+
 def later_first(item: Hit) -> int64:
     return 0 - item.start
 
@@ -78,6 +85,7 @@ def main():
     copy[0].start = 7
     print(f"{found.len()} {copy.len()} {found[0].start} {copy[0].start}")
     print(found == copy)
+    print(f"{text_list(found)} {text_list(copy)}")
     print(found == hits("abcdefghijklmn", 3))
 
     piece = found[1:3]
@@ -89,6 +97,8 @@ def main():
     ordered.sort(key=later_first)
     print(text_of(ordered))
     ordered.reverse()
+    print(text_of(ordered))
+    ordered.swap(0, 2)
     print(text_of(ordered))
 
     print(found.index(found[2]))
