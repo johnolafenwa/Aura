@@ -9611,6 +9611,18 @@ fn lightweight_worker_count_defaults_and_rejects_invalid_overrides() {
         format!("invalid AURA_WORKERS value `{overflow}`: expected a positive integer")
     );
 
+    assert_eq!(
+        super::decode_lightweight_worker_count(Some(OsStr::new("4096")), 7).unwrap(),
+        super::MAX_LIGHTWEIGHT_WORKERS
+    );
+    let error = super::decode_lightweight_worker_count(Some(OsStr::new("1000000000000")), 7)
+        .expect_err("a worker count past the maximum must be rejected");
+    assert_eq!(error.code, "AU4006");
+    assert_eq!(
+        error.message,
+        "invalid AURA_WORKERS value `1000000000000`: expected at most 4096 workers"
+    );
+
     let error = super::decode_lightweight_worker_count(None, 0)
         .expect_err("an impossible zero-core host must not create an empty runtime");
     assert_eq!(error.code, "AU4006");
@@ -18799,7 +18811,7 @@ fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
         .to_string()
         .contains("did not contain a key"));
     super::load_tls_root_store(Some(cert_path.to_str().expect("cert path should be UTF-8")))
-        .expect("custom CA PEM should extend the TLS root store");
+        .expect("custom CA PEM should form the TLS root store");
 
     let tls_listener = TlsListenerValue::bind(
         "127.0.0.1:0",
@@ -21535,4 +21547,43 @@ fn mutable_direct_callable_clone_settles_and_detaches() {
         .expect("captures settled");
     assert_eq!(captures.len(), 1);
     assert_eq!(captures[0].value, Value::Int(IntegerValue::from_i64(9)));
+}
+
+#[test]
+fn float_precision_past_the_rust_formatter_limit_pads_with_zeros() {
+    let float = Type::named("float64");
+    let fixed = format_runtime_value(&Value::Float(1.0), &float, ".65536f").unwrap();
+    assert_eq!(fixed.len(), 65538);
+    assert!(fixed.starts_with("1.000") && fixed.ends_with('0'));
+    let third = format_runtime_value(&Value::Float(1.0 / 3.0), &float, ".70000f").unwrap();
+    let exact = format!("{:.65535}", 1.0f64 / 3.0);
+    assert_eq!(&third[..exact.len()], exact);
+    assert!(third[exact.len()..].bytes().all(|byte| byte == b'0'));
+    assert_eq!(third.len(), 70002);
+    let scientific = format_runtime_value(&Value::Float(-2.5), &float, ".65536e").unwrap();
+    assert!(scientific.starts_with("-2.5000"), "{}", &scientific[..8]);
+    assert!(scientific.ends_with("0e+00"), "{}", &scientific[scientific.len() - 8..]);
+    assert_eq!(scientific.len(), 65536 + 7);
+    let percent = format_runtime_value(&Value::Float(0.5), &float, ".65536%").unwrap();
+    assert!(percent.starts_with("50.000") && percent.ends_with("0%"));
+    // At the limit nothing is appended.
+    let at_limit = format_runtime_value(&Value::Float(1.0), &float, ".65535f").unwrap();
+    assert_eq!(at_limit.len(), 65537);
+}
+
+#[test]
+fn a_custom_ca_file_replaces_the_built_in_roots() {
+    let built_in = super::build_tls_root_store(None).expect("built-in roots");
+    assert!(built_in.len() > 1);
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let custom = super::build_tls_root_store(Some(certificate.cert.pem().into_bytes()))
+        .expect("one custom root");
+    assert_eq!(custom.len(), 1);
+    for empty in [&b""[..], b"no certificate here\n"] {
+        let error = super::build_tls_root_store(Some(empty.to_vec()))
+            .expect_err("a CA file with no certificate is an error");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert!(error.to_string().contains("did not contain a certificate"));
+    }
 }

@@ -9675,6 +9675,11 @@ fn prepare_lightweight_task(
     ))
 }
 
+/// The most task workers `AURA_WORKERS` may ask for. Each worker is an OS
+/// thread with its own queues, so a count past this is refused before any
+/// is made.
+pub const MAX_LIGHTWEIGHT_WORKERS: usize = 4096;
+
 pub fn decode_lightweight_worker_count(
     override_value: Option<&OsStr>,
     available_workers: usize,
@@ -9693,6 +9698,14 @@ pub fn decode_lightweight_worker_count(
     let valid_digits = !rendered.is_empty() && rendered.bytes().all(|byte| byte.is_ascii_digit());
     if valid_digits {
         if let Ok(workers) = rendered.parse::<usize>() {
+            if workers > MAX_LIGHTWEIGHT_WORKERS {
+                return Err(Diagnostic::coded(
+                    "AU4006",
+                    format!(
+                        "invalid AURA_WORKERS value `{rendered}`: expected at most {MAX_LIGHTWEIGHT_WORKERS} workers"
+                    ),
+                ));
+            }
             if workers > 0 {
                 return Ok(workers);
             }
@@ -12544,6 +12557,33 @@ fn format_numeric_integer(integer: IntegerValue, code: char, spec: &ParsedFormat
     rendered
 }
 
+/// The most places Rust's formatter writes; it panics past them.
+const MAX_FORMATTER_PRECISION: usize = u16::MAX as usize;
+
+/// `magnitude` with `precision` places, in scientific form with
+/// `scientific`. A finite `float64` has at most 1074 places after the
+/// point and 767 significant digits, so the places past the formatter's
+/// limit are all zeros and are appended as zeros.
+fn fixed_precision_float(magnitude: f64, precision: usize, scientific: bool) -> String {
+    // Scientific form writes one digit more than its places.
+    let written = precision.min(MAX_FORMATTER_PRECISION - usize::from(scientific));
+    let mut rendered = if scientific {
+        format!("{magnitude:.written$e}")
+    } else {
+        format!("{magnitude:.written$}")
+    };
+    let zeros = precision - written;
+    if zeros > 0 {
+        let at = if scientific {
+            rendered.find('e').unwrap_or(rendered.len())
+        } else {
+            rendered.len()
+        };
+        rendered.insert_str(at, &"0".repeat(zeros));
+    }
+    rendered
+}
+
 fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> String {
     let negative = number.is_sign_negative();
     let magnitude = number.abs();
@@ -12553,9 +12593,9 @@ fn format_numeric_float(number: f64, code: char, spec: &ParsedFormatSpec) -> Str
     } else if magnitude.is_infinite() {
         "inf".to_string()
     } else if code == 'e' {
-        normalize_scientific_exponent(format!("{magnitude:.precision$e}"))
+        normalize_scientific_exponent(fixed_precision_float(magnitude, precision, true))
     } else {
-        format!("{magnitude:.precision$}")
+        fixed_precision_float(magnitude, precision, false)
     };
     if spec.grouping && magnitude.is_finite() {
         rendered = group_decimal_digits(&rendered);
@@ -14127,15 +14167,26 @@ fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     build_tls_root_store(pem)
 }
 
+/// The roots a TLS client trusts: the certificates of `ca_pem` alone when
+/// the caller names a CA file, and the built-in roots otherwise. A CA file
+/// that holds no certificate is an error, not a fall back to the built-in
+/// roots.
 fn build_tls_root_store(ca_pem: Option<Vec<u8>>) -> io::Result<RootCertStore> {
     ensure_rustls_crypto_provider();
     let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    if let Some(pem) = ca_pem {
-        for certificate in CertificateDer::pem_slice_iter(&pem) {
-            let certificate = certificate.map_err(io::Error::other)?;
-            roots.add(certificate).map_err(io::Error::other)?;
-        }
+    let Some(pem) = ca_pem else {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        return Ok(roots);
+    };
+    for certificate in CertificateDer::pem_slice_iter(&pem) {
+        let certificate = certificate.map_err(io::Error::other)?;
+        roots.add(certificate).map_err(io::Error::other)?;
+    }
+    if roots.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "TLS CA PEM did not contain a certificate",
+        ));
     }
     Ok(roots)
 }
