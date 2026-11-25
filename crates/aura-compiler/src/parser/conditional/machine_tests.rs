@@ -34,7 +34,7 @@ fn inactive_assembly_requires_no_ffi_and_the_first_active_use_keeps_its_span() {
     assert_eq!(crate::run_source(source).unwrap().stdout, "17\n");
     let active = format!("{source}    asm('nop')\n");
     assert_eq!(parse(&active).unwrap().asm_span.unwrap().line, 8);
-    assert_eq!(crate::check_source(&active).unwrap_err().code, "AU2090");
+    assert_eq!(crate::check_source(&active).unwrap_err().code, "AU2999");
 }
 
 #[test]

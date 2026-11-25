@@ -128,6 +128,7 @@ impl MirRuntime {
             }
             for inst in function.blocks.iter().flat_map(|b| &b.instructions) {
                 let value = match inst {
+                    Instruction::InlineAsm { .. } => return false,
                     Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
                         value
                     }
