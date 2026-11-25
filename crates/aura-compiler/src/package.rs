@@ -108,6 +108,9 @@ impl GitSelector {
                 package_name
             )));
         }
+        // The locked rev names the cache directory and the commit checked
+        // out, whichever selector chose it, so it is always a commit id.
+        validate_git_revision_literal(package_name, rev)?;
         if let Some(tag) = tag {
             validate_git_selector_literal(package_name, "tag", &tag)?;
             return Ok(Self::Tag(tag));
@@ -116,7 +119,6 @@ impl GitSelector {
             validate_git_selector_literal(package_name, "branch", &branch)?;
             return Ok(Self::Branch(branch));
         }
-        validate_git_revision_literal(package_name, rev)?;
         Ok(Self::Rev(rev.to_string()))
     }
 
@@ -1540,6 +1542,9 @@ fn parse_ls_remote_revision(source: &str, reference: &str, output: &str) -> Resu
 }
 
 fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
+    // The rev is a path component of the cache and an argument to `git
+    // checkout`: only a commit id is either.
+    validate_git_revision_literal("dependency", rev)?;
     let checkout_dir = git_cache_root()?.join(hash_source_key(source)).join(rev);
     if let Ok(metadata) = fs::symlink_metadata(&checkout_dir) {
         let file_type = metadata.file_type();
@@ -1641,6 +1646,7 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             "checkout".to_string(),
             "--detach".to_string(),
             rev.to_string(),
+            "--".to_string(),
         ],
     ) {
         let _ = fs::remove_dir_all(&temp_checkout);
@@ -2085,9 +2091,8 @@ fn validate_git_selector_literal(
 }
 
 fn validate_git_revision_literal(dependency_name: &str, rev: &str) -> Result<()> {
-    let trimmed = rev.trim();
     let is_valid_hex_revision =
-        (7..=64).contains(&trimmed.len()) && trimmed.chars().all(|ch| ch.is_ascii_hexdigit());
+        (7..=64).contains(&rev.len()) && rev.chars().all(|ch| ch.is_ascii_hexdigit());
     if !is_valid_hex_revision {
         return Err(Diagnostic::new(format!(
             "dependency `{}` has an invalid git revision `{}`",

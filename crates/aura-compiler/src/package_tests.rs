@@ -2805,3 +2805,63 @@ library_paths = ["escaped-lib"]
         sym_err.message
     );
 }
+
+#[test]
+fn lockfile_git_revision_is_a_commit_id_for_every_selector() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-lockfile-rev");
+    for (selector, rev) in [
+        ("branch = \"main\"\n", "../../../../victim"),
+        ("tag = \"v1\"\n", "--orphan=x"),
+        ("branch = \"main\"\n", "HEAD"),
+        ("", "0123abc/../x"),
+        ("branch = \"main\"\n", " 0123abcd"),
+        ("branch = \"main\"\n", "0123abcd\n"),
+    ] {
+        temp.write(
+            "Aura.lock",
+            &format!(
+                "version = 1\n\n[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"git\"\ngit = \"https://example.invalid/util.git\"\nrev = {}\n{selector}",
+                toml_string(rev)
+            ),
+        );
+        let error = expect_diag(
+            load_lockfile(&temp.path),
+            "a lockfile rev that is not a commit id must be refused",
+        );
+        assert!(
+            error.message.contains("invalid git revision"),
+            "unexpected error for `{rev}`: {}",
+            error.message
+        );
+    }
+    temp.write(
+        "Aura.lock",
+        "version = 1\n\n[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"git\"\ngit = \"https://example.invalid/util.git\"\nrev = \"0123abcd\"\nbranch = \"main\"\n",
+    );
+    let locked = load_lockfile(&temp.path).expect("a hex rev with a branch loads");
+    assert!(matches!(
+        &locked["util"].source,
+        LockedPackageSource::Git { rev, selector: GitSelector::Branch(branch), .. }
+            if rev == "0123abcd" && branch == "main"
+    ));
+}
+
+#[test]
+fn git_checkout_cache_refuses_a_revision_that_names_a_path() {
+    let _env = lock_package_env();
+    let temp = TempDir::new("aura-package-checkout-rev");
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let victim = temp.write("victim/keep.txt", "keep");
+    fs::create_dir_all(temp.path.join("cache/aura/git")).expect("create cache root");
+    let error = expect_diag(
+        ensure_git_checkout("https://example.invalid/util.git", "../../../../victim"),
+        "a checkout revision that is a path must be refused",
+    );
+    assert!(
+        error.message.contains("invalid git revision"),
+        "{}",
+        error.message
+    );
+    assert!(victim.exists(), "nothing outside the cache is removed");
+}
