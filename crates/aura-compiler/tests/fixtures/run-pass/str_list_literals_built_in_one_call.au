@@ -1,0 +1,28 @@
+# A list literal of two or more `str` literals is built in one call from
+# the texts the program keeps. A literal of one, one of empty texts only,
+# and one with a value that is not a literal are built as before.
+def pick(index: int64) -> str:
+    words = ["aura", "", "s\u{e9}r", "a much longer literal than fits inline", "end"]
+    return words[index % words.len()].clone()
+
+
+def main():
+    mut total = 0
+    for index in range(7):
+        word = pick(index)
+        total += word.byte_len()
+        print(f"{index}: [{word}]")
+    print(total)
+    mut grown = ["one", "two"]
+    grown.append("three")
+    grown[0] = "uno"
+    print(" ".join(grown))
+    empties = ["", ""]
+    print(empties.len())
+    single = ["solo"]
+    print(single[0])
+    name = "x".to_upper()
+    mixed = [name, "y"]
+    print("-".join(mixed))
+    for item in ["p", "q", "r"]:
+        print(item)
