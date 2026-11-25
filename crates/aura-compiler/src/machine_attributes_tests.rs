@@ -361,11 +361,95 @@ fn data_initializers_encode_the_checked_scalar_width() {
             Some(FreestandingTarget::X86_64),
             "AU2095",
         ),
+        (
+            "@machine.section(name=\".config\")\nN = 1",
+            Some(FreestandingTarget::X86_64),
+            "AU2095",
+        ),
+        (
+            "@machine.align(8)\nPAIR: (int64, int64) = (1, 2)",
+            Some(FreestandingTarget::X86_64),
+            "AU2095",
+        ),
+        (
+            "@machine.align(8)\nN: int64 = -(1 + 2)",
+            Some(FreestandingTarget::X86_64),
+            "AU2095",
+        ),
     ] {
         let _mode = target.map(crate::enter_freestanding_target);
         let error = crate::check_source(source).unwrap_err();
         assert_eq!(error.code, code, "{error:?}");
     }
+}
+
+#[test]
+fn object_emission_rejects_invalid_placement_in_mir() {
+    let source = "@machine.section(\".board\")\nMAGIC: uint32 = 42\n";
+    let target = FreestandingTarget::X86_64;
+    let _mode = crate::enter_freestanding_target(target);
+    let mut mir = lower(source);
+
+    // The object API also accepts deserialized MIR, without running the
+    // source checker that normally validates the section spelling.
+    mir.foreign_link.placed_data[0].placement.section = Some(".board\0truncated".into());
+    let errors = emit_freestanding_object(&mir, "board.au", source, target).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].message.contains("nul byte"), "{errors:?}");
+}
+
+#[test]
+fn object_emission_rejects_a_private_link_name_that_collides_with_an_export() {
+    let source = "@machine.used\n@machine.link_name(\"entry\")\ndef private_entry() -> None:\n    pass\nexport \"C\" def entry() -> None:\n    pass\n";
+    let target = FreestandingTarget::X86_64;
+    let _mode = crate::enter_freestanding_target(target);
+    let errors = build(source, target).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .message
+            .contains("link name `entry` is already defined"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn object_emission_rechecks_the_architecture_of_a_lowered_handler() {
+    let source = "@machine.interrupt(\"aarch64\")\nexport \"C\" def irq() -> None:\n    pass\n";
+    let mir = crate::with_freestanding_target(FreestandingTarget::Aarch64, || lower(source));
+    let errors = emit_freestanding_object(&mir, "board.au", source, FreestandingTarget::Riscv64)
+        .unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]
+            .message
+            .contains("interrupt entry requires aarch64"),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn object_emission_requires_the_initializer_of_a_placed_cell() {
+    let source = "@machine.section(\".reserve\")\nmut reserve: uint64 = 19\n";
+    let target = FreestandingTarget::X86_64;
+    let _mode = crate::enter_freestanding_target(target);
+    let program =
+        crate::check_freestanding_path(std::path::Path::new("board.au"), Some(source)).unwrap();
+    let mut mir = crate::lower_to_mir(&program);
+    let key = mir.foreign_link.placed_data[0].state_key.as_ref().unwrap();
+    let cell = mir
+        .constants
+        .iter_mut()
+        .find(|cell| cell.key == *key)
+        .unwrap();
+    assert!(cell.state.take().is_some());
+
+    let errors = emit_freestanding_object(&mir, "board.au", source, target).unwrap_err();
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].message,
+        format!("missing initializer for placed module state `{key}`")
+    );
 }
 
 #[test]
