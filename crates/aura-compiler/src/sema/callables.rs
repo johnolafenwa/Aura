@@ -141,8 +141,12 @@ pub(super) fn default_argument_references_param(
         ExprKind::Match {
             scrutinee, arms, ..
         } => default_argument_references_param(scrutinee, param_names).or_else(|| {
-            arms.iter()
-                .find_map(|arm| default_argument_references_param(&arm.value, param_names))
+            arms.iter().find_map(|arm| {
+                arm.guard
+                    .as_ref()
+                    .and_then(|guard| default_argument_references_param(guard, param_names))
+                    .or_else(|| default_argument_references_param(&arm.value, param_names))
+            })
         }),
         ExprKind::Membership {
             value, container, ..
@@ -1308,6 +1312,9 @@ impl<'a> FunctionChecker<'a> {
                 for arm in arms {
                     let mut arm_bound = bound.clone();
                     Self::collect_pattern_binding_names(&arm.pattern, &mut arm_bound);
+                    if let Some(guard) = &arm.guard {
+                        self.collect_lambda_capture_uses(locals, guard, &arm_bound, seen, captures);
+                    }
                     self.collect_lambda_capture_uses(
                         locals, &arm.value, &arm_bound, seen, captures,
                     );

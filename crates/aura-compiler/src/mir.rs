@@ -7944,6 +7944,9 @@ fn validate_loan_rvalue(
                         state,
                         None,
                     )?;
+                    // The callee may store any member in a `mut` argument,
+                    // so a tag proof over that place no longer holds.
+                    invalidate_union_facts_for_place(place, state);
                 }
             }
             let _ = context.pending_call(function, callee, args)?;

@@ -2725,6 +2725,21 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         // contract. Map them through each impl header so direct concrete
         // dispatch observes the same contract as dispatch through a bound.
         let mut mapped_impl_contracts = BTreeMap::<(usize, String), BTreeSet<String>>::new();
+        let clone_checker = FunctionChecker::new(
+            &program.module_name,
+            &type_names,
+            &type_arities,
+            &canonical_type_names,
+            &program.classes,
+            &program.enums,
+            &program.functions,
+            &program.constants,
+            &program.traits,
+            &program.trait_impls,
+            &program.imported_modules,
+            &program.module_registry,
+        )
+        .with_ffi(&program.extern_functions, &program.opaque_handles);
         for (impl_index, trait_impl) in program.trait_impls.iter().enumerate() {
             // Trait impl collection has already resolved and validated this
             // nominal identity; the fixed-point pass cannot observe a missing
@@ -2741,6 +2756,15 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 for requirement in &trait_method.signature.rng_clone_safe_type_params {
                     let resolved =
                         substitute_type(&Type::TypeParam(requirement.clone()), &substitutions);
+                    // A default method that copies a `T` value must not copy
+                    // a closure, a unique task result, a handle or a resource.
+                    clone_checker.reject_noncloneable_parts(
+                        &format!(
+                            "impl method `{method_name}` (the trait's default body copies `{resolved}`)"
+                        ),
+                        &resolved,
+                        impl_method.decl.span,
+                    )?;
                     match rng_clone_safety_in_context_with_modules(
                         &resolved,
                         &program.classes,
