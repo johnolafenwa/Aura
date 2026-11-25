@@ -227,6 +227,19 @@ impl ClassLayout {
     /// `src` holds the bytes of a live block and `dst` has room for one
     /// that does not overlap it.
     pub unsafe fn clone_element(&self, src: *const u8, dst: *mut u8) {
+        if self.drops_boxes_only {
+            // Scalars and boxes only: the bytes, then a copy of each box,
+            // without walking the layout table.
+            // SAFETY: the caller's contract; each offset is a box slot.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, dst, self.layout.size());
+                for offset in &self.boxes {
+                    let slot = dst.add(*offset).cast::<*mut super::OpaqueValue>();
+                    slot.write(super::typed_layout::clone_handle(slot.read()));
+                }
+            }
+            return;
+        }
         // SAFETY: the caller's contract.
         unsafe { (self.ops.clone)(self.table(), self.layout.root(), src, dst) }
     }
@@ -832,12 +845,8 @@ impl Clone for TypedFields {
         // SAFETY: the block holds a value of the layout, the copy's bytes
         // are dead, and the two blocks are distinct.
         unsafe {
-            (self.layout.ops.clone)(
-                self.layout.table(),
-                self.layout.layout.root(),
-                self.data.as_ptr(),
-                copy.data.as_ptr(),
-            )
+            self.layout
+                .clone_element(self.data.as_ptr(), copy.data.as_ptr())
         };
         copy
     }

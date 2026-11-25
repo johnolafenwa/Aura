@@ -473,6 +473,27 @@ impl InstanceElements {
         Some((words.as_ptr() as usize, (len + stride) / stride))
     }
 
+    /// Swaps elements `first` and `second`, which are in range, words,
+    /// boxes and all.
+    fn swap(&mut self, first: usize, second: usize) {
+        if first == second {
+            return;
+        }
+        let stride = self.stride();
+        let words = self.words_mut();
+        let (low, high) = (first.min(second), first.max(second));
+        let (head, tail) = words.split_at_mut(high * stride);
+        head[low * stride..(low + 1) * stride].swap_with_slice(&mut tail[..stride]);
+    }
+
+    /// Reverses the order of the elements.
+    fn reverse(&mut self) {
+        let len = self.len();
+        for index in 0..len / 2 {
+            self.swap(index, len - 1 - index);
+        }
+    }
+
     /// The instances, moved out of storage no other handle shares or
     /// copied out of shared storage.
     fn into_values(mut self) -> Vec<Value> {
@@ -1560,8 +1581,9 @@ impl ListElements {
         )
     }
 
+    /// Swaps two elements. A list that keeps instances in place swaps
+    /// their words, so a sort keeps the form.
     pub fn swap(&mut self, first: usize, second: usize) {
-        self.leave_instances();
         each_form!(
             self,
             values => values.swap(first, second),
@@ -1573,17 +1595,23 @@ impl ListElements {
                 );
                 typed.swap(first, second)
             },
-            _instances => unreachable!("the list left the instance form")
+            instances => {
+                assert!(
+                    first.max(second) < instances.len(),
+                    "list swap index is out of range for length {}",
+                    instances.len()
+                );
+                instances.swap(first, second)
+            }
         )
     }
 
     pub fn reverse(&mut self) {
-        self.leave_instances();
         each_form!(
             self,
             values => values.reverse(),
             typed => **typed = typed.permuted((0..typed.len()).rev()),
-            _instances => unreachable!("the list left the instance form")
+            instances => instances.reverse()
         )
     }
 

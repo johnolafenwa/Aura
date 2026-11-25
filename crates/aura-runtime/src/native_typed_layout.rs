@@ -1311,6 +1311,26 @@ unsafe fn drop_in_place(table: &LayoutTable, id: LayoutId, ptr: *mut u8) {
     }
 }
 
+/// A box of its own with a copy of the value and type name of `boxed`, a
+/// field box of a block; null, a moved-out handle, stays null.
+///
+/// # Safety
+///
+/// `boxed` is null or a live box the holder of its block covers, so
+/// neither read takes an access of its own.
+pub(super) unsafe fn clone_handle(boxed: *mut OpaqueValue) -> *mut OpaqueValue {
+    if boxed.is_null() {
+        return boxed;
+    }
+    unsafe {
+        let copy = element_boxed_value((*boxed).held_value().clone());
+        let tag = (*(*boxed).runtime_type_name.get()).clone();
+        // SAFETY: the copy is new and confined to this thread.
+        *(*copy).runtime_type_name.get() = tag;
+        copy
+    }
+}
+
 /// # Safety
 ///
 /// `src` holds a value of `id`'s layout, and `dst` is valid for its bytes
@@ -1322,19 +1342,7 @@ unsafe fn clone_into(table: &LayoutTable, id: LayoutId, src: *const u8, dst: *mu
             LayoutKind::Unit => {}
             LayoutKind::Scalar(_) => std::ptr::copy_nonoverlapping(src, dst, layout.size as usize),
             LayoutKind::Handle => {
-                let boxed = src.cast::<*mut OpaqueValue>().read();
-                // A moved-out handle stays moved out in the copy.
-                let copy = if boxed.is_null() {
-                    boxed
-                } else {
-                    // The layout's holder covers the box, so neither read
-                    // takes an access of its own.
-                    let copy = element_boxed_value((*boxed).held_value().clone());
-                    let tag = (*(*boxed).runtime_type_name.get()).clone();
-                    // SAFETY: the copy is new and confined to this thread.
-                    *(*copy).runtime_type_name.get() = tag;
-                    copy
-                };
+                let copy = clone_handle(src.cast::<*mut OpaqueValue>().read());
                 dst.cast::<*mut OpaqueValue>().write(copy);
             }
             LayoutKind::Indirect(target) => {
