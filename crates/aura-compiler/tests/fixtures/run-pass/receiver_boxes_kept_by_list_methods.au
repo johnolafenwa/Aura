@@ -1,0 +1,52 @@
+# A `mut self` method that names its receiver only through its fields, and
+# through calls of such methods on it, hands its receiver's box back as it
+# came, list fields and loops included, so the caller keeps the box's tag
+# without checking it again.
+
+
+class Book:
+    levels: list[int64]
+    names: list[str]
+    best: int64
+
+    def fix(mut self):
+        while self.best > 0 and self.levels[self.best] == 0:
+            self.best -= 1
+
+    def add(mut self, level: int64, name: str):
+        self.levels[level] += 1
+        self.names.append(name.clone())
+        if level > self.best:
+            self.best = level
+        self.fix()
+
+    def take(mut self, level: int64):
+        self.levels[level] -= 1
+        self.fix()
+
+    def show(self) -> str:
+        return f"best={self.best} names={self.names.len()}"
+
+    def report(mut self) -> str:
+        self.fix()
+        return self.show()
+
+    def reset(mut self):
+        self = Book(levels=[0, 0, 0, 0], names=[], best=0)
+
+
+def main():
+    mut book = Book(levels=[0, 0, 0, 0], names=[], best=0)
+    for step in range(6):
+        book.add(step % 4, f"n{step}")
+        if step % 3 == 2:
+            book.take(step % 4)
+    print(book.report())
+    print(book)
+    book.reset()
+    book.add(1, "again")
+    print(book)
+    mut shelf = [Book(levels=[0, 1], names=["x"], best=1)]
+    shelf[0].add(0, "y")
+    shelf[0].take(1)
+    print(shelf[0])

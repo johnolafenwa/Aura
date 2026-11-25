@@ -1295,6 +1295,7 @@ impl<'a> NativeCodegen<'a> {
             module,
             callable_shapes.keys().map(|key| key.function.as_str()),
         );
+        let shape_keepers = element_loans::receiver_shape_keepers(module, &method_receivers);
         program_shapes.set_field_only_methods(
             module
                 .functions
@@ -1303,7 +1304,8 @@ impl<'a> NativeCodegen<'a> {
                     // A total leaf is passed words, never the box.
                     boxed_receiver_fields(function, &classes).is_some()
                         && (leaf_body(function, &classes)
-                            || frameless_caller(function, &classes, &total_leaves))
+                            || frameless_caller(function, &classes, &total_leaves)
+                            || shape_keepers.contains(&function.name))
                 })
                 .map(|function| function.name.clone())
                 .collect(),

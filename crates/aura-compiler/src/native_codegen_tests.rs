@@ -1989,6 +1989,36 @@ fn indexed_ascii_bindings_exclude_writable_and_nonliteral_strings() {
 }
 
 #[test]
+fn receiver_shape_keepers_lend_their_whole_receiver_to_no_reader() {
+    let source = include_str!("../tests/fixtures/run-pass/receiver_boxes_kept_by_list_methods.au");
+    let mir = lower_source_to_mir(source).expect("receiver keepers lower");
+    let receivers = mir
+        .classes
+        .iter()
+        .flat_map(|class| &class.methods)
+        .map(|method| (method.function_name.clone(), method.receiver))
+        .collect::<HashMap<_, _>>();
+    let sorted = |names: std::collections::HashSet<String>| {
+        let mut names = names.into_iter().collect::<Vec<_>>();
+        names.sort_unstable();
+        names
+    };
+    // `report` lends its whole receiver to `show`, which may read its tag;
+    // `reset` assigns `self`.
+    assert_eq!(
+        sorted(super::element_loans::receiver_keepers(&mir, &receivers)),
+        ["Book.add", "Book.fix", "Book.report", "Book.take"]
+    );
+    assert_eq!(
+        sorted(super::element_loans::receiver_shape_keepers(
+            &mir, &receivers
+        )),
+        ["Book.add", "Book.fix", "Book.take"]
+    );
+    emit_unoptimized_object(&mir).expect("receiver keepers emit");
+}
+
+#[test]
 fn nested_field_list_reads_follow_the_field_s_boxes() {
     let source = include_str!("../tests/fixtures/run-pass/nested_field_lists_read_in_place.au");
     let mir = lower_source_to_mir(source).expect("nested field list reads lower");

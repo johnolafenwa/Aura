@@ -637,6 +637,27 @@ pub(super) fn receiver_keepers(
     module: &MirModule,
     method_receivers: &HashMap<String, Option<MirReceiverKind>>,
 ) -> HashSet<String> {
+    keepers_lending_to(module, method_receivers, true)
+}
+
+/// The [`receiver_keepers`] that also lend their whole receiver to no
+/// method that only reads it: nothing in them names the receiver's box but
+/// their calls of one another on it, so none reads the box's tag, and the
+/// box goes back to its place as it came.
+pub(super) fn receiver_shape_keepers(
+    module: &MirModule,
+    method_receivers: &HashMap<String, Option<MirReceiverKind>>,
+) -> HashSet<String> {
+    keepers_lending_to(module, method_receivers, false)
+}
+
+/// The `mut self` methods that name their whole receiver only to call one
+/// another on it, or, when `readers`, methods that only read it.
+fn keepers_lending_to(
+    module: &MirModule,
+    method_receivers: &HashMap<String, Option<MirReceiverKind>>,
+    readers: bool,
+) -> HashSet<String> {
     let mutable =
         |name: &str| method_receivers.get(name) == Some(&Some(MirReceiverKind::BorrowMut));
     let mut keepers = module
@@ -653,7 +674,7 @@ pub(super) fn receiver_keepers(
             .filter(|function| {
                 function.blocks.iter().any(|block| {
                     block.instructions.iter().any(|instruction| {
-                        !keeps_whole_receiver(instruction, &keepers, method_receivers)
+                        !keeps_whole_receiver(instruction, &keepers, method_receivers, readers)
                     }) || names_whole_receiver(&block.terminator)
                 })
             })
@@ -681,6 +702,7 @@ fn keeps_whole_receiver(
     instruction: &Instruction,
     keepers: &HashSet<String>,
     method_receivers: &HashMap<String, Option<MirReceiverKind>>,
+    readers: bool,
 ) -> bool {
     if !names_whole_receiver(instruction) {
         return true;
@@ -704,7 +726,7 @@ fn keeps_whole_receiver(
         return false;
     };
     let keeps = keepers.contains(function)
-        || method_receivers.get(function) == Some(&Some(MirReceiverKind::Borrow));
+        || (readers && method_receivers.get(function) == Some(&Some(MirReceiverKind::Borrow)));
     keeps
         && receiver == "self"
         && receiver_place
