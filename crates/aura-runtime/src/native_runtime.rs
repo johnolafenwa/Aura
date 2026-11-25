@@ -5740,10 +5740,9 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
                 crate::runtime_value::clear_pending_generator_drop_exit();
                 // Free the `Box<LightweightTaskFailureSignal>` before any
                 // non-local exit or recovery jump.
-                let diagnostic = {
-                    let signal = signal;
-                    signal.0
-                };
+                // `identity` moves the box into a temporary that drops at
+                // the end of this statement.
+                let diagnostic = std::convert::identity(signal).0;
                 if enclosing_rust_boundary {
                     std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
                 }

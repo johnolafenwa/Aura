@@ -3335,6 +3335,7 @@ fn mir_runtime_ffi_commits_handle_writeback_before_flag_validation_trap() {
     );
 
     let call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "replace_and_flag".to_string(),
         abi: "C".to_string(),
@@ -25529,6 +25530,7 @@ def run() -> int32:
         return_type: Box::new(Type::named("int32")),
     };
     let outer_call = MirExternCall {
+        module_name: String::new(),
         name: String::new(),
         symbol: "outer_c".to_string(),
         abi: "C".to_string(),

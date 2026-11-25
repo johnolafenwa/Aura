@@ -19896,7 +19896,7 @@ impl<'a> FunctionCompiler<'a> {
                 transferred.len()
             ));
         }
-        for (var, compiled) in vars.iter().zip(transferred.into_iter()) {
+        for (var, compiled) in vars.iter().zip(transferred) {
             self.builder.def_var(*var, compiled);
         }
         Ok(())
