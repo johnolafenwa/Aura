@@ -12,7 +12,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Backslash continuation is not implemented.
 - Ordinary, raw, and f-strings are single-line. Triple-quoted ordinary strings may span physical lines.
 - A trailing comma needs a closing `)`, `]`, or `}`. Unparenthesized unpack targets, unparenthesized import lists, and lambda parameter lists reject it.
-- The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic.
+- The parser's nesting, postfix-chain, and binary-chain guards allow 128 operations. Deeper input is rejected with a diagnostic. Each item of a `with` header after the first counts as one level of nesting.
+- The type the checker infers for a tuple expression may hold at most 65,536 type nodes. A larger one, such as a tuple of tuples nested many times, is `AU2999`.
 - Statement match arms cannot be inline. An expression match arm may put its expression on the same line after `case pattern:` or use an indented expression body.
 - A `for` loop binding cannot shadow a name already visible in the same scope.
 
