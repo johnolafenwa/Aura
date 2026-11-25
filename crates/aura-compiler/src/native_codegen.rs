@@ -4048,6 +4048,15 @@ struct DirectElementSelector {
     span: Span,
 }
 
+/// A selection of one element of a list held in a list field of an
+/// instance (see `FunctionCompiler::nested_field_list_selector`).
+struct NestedFieldList {
+    root: String,
+    slot: classes::ClassSlot,
+    outer: DirectElementSelector,
+    inner: DirectElementSelector,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct DirectUnionPayload {
     base: String,
@@ -12927,6 +12936,27 @@ impl<'a> FunctionCompiler<'a> {
         loan: &str,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<bool, String> {
+        if let Some(nested) = self.nested_field_list_selector(alternative)? {
+            let slow_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            let list = self.load_nested_field_list(&nested, slow_block)?;
+            let index = self.builder.use_var(nested.inner.variable);
+            let (line, column) = self.span_operands(nested.inner.span);
+            self.builder.call(
+                self.runtime[RuntimeFn::VecCheckIndex],
+                &[list, index, line, column],
+            );
+            self.builder.jump(join_block, &[]);
+
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            self.emit_element_path_probe(loan, false)?;
+            self.builder.jump(join_block, &[]);
+
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            return Ok(true);
+        }
         let [selector] = alternative.elements.as_slice() else {
             return Ok(false);
         };
@@ -13050,6 +13080,28 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         alternative: &DirectViewAlternative,
     ) -> std::result::Result<Option<Val>, String> {
+        if let Some(nested) = self
+            .nested_field_list_selector(alternative)?
+            .filter(|nested| nested.inner.element_type == Type::named("str"))
+        {
+            let slow_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            self.builder.append_block_param(join_block, types::I64);
+            let list = self.load_nested_field_list(&nested, slow_block)?;
+            let index = self.builder.use_var(nested.inner.variable);
+            let copy = self.emit_str_element_copy(list, index, nested.inner.span);
+            self.builder.jump(join_block, &[copy]);
+
+            self.builder.switch_to_block(slow_block);
+            self.builder.seal_block(slow_block);
+            let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+            let copy = self.element_path_load(collection.values[0], &projection, alternative)?;
+            self.builder.jump(join_block, &[copy]);
+
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            return Ok(Some(self.builder.block_params(join_block)[0]));
+        }
         let [selector] = alternative.elements.as_slice() else {
             return Ok(None);
         };
@@ -13096,6 +13148,89 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(Some(self.builder.block_params(join_block)[0]))
+    }
+
+    /// The inner selector of a selection of one element of a list held in
+    /// a list field, such as `broker.mailboxes[c][i]`, when the instance
+    /// may be kept in place: two list positions, no projections, and the
+    /// field a handle slot. `None` for any other alternative.
+    fn nested_field_list_selector(
+        &mut self,
+        alternative: &DirectViewAlternative,
+    ) -> std::result::Result<Option<NestedFieldList>, String> {
+        let [outer, inner] = alternative.elements.as_slice() else {
+            return Ok(None);
+        };
+        let plain = |selector: &DirectElementSelector| {
+            selector.projection.is_empty() && matches!(selector.kind, DirectElementKind::List)
+        };
+        if !plain(outer)
+            || !plain(inner)
+            || !matches!(&outer.element_type, Type::Named(name, _) if name == "list")
+        {
+            return Ok(None);
+        }
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(None);
+        };
+        Ok(
+            matches!(slot.kind, classes::SlotKind::Handle).then(|| NestedFieldList {
+                root,
+                slot,
+                outer: outer.clone(),
+                inner: inner.clone(),
+            }),
+        )
+    }
+
+    /// The box of the inner list a [`Self::nested_field_list_selector`]
+    /// alternative selects from, read where the instance keeps its field
+    /// and the field's list keeps its elements in boxes. An instance not
+    /// kept in place, a moved-out field or element, any other list form,
+    /// or an outer position out of range branches to `slow_block`, where
+    /// the runtime walk reports it.
+    fn load_nested_field_list(
+        &mut self,
+        nested: &NestedFieldList,
+        slow_block: Blk,
+    ) -> std::result::Result<Val, String> {
+        use aura_runtime::native_runtime::DirectListAccess;
+        let NestedFieldList {
+            root, slot, outer, ..
+        } = nested;
+        let flags = MemFlags::trusted();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let object = self.load_root(root)?.values[0];
+        let fast_block = self.builder.create_block();
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self.builder.load(types::I64, flags, block, slot.offset);
+        let field_block = self.builder.create_block();
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let boxes_block = self.builder.create_block();
+        self.emit_list_access_check(
+            field,
+            DirectListAccess::Boxes,
+            &layout,
+            slow_block,
+            boxes_block,
+        );
+        self.builder.switch_to_block(boxes_block);
+        self.builder.seal_block(boxes_block);
+        let index = self.builder.use_var(outer.variable);
+        let position = self.emit_list_view_bounds_check(field, index, &layout, slow_block);
+        let elements = self.list_view_word(field, list_snapshots::ViewWord::Elements);
+        let element_slot = self.scalar_list_element(elements, position, 8);
+        let list = self.builder.load(types::I64, flags, element_slot, 0);
+        let list_block = self.builder.create_block();
+        self.builder.brif(list, list_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(list_block);
+        self.builder.seal_block(list_block);
+        Ok(list)
     }
 
     /// Stores through one view alternative: a static place directly, or the
