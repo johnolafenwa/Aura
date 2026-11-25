@@ -32057,3 +32057,241 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     );
     assert_eq!(out, [-1, 0]);
 }
+
+#[test]
+fn a_tasks_last_reference_to_a_str_box_frees_the_text_and_the_block() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            // A text kept in the value, one kept on the heap, and a `str`
+            // box with a type name, which takes the general release.
+            let long = "a text that is too long to keep in the value itself";
+            for text in ["", "short", long] {
+                let value = string_value(text);
+                assert_eq!(entries(), [(value as usize, 1)]);
+                unsafe { super::aura_direct_release_last_owned_value(value) };
+                assert!(entries().is_empty(), "{text}");
+            }
+            let named = super::boxed_typed_value(Value::String(long.into()), "Name");
+            unsafe { super::aura_direct_release_last_owned_value(named) };
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn appending_an_only_str_box_moves_its_text_into_the_list() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let entries =
+                || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
+            let long = "a text that is too long to keep in the value itself";
+            let vec = super::aura_direct_vec_empty();
+            super::aura_direct_vec_push_in_place(vec, string_value("first"));
+            super::aura_direct_vec_push_in_place(vec, string_value(long));
+            // The list is all the ledger still owns.
+            assert_eq!(entries(), [(vec as usize, 1)]);
+            // A box another reference holds keeps its text.
+            let kept = string_value("kept");
+            unsafe { super::aura_direct_retain_value(kept) };
+            super::aura_direct_vec_push_in_place(vec, kept);
+            assert_eq!(unsafe { value_ref(kept) }, Value::String("kept".into()));
+            // A `str` box with a type name takes the general append.
+            let named = super::boxed_typed_value(Value::String("named".into()), "Name");
+            super::aura_direct_vec_push_in_place(vec, named);
+            let texts = super::with_vector(vec, |vector| {
+                assert_eq!(*vector.element_type, Type::named("str"));
+                (0..vector.elements.len())
+                    .map(|index| match vector.elements.at(index).into_owned() {
+                        Value::String(text) => text.into_string(),
+                        other => panic!("expected a string, found {other:?}"),
+                    })
+                    .collect::<Vec<_>>()
+            });
+            assert_eq!(texts, ["first", long, "kept", "named"]);
+            unsafe {
+                release_value(kept);
+                release_value(vec);
+            }
+            assert!(entries().is_empty());
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(result.expect("root task should complete"), Value::Unit);
+}
+
+#[test]
+fn an_owned_literal_replace_keeps_the_only_box() {
+    let replace = |value: *mut OpaqueValue, from: &str, to: &str| unsafe {
+        super::aura_direct_string_replace_literal_owned(
+            value,
+            from.as_ptr(),
+            from.len(),
+            to.as_ptr(),
+            to.len(),
+        )
+    };
+    // The only reference comes back, untouched or with its text replaced.
+    let text = string_value("a<b><");
+    assert_eq!(replace(text, "zz", ""), text);
+    assert_eq!(replace(text, "<", "&lt;"), text);
+    assert_eq!(
+        unsafe { value_ref(text) },
+        Value::String("a&lt;b>&lt;".into())
+    );
+    assert_eq!(replace(text, "", "-"), text);
+    assert_eq!(expect_string(text), "a&lt;b>&lt;".replace("", "-"));
+
+    // A box another reference holds keeps its text, and the caller's
+    // reference goes for a new box.
+    let shared = string_value("x&y");
+    unsafe { retain_value(shared) };
+    let replaced = replace(shared, "&", "&amp;");
+    assert_ne!(replaced, shared);
+    assert_eq!(expect_string(replaced), "x&amp;y");
+    assert_eq!(expect_string(shared), "x&y");
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        replace(address as *mut OpaqueValue, "a", "b");
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+}
+
+#[test]
+fn literal_split_reads_its_separator_where_the_program_keeps_it() {
+    let split = |text: *mut OpaqueValue, separator: &str| {
+        let parts =
+            super::aura_direct_string_split_literal(text, separator.as_ptr(), separator.len());
+        let texts = super::with_vector(parts, |vector| {
+            assert_eq!(*vector.element_type, Type::named("str"));
+            (0..vector.elements.len())
+                .map(|index| match vector.elements.at(index).into_owned() {
+                    Value::String(text) => text.into_string(),
+                    other => panic!("expected a string, found {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        });
+        unsafe { release_value(parts) };
+        texts
+    };
+    let text = string_value("2026-01-02,north,,SKU-7,");
+    assert_eq!(split(text, ","), ["2026-01-02", "north", "", "SKU-7", ""]);
+    assert_eq!(split(text, ",,"), ["2026-01-02,north", "SKU-7,"]);
+    assert_eq!(split(text, ";"), ["2026-01-02,north,,SKU-7,"]);
+    unsafe { release_value(text) };
+
+    let number = int_value(1);
+    let address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_string_split_literal(address as *mut OpaqueValue, ",".as_ptr(), 1);
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+}
+
+#[test]
+fn padded_int64_parts_match_the_general_formatter() {
+    let values = [
+        0,
+        7,
+        -7,
+        42,
+        -42,
+        99,
+        100,
+        -100,
+        12345,
+        -98765,
+        i64::MAX,
+        i64::MIN,
+    ];
+    let specs = [
+        "1", "2", "02", "3", "03", "8", "08", "10", "010", "20", "020", "99", "099",
+    ];
+    for value in values {
+        for spec in specs {
+            let mut out = [0_u8; super::PADDED_I64_BYTES];
+            let padded = super::padded_i64(value, spec.as_bytes(), &mut out).expect(spec);
+            let general = crate::runtime_value::format_runtime_value_with(
+                &Value::Int(IntegerValue::from_i64(value)),
+                &Type::named("int64"),
+                spec,
+                &mut |value| Ok(super::render_direct_plain(value)),
+            )
+            .expect(spec);
+            assert_eq!(padded, general, "{value}:{spec}");
+        }
+    }
+    // Every other spec takes the general formatter.
+    for spec in [
+        "", "0", "00", "007", "100", ">8", "<8", "+3", "x", "08x", "8d", ",", " 5",
+    ] {
+        let mut out = [0_u8; super::PADDED_I64_BYTES];
+        assert_eq!(
+            super::padded_i64(5, spec.as_bytes(), &mut out),
+            None,
+            "{spec}"
+        );
+    }
+    let builder = super::aura_direct_format_begin("[".as_ptr(), 1);
+    super::aura_direct_format_push_i64_formatted(builder, -7, "04".as_ptr(), 2);
+    super::aura_direct_format_push_i64_formatted(builder, 255, "x".as_ptr(), 1);
+    assert_eq!(expect_string(builder), "[-007ff");
+}
+
+#[test]
+fn extending_a_byte_list_with_a_text_appends_its_bytes() {
+    let bytes_of = |list: *mut OpaqueValue| {
+        super::with_vector(list, |vector| {
+            (0..vector.elements.len())
+                .map(|index| match vector.elements.at(index).into_owned() {
+                    Value::Int(byte) => byte.as_i128().expect("a byte") as u8,
+                    other => panic!("expected a byte, found {other:?}"),
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let text = string_value("a&é");
+    // A list that keeps bytes unboxed, and an empty one that keeps none yet.
+    let bytes = super::boxed_value(super::bytes_vec_value(b"<".to_vec()));
+    super::aura_direct_vec_extend_str_bytes(bytes, text);
+    super::aura_direct_vec_extend_str_bytes(bytes, text);
+    assert_eq!(bytes_of(bytes), "<a&éa&é".as_bytes());
+    let empty = super::aura_direct_vec_empty();
+    super::aura_direct_vec_extend_str_bytes(empty, text);
+    assert_eq!(bytes_of(empty), "a&é".as_bytes());
+    unsafe {
+        release_value(empty);
+        release_value(bytes);
+    }
+
+    let address = text as usize;
+    let number = int_value(1);
+    let number_address = number as usize;
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_extend_str_bytes(
+            address as *mut OpaqueValue,
+            number_address as *mut OpaqueValue,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `str`, found `integer`");
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        super::aura_direct_vec_extend_str_bytes(
+            address as *mut OpaqueValue,
+            address as *mut OpaqueValue,
+        );
+    });
+    assert_eq!(diagnostic.message, "expected `list`, found `str`");
+    unsafe {
+        release_value(number);
+        release_value(text);
+    }
+}

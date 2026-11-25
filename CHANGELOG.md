@@ -50,6 +50,15 @@ in this file.
   the allocation hooks with a reference count, and the program frees
   every block when its last reference goes. Classes, tuples, and `Result`
   may hold such an enum, and `match own` and `try` work on them.
+- Performance: text-heavy programs do less work. Making and freeing a `str`
+  costs about half as much; each later step of a chain of literal `replace`
+  calls reuses the string the step before it made; `split` with a literal
+  separator makes no value for the separator; appending a string that was
+  just built to a list moves it; `out.extend(text.to_bytes())` appends the
+  bytes without a list in between; and `{value:02}`-style padded integers
+  format without allocating. On the cross-language programs,
+  `markdown_render` runs 47% fewer instructions, `template_render` 26%,
+  `csv_aggregate` 16% and `word_freq` 14%.
 - Speed: `d.remove(key)` builds no `Lookup` value when its result is
   matched or dropped, and takes about a quarter of the instructions. A loop
   over `d.items()`, `d.keys()` or `d.values()` with number, `bool` or `str`

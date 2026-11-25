@@ -2155,9 +2155,35 @@ fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue 
 }
 
 fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
-    let value = untracked_boxed_value(value, runtime_type_name);
-    register_direct_owned_value(value);
-    value
+    let view = list_view_of(&value);
+    let layout = std::alloc::Layout::new::<OpaqueValue>();
+    // SAFETY: a box is not zero-sized.
+    let boxed = unsafe { std::alloc::alloc(layout) }.cast::<OpaqueValue>();
+    if boxed.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    // The header is written where it will live, so making a box moves the
+    // value once and the header not at all.
+    // SAFETY: the block is new, sized and aligned for a box, and nothing
+    // else reads it yet.
+    unsafe {
+        boxed.write(OpaqueValue::with_view(value, runtime_type_name, view));
+        follow_inline_block(&*boxed);
+    }
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_add(1, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_opaque_box();
+    if let Some(stack) = current_direct_frame_stack() {
+        // SAFETY: the stack belongs to the running task, and no other
+        // reference to its ledger is live while the runtime registers a
+        // value. The box is new, so no ledger links it and no other thread
+        // reaches it.
+        let ledger = unsafe { &mut (*stack.as_ptr()).owned_values };
+        if ledger.tracking() && !unsafe { ledger.add_new(stack.as_ptr(), boxed) } {
+            runtime_error("direct task owned-value reference count overflow");
+        }
+    }
+    boxed
 }
 
 /// A new box that no task's ledger links. Its owner releases it with
@@ -3007,7 +3033,12 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
     }
     fn assign_shared_type(slot: &mut SharedType, ty: &Type) {
         if *slot != *ty {
-            *slot = ty.clone().into();
+            *slot = match ty {
+                // A common name, such as `str`, has one shared copy, so
+                // tagging a new `dict[str, str]` allocates nothing.
+                Type::Named(name, args) if args.is_empty() => SharedType::named(name),
+                _ => ty.clone().into(),
+            };
         }
     }
     match value {
@@ -7372,12 +7403,51 @@ pub unsafe extern "C-unwind" fn aura_direct_release_last_owned_value(value: *mut
             0 => runtime_error("attempted to release an already-released direct runtime value"),
             1 => {
                 header.ref_count.store(0, Ordering::Relaxed);
-                // SAFETY: the ledger held the last reference.
-                unsafe { free_direct_value(value) };
+                // SAFETY: the ledger held the last reference, and
+                // `remove_last` unlinked the value and found it confined.
+                unsafe {
+                    if !free_unlinked_str_box(value) {
+                        free_direct_value(value);
+                    }
+                }
             }
             count => header.ref_count.store(count - 1, Ordering::Relaxed),
         }
     })
+}
+
+/// Frees the box of a `str` without the general drop of a box, and returns
+/// whether it did: a box of any other value, or one with a type name, is
+/// left for [`free_direct_value`]. Most boxes a text program frees are
+/// these, and all there is to free is the text and the block.
+///
+/// # Safety
+///
+/// The caller dropped the last reference to `value`, which is confined to
+/// this thread and which no ledger links.
+#[inline]
+unsafe fn free_unlinked_str_box(value: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller owns the box alone.
+    let header = unsafe { &*value };
+    // SAFETY: as above, so nothing else reads the cells.
+    let (text, named) = unsafe { (&mut *header.value.get(), &*header.runtime_type_name.get()) };
+    let Value::String(text) = text else {
+        return false;
+    };
+    if named.is_some() {
+        return false;
+    }
+    crate::runtime_value::representation_stats::note_box_freed();
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+    // SAFETY: the text is dropped once, here, and the block came from the
+    // global allocator with a box's layout. The other fields own nothing:
+    // the value has no lock and no ledger links it.
+    unsafe {
+        std::ptr::drop_in_place(text);
+        std::alloc::dealloc(value.cast(), std::alloc::Layout::new::<OpaqueValue>());
+    }
+    true
 }
 
 /// Debug builds refuse a release of a value the task's ledger does not
@@ -7845,6 +7915,45 @@ pub extern "C-unwind" fn aura_direct_format_push_value(
     })
 }
 
+/// The room [`padded_i64`] needs: the widest padding it takes, or every
+/// digit and the sign of an `int64`.
+const PADDED_I64_BYTES: usize = 100;
+
+/// `value` under a spec that is only a width of one or two digits, with or
+/// without the zero flag, such as `02` or `8`: the two forms nearly every
+/// padded integer in a program takes. It is what the general formatter
+/// gives for them, written into `out` with no allocation. `None` for any
+/// other spec.
+fn padded_i64<'a>(value: i64, spec: &[u8], out: &'a mut [u8; PADDED_I64_BYTES]) -> Option<&'a str> {
+    let (zero, width) = match spec {
+        [b'0', width @ ..] => (true, width),
+        width => (false, width),
+    };
+    let width = match width {
+        [ones @ b'1'..=b'9'] => usize::from(ones - b'0'),
+        [tens @ b'1'..=b'9', ones @ b'0'..=b'9'] => {
+            usize::from(tens - b'0') * 10 + usize::from(ones - b'0')
+        }
+        _ => return None,
+    };
+    let mut digits = [0_u8; I64_DECIMAL_BYTES];
+    let digits = i64_decimal(value, &mut digits).as_bytes();
+    let len = digits.len().max(width);
+    let padding = len - digits.len();
+    if zero {
+        // The zeros go between the sign and the digits.
+        let sign = usize::from(value < 0);
+        out[..sign].copy_from_slice(&digits[..sign]);
+        out[sign..sign + padding].fill(b'0');
+        out[sign + padding..len].copy_from_slice(&digits[sign..]);
+    } else {
+        out[..padding].fill(b' ');
+        out[padding..len].copy_from_slice(digits);
+    }
+    // SAFETY: the bytes are ASCII digits, a minus sign, spaces and zeros.
+    Some(unsafe { str::from_utf8_unchecked(&out[..len]) })
+}
+
 /// Appends an `int64` part that has a format spec, such as `{cents:02}`,
 /// without boxing it.
 #[cfg_attr(not(coverage), no_mangle)]
@@ -7856,6 +7965,11 @@ pub extern "C-unwind" fn aura_direct_format_push_i64_formatted(
 ) {
     task_runtime_boundary(|| {
         let spec = literal_str(spec_ptr, spec_len);
+        let mut padded = [0_u8; PADDED_I64_BYTES];
+        if let Some(text) = padded_i64(value, spec.as_bytes(), &mut padded) {
+            push_format_text_with(builder, text, true);
+            return;
+        }
         let value = Value::Int(IntegerValue::from_i64(value));
         match format_runtime_value_with(&value, &Type::named("int64"), spec, &mut |value| {
             Ok(render_direct_plain(value))
@@ -8171,20 +8285,36 @@ pub extern "C-unwind" fn aura_direct_string_split(
         let Value::String(separator) = (unsafe { take_value(separator) }) else {
             runtime_error("`split` requires a `str` argument");
         };
-        unsafe {
-            with_value(value, |value| match value {
-                Value::String(text) => boxed_value(Value::Vec(VecValue {
-                    element_type: SharedType::named("str"),
-                    elements: split_text(text, separator.as_str()).into(),
-                    str_view: Default::default(),
-                })),
-                other => runtime_error(format!(
-                    "expected `str`, found `{}`",
-                    value_type_name(other)
-                )),
-            })
-        }
+        split_value(value, separator.as_str())
     })
+}
+
+/// `split` whose separator is a literal, read where the program keeps it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_split_literal(
+    value: *mut OpaqueValue,
+    separator_ptr: *const u8,
+    separator_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| split_value(value, literal_str(separator_ptr, separator_len)))
+}
+
+/// A new `list[str]` box of the parts of the `str` box `value` between
+/// occurrences of `separator`.
+fn split_value(value: *mut OpaqueValue, separator: &str) -> *mut OpaqueValue {
+    unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => boxed_value(Value::Vec(VecValue {
+                element_type: SharedType::named("str"),
+                elements: split_text(text, separator).into(),
+                str_view: Default::default(),
+            })),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
 }
 
 /// The parts of `text` between occurrences of `separator`, as `str::split`
@@ -8194,7 +8324,9 @@ fn split_text(text: &crate::text::Text, separator: &str) -> Vec<Value> {
     let [byte] = separator.as_bytes() else {
         return text.split(separator).map(Value::string).collect();
     };
-    let mut parts = Vec::new();
+    // The list is made at its final size: a line of a few fields would
+    // otherwise grow it once or twice.
+    let mut parts = Vec::with_capacity(memchr::memchr_iter(*byte, text.as_bytes()).count() + 1);
     let mut start = 0;
     for position in memchr::memchr_iter(*byte, text.as_bytes()) {
         parts.push(Value::String(text.slice(start..position)));
@@ -8207,8 +8339,14 @@ fn split_text(text: &crate::text::Text, separator: &str) -> Vec<Value> {
 /// `text` with every occurrence of `from` replaced by `to`, as
 /// `str::replace` gives it. Text without `from` is copied as it is.
 fn replace_text(text: &crate::text::Text, from: &str, to: &str) -> crate::text::Text {
+    replaced_text(text, from, to).unwrap_or_else(|| text.clone())
+}
+
+/// [`replace_text`], or `None` when `text` has no `from` and so stays as
+/// it is.
+fn replaced_text(text: &crate::text::Text, from: &str, to: &str) -> Option<crate::text::Text> {
     if from.is_empty() {
-        return text.replace(from, to).into();
+        return Some(text.replace(from, to).into());
     }
     // A one-byte pattern, such as each step of an HTML escape, needs no
     // substring searcher.
@@ -8224,16 +8362,14 @@ fn replace_text(text: &crate::text::Text, from: &str, to: &str) -> crate::text::
 }
 
 /// `text` with each occurrence that `found` lists, `from_len` bytes long,
-/// replaced by `to`, or `text` itself when there is none.
+/// replaced by `to`, or `None` when there is none.
 fn replace_found(
     text: &crate::text::Text,
     mut found: impl Iterator<Item = usize>,
     from_len: usize,
     to: &str,
-) -> crate::text::Text {
-    let Some(first) = found.next() else {
-        return text.clone();
-    };
+) -> Option<crate::text::Text> {
+    let first = found.next()?;
     let mut output = String::with_capacity(text.len() + to.len().saturating_sub(from_len) * 4);
     output.push_str(&text[..first]);
     output.push_str(to);
@@ -8245,9 +8381,9 @@ fn replace_found(
     }
     output.push_str(&text[rest..]);
     if output.len() <= crate::text::INLINE_CAPACITY {
-        return output.as_str().into();
+        return Some(output.as_str().into());
     }
-    output.into()
+    Some(output.into())
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -8304,6 +8440,55 @@ pub extern "C-unwind" fn aura_direct_string_replace_literal(
                 )),
             })
         }
+    })
+}
+
+/// [`aura_direct_string_replace_literal`] on a `str` box the caller owns
+/// one reference to and hands over, as each later step of
+/// `text.replace(..).replace(..)` does with the step before it. The only
+/// reference to a confined box comes back as the result: untouched when
+/// the text has no `from`, and with its text replaced in place otherwise,
+/// so the step makes no box. A box another handle shares, or a frozen one,
+/// keeps its text, and the caller's reference goes for a new box.
+///
+/// # Safety
+///
+/// `value` is a live box the caller owns one reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_replace_literal_owned(
+    value: *mut OpaqueValue,
+    from_ptr: *const u8,
+    from_len: usize,
+    to_ptr: *const u8,
+    to_len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller owns a reference, so the box is live, and a
+        // count of one cannot grow while it holds the only reference.
+        let confined = unsafe { value.as_ref() }.and_then(|header| {
+            if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+                return None;
+            }
+            // SAFETY: no other access to a confined box with one reference
+            // is in progress, and a `str` keeps no view of its value.
+            match unsafe { &mut *header.value.get() } {
+                Value::String(text) => Some(text),
+                _ => None,
+            }
+        });
+        let Some(text) = confined else {
+            let replaced =
+                aura_direct_string_replace_literal(value, from_ptr, from_len, to_ptr, to_len);
+            // SAFETY: the caller's contract.
+            unsafe { aura_direct_release_value(value) };
+            return replaced;
+        };
+        let from = literal_str(from_ptr, from_len);
+        let to = literal_str(to_ptr, to_len);
+        if let Some(replaced) = replaced_text(text, from, to) {
+            *text = replaced;
+        }
+        value
     })
 }
 
@@ -9227,6 +9412,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
+        // SAFETY: generated code passes a live box it owns.
+        if unsafe { push_only_str_box(vec, value) } {
+            return;
+        }
         // An instance kept in its class's layout, or a collection, joins
         // the list in its own box, which then needs no copy for generated
         // code to lend it or change it in place (see
@@ -9257,6 +9446,68 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
     })
+}
+
+/// Appends the text of `value` to the list `vec` when `value` is a `str`
+/// box with one reference, which the caller hands over, and returns
+/// whether it did. The text moves into the list and the emptied box is
+/// freed here, without the general release of a value: appending a string
+/// that was just built is what a text program's output loop does.
+///
+/// # Safety
+///
+/// `value` is null or a live box the caller owns one reference to.
+#[inline]
+unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> bool {
+    // SAFETY: the caller owns a reference, so the box is live, and a count
+    // of one cannot grow while it holds the only reference.
+    let Some(header) = (unsafe { value.as_ref() }) else {
+        return false;
+    };
+    if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
+        return false;
+    }
+    // SAFETY: no other access to a confined box with one reference is in
+    // progress, and a `str` keeps no view of its value.
+    let (cell, named) = unsafe { (&mut *header.value.get(), &*header.runtime_type_name.get()) };
+    if !matches!(cell, Value::String(_)) || named.is_some() {
+        return false;
+    }
+    let text = std::mem::replace(cell, Value::Unit);
+    with_vector_mut(vec, |vector| {
+        if is_unknown_runtime_type(&vector.element_type) {
+            let inferred = inferred_collection_type(&text);
+            if !is_unknown_runtime_type(&inferred) {
+                vector.element_type = SharedType::from(inferred);
+            }
+        }
+        match &mut vector.elements {
+            ListElements::Values(values) => values.push(text),
+            elements => elements.push(text),
+        }
+    });
+    let unlinked = current_direct_frame_stack().is_some_and(|stack| {
+        // SAFETY: the stack belongs to the running task, and the box is
+        // live.
+        unsafe {
+            (*stack.as_ptr())
+                .owned_values
+                .remove_last(stack.as_ptr(), value)
+        }
+    });
+    if !unlinked {
+        // SAFETY: the caller's reference, which this function took.
+        unsafe { aura_direct_release_value(value) };
+        return true;
+    }
+    header.ref_count.store(0, Ordering::Relaxed);
+    crate::runtime_value::representation_stats::note_box_freed();
+    #[cfg(coverage)]
+    DIRECT_VALUE_LIVE_COUNT.fetch_sub(1, Ordering::AcqRel);
+    // SAFETY: the last reference is gone, no ledger links the box, and it
+    // holds `Unit`, no type name and no lock, so only the block is left.
+    unsafe { std::alloc::dealloc(value.cast(), std::alloc::Layout::new::<OpaqueValue>()) };
+    true
 }
 
 /// Appends a `str` literal of a list literal, read where the program keeps
@@ -9848,6 +10099,30 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
         };
         with_vector_mut(vec, |vector| vector.elements.append(other.elements));
         boxed_value(Value::Unit)
+    })
+}
+
+/// `vec.extend(text.to_bytes())` in one call: the bytes of the `str` box
+/// `text` go onto the end of the `list[uint8]` box `vec` from where they
+/// lie, with no list made for them in between. Building output as bytes
+/// appends a piece of text this way at every step.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_extend_str_bytes(
+    vec: *mut OpaqueValue,
+    text: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| unsafe {
+        with_value(text, |text| {
+            let Value::String(bytes) = text else {
+                runtime_error(format!("expected `str`, found `{}`", value_type_name(text)));
+            };
+            // A `str` is far below the size `to_bytes` refuses, so every
+            // text has bytes to give.
+            with_vector_mut(vec, |vector| match &mut vector.elements {
+                ListElements::Uint8(elements) => elements.extend_from_slice(bytes.as_bytes()),
+                elements => elements.append(ListElements::from_uint8(bytes.as_bytes().to_vec())),
+            });
+        })
     })
 }
 

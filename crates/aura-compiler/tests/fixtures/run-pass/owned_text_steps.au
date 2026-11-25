@@ -1,0 +1,35 @@
+# Text steps that take over a value nothing else reads: each later step of a
+# chain of literal replaces, a split by a literal separator, and the append of
+# a string that was just built.
+def escape(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace(
+        "\"",
+        "&quot;",
+    )
+
+
+def shout(text: str) -> str:
+    kept = text.replace("a", "A")
+    again = kept.replace("A", "4").replace("b", "B")
+    return f"{kept}|{again}"
+
+
+def main():
+    print(escape("plain"))
+    print(escape("a<b> & \"c\""))
+    print(escape("a text that is long enough to live on the heap, with <one> tag"))
+    print(shout("abba"))
+    print(f"x{1 + 1}y".replace("2", "two").replace("zz", "").replace("x", ""))
+    mut out: list[str] = []
+    for i in range(4):
+        out.append(escape(f"<{i}>"))
+        out.append(
+            "a much longer piece of text that does not fit in the value: " + escape("&")
+        )
+    print(f"{out.len()} {out[0]} {out[7]}")
+    print("|".join(out[0:3]))
+    fields = "2026-01-02,north,,SKU-7,".split(",")
+    print(f"{fields.len()} {fields[0]} {fields[1]} [{fields[2]}] [{fields[4]}]")
+    date = fields[0].split("-")
+    print(f"{date[1]} {date.len()}")
+    print(f"{"a--b--".split("--")} {"none".split(";")} {"é,ü".split(",")}")
