@@ -11966,7 +11966,26 @@ impl<'a> FunctionCompiler<'a> {
                     index + 1
                 ));
             }
-            let loaded = self.load_operand(&argument.value)?;
+            let loaded = match &argument.value {
+                // A stream in a field is passed where it lies to a builtin
+                // that borrows it: the builtin reads the stream it names,
+                // and the field keeps it.
+                Operand::Place(place)
+                    if place.contains('.')
+                        && builtin
+                            .metadata()
+                            .params
+                            .get(index)
+                            .map(|param| param.passing)
+                            == Some(ReceiverKind::Borrow)
+                        && self.type_of_place(place).ok()
+                            == Some(DirectType::Opaque(Type::named("http.Stream"))) =>
+                {
+                    let ty = DirectType::Opaque(Type::named("http.Stream"));
+                    self.load_borrowed_field_argument(&argument.value, &ty)?
+                }
+                operand => self.load_operand(operand)?,
+            };
             let loaded = self.ensure_opaque(loaded)?;
             loaded_args.push(loaded);
         }
@@ -16231,11 +16250,15 @@ impl<'a> FunctionCompiler<'a> {
                 };
                 let tag = codegen.builder.iconst(types::I64, index as i64);
                 let call = codegen.builder.call(inject, &[ptr, len, tag, transferred]);
+                // The injection names the union's type, which is all a tag
+                // gives a union.
+                codegen.shaped_boxes.insert(call.results[0]);
                 Ok(ValueRef {
                     values: call.results,
                     ty: DirectType::Opaque(union_type.clone()),
                 })
             })?;
+        self.shaped_boxes.insert(boxed.values[0]);
         self.mark_temporary_opaque_owned(&boxed);
         Ok(boxed)
     }
@@ -22386,20 +22409,15 @@ fn reads_operands_only(rvalue: &Rvalue) -> bool {
             ..
         } => matches!(
             op,
-            RuntimeOp::Str(StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len)
-                | RuntimeOp::List(
-                    ListOp::Len
-                        | ListOp::IsEmpty
-                        | ListOp::Contains
-                        | ListOp::IndexOf
-                        | ListOp::Count
-                )
-                | RuntimeOp::Dict(
-                    DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
-                )
-                | RuntimeOp::Set(
-                    SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
-                )
+            RuntimeOp::Str(
+                StrOp::Contains | StrOp::StartsWith | StrOp::EndsWith | StrOp::Len | StrOp::ByteLen
+            ) | RuntimeOp::List(
+                ListOp::Len | ListOp::IsEmpty | ListOp::Contains | ListOp::IndexOf | ListOp::Count
+            ) | RuntimeOp::Dict(
+                DictOp::Len | DictOp::IsEmpty | DictOp::ContainsKey | DictOp::ContainsKeyInt64
+            ) | RuntimeOp::Set(
+                SetOp::Len | SetOp::IsEmpty | SetOp::Contains | SetOp::ContainsInt64
+            )
         ),
         _ => false,
     }

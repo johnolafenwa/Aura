@@ -480,7 +480,7 @@ impl FunctionCompiler<'_> {
         place: &str,
     ) -> std::result::Result<Option<ValueRef>, String> {
         let Some((root, slot, ty)) = self.class_place(place)? else {
-            return Ok(None);
+            return self.load_union_class_place(place);
         };
         let object = self.load_root(&root)?.values[0];
         let slow_block = self.builder.create_block();
@@ -489,6 +489,46 @@ impl FunctionCompiler<'_> {
         let loaded = self.load_class_slot(place, object, slow_block, &slot, ty, false);
         self.skip_class_check = false;
         loaded.map(Some)
+    }
+
+    /// Reads `root.__union_payload_N.field...` where it lies when member
+    /// `N` of the union `root` holds is an instance of a class kept in
+    /// place: the member's payload word is the instance box, which the
+    /// class check reads as any other. `None` for any other place.
+    fn load_union_class_place(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let mut segments = place.split('.');
+        let (Some(root), Some(member), Some(_)) =
+            (segments.next(), segments.next(), segments.clone().next())
+        else {
+            return Ok(None);
+        };
+        if self.view_places.contains_key(root) {
+            return Ok(None);
+        }
+        let Some(DirectType::Union(union)) = self.variable_types.get(root).cloned() else {
+            return Ok(None);
+        };
+        let Some(member_ty) = crate::mir::union_payload_projection_index(member)
+            .and_then(|index| union.members.get(index))
+            .map(|member| member.ty.clone())
+        else {
+            return Ok(None);
+        };
+        let Ok(ty) = self.type_of_place(place) else {
+            return Ok(None);
+        };
+        let path = segments.collect::<Vec<_>>();
+        let Some((_, slot)) = self.class_slot(&member_ty, &path, &ty)? else {
+            return Ok(None);
+        };
+        // The payload words follow the tag; an instance is one box.
+        let object = self.load_root(root)?.values[1];
+        let slow_block = self.builder.create_block();
+        self.load_class_slot(place, object, slow_block, &slot, ty, false)
+            .map(Some)
     }
 
     /// Reads the field at `slot` of the instance box `object` where it lies
@@ -927,7 +967,13 @@ impl FunctionCompiler<'_> {
                 &self.classes,
                 &format!("field `{}` on class `{}`", field.name, class_name),
             )?;
-            let slot = record.slot(&[field.name.as_str()], &field_ty);
+            // An enum or union field lies in a box of its own, which the
+            // literal puts into its slot as it would a box field.
+            let slot = record.slot(&[field.name.as_str()], &field_ty).or_else(|| {
+                record
+                    .slot(&[field.name.as_str()], &DirectType::Opaque(Type::Unit))
+                    .filter(|slot| matches!(slot.kind, SlotKind::Handle))
+            });
             slots.push((field, field_ty, slot));
         }
         let cell = self.builder.import_data(record.cell);
