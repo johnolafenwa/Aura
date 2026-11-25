@@ -310,6 +310,7 @@ fn recovered_stack_exhaustion_reports_the_frame_the_native_caller_already_entere
         panic!("a call with no stack reserve returned");
     }
 
+    let _guard = super::direct_task_claim_flag_test_guard();
     run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             let result = call_recovered_thunk(exhaust, &[]);
@@ -30766,36 +30767,79 @@ fn direct_array_views_take_one_or_two_components_as_plain_words() {
 fn every_direct_task_start_test_holds_claim_flag_test_guard() {
     let source = include_str!("native_runtime_tests.rs");
     let lines: Vec<&str> = source.lines().collect();
-    let mut unguarded = Vec::new();
+    let needle_start = ["aura_direct_start_task", "_"].concat();
+    let needle_alloc = ["allocate_direct_task_claim", "_flag"].concat();
+    let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
+    let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
+
+    // Collect every top-level `fn <name>` in the test module with whether it is a `#[test]`.
+    let mut funcs: Vec<(bool, usize, String, String)> = Vec::new();
     let mut index = 0;
     while index < lines.len() {
         let trimmed = lines[index].trim();
-        let is_test_attr = trimmed == "#[test]";
-        if is_test_attr {
-            let mut fn_idx = index + 1;
+        let mut is_test = false;
+        let mut fn_idx = index;
+        if trimmed == "#[test]" {
+            is_test = true;
+            fn_idx = index + 1;
             while fn_idx < lines.len() && lines[fn_idx].trim().starts_with("#[") {
                 fn_idx += 1;
             }
-            if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
-                let fn_header = lines[fn_idx];
-                let mut end_idx = fn_idx + 1;
-                while end_idx < lines.len() && lines[end_idx] != "}" {
-                    end_idx += 1;
-                }
-                let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
-                let needle_start = ["aura_direct_start_task", "_"].concat();
-                let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
-                let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
-                if (body.contains(&needle_start) || body.contains(&needle_count))
-                    && !body.contains(&needle_guard)
-                {
-                    unguarded.push(format!("line {}: {}", fn_idx + 1, fn_header));
-                }
-                index = end_idx + 1;
-                continue;
+        }
+        if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
+            let fn_header = lines[fn_idx];
+            let name = fn_header
+                .strip_prefix("fn ")
+                .and_then(|rest| rest.split(|ch: char| ch == '(' || ch == '<' || ch.is_whitespace()).next())
+                .unwrap_or("")
+                .to_string();
+            let mut end_idx = fn_idx + 1;
+            while end_idx < lines.len() && lines[end_idx] != "}" {
+                end_idx += 1;
             }
+            let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
+            funcs.push((is_test, fn_idx + 1, name, body));
+            index = end_idx + 1;
+            continue;
         }
         index += 1;
+    }
+
+    // Compute transitive set of non-test helper functions that start direct tasks
+    // or mutate `DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT` without holding the guard themselves.
+    let mut unguarded_helpers: Vec<String> = Vec::new();
+    let touches_flag = |body: &str, helpers: &[String]| {
+        body.contains(&needle_start)
+            || body.contains(&needle_alloc)
+            || body.contains(&needle_count)
+            || helpers
+                .iter()
+                .any(|helper| body.contains(&format!("{helper}(")))
+    };
+    loop {
+        let mut added = false;
+        for (is_test, _, name, body) in &funcs {
+            if *is_test || name.is_empty() || unguarded_helpers.contains(name) {
+                continue;
+            }
+            if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+                unguarded_helpers.push(name.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    let mut unguarded = Vec::new();
+    for (is_test, line_no, name, body) in &funcs {
+        if !*is_test {
+            continue;
+        }
+        if touches_flag(body, &unguarded_helpers) && !body.contains(&needle_guard) {
+            unguarded.push(format!("line {line_no}: fn {name}"));
+        }
     }
     assert!(
         unguarded.is_empty(),

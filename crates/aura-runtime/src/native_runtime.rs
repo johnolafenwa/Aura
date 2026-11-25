@@ -945,11 +945,28 @@ static DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static DIRECT_TASK_CLAIM_FLAG_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
-fn direct_task_claim_flag_test_guard() -> MutexGuard<'static, ()> {
-    match DIRECT_TASK_CLAIM_FLAG_TEST_LOCK.lock() {
+static DIRECT_TASK_CLAIM_FLAG_GUARD_HELD: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+struct DirectTaskClaimFlagTestGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl Drop for DirectTaskClaimFlagTestGuard {
+    fn drop(&mut self) {
+        DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.store(false, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+fn direct_task_claim_flag_test_guard() -> DirectTaskClaimFlagTestGuard {
+    let lock = match DIRECT_TASK_CLAIM_FLAG_TEST_LOCK.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
-    }
+    };
+    DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.store(true, Ordering::Release);
+    DirectTaskClaimFlagTestGuard { _lock: lock }
 }
 
 fn direct_task_runtime_key() -> u64 {
@@ -21941,7 +21958,13 @@ unsafe fn release_abandoned_direct_task_args(args_address: usize) {
 fn allocate_direct_task_claim_flag() -> usize {
     let address = Box::into_raw(Box::new(AtomicBool::new(false))) as usize;
     #[cfg(test)]
-    DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    {
+        assert!(
+            DIRECT_TASK_CLAIM_FLAG_GUARD_HELD.load(Ordering::Acquire),
+            "unit tests starting direct tasks must hold direct_task_claim_flag_test_guard()"
+        );
+        DIRECT_TASK_CLAIM_FLAG_LIVE_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
     address
 }
 
