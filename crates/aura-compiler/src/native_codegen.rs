@@ -737,6 +737,10 @@ struct NativeCodegen<'a> {
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
     instance_keepers: HashSet<String>,
+    /// The `mut self` methods that keep their receiver's layout, with the
+    /// fields whose lists each may store elements into (see
+    /// `list_snapshots::layout_keepers`).
+    layout_keepers: HashMap<String, HashSet<String>>,
     program_path: String,
     program_source: String,
     /// Whether the object is a debug build, which describes each function
@@ -1073,7 +1077,35 @@ impl<'a> NativeCodegen<'a> {
                     && leaf_body_calling(function, &classes, Some(&total_leaves))
             })
             .map(|function| function.name.clone())
-            .collect();
+            .collect::<HashSet<_>>();
+        let receiver_field = |function: &MirFunction, place: &str| {
+            receiver_class(function, &classes)
+                .into_iter()
+                .flat_map(|class| &class.fields)
+                .find(|field| place.strip_prefix("self.") == Some(field.name.as_str()))
+                .map(|field| field.ty.clone())
+        };
+        let words = |ty: &Type| {
+            matches!(
+                direct_type(ty, &classes),
+                Some(DirectType::Scalar(_) | DirectType::PlainClass(_))
+            )
+        };
+        let layout_keepers = list_snapshots::layout_keepers(
+            &module.functions,
+            |function| {
+                function.receiver == Some(MirReceiverKind::BorrowMut)
+                    && receiver_class(function, &classes).is_some()
+            },
+            |function, place| receiver_field(function, place).is_some_and(|ty| words(&ty)),
+            |function, place| {
+                receiver_field(function, place).is_some_and(|ty| {
+                    matches!(&ty, Type::Named(name, args)
+                        if name == "list" && matches!(args.as_slice(), [element] if words(element)))
+                })
+            },
+            &|callee| instance_keepers.contains(callee),
+        );
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1304,6 +1336,7 @@ impl<'a> NativeCodegen<'a> {
             recursive_functions,
             total_leaves,
             instance_keepers,
+            layout_keepers,
             debug_info: false,
             program_path: program_path.to_string(),
             program_source: program_source.to_string(),
@@ -1761,7 +1794,21 @@ impl<'a> NativeCodegen<'a> {
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
             || calls_total_leaves;
-        let (mut body, entered_in_runtime) = if frameless {
+        // Any other function on no call cycle with no `mut` parameter,
+        // cleanup, or second frame pushes its record where it first calls
+        // out (see `defer_frame`), unless a way that is not cold does.
+        let defers_frame = !frameless
+            && forwarding_frame.is_none()
+            && function.name != "main"
+            && !takes_mutable(function)
+            && !self.recursive_functions.contains(&function.name)
+            && !function.blocks.iter().any(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .any(|instruction| matches!(instruction, Instruction::PushCleanup { .. }))
+            });
+        let (mut body, entered_in_runtime) = if frameless || defers_frame {
             (entry, builder.iconst(types::I64, 0))
         } else {
             emit_frame_push(builder, &runtime_refs, descriptor)
@@ -2053,6 +2100,39 @@ impl<'a> NativeCodegen<'a> {
             builder.seal_block(ready);
             blocks.insert(function.entry.clone(), ready);
         }
+        let deferred_frame = defers_frame.then(|| {
+            let framed = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(framed, types::I64);
+            // Once the body shows a way that is not cold calls out, the
+            // record is pushed here, as for any function.
+            let deferred = builder.iconst(types::I64, 0);
+            let push = builder.create_block();
+            let skip = builder.create_block();
+            let start = builder.create_block();
+            builder.frame_branch(deferred, push, skip);
+            builder.switch_to_block(push);
+            builder.seal_block(push);
+            emit_frame_push(builder, &runtime_refs, descriptor);
+            let one = builder.iconst(types::I64, 1);
+            builder.def_var(framed, one);
+            builder.jump(start, &[]);
+            builder.switch_to_block(skip);
+            builder.seal_block(skip);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(framed, zero);
+            builder.jump(start, &[]);
+            builder.switch_to_block(start);
+            builder.seal_block(start);
+            blocks.insert(function.entry.clone(), start);
+            builder.defer_frame(
+                framed,
+                descriptor,
+                runtime_refs[RuntimeFn::EnterCall],
+                &frame_calls(&runtime_refs),
+            );
+            framed
+        });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
             let receiver_ty = receiver_type(function, &self.classes)?;
             writeback_locals.push(("self".to_string(), receiver_ty));
@@ -2783,6 +2863,7 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: None,
             })
@@ -2837,6 +2918,7 @@ impl<'a> NativeCodegen<'a> {
                     })
                 },
                 keeps_instances: &|callee| self.instance_keepers.contains(callee),
+                keeps_receiver: &|callee| self.layout_keepers.get(callee),
             },
         );
         for region in field_regions {
@@ -2865,6 +2947,7 @@ impl<'a> NativeCodegen<'a> {
                 ir_blocks: Vec::new(),
                 selects: Vec::new(),
                 entries: Vec::new(),
+                scalar_entries: Vec::new(),
                 expected: Vec::new(),
                 field_box: Some(field_box),
             });
@@ -2913,6 +2996,7 @@ impl<'a> NativeCodegen<'a> {
             freestanding: self.freestanding,
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
+            deferred_frame,
             forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
@@ -3013,6 +3097,7 @@ impl<'a> NativeCodegen<'a> {
             callable_retains: HashMap::new(),
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
+            runtime_type_tagged: None,
             shaped_locals,
             reusable_array_temporaries: reusable_array_temporaries(function),
             array_binary_reuse: 0,
@@ -3020,6 +3105,7 @@ impl<'a> NativeCodegen<'a> {
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
             class_check_snapshot: None,
+            layout_checks: Vec::new(),
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
@@ -3078,6 +3164,13 @@ impl<'a> NativeCodegen<'a> {
             .unwrap_or_default();
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
+        if compiler.deferred_frame.is_some()
+            && compiler
+                .builder
+                .calls_when_warm(&frame_calls(&compiler.runtime))
+        {
+            compiler.builder.settle_frame();
+        }
 
         compiler.builder.seal_all_blocks();
         try_or_string_error!(
@@ -4400,6 +4493,9 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The variable that is set once the function has pushed the frame
+    /// record it defers (see `defers_frame`).
+    deferred_frame: Option<Var>,
     /// The source frame of a closure implemented by its forwarded method.
     forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
@@ -4450,6 +4546,9 @@ struct FunctionCompiler<'a> {
     /// of a list in a field of the instance once: the loop, whose copy
     /// runs while the instance keeps its layout.
     class_check_snapshot: Option<usize>,
+    /// The latest layout checks, the latest first: each one's block, the block it takes where
+    /// the box keeps the layout, the box, the access code, and the flag.
+    layout_checks: Vec<(Blk, Blk, Val, i64, Val)>,
     /// The `mut` arguments and receivers the MIR moves into their call,
     /// which take their root's value: see `ownership::moved_writebacks`.
     moved_operands: HashSet<*const Operand>,
@@ -4679,6 +4778,10 @@ struct FunctionCompiler<'a> {
     /// The latest `tag_value_type` call: its instruction, value, and encoded
     /// type, so an identical tag that no other call follows is not repeated.
     last_runtime_type_tag: Option<(Inst, Val, String)>,
+    /// The block a `tag_value_type` check joins in, with the value and the
+    /// encoded type it tagged, so an identical tag in that block that no
+    /// other call precedes is not repeated.
+    runtime_type_tagged: Option<(Blk, Val, String)>,
     /// The locals whose box always carries the tag of their type. See
     /// `shapes::shaped_locals`.
     shaped_locals: HashSet<String>,
@@ -5460,6 +5563,16 @@ impl<'a> FunctionCompiler<'a> {
             HashMap::<String, HashMap<String, Vec<DirectClosureCaptureWriteback>>>::new();
         incoming_writebacks.insert(function.entry.clone(), HashMap::new());
         let mut compiled = HashSet::new();
+        let mut predecessors = HashMap::<&str, Vec<&str>>::new();
+        for block in block_by_label.values() {
+            for successor in direct_terminator_successors(&block.terminator) {
+                predecessors
+                    .entry(successor)
+                    .or_default()
+                    .push(&block.label);
+            }
+        }
+        self.enter_method_snapshot(function)?;
 
         for label in order {
             let block = block_by_label.get(label.as_str()).ok_or_else(|| {
@@ -5481,6 +5594,12 @@ impl<'a> FunctionCompiler<'a> {
                         function.name
                     )
                 })?;
+            // Blocks compile in reverse postorder, so only a loop's way
+            // back reaches a block after it.
+            let mut entered = predecessors.get(label.as_str()).into_iter().flatten();
+            if entered.all(|from| compiled.contains(*from)) {
+                self.builder.note_complete(self.blocks[label.as_str()]);
+            }
             let first_block = self.builder.block_count();
             self.compile_block(block, return_ty)?;
             let own = self.compiled_block_id(&label)?;
@@ -7271,7 +7390,18 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.release_boxed_copy_roots()?;
         self.release_made_str_slots();
-        if self.frameless_descriptor.is_none() {
+        if let Some(framed) = self.deferred_frame {
+            let pushed = self.builder.use_var(framed);
+            let pop = self.builder.create_block();
+            let done = self.builder.create_block();
+            self.builder.frame_branch(pushed, pop, done);
+            self.builder.switch_to_block(pop);
+            self.builder.seal_block(pop);
+            emit_frame_pop(self.builder, &self.runtime);
+            self.builder.jump(done, &[]);
+            self.builder.switch_to_block(done);
+            self.builder.seal_block(done);
+        } else if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
         }
         if self.checked_scalar_body.is_some() {
@@ -13960,6 +14090,12 @@ impl<'a> FunctionCompiler<'a> {
                 return Ok(());
             }
         }
+        if let Some((block, tagged, tagged_type)) = &self.runtime_type_tagged {
+            // Either way through the check below, the box has the tag.
+            if *tagged == raw && *tagged_type == encoded && self.no_call_in(*block) {
+                return Ok(());
+            }
+        }
         let (type_ptr, type_len) = self.string_constant(encoded.as_bytes())?;
         let cell = self.tag_cell(&encoded)?;
         // A box that already took this cell's tag has its shape, so the
@@ -13994,8 +14130,9 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(done);
         self.builder.switch_to_block(done);
         // The call sits in a block of its own, so a later tag of the same
-        // box repeats the cheap check instead.
+        // box in another block repeats the cheap check instead.
         self.last_runtime_type_tag = None;
+        self.runtime_type_tagged = Some((done, raw, encoded));
         Ok(())
     }
 
@@ -14011,19 +14148,29 @@ impl<'a> FunctionCompiler<'a> {
     /// release of `raw` that frees it. A call that only boxes a new value
     /// from its words reaches no other box.
     fn no_call_since(&self, inst: Inst) -> bool {
-        self.builder.only_calls_since(
-            inst,
-            &[
-                self.runtime[RuntimeFn::RetainValue],
-                self.runtime[RuntimeFn::ReleaseValue],
-                self.runtime[RuntimeFn::ReleaseLastOwnedVariant],
-                self.runtime[RuntimeFn::FormatBegin],
-                self.runtime[RuntimeFn::StringLiteral],
-                self.runtime[RuntimeFn::StringLiteralCell],
-                self.runtime[RuntimeFn::BoxI64],
-                self.runtime[RuntimeFn::BoxBool],
-            ],
-        )
+        self.builder
+            .only_calls_since(inst, &self.box_keeping_calls())
+    }
+
+    /// Whether `block` is the current block and no call that could change
+    /// a box is in it (see `no_call_since`).
+    fn no_call_in(&self, block: Blk) -> bool {
+        self.builder.only_calls_in(block, &self.box_keeping_calls())
+    }
+
+    /// The runtime calls that change no box but the one they name (see
+    /// `no_call_since`).
+    fn box_keeping_calls(&self) -> [FuncRef; 8] {
+        [
+            self.runtime[RuntimeFn::RetainValue],
+            self.runtime[RuntimeFn::ReleaseValue],
+            self.runtime[RuntimeFn::ReleaseLastOwnedVariant],
+            self.runtime[RuntimeFn::FormatBegin],
+            self.runtime[RuntimeFn::StringLiteral],
+            self.runtime[RuntimeFn::StringLiteralCell],
+            self.runtime[RuntimeFn::BoxI64],
+            self.runtime[RuntimeFn::BoxBool],
+        ]
     }
 
     fn tag_raw_opaque_runtime_type(
@@ -20646,13 +20793,13 @@ fn sinkless_closure(function: &MirFunction) -> bool {
     function.name.contains("::__lambda_") && takes_mutable(function) && small_leaf(function)
 }
 
-/// The scalar fields of the receiver of a method of a class kept in a
-/// box, by name, or `None` when `function` has no such receiver. A generic
-/// class keeps a symbolic layout, so it has none here.
-fn boxed_receiver_fields<'c>(
+/// The class of the receiver of a method of a class kept in a box, or
+/// `None` when `function` has no such receiver. A generic class keeps a
+/// symbolic layout, so it has none here.
+fn receiver_class<'c>(
     function: &MirFunction,
     classes: &'c HashMap<String, MirClass>,
-) -> Option<HashSet<&'c str>> {
+) -> Option<&'c MirClass> {
     function.receiver?;
     let receiver = function
         .local_types
@@ -20666,6 +20813,17 @@ fn boxed_receiver_fields<'c>(
     if !arguments.is_empty() || !class.type_params.is_empty() {
         return None;
     }
+    Some(class)
+}
+
+/// The scalar fields of the receiver of a method of a class kept in a
+/// box, by name, or `None` when `function` has no such receiver. A generic
+/// class keeps a symbolic layout, so it has none here.
+fn boxed_receiver_fields<'c>(
+    function: &MirFunction,
+    classes: &'c HashMap<String, MirClass>,
+) -> Option<HashSet<&'c str>> {
+    let class = receiver_class(function, classes)?;
     Some(
         class
             .fields
@@ -21536,6 +21694,15 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// Pops the innermost call's frame record: count one entry fewer, unless
 /// the stack's flags ask for the runtime or no call is above its floor.
 /// Then `aura_direct_exit_call` does the whole pop.
+/// The calls that push, find, and pop frame records, which need none.
+fn frame_calls(runtime: &RuntimeTable<FuncRef>) -> [FuncRef; 3] {
+    [
+        runtime[RuntimeFn::FrameStack],
+        runtime[RuntimeFn::EnterCall],
+        runtime[RuntimeFn::ExitCall],
+    ]
+}
+
 fn emit_frame_pop(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) {
     let layout = frame_stack_layout();
     let header = MemFlags::trusted_in(AliasClass::FrameHeader);

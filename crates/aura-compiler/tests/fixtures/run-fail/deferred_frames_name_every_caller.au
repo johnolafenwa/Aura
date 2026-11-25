@@ -1,0 +1,22 @@
+enum Value:
+    Int(int64)
+    Text(str)
+
+def pick(values: list[int64], at: int64) -> int64:
+    return values[at]
+
+def worth(cell: Value, values: list[int64]) -> int64:
+    match cell:
+        case Value.Int(v):
+            return pick(values, v)
+        case Value.Text(_):
+            return 0
+
+def outer(cell: Value) -> int64:
+    values = [1, 2, 3]
+    return worth(cell, values) + 1
+
+def main():
+    print(outer(Value.Int(1)))
+    print(outer(Value.Text("x")))
+    print(outer(Value.Int(7)))

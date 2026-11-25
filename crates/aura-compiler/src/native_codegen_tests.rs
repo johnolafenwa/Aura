@@ -18673,3 +18673,32 @@ def main():
     let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
     assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }
+
+const REPEATED_TAG_SOURCE: &str = r#"
+enum Cell:
+    Int(value: int64)
+    Text(value: str)
+
+def positive(cell: Cell) -> bool:
+    match cell:
+        case Cell.Int(v):
+            return v > 0
+        case Cell.Text(_):
+            return false
+
+def first(row: list[Cell], at: int64) -> bool:
+    return positive(row[at])
+
+def main():
+    print(first([Cell.Int(value=1)], 0))
+"#;
+
+#[test]
+fn a_value_tagged_once_is_not_tagged_again_where_the_check_joins() {
+    let mir = lower_source_to_mir(REPEATED_TAG_SOURCE).expect("the source should lower");
+    let object = emit_unoptimized_object(&mir).expect("the source should compile directly");
+    // A tag of a value where an identical tag's check joins, with no call
+    // between, would change nothing, and is left out: five become three.
+    let tags = object_referenced_symbol_occurrences(&object, "aura_direct_tag_value_type_cell");
+    assert_eq!(tags, 3);
+}

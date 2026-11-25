@@ -1,0 +1,102 @@
+# A loop over a list that runs after another loop over it, with nothing
+# between them that may move or share the list's storage, takes the view
+# words the first loop read instead of reading them again. A list whose
+# view the first loop did not find in its form, or one written or grown
+# between the loops, is read again.
+def sum_then_bump(xs: mut list[float64], n: int64) -> float64:
+    mut total = 0.0
+    for i in range(n):
+        total += xs[i]
+    for i in range(n):
+        xs[i] += total
+    return total
+
+def write_then_read(xs: mut list[int64], ys: mut list[int64]) -> int64:
+    mut total = 0
+    for i in range(3):
+        total += xs[i]
+        ys[i] = total
+    xs[0] = total
+    ys[1] = total
+    for i in range(3):
+        total += xs[i] * 10 + ys[i]
+    return total
+
+def grow_between(xs: mut list[int64]) -> int64:
+    mut total = 0
+    for i in range(len(xs)):
+        total += xs[i]
+    xs.append(total)
+    for i in range(len(xs)):
+        total += xs[i]
+    return total
+
+def maybe_first(xs: mut list[int64], first: bool) -> int64:
+    mut total = 0
+    if first:
+        for i in range(2):
+            total += xs[i]
+    for i in range(2):
+        xs[i] += total
+    return total
+
+def count_then_sum(xs: mut list[int64]) -> int64:
+    mut n = 0
+    while n < len(xs):
+        n += 1
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+        xs[i] = total
+    return total
+
+def pair(xs: mut list[float64], vs: mut list[float64]) -> float64:
+    for i in range(3):
+        vs[i] += xs[i]
+    for i in range(3):
+        xs[i] += vs[i]
+    return xs[0] + vs[0]
+
+def steps(xs: mut list[float64], vs: mut list[float64], rounds: int64):
+    for round in range(rounds):
+        for i in range(3):
+            vs[i] += xs[i] * 0.5
+        for i in range(3):
+            xs[i] += vs[i]
+
+def main():
+    mut xs = [1.0, 2.0, 3.0]
+    print(sum_then_bump(xs, 3))
+    print(xs)
+    # Too short for the loops' guards: the loops read the view themselves.
+    mut short = [1.0, 2.0]
+    print(sum_then_bump(short, 2))
+    print(short)
+    mut a = [1, 2, 3]
+    mut b = [4, 5, 6]
+    print(write_then_read(a, b))
+    print(a)
+    print(b)
+    mut c = [1, 2]
+    print(grow_between(c))
+    print(c)
+    mut d = [3, 4]
+    print(maybe_first(d, true))
+    print(maybe_first(d, false))
+    print(d)
+    mut e = [5, 6, 7]
+    print(count_then_sum(e))
+    print(e)
+    mut p = [1.0, 0.0, -1.0]
+    mut v = [0.0, 0.5, 1.0]
+    steps(p, v, 4)
+    print(pair(p, v))
+    print(p)
+    print(v)
+    # Lists that share their storage with another list are copied by the
+    # first write.
+    mut rows = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    mut row = rows[0].copy()
+    print(sum_then_bump(row, 3))
+    print(row)
+    print(rows)

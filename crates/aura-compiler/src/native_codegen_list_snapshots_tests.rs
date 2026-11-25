@@ -68,9 +68,42 @@ def scalars(xs: list[int64], ys: mut list[float64], n: int64) -> int64:
         i += 1
     return total
 
+def carried(xs: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+    for i in range(n):
+        xs[i] += total
+    return total
+
+def appended(xs: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+    xs.append(total)
+    for i in range(n):
+        total += xs[i]
+    return total
+
+def stored(xs: mut list[int64], ys: mut list[int64], n: int64) -> int64:
+    mut total = 0
+    for i in range(n):
+        total += xs[i]
+        ys[i] = total
+    xs[0] = total
+    ys[0] = total
+    for i in range(n):
+        total += xs[i] + ys[i]
+    return total
+
 def main():
     mut ps = [Point(x=1.0, y=2.0)]
     mut ys = [0.5, 0.25, 0.125]
+    mut zs = [1, 2, 3]
+    mut ws = [4, 5, 6]
+    print(carried(zs, 3))
+    print(appended(zs, 3))
+    print(stored(zs, ws, 3))
     print(scalars([1, 2, 3], ys, 2))
     print(reads(ps))
     print(loans(3))
@@ -167,10 +200,67 @@ fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
 }
 
 #[test]
+fn a_loop_after_another_on_the_list_takes_the_words_it_read() {
+    let found = regions("carried");
+    assert_eq!(found.len(), 2, "{found:?}");
+    let [first, second] = [0, 1].map(|later| {
+        let earlier = &found[1 - later];
+        found[later].carry.as_ref() == Some(&earlier.blocks)
+    });
+    // Only the loop entered second takes the other's words: the first is
+    // entered before the other reads them.
+    assert!(first != second, "{found:?}");
+    // A write the earlier loop did not check room for may share the
+    // storage, and an append moves it.
+    let carries = |name: &str, list: &str| {
+        regions(name)
+            .iter()
+            .filter(|region| region.list == list)
+            .any(|region| region.carry.is_some())
+    };
+    assert!(!carries("appended", "xs"));
+    assert!(!carries("stored", "xs"));
+    assert!(carries("stored", "ys"));
+}
+
+#[test]
 fn loops_that_read_views_once_compile_with_their_copies() {
     let module = lower_source_to_mir(SOURCE).expect("the source should lower");
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
         .expect("the loops should compile");
+}
+
+#[test]
+fn loops_inside_and_across_each_other_compile_with_their_copies() {
+    // Copies of loops inside other loops' copies, of loops that share all
+    // but one block, and of a loop over a list of scalars and a list of
+    // records, first for the scalars alone.
+    let source =
+        include_str!("../tests/fixtures/run-pass/nested_and_overlapping_loops_read_views_once.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+#[test]
+fn loops_after_other_loops_compile_taking_their_words() {
+    // Loops that take the words of loops before them, over lists of
+    // scalars and an Array, which reads its layout itself.
+    let source =
+        include_str!("../tests/fixtures/run-pass/sibling_loops_take_the_view_words_once.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+    let twice = array_function("twice");
+    let found = list_snapshot_regions(&twice, |_| true);
+    assert!(
+        found.iter().any(|region| region.carry.is_some()),
+        "{found:?}"
+    );
+    let module = lower_source_to_mir(ARRAY_SOURCE).expect("the source should lower");
+    super::super::emit_host_object(&module).expect("the Array loops should compile");
 }
 
 const ARRAY_SOURCE: &str = r#"
@@ -204,9 +294,18 @@ def summed(values: Array[int64], n: int64) -> int64:
         sum += values[i] + values.sum()
     return sum
 
+def twice(values: Array[int64], n: int64) -> int64:
+    mut sum = 0
+    for i in range(n):
+        sum += values[i]
+    for i in range(n):
+        sum += values[i] * 2
+    return sum
+
 def main():
     mut grid = Array[float64].zeros([4, 4])
     smooth(grid.clone(), grid, 4)
+    print(twice(Array[int64].zeros([2]), 2))
     print(grid)
     print(total(Array[int32].zeros([3]), 3))
     print(mixed(Array[float32].zeros([2, 2, 2]), 2))
@@ -293,6 +392,7 @@ class Shelf:
     balls: list[Ball]
     seen: int64
     best: int64
+    open: bool
 
     def heavy(self, weight: float64) -> bool:
         return weight > 1.0 and self.best >= 0
@@ -342,6 +442,14 @@ class Shelf:
         self.balls[0].size += sum
         return sum
 
+    def untouched(mut self, n: int64) -> int64:
+        return n + 1
+
+    def flagged(mut self) -> int64:
+        if self.open:
+            return 1
+        return 0
+
     def peeks(self, n: int64) -> int64:
         mut sum = 0
         for i in range(n):
@@ -349,13 +457,13 @@ class Shelf:
         return sum
 
 def owner(n: int64) -> int64:
-    mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0)
+    mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0, open=true)
     mut sum = 0
     for round in range(n):
         for i in range(s.weights.len()):
             sum += s.weights[i] * round
         s.seen += 1
-    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1)
+    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1) + s.untouched(1) + s.flagged()
 
 def main():
     print(owner(2))
@@ -365,6 +473,21 @@ def main():
 /// when `keeps` says whether a callee keeps an instance and `exclusive`
 /// whether the function holds an instance alone.
 fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRegion> {
+    all_field_regions(name, keeps, exclusive)
+        .into_iter()
+        .filter(|region| !region.method)
+        .collect()
+}
+
+/// The whole body of method `name` in `FIELD_SOURCE` when it keeps its
+/// receiver (see `field_regions`).
+fn method_region(name: &str, keeps: bool, exclusive: bool) -> Option<ListSnapshotRegion> {
+    all_field_regions(name, keeps, exclusive)
+        .into_iter()
+        .find(|region| region.method)
+}
+
+fn all_field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRegion> {
     let function = lower_source_to_mir(FIELD_SOURCE)
         .expect("the source should lower")
         .functions
@@ -378,8 +501,11 @@ fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRe
         &super::FieldListRules {
             lend_temps: &lend_temps,
             candidate: &|_, _| true,
-            scalar_field: &|place| place.ends_with(".seen") || place.ends_with(".best"),
+            scalar_field: &|place| {
+                place.ends_with(".seen") || place.ends_with(".best") || place.ends_with(".open")
+            },
             keeps_instances: &|_| keeps,
+            keeps_receiver: &|_| None,
         },
     )
 }
@@ -421,6 +547,166 @@ fn a_loop_that_may_change_the_field_or_its_list_keeps_reading_them() {
     assert_eq!(field_regions("Shelf.calls", false, true), Vec::new());
     // A loan of an element of the list anywhere in the function.
     assert_eq!(field_regions("Shelf.resizes", true, true), Vec::new());
+}
+
+#[test]
+fn a_method_that_keeps_its_receiver_in_its_layout_is_one_region() {
+    // Scalar fields, lends of field boxes, and calls of functions that
+    // only read scalar fields keep the receiver in its layout.
+    let total = method_region("Shelf.total", false, true).expect("`total` keeps `self`");
+    assert_eq!(total.list, "self");
+    assert!(total.entries.is_empty() && total.temps.is_empty() && !total.writes);
+    let function = lower_source_to_mir(FIELD_SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == "Shelf.total")
+        .expect("the function should exist");
+    assert_eq!(total.blocks.len(), function.blocks.len());
+    assert!(method_region("Shelf.count_heavy", true, true).is_some());
+    // A receiver something else may reach, a call that may change it, a
+    // store of another list in a field, and a function with no receiver.
+    assert_eq!(method_region("Shelf.total", false, false), None);
+    assert_eq!(method_region("Shelf.calls", false, true), None);
+    assert_eq!(method_region("Shelf.swaps", true, true), None);
+    assert_eq!(method_region("owner", true, true), None);
+    // A method that never names its receiver has nothing to keep.
+    assert_eq!(method_region("Shelf.untouched", true, true), None);
+    // A branch on a scalar field keeps it too.
+    assert!(method_region("Shelf.flagged", true, true).is_some());
+}
+
+const KEEPER_SOURCE: &str =
+    include_str!("../tests/fixtures/run-pass/loops_that_call_methods_keeping_their_receiver.au");
+
+/// The methods of `KEEPER_SOURCE` that keep their receiver's layout, with
+/// the fields whose lists each may store into, and the regions of
+/// `name` given them.
+fn keeper_regions(
+    name: &str,
+) -> (
+    std::collections::HashMap<String, std::collections::HashSet<String>>,
+    Vec<ListSnapshotRegion>,
+) {
+    let functions = lower_source_to_mir(KEEPER_SOURCE)
+        .expect("the source should lower")
+        .functions;
+    let scalar = |place: &str| place == "self.total";
+    // `label` holds a `str`, which is not a list.
+    let list = |place: &str| ["self.counts", "self.marks"].contains(&place);
+    let keepers = super::layout_keepers(
+        &functions,
+        |function| function.name.starts_with("Tally."),
+        |_, place| scalar(place),
+        |_, place| list(place),
+        &|_| false,
+    );
+    let function = functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist");
+    let lend_temps = super::super::classes::field_lend_temps(function, |_| false);
+    let regions = super::field_list_snapshot_regions(
+        function,
+        |_| true,
+        &super::FieldListRules {
+            lend_temps: &lend_temps,
+            candidate: &|_, _| true,
+            scalar_field: &scalar,
+            keeps_instances: &|_| false,
+            keeps_receiver: &|callee| keepers.get(callee),
+        },
+    )
+    .into_iter()
+    .filter(|region| !region.method)
+    .collect();
+    (keepers, regions)
+}
+
+#[test]
+fn a_loop_may_call_methods_that_keep_their_receiver() {
+    let (keepers, scan) = keeper_regions("Tally.scan");
+    // A store into a list, a scalar field, and a call of another keeper.
+    let stores = |name: &str| {
+        keepers
+            .get(name)
+            .map(|fields| fields.iter().cloned().collect::<Vec<_>>())
+    };
+    assert_eq!(stores("Tally.bump"), Some(vec!["counts".to_string()]));
+    assert_eq!(stores("Tally.note"), Some(vec!["counts".to_string()]));
+    // An append, another list in a field, `self` handed to a function
+    // that writes it back, and a call of a method that appends.
+    // A field that holds something other than a list keeps its own view.
+    for name in [
+        "Tally.grow",
+        "Tally.swap",
+        "Tally.hand",
+        "Tally.deep",
+        "Tally.labelled",
+    ] {
+        assert!(!keepers.contains_key(name), "{name}: {keepers:?}");
+    }
+    // The loop reads `marks` once, which its calls store nothing into.
+    let [region] = scan.as_slice() else {
+        panic!("one loop reads `self.marks`: {scan:?}");
+    };
+    assert_eq!(region.list, "self.marks");
+    assert!(!region.writes);
+    // A loop whose calls store into its list checks it holds its
+    // storage alone, as one that stores into it itself does.
+    for name in ["Tally.scan_counts", "Tally.doubles"] {
+        let (_, found) = keeper_regions(name);
+        assert!(found.len() == 1 && found[0].writes, "{name}: {found:?}");
+    }
+    // A loop that calls one of the others reads the view again after the
+    // call: no copy holds the block that makes it.
+    let functions = lower_source_to_mir(KEEPER_SOURCE)
+        .expect("the source should lower")
+        .functions;
+    for (name, callee) in [
+        ("Tally.scan_grow", "grow"),
+        ("Tally.scan_swap", "swap"),
+        ("Tally.scan_hand", "hand"),
+        ("Tally.scan_deep", "deep"),
+    ] {
+        let function = functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist");
+        let calling = function
+            .blocks
+            .iter()
+            .find(|block| {
+                format!("{:?}", block.instructions).contains(&format!("field: \"{callee}\""))
+            })
+            .expect("a block calls the method");
+        let (_, found) = keeper_regions(name);
+        assert!(
+            found
+                .iter()
+                .all(|region| !region.blocks.contains(&calling.label)),
+            "{name}: {found:?}"
+        );
+    }
+}
+
+#[test]
+fn loops_that_call_methods_keeping_their_receiver_compile_with_their_copies() {
+    let module = lower_source_to_mir(KEEPER_SOURCE).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+#[test]
+fn methods_that_keep_their_receiver_compile_with_their_copies() {
+    // A method's copy, one through a field and a list element, and a
+    // class that keeps its fields in a map, which has no copy.
+    let source = include_str!("../tests/fixtures/run-pass/methods_that_keep_their_receiver.au");
+    let module = lower_source_to_mir(source).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the methods should compile");
+    super::super::emit_host_object(&module).expect("the methods should compile optimized");
 }
 
 #[test]

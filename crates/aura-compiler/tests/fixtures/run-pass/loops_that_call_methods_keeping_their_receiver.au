@@ -1,0 +1,145 @@
+# A loop over a list in a field of `self` may call methods that keep the
+# receiver in its layout: they read and write scalar fields, read field
+# lists, store elements into them, and call other such methods. The loop
+# reads the list's view once. A method that appends to a field list,
+# stores another list in a field, hands `self` to a function that writes
+# it back, or calls a method that does any of these, keeps the loop
+# reading the view each time.
+import control
+
+class Tally:
+    counts: list[int64]
+    marks: list[int64]
+    total: int64
+    label: str
+
+    def bump(mut self, at: int64):
+        self.counts[at] += 1
+        self.total += 1
+
+    def note(mut self, at: int64) -> int64:
+        self.bump(at)
+        return self.marks[at]
+
+    def labelled(mut self) -> int64:
+        self.total += 1
+        return self.label.byte_len()
+
+    def grow(mut self, v: int64):
+        self.marks.append(v)
+
+    def swap(mut self):
+        self.marks = [7, 8, 9, 10]
+
+    def hand(mut self):
+        reset(self)
+
+    def deep(mut self, v: int64):
+        self.grow(v)
+
+    def scan(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            sum += self.note(i) + self.marks[i]
+        return sum
+
+    def scan_counts(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.counts.len()):
+            self.bump(i)
+            sum += self.counts[i]
+        return sum
+
+    def doubles(mut self) -> int64:
+        for i in range(self.counts.len()):
+            self.counts[i] *= 2
+        return self.counts[0]
+
+    def scan_grow(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            if i == 0:
+                self.grow(i)
+            sum += self.marks[i]
+        return sum
+
+    def scan_swap(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            if i == 1:
+                self.swap()
+            sum += self.marks[i]
+        return sum
+
+    def scan_hand(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            self.hand()
+            sum += self.marks[i] + self.total
+        return sum
+
+    def scan_label(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            sum += self.marks[i] + self.labelled()
+        return sum
+
+    def scan_deep(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            if i == 2:
+                self.deep(i)
+            sum += self.marks[i]
+        return sum
+
+    def overflow(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.marks.len()):
+            self.bump(i)
+            sum += self.marks[i]
+        return sum
+
+def reset(t: mut Tally):
+    t.total = 0
+
+def tally() -> Tally:
+    return Tally(counts=[1, 2, 3], marks=[10, 20, 30], total=0, label="t")
+
+def overflowed(at: int64) -> int64:
+    mut t = Tally(counts=[9223372036854775807, 0], marks=[1, 2], total=0, label="t")
+    return t.overflow() + at
+
+def main():
+    mut t = tally()
+    print(t.scan())
+    print(t.counts)
+    print(t.total)
+    print(t.scan_counts())
+    print(t.doubles())
+    print(t.counts)
+    mut g = tally()
+    print(g.scan_grow())
+    print(g.marks)
+    mut s = tally()
+    print(s.scan_swap())
+    print(s.marks)
+    mut h = tally()
+    print(h.scan_hand())
+    mut l = tally()
+    print(l.scan_label())
+    mut d = tally()
+    print(d.scan_deep())
+    print(d.marks)
+    # A list whose storage another list shares is copied by the first store.
+    mut shared = [4, 5, 6]
+    mut c = Tally(counts=shared.copy(), marks=[1, 1, 1], total=0, label="t")
+    print(c.scan_counts())
+    print(c.doubles())
+    print(c.counts)
+    print(shared)
+    # An overflow in a called method stops the loop with its message.
+    match control.recover(overflowed, 1):
+        case Ok(v):
+            print(v)
+        case Err(trap):
+            print(trap.message)
