@@ -21219,9 +21219,11 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
 /// function without `mut` parameters does (see `defers_frame`). A direct
 /// call that hands no sink over enters it, and so do the calls that body
 /// makes with its own `mut` parameters. A function with a cleanup action
-/// keeps one body, since its record holds the action from entry.
+/// keeps one body, since its record holds the action from entry. A closure
+/// body keeps its own sink-free entry (see `sinkless_closure`).
 fn mutable_twin(function: &MirFunction) -> bool {
     takes_mutable(function)
+        && !function.name.contains("::__lambda_")
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && function.name != "main"
         && !function.blocks.iter().any(|block| {
