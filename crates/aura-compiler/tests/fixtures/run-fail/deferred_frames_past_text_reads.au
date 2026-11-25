@@ -1,0 +1,23 @@
+# A function whose warm ways read a `str` payload's words and compare
+# bytes still defers its frame record, and pushes it before a call that
+# fails, so the failure names it.
+enum Cell:
+    Int(value: int64)
+    Text(value: str)
+
+def lookup(cells: list[int64], i: int64) -> int64:
+    return cells[i]
+
+def check(cell: Cell, cells: list[int64]) -> int64:
+    match cell:
+        case Cell.Int(value):
+            return value
+        case Cell.Text(value):
+            if value == "far":
+                return lookup(cells, 9)
+            return 0
+
+def main():
+    cells = [1, 2, 3]
+    print(check(Cell.Int(value=3), cells) + check(Cell.Text(value="near"), cells))
+    print(check(Cell.Text(value="far"), cells))

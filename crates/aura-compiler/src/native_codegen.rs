@@ -736,6 +736,10 @@ struct NativeCodegen<'a> {
     /// before its first call instead of on entry. `None` when the program
     /// has no such function.
     cycle_frame_entry: Option<FuncHandle>,
+    /// The module's push of a deferred frame record of a function on no
+    /// call cycle (see `define_frame_entry`). `None` in a freestanding
+    /// build, which keeps no records.
+    frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
     /// The functions that only read scalar fields of an instance they are
@@ -1056,6 +1060,20 @@ impl<'a> NativeCodegen<'a> {
         if let Some(entry) = cycle_frame_entry {
             object.mark_inline(entry);
         }
+        let frame_entry = match freestanding {
+            Some(_) => None,
+            None => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_deferred_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the deferred frame entry: {}"
+            )),
+        };
+        if let Some(entry) = frame_entry {
+            object.mark_inline(entry);
+        }
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -1158,14 +1176,17 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
-            let mutable_leaf = leaf_variant(function, &classes) || mutable_twin(function);
+            let mutable_leaf = leaf_variant(function, &classes);
             if freestanding.is_some() {
                 // Every body is frameless, and nothing enters a function
                 // through a thunk.
                 if small_leaf(function) {
                     object.mark_inline(func_id);
                 }
-            } else if mutable_leaf || sinkless_closure(function) {
+            } else if mutable_leaf
+                || sinkless_closure(function)
+                || deferring_variant(function, &classes)
+            {
                 let symbol = if mutable_leaf {
                     mangle_leaf_symbol(&function.name)
                 } else {
@@ -1356,6 +1377,7 @@ impl<'a> NativeCodegen<'a> {
             safepoints_enabled,
             recursive_functions,
             cycle_frame_entry,
+            frame_entry,
             total_leaves,
             instance_keepers,
             layout_keepers,
@@ -1453,6 +1475,7 @@ impl<'a> NativeCodegen<'a> {
         }
         self.define_ownership_fast_paths()?;
         self.define_cycle_frame_entry()?;
+        self.define_frame_entry()?;
         self.define_main_wrapper()
     }
 
@@ -1484,6 +1507,33 @@ impl<'a> NativeCodegen<'a> {
                     emit_call_safepoint(builder, &runtime_refs);
                 }
                 emit_stack_check(builder, &runtime_refs);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
+    /// Defines the push of a deferred frame record of a function on no
+    /// call cycle, which it runs where a way first calls out (see
+    /// `defers_frame`): the record goes on the frame stack in place, or
+    /// through the runtime while the stack's flags ask for it, as an entry
+    /// push does. It is inlined into its caller.
+    fn define_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.frame_entry else {
+            return Ok(());
+        };
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the deferred frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
                 builder.return_(&[]);
                 Ok(())
             },
@@ -1864,7 +1914,7 @@ impl<'a> NativeCodegen<'a> {
         let defers_frame = !frameless
             && forwarding_frame.is_none()
             && function.name != "main"
-            && (!takes_mutable(function) || without_sinks)
+            && (without_sinks || !takes_mutable(function))
             && !function.blocks.iter().any(|block| {
                 block
                     .instructions
@@ -2195,8 +2245,9 @@ impl<'a> NativeCodegen<'a> {
             builder.switch_to_block(start);
             builder.seal_block(start);
             blocks.insert(function.entry.clone(), start);
-            let enter = match self.cycle_frame_entry {
-                Some(entry) if on_cycle => builder.import_function(entry),
+            let enter = match (self.cycle_frame_entry, self.frame_entry) {
+                (Some(entry), _) if on_cycle => builder.import_function(entry),
+                (_, Some(entry)) => builder.import_function(entry),
                 _ => runtime_refs[RuntimeFn::EnterCall],
             };
             builder.defer_frame(framed, descriptor, enter, &frame_calls(&runtime_refs));
@@ -3255,8 +3306,10 @@ impl<'a> NativeCodegen<'a> {
         // could not read in place. It pushes the record on entry when a
         // warm way calls the runtime for anything else, which pays for the
         // record on that way anyway.
+        // A function on no call cycle does the same: its deferred push is
+        // as cheap as one on entry (see `define_frame_entry`).
         let frame_free = frame_calls(&compiler.runtime);
-        let warm_calls = if on_cycle {
+        let warm_calls = {
             let mut runtime = Vec::new();
             compiler.runtime.map(|callee| runtime.push(*callee));
             let fallbacks = layout_fallbacks(&compiler.runtime);
@@ -3265,8 +3318,6 @@ impl<'a> NativeCodegen<'a> {
                     && !frame_free.contains(&callee)
                     && !fallbacks.contains(&callee)
             })
-        } else {
-            compiler.builder.calls_when_warm(&frame_free)
         };
         if compiler.deferred_frame.is_some() && warm_calls {
             compiler.builder.settle_frame();
@@ -15254,6 +15305,10 @@ impl<'a> FunctionCompiler<'a> {
         let fast_block = self.builder.create_block();
         let room_block = self.builder.create_block();
         let join_block = self.builder.create_block();
+        // Growing the storage is rare once a list has room, so the call is
+        // cold, and a function that only calls out there pushes its frame
+        // record there (see `defers_frame`).
+        self.builder.set_cold_block(slow_block);
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
@@ -21213,19 +21268,18 @@ fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> 
         && leaf_body(function, classes)
 }
 
-/// Whether `function`, which has a `mut self` receiver or a `mut`
-/// parameter and is no leaf, gets a second body that reads no write-through
-/// sink and pushes its frame record only where it first calls out, as a
-/// function without `mut` parameters does (see `defers_frame`). A direct
-/// call that hands no sink over enters it, and so do the calls that body
-/// makes with its own `mut` parameters. A function with a cleanup action
-/// keeps one body, since its record holds the action from entry. A closure
-/// body keeps its own sink-free entry (see `sinkless_closure`).
-fn mutable_twin(function: &MirFunction) -> bool {
+/// Whether `function` gets a second body that reads no write-through sink
+/// although it is no leaf (see `leaf_variant`): it has a `mut self`
+/// receiver or `mut` parameters, so its own body keeps its frame record on
+/// entry to learn whether the runtime entered it with sinks. A direct call
+/// that hands no sink over enters the second body, which pushes its record
+/// only where it first calls out, as a function with no `mut` parameter
+/// does (see `defers_frame`). A body with cleanup keeps its record.
+fn deferring_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     takes_mutable(function)
-        && !function.name.contains("::__lambda_")
         && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
         && function.name != "main"
+        && !leaf_body(function, classes)
         && !function.blocks.iter().any(|block| {
             block
                 .instructions
@@ -22209,7 +22263,9 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// Then `aura_direct_exit_call` does the whole pop.
 /// The calls that push, find, and pop frame records, which need none.
 /// The runtime's reads of a variant or list box that generated code reads
-/// in place when the box is in its layout, and its releases.
+/// in place when the box is in its layout, a list element's loan or path
+/// in a list of another form, the words of a `str` box, a byte compare,
+/// and its releases.
 fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
     [
         RuntimeFn::VariantMatches,
@@ -22221,6 +22277,11 @@ fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
         RuntimeFn::VecLen,
         RuntimeFn::VecIndex,
         RuntimeFn::VecIndexScalar,
+        RuntimeFn::VecLend,
+        RuntimeFn::ElementPathLoad,
+        RuntimeFn::ElementPathPromote,
+        RuntimeFn::StringWords,
+        RuntimeFn::BytesEqual,
         RuntimeFn::TagValueType,
         RuntimeFn::ReleaseValue,
         RuntimeFn::ReleaseLastOwnedValue,

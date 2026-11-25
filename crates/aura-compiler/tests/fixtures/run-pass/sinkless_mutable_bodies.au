@@ -1,0 +1,71 @@
+# A function with `mut` parameters that is no leaf gets a second body for
+# direct calls that hand no write-through sink over. That body pushes its
+# frame record only where it first calls out, here where an append grows
+# the list. Calls through a `mut` parameter, recursion, and a body with
+# cleanup reach the framed body or keep their record.
+class Marks:
+    seen: list[int64]
+    generation: int64
+
+    def visit(mut self, states: mut list[int64], start: int64, limit: int64):
+        mut s = start
+        while s < limit and self.seen[s] != self.generation:
+            self.seen[s] = self.generation
+            states.append(s)
+            s += 1
+
+    def sweep(mut self, limit: int64) -> int64:
+        self.generation += 1
+        mut current: list[int64] = []
+        self.visit(current, 0, limit)
+        mut total = 0
+        for s in current:
+            total += s
+        return total
+
+
+def fill(out: mut list[int64], count: int64):
+    for i in range(count):
+        out.append(i * i)
+
+
+def forward(out: mut list[int64], count: int64):
+    fill(out, count)
+
+
+def countdown(out: mut list[int64], n: int64):
+    if n == 0:
+        return
+    out.append(n)
+    countdown(out, n - 1)
+
+
+class Note:
+    text: str
+
+    def __enter__(mut self):
+        print(f"enter {self.text}")
+
+    def __exit__(mut self):
+        print(f"exit {self.text}")
+
+
+def guarded(out: mut list[int64], value: int64):
+    with note = Note(text="guard"):
+        out.append(value)
+
+
+def main():
+    mut marks = Marks(seen=[0, 0, 0, 0, 0, 0, 0, 0], generation=0)
+    print(marks.sweep(8))
+    print(marks.sweep(5))
+    mut squares: list[int64] = []
+    fill(squares, 40)
+    print(f"{squares.len()} {squares[39]}")
+    forward(squares, 3)
+    print(f"{squares.len()} {squares[41]}")
+    mut down: list[int64] = []
+    countdown(down, 20)
+    print(f"{down.len()} {down[0]} {down[19]}")
+    guarded(down, 99)
+    print(down[20])

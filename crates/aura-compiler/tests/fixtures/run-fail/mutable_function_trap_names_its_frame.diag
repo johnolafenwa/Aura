@@ -1,6 +1,0 @@
-error[AU4003]: list index `7` is out of bounds for length `2`
- --> crates/aura-compiler/tests/fixtures/run-fail/mutable_function_trap_names_its_frame.au:2:5
-  |
-2 |     values[at] += 1
-  |     ^
-  = note: Aura call chain (innermost first): bump at 1:1 -> main at 5:1

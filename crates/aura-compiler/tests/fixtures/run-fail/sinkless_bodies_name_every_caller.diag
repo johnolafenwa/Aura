@@ -1,0 +1,6 @@
+error[AU4003]: list index `4` is out of bounds for length `4`
+ --> crates/aura-compiler/tests/fixtures/run-fail/sinkless_bodies_name_every_caller.au:7:39
+  |
+7 |         while s < limit and self.seen[s] != self.generation:
+  |                                       ^
+  = note: Aura call chain (innermost first): Marks.visit at 5:5 -> Marks.sweep at 12:5 -> main at 18:1

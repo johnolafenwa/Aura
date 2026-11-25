@@ -18324,20 +18324,6 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
         assert!(!super::leaf_variant(function(name), &classes), "{name}");
         assert!(!super::frameless_leaf(function(name), &classes), "{name}");
     }
-    // A function with a `mut` receiver or parameter that is no leaf gets a
-    // second body too, which defers its frame record; `main` keeps one.
-    for name in [
-        "Counter.rename",
-        "Counter.reset",
-        "Counter.bump_twice",
-        "Pair.bump",
-        "forward",
-    ] {
-        assert!(super::mutable_twin(function(name)), "{name}");
-    }
-    for name in ["Tally.scaled", "Counter.label", "main"] {
-        assert!(!super::mutable_twin(function(name)), "{name}");
-    }
     assert_eq!(
         super::boxed_receiver_fields(function("Counter.bump"), &classes),
         Some(["count"].into_iter().collect())
@@ -18359,20 +18345,110 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     let object = crate::native_backend::without_optimization(|| emit_host_object(&mir))
         .expect("the leaf methods should emit");
     let defined = object_defined_aura_functions(&object);
+    for name in ["aura_fn_Tally_bump__leaf", "aura_fn_Counter_bump__leaf"] {
+        assert!(defined.contains(name), "{name}: {defined:?}");
+    }
     for name in [
-        "aura_fn_Tally_bump__leaf",
-        "aura_fn_Counter_bump__leaf",
+        "aura_fn_Tally_scaled__leaf",
         "aura_fn_Counter_rename__leaf",
         "aura_fn_Counter_reset__leaf",
         "aura_fn_Pair_bump__leaf",
-        "aura_fn_forward__leaf",
     ] {
-        assert!(defined.contains(name), "{name}: {defined:?}");
-    }
-    for name in ["aura_fn_Tally_scaled__leaf", "aura_fn_Counter_label__leaf"] {
         assert!(!defined.contains(name), "{name}: {defined:?}");
     }
     emit_host_object(&mir).expect("the leaf methods should emit optimized");
+}
+
+#[test]
+fn a_mutable_function_that_calls_out_gets_a_sink_free_body() {
+    let source = include_str!("../tests/fixtures/run-pass/sinkless_mutable_bodies.au");
+    let mir = lower_source_to_mir(source).expect("the mutable functions should lower");
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    for name in ["Marks.visit", "Marks.sweep", "fill", "forward", "countdown"] {
+        assert!(super::deferring_variant(function(name), &classes), "{name}");
+        assert!(!super::leaf_variant(function(name), &classes), "{name}");
+    }
+    // A body with cleanup keeps its record, and `main` takes nothing `mut`.
+    for name in ["guarded", "main"] {
+        assert!(
+            !super::deferring_variant(function(name), &classes),
+            "{name}"
+        );
+    }
+
+    let object = emit_unoptimized_object(&mir).expect("the mutable functions should emit");
+    let defined = object_defined_aura_functions(&object);
+    for name in [
+        "aura_fn_Marks_visit__nosinks",
+        "aura_fn_Marks_sweep__nosinks",
+        "aura_fn_fill__nosinks",
+        "aura_fn_forward__nosinks",
+        "aura_fn_countdown__nosinks",
+    ] {
+        assert!(defined.contains(name), "{name}: {defined:?}");
+    }
+    assert!(!defined.contains("aura_fn_guarded__nosinks"), "{defined:?}");
+    // A call whose `mut` arguments no sink follows enters the second body.
+    let sweep = object_function_referenced_symbols(&object, "aura_fn_Marks_sweep__nosinks");
+    assert!(
+        sweep
+            .iter()
+            .any(|name| name.ends_with("aura_fn_Marks_visit__nosinks")),
+        "{sweep:?}"
+    );
+    let main = object_function_referenced_symbols(&object, "aura_fn_main");
+    assert!(
+        main.iter()
+            .any(|name| name.ends_with("aura_fn_fill__nosinks")),
+        "{main:?}"
+    );
+    // A `mut` parameter may carry its caller's sink, so the framed body
+    // passes it on to the framed callee; its second body does not.
+    let framed = object_function_referenced_symbols(&object, "aura_fn_forward");
+    assert!(
+        framed.iter().any(|name| name.ends_with("aura_fn_fill")),
+        "{framed:?}"
+    );
+    let sinkless = object_function_referenced_symbols(&object, "aura_fn_forward__nosinks");
+    assert!(
+        sinkless
+            .iter()
+            .any(|name| name.ends_with("aura_fn_fill__nosinks")),
+        "{sinkless:?}"
+    );
+    emit_host_object(&mir).expect("the mutable functions should emit optimized");
+}
+
+#[test]
+fn a_function_on_no_cycle_pushes_its_record_where_it_calls_out() {
+    let source = include_str!("../tests/fixtures/run-fail/deferred_frames_name_every_caller.au");
+    let mir = lower_source_to_mir(source).expect("the deferred frames should lower");
+    let object = emit_unoptimized_object(&mir).expect("the deferred frames should emit");
+    // `pick` calls `lookup` on one way only, so it pushes its record there,
+    // in place, through the module's deferred frame entry.
+    let pick = object_function_referenced_symbols(&object, "aura_fn_pick");
+    assert!(
+        pick.iter()
+            .any(|name| name.ends_with("aura_enter_deferred_frame")),
+        "{pick:?}"
+    );
+    assert!(
+        !pick
+            .iter()
+            .any(|name| name.ends_with("aura_direct_enter_frame")),
+        "{pick:?}"
+    );
+    emit_host_object(&mir).expect("the deferred frames should emit optimized");
 }
 
 const FRAMELESS_CALLER_SOURCE: &str = r#"
