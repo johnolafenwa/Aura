@@ -734,7 +734,10 @@ pub(super) fn indexed_bytes(function: &MirFunction) -> HashSet<String> {
             }
             let mut mentions = Vec::new();
             instruction_place_mentions(read, &mut mentions);
-            let reads = mentions.iter().filter(|place| **place == target.as_str()).count();
+            let reads = mentions
+                .iter()
+                .filter(|place| **place == target.as_str())
+                .count();
             // The read's mentions and the release's.
             indexed.insert(target.as_str(), reads + 1);
         }
@@ -2159,7 +2162,7 @@ impl FunctionCompiler<'_> {
                     released: None,
                 }
             }
-                        Operand::Place(place) if self.owns_counted_str(place) => {
+            Operand::Place(place) if self.owns_counted_str(place) => {
                 let held = self.load_root(place)?.values[0];
                 let (ptr, len) = self.str_box_words(held);
                 ViewArgument {
@@ -2169,7 +2172,8 @@ impl FunctionCompiler<'_> {
                     released: None,
                 }
             }
-            operand => match self.load_place_words(operand)? {     Some(words) => words,
+            operand => match self.load_place_words(operand)? {
+                Some(words) => words,
                 None => return Ok(false),
             },
         };

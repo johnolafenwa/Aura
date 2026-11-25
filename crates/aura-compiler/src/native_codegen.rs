@@ -6887,8 +6887,7 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
             Instruction::Assign { target, value }
                 if self.defer_extended_bytes(target, value)? => {}
-            Instruction::Assign { target, value }
-                if self.defer_indexed_bytes(target, value)? => {}
+            Instruction::Assign { target, value } if self.defer_indexed_bytes(target, value)? => {}
             Instruction::Assign { target, value }
                 if self.index_deferred_bytes(target, value)? => {}
             Instruction::Assign { target, value } => {
@@ -18255,8 +18254,8 @@ impl<'a> FunctionCompiler<'a> {
                 // A discarded `put` of an `int64` passes the integer itself,
                 // so no box is made for it.
                 self.lookup_payload = Some(true);
-                let loaded = self
-                    .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let loaded =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
                 let value = self.coerce_value(loaded, &DirectType::Scalar(ScalarKind::Int64))?;
                 self.runtime_call_results(
                     self.runtime[RuntimeFn::ChannelSendDiscardedInt64],
