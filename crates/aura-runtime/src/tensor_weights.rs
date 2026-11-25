@@ -134,11 +134,12 @@ fn read_header(path: &str) -> std::result::Result<(std::fs::File, Vec<Entry>, u6
         .map_err(|error| format!("`{path}` has a header that is not JSON: {error}"))?;
     let mut failed_tensor = None;
     let mut reader = serde_json::Deserializer::from_slice(&header);
-    let fields = serde::de::DeserializeSeed::deserialize(RawHeader(&mut failed_tensor), &mut reader)
-        .map_err(|error| match &failed_tensor {
-            Some(name) => format!("`{path}` describes tensor `{name}` wrongly: {error}"),
-            None => format!("`{path}` is not a safetensors file"),
-        })?;
+    let fields =
+        serde::de::DeserializeSeed::deserialize(RawHeader(&mut failed_tensor), &mut reader)
+            .map_err(|error| match &failed_tensor {
+                Some(name) => format!("`{path}` describes tensor `{name}` wrongly: {error}"),
+                None => format!("`{path}` is not a safetensors file"),
+            })?;
     let data = 8 + length;
     let mut entries = Vec::new();
     for (name, field) in fields {
@@ -481,7 +482,9 @@ mod tests {
             &[1]
         );
         write_raw(&path, "[1, 2]", &[]);
-        assert!(names(text).unwrap_err().contains("is not a safetensors file"));
+        assert!(names(text)
+            .unwrap_err()
+            .contains("is not a safetensors file"));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

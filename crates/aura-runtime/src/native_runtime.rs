@@ -10241,7 +10241,10 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
         };
         let appended = with_vector_mut(vec, |vector| vector.elements.try_append(other.elements));
         if appended.is_err() {
-            runtime_diagnostic_error(Diagnostic::coded("AU4005", "list capacity allocation failed"));
+            runtime_diagnostic_error(Diagnostic::coded(
+                "AU4005",
+                "list capacity allocation failed",
+            ));
         }
         boxed_value(Value::Unit)
     })

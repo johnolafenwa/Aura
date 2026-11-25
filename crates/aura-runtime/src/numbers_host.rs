@@ -275,8 +275,8 @@ fn normalized(mut coefficient: BigInt, mut exponent: i64) -> Result<(BigInt, i64
             removed += step;
         }
     }
-    let removed = i64::try_from(removed)
-        .map_err(|_| overflow("`numbers.Decimal` exponent overflow"))?;
+    let removed =
+        i64::try_from(removed).map_err(|_| overflow("`numbers.Decimal` exponent overflow"))?;
     exponent = exponent
         .checked_add(removed)
         .ok_or_else(|| overflow("`numbers.Decimal` exponent overflow"))?;

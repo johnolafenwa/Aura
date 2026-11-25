@@ -308,7 +308,9 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let resized = image_codec::resize(
                 &pixels, width, height, channels, new_width, new_height, filter,
             )
-            .map_err(|error| Diagnostic::coded("AU4005", format!("`image.resize` failed: {error}")))?;
+            .map_err(|error| {
+                Diagnostic::coded("AU4005", format!("`image.resize` failed: {error}"))
+            })?;
             Ok(bytes_value(resized))
         }
         "image::__aura_crop" => {

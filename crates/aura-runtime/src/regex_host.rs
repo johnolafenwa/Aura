@@ -43,7 +43,12 @@ struct PatternTable {
 impl PatternTable {
     /// The number of `pattern`, adding it when the table has room for one
     /// more of at most `count` patterns and `bytes` bytes of text.
-    fn number(&mut self, pattern: &str, count: usize, bytes: usize) -> std::result::Result<i64, String> {
+    fn number(
+        &mut self,
+        pattern: &str,
+        count: usize,
+        bytes: usize,
+    ) -> std::result::Result<i64, String> {
         if let Some(number) = self.numbers.get(pattern) {
             return Ok(*number);
         }
@@ -123,9 +128,11 @@ fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
         let mut table = PATTERNS
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        table
-            .get_or_insert_with(PatternTable::default)
-            .number(pattern, MAX_PATTERN_COUNT, MAX_PATTERN_TABLE_BYTES)?
+        table.get_or_insert_with(PatternTable::default).number(
+            pattern,
+            MAX_PATTERN_COUNT,
+            MAX_PATTERN_TABLE_BYTES,
+        )?
     };
     COMPILED.with(|cache| cache.borrow_mut().keep(number, &regex));
     Ok(number)
@@ -337,8 +344,12 @@ pub fn evaluate_regex_builtin(
                     format!("`{name}` expects a replacement"),
                 ));
             };
-            let replaced =
-                bounded_replace(&regex, text, replacement, name == "regex::__aura_replace_all")?;
+            let replaced = bounded_replace(
+                &regex,
+                text,
+                replacement,
+                name == "regex::__aura_replace_all",
+            )?;
             Value::string(replaced)
         }
         other => {
@@ -486,7 +497,9 @@ pub fn host_regex_escape(args: Vec<Value>, _program_args: Option<&[String]>) -> 
     if escaped.len() > MAX_STRING_BYTES {
         return Err(Diagnostic::coded(
             "AU4005",
-            format!("`regex.escape` result exceeds the maintained {MAX_STRING_BYTES}-byte string limit"),
+            format!(
+                "`regex.escape` result exceeds the maintained {MAX_STRING_BYTES}-byte string limit"
+            ),
         ));
     }
     Ok(Value::string(escaped))

@@ -716,7 +716,10 @@ impl HttpBody {
         }
         // A bare CR or LF inside a framing line is not a line end to every
         // reader, so it is refused.
-        if unread[..end].iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        if unread[..end]
+            .iter()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
+        {
             return Err(invalid_chunk("a framing line holds a bare CR or LF"));
         }
         let line = std::str::from_utf8(&unread[..end])

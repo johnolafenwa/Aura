@@ -246,10 +246,12 @@ fn results_over_the_size_limits_are_refused() {
     // Each high Latin-1 byte decodes to two bytes of UTF-8, so half the
     // string limit plus one such bytes is over it.
     let high = vec![0xE9_u8; MAX_DECODED_BYTES / 2 + 1];
-    assert_eq!(decode(&high, Encoding::Latin1), Err(EncodingError::TooLarge));
     assert_eq!(
-        decode(&high[..MAX_DECODED_BYTES / 2], Encoding::Latin1)
-            .map(|text| text.len()),
+        decode(&high, Encoding::Latin1),
+        Err(EncodingError::TooLarge)
+    );
+    assert_eq!(
+        decode(&high[..MAX_DECODED_BYTES / 2], Encoding::Latin1).map(|text| text.len()),
         Ok(MAX_DECODED_BYTES)
     );
     // Windows-1252 bytes 0x80 decode to three bytes.

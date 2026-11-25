@@ -1522,7 +1522,9 @@ fn a_compressed_body_is_decoded_in_bounded_steps() {
     let reply = encoded("gzip", &zipped);
     let (base, port, server) = serve(1, move |_| Reply::SendAndClose(reply.clone()));
     let mut response = get(&base).expect("an encoded response");
-    let error = response.read_all(1 << 20, None).expect_err("over the limit");
+    let error = response
+        .read_all(1 << 20, None)
+        .expect_err("over the limit");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     pool_discard(port);
     server.join().expect("the server");

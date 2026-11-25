@@ -1111,11 +1111,19 @@ fn resize_on(
     // across costs about twice the pass down, which works on whole rows.
     // The pass that runs second works on what the first left, so the
     // cheaper order depends on which axis shrinks more.
-    let cost = |factors: [usize; 4]| factors.iter().fold(1usize, |cost, &f| cost.saturating_mul(f));
+    let cost = |factors: [usize; 4]| {
+        factors
+            .iter()
+            .fold(1usize, |cost, &f| cost.saturating_mul(f))
+    };
     let across_first = cost([2, new_width, height, across.taps])
         .saturating_add(cost([1, new_width, new_height, down.taps]));
-    let down_first = cost([1, width, new_height, down.taps])
-        .saturating_add(cost([2, new_width, new_height, across.taps]));
+    let down_first = cost([1, width, new_height, down.taps]).saturating_add(cost([
+        2,
+        new_width,
+        new_height,
+        across.taps,
+    ]));
     let resampled = if down_first <= across_first {
         let rows = resample_down(data, width * channels, &down, threads)?;
         resample_across_any(&rows, width, channels, &across, threads)?

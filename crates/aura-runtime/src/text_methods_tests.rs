@@ -1,6 +1,6 @@
 use super::{
-    change_case_checked, chars, chr, evaluate_bytes_search, evaluate_text_method, is_bytes_search_builtin,
-    join_checked, ord, replace_checked,
+    change_case_checked, chars, chr, evaluate_bytes_search, evaluate_text_method,
+    is_bytes_search_builtin, join_checked, ord, replace_checked,
 };
 use crate::runtime_value::Value;
 
@@ -107,12 +107,21 @@ fn join_replace_and_case_changes_stop_at_the_string_limit() {
         ("none", "x", "y"),
         ("", "", "z"),
     ] {
-        assert_eq!(replace_checked(text, from, to).unwrap(), text.replace(from, to));
+        assert_eq!(
+            replace_checked(text, from, to).unwrap(),
+            text.replace(from, to)
+        );
     }
     let wide = "a".repeat(100_000);
     let long = "b".repeat(1_000);
-    assert_eq!(replace_checked(&wide, "a", &long).unwrap_err().code, "AU4005");
-    assert_eq!(replace_checked(&wide, "", &long).unwrap_err().code, "AU4005");
+    assert_eq!(
+        replace_checked(&wide, "a", &long).unwrap_err().code,
+        "AU4005"
+    );
+    assert_eq!(
+        replace_checked(&wide, "", &long).unwrap_err().code,
+        "AU4005"
+    );
     // The fast bound is not a trap: few real matches still fit.
     let sparse = format!("{}x", "a".repeat(MAX_STRING_BYTES / 2));
     assert_eq!(
@@ -126,7 +135,10 @@ fn join_replace_and_case_changes_stop_at_the_string_limit() {
     assert_eq!(change_case_checked("MiXed", true).unwrap(), "MIXED");
     // Each `ß` grows from two bytes to two, `ŉ` from two to three.
     let growing = "ŉ".repeat(MAX_STRING_BYTES / 2);
-    assert_eq!(change_case_checked(&growing, true).unwrap_err().code, "AU4005");
+    assert_eq!(
+        change_case_checked(&growing, true).unwrap_err().code,
+        "AU4005"
+    );
 }
 
 #[test]

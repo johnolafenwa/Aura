@@ -758,7 +758,10 @@ fn resize_on_several_threads_gives_the_pixels_of_one() {
                     "{filter:?} to {width}x{height} on {threads} threads"
                 );
             }
-            assert_eq!(resize(&data, 700, 500, 3, width, height, filter).unwrap(), one);
+            assert_eq!(
+                resize(&data, 700, 500, 3, width, height, filter).unwrap(),
+                one
+            );
         }
     }
     assert!(thread_limit() >= 1);

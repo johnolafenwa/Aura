@@ -246,8 +246,28 @@ fn replacement_expands_group_references_as_the_regex_crate_does() {
     let a = number(pattern);
     let text = "a@b, c@d and e@f@g";
     for replacement in [
-        "", "x", "$1", "$2-$1", "${2}x", "$2x", "$word", "${word}!", "$$", "$$1", "$", "a$",
-        "${", "${1", "$9", "${9}", "$nope", "${+1}", "$-", "${}", "$1$1$1", "\u{e9}$1\u{e9}",
+        "",
+        "x",
+        "$1",
+        "$2-$1",
+        "${2}x",
+        "$2x",
+        "$word",
+        "${word}!",
+        "$$",
+        "$$1",
+        "$",
+        "a$",
+        "${",
+        "${1",
+        "$9",
+        "${9}",
+        "$nope",
+        "${+1}",
+        "$-",
+        "${}",
+        "$1$1$1",
+        "\u{e9}$1\u{e9}",
     ] {
         for all in [false, true] {
             let name = if all {
@@ -262,7 +282,11 @@ fn replacement_expands_group_references_as_the_regex_crate_does() {
             };
             let found =
                 evaluate_regex_builtin(name, a, text, RegexArgument::Text(replacement)).unwrap();
-            assert_eq!(text_of(&found), expected.as_ref(), "{replacement:?} all={all}");
+            assert_eq!(
+                text_of(&found),
+                expected.as_ref(),
+                "{replacement:?} all={all}"
+            );
         }
     }
     let empty = number("x*");
@@ -326,7 +350,7 @@ fn the_pattern_table_is_bounded() {
 #[test]
 fn escape_refuses_a_result_over_the_string_limit() {
     let dots = ".".repeat(MAX_STRING_BYTES / 2 + 1);
-    let error = host("regex::__aura_escape", vec![Value::string(dots)])
-        .expect_err("over the string limit");
+    let error =
+        host("regex::__aura_escape", vec![Value::string(dots)]).expect_err("over the string limit");
     assert_eq!(error.code.as_str(), "AU4005");
 }
