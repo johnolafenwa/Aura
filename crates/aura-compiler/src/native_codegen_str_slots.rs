@@ -118,7 +118,6 @@ fn param_uses(
     // (see `element_slots`), compare from their bytes.
     let mut loans = read_str_loans(function);
     loans.extend(str_element_reads(function));
-    let extended = extended_bytes(function);
     let views = |operand: &Operand| {
         matches!(operand, Operand::String(_))
             || matches!(operand, Operand::Place(place)
@@ -174,13 +173,8 @@ fn param_uses(
                     (op, []) => receiver_view_read(*op).is_some(),
                     _ => false,
                 },
-                // Bytes only for the next operation to extend a list
-                // with are appended from the words.
-                Instruction::Assign { target, value }
-                    if str_to_bytes(value).is_some() && extended.contains(target.as_str()) =>
-                {
-                    true
-                }
+                // The bytes of a `str` are copied from its words.
+                Instruction::Assign { value, .. } if str_to_bytes(value).is_some() => true,
                 // The entry loan of a dict under the key a fused test
                 // probed reads the probe's slot.
                 Instruction::BeginElementLoan {
@@ -841,6 +835,9 @@ fn reads_words(
     let Instruction::Assign { value, .. } = instruction else {
         return false;
     };
+    if str_to_bytes(value).is_some_and(is_local) {
+        return true;
+    }
     match value {
         Rvalue::Binary {
             op: BinaryOp::Eq | BinaryOp::NotEq,
@@ -1958,6 +1955,30 @@ impl FunctionCompiler<'_> {
         };
         self.deferred_str_copies.insert(target.to_string(), words);
         Ok(true)
+    }
+
+    /// The result of `text.to_bytes()` made from the words of `text`, when
+    /// it is a literal or this body has it as words.
+    pub(super) fn str_to_bytes_from_words(
+        &mut self,
+        text: &Operand,
+    ) -> std::result::Result<Option<Vec<Val>>, String> {
+        let (ptr, len, released) = match text {
+            Operand::String(text) => {
+                let (ptr, len) = self.string_constant(text.as_bytes())?;
+                (ptr, len, None)
+            }
+            operand => match self.load_place_words(operand)? {
+                Some(words) => (words.ptr, words.len, words.released),
+                None => return Ok(None),
+            },
+        };
+        let made = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringToBytesView], &[ptr, len])
+            .results;
+        self.release_view_arguments(released.into_iter().collect());
+        Ok(Some(made))
     }
 
     /// Extends the `list[uint8]` `list` with the deferred bytes `operand`

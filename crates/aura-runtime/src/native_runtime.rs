@@ -10391,6 +10391,33 @@ fn with_vec_element<T>(
     })
 }
 
+/// `text.to_bytes()` of the `str` whose `len` bytes are at `ptr`, which
+/// generated code holds as words, with no box made for the text. A text
+/// `to_bytes` cannot copy stops the program as `to_bytes` does.
+///
+/// # Safety
+///
+/// The bytes are the text of a live `str`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_to_bytes_view(
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let bytes = match len {
+            0 => &[][..],
+            // SAFETY: the caller's contract.
+            _ => unsafe { slice::from_raw_parts(ptr, len) },
+        };
+        // SAFETY: the bytes of a `str` are UTF-8.
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        match crate::runtime_value::evaluate_string_to_bytes_host_ref(text) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// A new `str` box holding the `len` bytes at `ptr`, which generated code
 /// read out of a list's [`DirectListAccess::Str`] view.
 ///

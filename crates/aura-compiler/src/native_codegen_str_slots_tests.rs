@@ -453,9 +453,10 @@ fn bytes_made_only_to_extend_a_list_are_appended_from_the_words() {
     // Only the literal's bytes extend the list as the next operation.
     assert_eq!(extended_bytes(function("size")).len(), 1);
     assert!(extended_bytes(function("main")).is_empty());
-    // So `add_text` reads its text only through the bytes.
+    // Each reads its text only through the bytes, which are copied from
+    // the words.
     let views = plan_views(&module);
     assert_eq!(views["add_text"], [view(1, true)]);
-    assert!(!views.contains_key("keep"));
-    assert!(!views.contains_key("size"));
+    assert_eq!(views["keep"], [view(0, true)]);
+    assert_eq!(views["size"], [view(1, true)]);
 }

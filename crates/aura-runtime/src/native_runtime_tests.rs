@@ -27210,6 +27210,22 @@ fn a_full_scalar_list_grows_from_what_generated_code_left() {
 }
 
 #[test]
+fn str_bytes_are_copied_from_their_words() {
+    for text in ["", "h\u{e9}llo"] {
+        let bytes = unsafe { super::aura_direct_string_to_bytes_view(text.as_ptr(), text.len()) };
+        match unsafe { value_ref(bytes) } {
+            Value::Vec(vector) => assert_eq!(*vector.element_type, Type::named("uint8")),
+            other => panic!("expected a list, found {other:?}"),
+        }
+        let copied = (0..super::aura_direct_vec_len(bytes))
+            .map(|index| super::aura_direct_vec_index_scalar(bytes, index, 6) as u8)
+            .collect::<Vec<_>>();
+        assert_eq!(copied, text.as_bytes());
+        unsafe { release_value(bytes) };
+    }
+}
+
+#[test]
 fn str_bytes_extend_a_byte_list_from_their_words() {
     use super::DirectListAccess;
     let bytes = |list: *mut OpaqueValue| -> Vec<u8> {

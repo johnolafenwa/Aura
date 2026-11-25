@@ -11612,7 +11612,13 @@ impl<'a> FunctionCompiler<'a> {
             }
             _ => None,
         };
-        let results = if let Some((source, code)) = literal_codec {
+        let from_words = match (name, args) {
+            ("str.to_bytes", [text]) => self.str_to_bytes_from_words(&text.value)?,
+            _ => None,
+        };
+        let results = if let Some(results) = from_words {
+            results
+        } else if let Some((source, code)) = literal_codec {
             let source = self.load_place(source)?;
             let code = self.builder.iconst(types::I64, code as i64);
             let decode = self
