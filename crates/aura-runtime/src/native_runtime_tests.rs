@@ -15958,10 +15958,25 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         super::aura_direct_value_type_matches(
+            super::aura_direct_box_f32(3.5),
+            b"float32".as_ptr(),
+            "float32".len(),
+        ),
+        1
+    );
+    // A float boxed with its width does not answer for the other width.
+    assert_eq!(
+        super::aura_direct_value_type_matches(
             float_value(3.5),
             b"float32".as_ptr(),
             "float32".len(),
         ),
+        0
+    );
+    // An untagged float answers for either width.
+    let untagged = super::boxed_value(Value::Float(3.5));
+    assert_eq!(
+        super::aura_direct_value_type_matches(untagged, b"float32".as_ptr(), "float32".len()),
         1
     );
     assert_eq!(

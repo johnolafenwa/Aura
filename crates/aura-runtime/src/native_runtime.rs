@@ -15617,9 +15617,11 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::Generator(_) => expected == "iter.GeneratorHandle",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
+            // A float boxed with its width answers for that width only. An
+            // untagged float comes from code that knows its width statically.
             Value::Float(_) => match explicit_type.as_deref() {
-                Some(actual) => actual == expected,
-                None => expected == "float64",
+                Some(actual @ ("float32" | "float64")) => actual == expected,
+                _ => expected == "float64" || expected == "float32",
             },
             Value::Int(value) => value.runtime_type_name().map_or_else(
                 || expected.starts_with("int") || expected.starts_with("uint"),

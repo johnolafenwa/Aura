@@ -803,11 +803,19 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
         )
     );
 
-    ArrayValue::new(
+    // A zero dimension empties the array, but the other dimensions still
+    // feed row-major strides, so their product must fit too.
+    let zero_error = ArrayValue::new(
         vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
         ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
-    .expect("a zero dimension makes the checked row-major product zero regardless of axis order");
+    .expect_err("non-zero dimensions of an empty array must still fit");
+    assert_eq!(zero_error.code, "AU4005");
+    ArrayValue::new(
+        vec![3, 0, 2].into_boxed_slice(),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
+    )
+    .expect("a zero dimension makes the element count zero");
 
     let dimension_error = ArrayValue::new(
         vec![i64::MAX as usize + 1, 0].into_boxed_slice(),
