@@ -34,6 +34,7 @@ struct Api {
     cuMemsetD8_v2: unsafe extern "C" fn(DevicePointer, u8, usize) -> Status,
     cuMemcpyDtoH_v2: unsafe extern "C" fn(*mut c_void, DevicePointer, usize) -> Status,
     cuModuleLoadData: unsafe extern "C" fn(*mut *mut c_void, *const c_void) -> Status,
+    cuModuleUnload: unsafe extern "C" fn(*mut c_void) -> Status,
     cuModuleGetFunction:
         unsafe extern "C" fn(*mut *mut c_void, *mut c_void, *const c_char) -> Status,
     #[allow(clippy::type_complexity)]
@@ -352,6 +353,7 @@ impl Api {
             cuMemsetD8_v2: load!(driver, cuMemsetD8_v2),
             cuMemcpyDtoH_v2: load!(driver, cuMemcpyDtoH_v2),
             cuModuleLoadData: load!(driver, cuModuleLoadData),
+            cuModuleUnload: load!(driver, cuModuleUnload),
             cuModuleGetFunction: load!(driver, cuModuleGetFunction),
             cuLaunchKernel: load!(driver, cuLaunchKernel),
             nvrtcCreateProgram: load!(nvrtc, nvrtcCreateProgram),
@@ -425,8 +427,71 @@ fn pooled_bytes(total: usize) -> usize {
     (total / 4).max(MIN_POOLED_BYTES)
 }
 
+/// An owned CUDA driver module unloaded automatically on drop or eviction.
+struct Module {
+    handle: *mut c_void,
+    unload: unsafe extern "C" fn(*mut c_void) -> Status,
+}
+
+// SAFETY: `CUmodule` handles are managed under the `compiled` mutex and
+// unloaded only after synchronizing the CUDA context.
+unsafe impl Send for Module {}
+
+impl Drop for Module {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: `self.handle` is an owned module handle.
+            unsafe {
+                (self.unload)(self.handle);
+            }
+        }
+    }
+}
+
+/// RAII guard for `Pool::running` so panics do not permanently disable trimming.
+struct RunGuard<'a> {
+    pool: &'a Mutex<Pool>,
+    active: bool,
+}
+
+impl<'a> RunGuard<'a> {
+    fn enter(pool: &'a Mutex<Pool>) -> Self {
+        pool.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .running += 1;
+        Self { pool, active: true }
+    }
+
+    fn finish(mut self, waits: bool, pooled: usize) -> Vec<DevicePointer> {
+        self.active = false;
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pool.running = pool.running.saturating_sub(1);
+        if pool.running == 0 && waits {
+            pool.trim(pooled)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let mut pool = self
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pool.running = pool.running.saturating_sub(1);
+        }
+    }
+}
+
 /// A compiled plan: the kernels by name and the actions that run them.
 struct Compiled {
+    _module: Module,
     program: Program,
     functions: HashMap<String, usize>,
     /// For each action, the buffers no later action reads and the run
@@ -493,7 +558,9 @@ impl Runtime {
         }
         let mut compiler = (0, 0);
         // SAFETY: both pointers are to live integers.
-        unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) };
+        if unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) } != 0 {
+            return None;
+        }
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: both pointers are to live integers, and the context is
         // current. A failed call leaves the total at zero.
@@ -1033,37 +1100,23 @@ impl Compiled {
         // SAFETY: `handle` is the program just created.
         let status = unsafe { (api.nvrtcCompileProgram)(handle, 1, options.as_ptr()) };
         let image = if status == 0 {
-            let mut size = 0;
-            // SAFETY: `image` has the size NVRTC reports.
-            unsafe {
-                (api.nvrtcGetPTXSize)(handle, &mut size);
-                let mut image = vec![0_u8; size.max(1)];
-                (api.nvrtcGetPTX)(handle, image.as_mut_ptr().cast());
-                Ok(image)
-            }
+            read_nvrtc_ptx(handle, api.nvrtcGetPTXSize, api.nvrtcGetPTX)
         } else {
-            let mut size = 0;
-            // SAFETY: `log` has the size NVRTC reports.
-            let log = unsafe {
-                (api.nvrtcGetProgramLogSize)(handle, &mut size);
-                let mut log = vec![0_u8; size.max(1)];
-                (api.nvrtcGetProgramLog)(handle, log.as_mut_ptr().cast());
-                CStr::from_bytes_until_nul(&log)
-                    .map(|log| log.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            };
+            let log = read_nvrtc_log(handle, api.nvrtcGetProgramLogSize, api.nvrtcGetProgramLog);
             Err(cuda_error(format!(
                 "could not compile a kernel (status {status}): {log}"
             )))
         };
         // SAFETY: `handle` is a live program.
-        unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
-        image
+        let destroy_status = unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
+        let image = image?;
+        check(destroy_status, "finish a kernel compile")?;
+        Ok(image)
     }
 
     /// The loaded module of a PTX `image`, or `None` when the driver does
     /// not take it.
-    fn load(runtime: &Runtime, image: &[u8]) -> Option<*mut c_void> {
+    fn load(runtime: &Runtime, image: &[u8]) -> Option<Module> {
         if !is_valid_ptx_image(image) {
             return None;
         }
@@ -1071,7 +1124,10 @@ impl Compiled {
         // SAFETY: `image` is verified printable ASCII PTX ending in a single
         // NUL byte.
         let status = unsafe { (runtime.api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
-        (status == 0).then_some(module)
+        (status == 0 && !module.is_null()).then_some(Module {
+            handle: module,
+            unload: runtime.api.cuModuleUnload,
+        })
     }
 
     fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
@@ -1108,15 +1164,17 @@ impl Compiled {
             if let Some(name) = name {
                 let symbol = CString::new(name).expect("a kernel name has no NUL byte");
                 let mut function = std::ptr::null_mut();
-                // SAFETY: `module` is loaded and `symbol` is NUL-terminated.
-                let status =
-                    unsafe { (api.cuModuleGetFunction)(&mut function, module, symbol.as_ptr()) };
+                // SAFETY: `module.handle` is loaded and `symbol` is NUL-terminated.
+                let status = unsafe {
+                    (api.cuModuleGetFunction)(&mut function, module.handle, symbol.as_ptr())
+                };
                 check(status, "find a compiled kernel")?;
                 functions.insert(name.to_string(), function as usize);
             }
         }
         let finished = tensor_codegen::finished_buffers(&program, plan);
         Ok(Self {
+            _module: module,
             program,
             functions,
             finished,
@@ -1218,6 +1276,12 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let known = compiled.contains_key(plan);
     if !known {
         if compiled.len() >= MAX_COMPILED_PLANS {
+            // Ensure no in-flight kernels still reference modules being evicted.
+            // SAFETY: the context is current on this thread.
+            check(
+                unsafe { (api.cuCtxSynchronize)() },
+                "synchronize before unloading compiled kernels",
+            )?;
             compiled.clear();
         }
         compiled.insert(plan.clone(), Compiled::new(runtime, plan)?);
@@ -1286,7 +1350,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     // The address tables of batched products, kept until the last
     // action is launched.
     let mut tables: Vec<Arc<Buffer>> = Vec::new();
-    runtime.pool().running += 1;
+    let run_guard = RunGuard::enter(&runtime.pool);
     for (index, action) in compiled.program.actions.iter().enumerate() {
         let action_began = std::time::Instant::now();
         outcome = match action {
@@ -1693,15 +1757,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     } else {
         Ok(())
     };
-    let freed = {
-        let mut pool = runtime.pool();
-        pool.running -= 1;
-        if pool.running == 0 && waits {
-            pool.trim(runtime.pooled)
-        } else {
-            Vec::new()
-        }
-    };
+    let freed = run_guard.finish(waits, runtime.pooled);
     for pointer in freed {
         // SAFETY: the pool owned the allocation and no kernel is running.
         unsafe { (api.cuMemFree_v2)(pointer) };
@@ -2064,6 +2120,172 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    #[test]
+    fn cuda_nvrtc_status_module_unload_and_run_guard() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        unsafe extern "C" fn fail_size(_: *mut c_void, _: *mut usize) -> Status {
+            6
+        }
+        unsafe extern "C" fn zero_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = 0;
+            0
+        }
+        unsafe extern "C" fn huge_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = MAX_KERNEL_IMAGE_BYTES + 1;
+            0
+        }
+        unsafe extern "C" fn ok_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = 4;
+            0
+        }
+        unsafe extern "C" fn fail_read(_: *mut c_void, _: *mut c_char) -> Status {
+            7
+        }
+        unsafe extern "C" fn write_bytes(_: *mut c_void, out: *mut c_char) -> Status {
+            std::ptr::copy_nonoverlapping(c"ok!".as_ptr(), out, 4);
+            0
+        }
+
+        // NVRTC PTX status and bounds checks.
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), fail_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), zero_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), huge_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), ok_size, fail_read)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), ok_size, write_bytes).unwrap(),
+            b"ok!\0"
+        );
+
+        // NVRTC log status checks degrade cleanly to empty string on error.
+        assert_eq!(
+            read_nvrtc_log(std::ptr::null_mut(), fail_size, write_bytes),
+            ""
+        );
+        assert_eq!(read_nvrtc_log(std::ptr::null_mut(), ok_size, fail_read), "");
+        assert_eq!(
+            read_nvrtc_log(std::ptr::null_mut(), ok_size, write_bytes),
+            "ok!"
+        );
+
+        // Module RAII unloads handles on drop and cache clear.
+        static UNLOADED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn count_unload(handle: *mut c_void) -> Status {
+            if !handle.is_null() {
+                UNLOADED.fetch_add(1, Ordering::SeqCst);
+            }
+            0
+        }
+        let before = UNLOADED.load(Ordering::SeqCst);
+        let mut cache: HashMap<usize, Module> = HashMap::new();
+        cache.insert(
+            0,
+            Module {
+                handle: std::ptr::dangling_mut::<c_void>(),
+                unload: count_unload,
+            },
+        );
+        cache.insert(
+            1,
+            Module {
+                handle: std::ptr::dangling_mut::<c_void>(),
+                unload: count_unload,
+            },
+        );
+        cache.clear();
+        assert_eq!(UNLOADED.load(Ordering::SeqCst) - before, 2);
+
+        // RunGuard restores `pool.running` after panic so pool trimming still works.
+        let pool = Mutex::new(Pool::default());
+        {
+            let mut guard = pool.lock().unwrap();
+            guard.bytes = 64;
+            guard.free.insert(64, vec![1]);
+        }
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _running = RunGuard::enter(&pool);
+            assert_eq!(pool.lock().unwrap().running, 1);
+            panic!("simulated run unwind");
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(pool.lock().unwrap().running, 0);
+
+        let running = RunGuard::enter(&pool);
+        assert_eq!(pool.lock().unwrap().running, 1);
+        let freed = running.finish(true, 0);
+        assert_eq!(freed, vec![1]);
+        assert_eq!(pool.lock().unwrap().running, 0);
+    }
+}
+
+fn read_nvrtc_ptx(
+    handle: *mut c_void,
+    get_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    get_ptx: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+) -> Result<Vec<u8>> {
+    let mut size = 0;
+    // SAFETY: `handle` is a compiled NVRTC program and `size` is writable.
+    let size_status = unsafe { get_size(handle, &mut size) };
+    check(size_status, "measure a compiled kernel")?;
+    if size == 0 || size > MAX_KERNEL_IMAGE_BYTES {
+        return Err(cuda_error(format!(
+            "compiled kernel reported invalid PTX size {size}"
+        )));
+    }
+    let mut image = Vec::new();
+    image
+        .try_reserve_exact(size)
+        .map_err(|_| cuda_error("could not allocate memory for a compiled kernel"))?;
+    image.resize(size, 0);
+    // SAFETY: `image` has `size` writable bytes reported by NVRTC.
+    let ptx_status = unsafe { get_ptx(handle, image.as_mut_ptr().cast()) };
+    check(ptx_status, "read a compiled kernel")?;
+    Ok(image)
+}
+
+fn read_nvrtc_log(
+    handle: *mut c_void,
+    get_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    get_log: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+) -> String {
+    let mut size = 0;
+    // SAFETY: `handle` is a compiled NVRTC program and `size` is writable.
+    if unsafe { get_size(handle, &mut size) } != 0 || size == 0 || size > MAX_KERNEL_IMAGE_BYTES {
+        return String::new();
+    }
+    let mut log = Vec::new();
+    if log.try_reserve_exact(size).is_err() {
+        return String::new();
+    }
+    log.resize(size, 0);
+    // SAFETY: `log` has `size` writable bytes reported by NVRTC.
+    if unsafe { get_log(handle, log.as_mut_ptr().cast()) } != 0 {
+        return String::new();
+    }
+    CStr::from_bytes_until_nul(&log)
+        .map(|log| log.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[derive(Debug)]
