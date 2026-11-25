@@ -234,6 +234,12 @@ fn checked_byte_len(count: usize, width: usize, context: &str) -> Result<usize> 
 /// lanes have `length` elements `inner` apart: the lane number before the
 /// axis, the place on the axis, and the place after it.
 fn split(inner: usize, length: usize) -> Result<(String, String, String)> {
+    if inner == 0 || length == 0 {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "tensor GPU codegen cannot split an empty axis",
+        ));
+    }
     let span = checked_mul(inner, length, "lane span")?;
     Ok((
         format!("(j / {span}LL)"),
@@ -304,6 +310,12 @@ fn len(shape: &[usize]) -> Result<usize> {
 /// `j` of `shape`.
 fn coordinate(shape: &[usize], axis: usize) -> Result<String> {
     let stride = strides(shape)?[axis];
+    if stride == 0 || shape[axis] == 0 {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "tensor GPU codegen cannot index an empty axis",
+        ));
+    }
     // A GPU divides 32-bit integers several times faster than 64-bit
     // ones, and the index of a tensor of fewer than 2^32 elements fits.
     if len(shape)? <= u32::MAX as usize {
@@ -450,6 +462,12 @@ impl<'a> Generator<'a> {
             let dtype = ArrayDType::from_code(dtype)
                 .ok_or_else(|| Diagnostic::coded("AU4007", "tensor plan has an unknown dtype"))?;
             checked_tensor_byte_len(shape, dtype)?;
+            if shape.is_empty() || shape.contains(&0) {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    "tensor GPU codegen requires non-empty shapes with at least one axis",
+                ));
+            }
         }
         let count = plan.slots.len();
         let mut uses = vec![0_usize; count];

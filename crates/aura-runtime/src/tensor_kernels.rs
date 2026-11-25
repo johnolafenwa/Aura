@@ -16,11 +16,12 @@ pub(crate) struct Lanes {
 }
 
 impl Lanes {
-    pub(crate) fn new(shape: &[usize], axis: usize) -> Self {
-        Self {
-            inner: shape[axis + 1..].iter().product(),
+    pub(crate) fn new(shape: &[usize], axis: usize) -> Result<Self> {
+        let inner = checked_array_element_count(&shape[axis + 1..])?;
+        Ok(Self {
+            inner,
             length: shape[axis],
-        }
+        })
     }
 
     /// The lane number before the axis, the place on the axis, and the
@@ -61,12 +62,11 @@ fn index_map(
                     _ => unreachable!("the sources have one dtype"),
                 })
                 .collect();
-            ArrayStorage::$variant(
-                (0..count)
-                    .map(|index| map(index).map_or($zero, |(source, at)| slices[source][at]))
-                    .collect::<Box<[_]>>()
-                    .into(),
-            )
+            let mut out = try_array_buffer(count, "tensor kernel result")?;
+            for index in 0..count {
+                out.push(map(index).map_or($zero, |(source, at)| slices[source][at]));
+            }
+            ArrayStorage::$variant(out.into())
         }};
     }
     let storage = match &*stores[0] {
@@ -88,10 +88,29 @@ pub(crate) fn slice(
     step: usize,
     length: usize,
 ) -> Result<ArrayValue> {
-    let from = Lanes::new(&source.shape, axis);
+    if step == 0 {
+        return Err(tensor_error(
+            "tensor::slice",
+            "expects a step of at least 1",
+        ));
+    }
+    let from = Lanes::new(&source.shape, axis)?;
+    if length > 0 {
+        let last = (length - 1)
+            .checked_mul(step)
+            .and_then(|offset| start.checked_add(offset))
+            .filter(|&last| last < from.length);
+        if last.is_none() {
+            return Err(tensor_error(
+                "tensor::slice",
+                "slice bounds exceed the source axis length",
+            ));
+        }
+    }
     let mut shape = source.shape.clone();
     shape[axis] = length;
-    let to = Lanes::new(&shape, axis);
+    checked_tensor_byte_len(&shape, source.dtype())?;
+    let to = Lanes::new(&shape, axis)?;
     index_map(&[source], shape, |index| {
         let (outer, at, rest) = to.split(index);
         Some((0, from.join(outer, start + at * step, rest)))
@@ -108,10 +127,17 @@ pub(crate) fn unslice(
     step: usize,
     size: usize,
 ) -> Result<ArrayValue> {
-    let from = Lanes::new(&source.shape, axis);
+    if step == 0 {
+        return Err(tensor_error(
+            "tensor::unslice",
+            "expects a step of at least 1",
+        ));
+    }
+    let from = Lanes::new(&source.shape, axis)?;
     let mut shape = source.shape.clone();
     shape[axis] = size;
-    let to = Lanes::new(&shape, axis);
+    checked_tensor_byte_len(&shape, source.dtype())?;
+    let to = Lanes::new(&shape, axis)?;
     index_map(&[source], shape, |index| {
         let (outer, at, rest) = to.split(index);
         let offset = at.checked_sub(start)?;
@@ -134,12 +160,13 @@ pub(crate) fn expand(source: &ArrayValue, shape: &[usize]) -> Result<ArrayValue>
 /// `right`.
 pub(crate) fn concat(left: &ArrayValue, right: &ArrayValue, axis: usize) -> Result<ArrayValue> {
     let (first, second) = (
-        Lanes::new(&left.shape, axis),
-        Lanes::new(&right.shape, axis),
+        Lanes::new(&left.shape, axis)?,
+        Lanes::new(&right.shape, axis)?,
     );
     let mut shape = left.shape.clone();
     shape[axis] = checked_concat_axis(shape[axis], right.shape[axis])?;
-    let to = Lanes::new(&shape, axis);
+    checked_tensor_byte_len(&shape, left.dtype())?;
+    let to = Lanes::new(&shape, axis)?;
     index_map(&[left, right], shape, |index| {
         let (outer, at, rest) = to.split(index);
         Some(if at < first.length {
@@ -165,8 +192,20 @@ fn checked_indices(indices: &ArrayValue, length: usize, name: &str) -> Result<Ve
             })
     };
     match &*indices.elements()? {
-        ArrayStorage::Int32(values) => values.iter().map(|&index| check(index.into())).collect(),
-        ArrayStorage::Int64(values) => values.iter().map(|&index| check(index)).collect(),
+        ArrayStorage::Int32(values) => {
+            let mut out = try_array_buffer(values.len(), name)?;
+            for &index in values.iter() {
+                out.push(check(index.into())?);
+            }
+            Ok(out)
+        }
+        ArrayStorage::Int64(values) => {
+            let mut out = try_array_buffer(values.len(), name)?;
+            for &index in values.iter() {
+                out.push(check(index)?);
+            }
+            Ok(out)
+        }
         _ => Err(tensor_error(name, "expects integer indices")),
     }
 }
@@ -184,9 +223,10 @@ pub(crate) fn take_shape(source: &[usize], indices: &[usize], axis: usize) -> Bo
 
 /// For each index, the entry of `source` at that place along `axis`.
 pub(crate) fn take(source: &ArrayValue, indices: &ArrayValue, axis: usize) -> Result<ArrayValue> {
-    let from = Lanes::new(&source.shape, axis);
+    let from = Lanes::new(&source.shape, axis)?;
     let places = checked_indices(indices, from.length, "tensor::index_select")?;
     let shape = take_shape(&source.shape, &indices.shape, axis);
+    checked_tensor_byte_len(&shape, source.dtype())?;
     let to = Lanes {
         inner: from.inner,
         length: places.len(),
@@ -206,7 +246,7 @@ pub(crate) fn index_add(
     size: usize,
 ) -> Result<ArrayValue> {
     let places = checked_indices(indices, size, "tensor::index_add")?;
-    let inner: usize = updates.shape[axis + indices.shape.len()..].iter().product();
+    let inner = checked_array_element_count(&updates.shape[axis + indices.shape.len()..])?;
     let from = Lanes {
         inner,
         length: places.len(),
@@ -263,27 +303,27 @@ pub(crate) fn lane_shape(shape: &[usize], axis: usize) -> Box<[usize]> {
 /// The place along `axis` of the largest element of each lane, or of the
 /// smallest. The first one wins a tie, and a NaN wins over every number.
 pub(crate) fn arg_reduce(source: &ArrayValue, axis: usize, largest: bool) -> Result<ArrayValue> {
-    let lanes = Lanes::new(&source.shape, axis);
+    let lanes = Lanes::new(&source.shape, axis)?;
     let shape = lane_shape(&source.shape, axis);
-    let count: usize = shape.iter().product();
+    let (count, _) = checked_tensor_byte_len(&shape, ArrayDType::Int64)?;
     macro_rules! build {
         ($values:expr, $is_nan:expr) => {{
-            (0..count)
-                .map(|lane| {
-                    let (outer, rest) = (lane / lanes.inner, lane % lanes.inner);
-                    let mut best = $values[lanes.join(outer, 0, rest)];
-                    let mut place = 0_i64;
-                    for at in 1..lanes.length {
-                        let value = $values[lanes.join(outer, at, rest)];
-                        let wins = if largest { value > best } else { value < best };
-                        if wins || ($is_nan(value) && !$is_nan(best)) {
-                            best = value;
-                            place = at as i64;
-                        }
+            let mut out = try_array_buffer(count, "tensor::argmax result")?;
+            for lane in 0..count {
+                let (outer, rest) = (lane / lanes.inner, lane % lanes.inner);
+                let mut best = $values[lanes.join(outer, 0, rest)];
+                let mut place = 0_i64;
+                for at in 1..lanes.length {
+                    let value = $values[lanes.join(outer, at, rest)];
+                    let wins = if largest { value > best } else { value < best };
+                    if wins || ($is_nan(value) && !$is_nan(best)) {
+                        best = value;
+                        place = at as i64;
                     }
-                    place
-                })
-                .collect::<Box<[i64]>>()
+                }
+                out.push(place);
+            }
+            out
         }};
     }
     let places = match &*source.elements()? {
@@ -397,56 +437,62 @@ pub(crate) fn filled(
 ) -> Result<ArrayValue> {
     let (count, _) = checked_tensor_byte_len(&shape, dtype)?;
     let storage = match (dtype, fill) {
-        (ArrayDType::Float32, Fill::Count) => ArrayStorage::Float32(
-            (0..count)
-                .map(|index| index as f32)
-                .collect::<Box<[f32]>>()
-                .into(),
-        ),
-        (ArrayDType::Float32, _) => ArrayStorage::Float32(
-            (0..count as u64)
-                .map(|index| {
-                    if fill == Fill::Uniform {
-                        return unit_single(random_bits(seed, index));
-                    }
+        (ArrayDType::Float32, Fill::Count) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count {
+                out.push(index as f32);
+            }
+            ArrayStorage::Float32(out.into())
+        }
+        (ArrayDType::Float32, _) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count as u64 {
+                let value = if fill == Fill::Uniform {
+                    unit_single(random_bits(seed, index))
+                } else {
                     let first = unit_single(random_bits(seed, 2 * index));
                     let second = unit_single(random_bits(seed, 2 * index + 1));
                     (-2.0 * (1.0 - first).ln()).sqrt() * (std::f32::consts::TAU * second).cos()
-                })
-                .collect::<Box<[f32]>>()
-                .into(),
-        ),
-        (ArrayDType::Float64, Fill::Count) => ArrayStorage::Float64(
-            (0..count)
-                .map(|index| index as f64)
-                .collect::<Box<[f64]>>()
-                .into(),
-        ),
-        (ArrayDType::Float64, _) => ArrayStorage::Float64(
-            (0..count as u64)
-                .map(|index| {
-                    if fill == Fill::Uniform {
-                        return unit(random_bits(seed, index));
-                    }
+                };
+                out.push(value);
+            }
+            ArrayStorage::Float32(out.into())
+        }
+        (ArrayDType::Float64, Fill::Count) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count {
+                out.push(index as f64);
+            }
+            ArrayStorage::Float64(out.into())
+        }
+        (ArrayDType::Float64, _) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count as u64 {
+                let value = if fill == Fill::Uniform {
+                    unit(random_bits(seed, index))
+                } else {
                     let first = unit(random_bits(seed, 2 * index));
                     let second = unit(random_bits(seed, 2 * index + 1));
                     (-2.0 * (1.0 - first).ln()).sqrt() * (std::f64::consts::TAU * second).cos()
-                })
-                .collect::<Box<[f64]>>()
-                .into(),
-        ),
-        (ArrayDType::Int64, Fill::Count) => ArrayStorage::Int64(
-            (0..count)
-                .map(|index| index as i64)
-                .collect::<Box<[i64]>>()
-                .into(),
-        ),
-        (ArrayDType::Int32, Fill::Count) => ArrayStorage::Int32(
-            (0..count)
-                .map(|index| index as i32)
-                .collect::<Box<[i32]>>()
-                .into(),
-        ),
+                };
+                out.push(value);
+            }
+            ArrayStorage::Float64(out.into())
+        }
+        (ArrayDType::Int64, Fill::Count) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count {
+                out.push(index as i64);
+            }
+            ArrayStorage::Int64(out.into())
+        }
+        (ArrayDType::Int32, Fill::Count) => {
+            let mut out = try_array_buffer(count, "tensor::filled result")?;
+            for index in 0..count {
+                out.push(index as i32);
+            }
+            ArrayStorage::Int32(out.into())
+        }
         _ => {
             return Err(tensor_error(
                 "tensor::random",

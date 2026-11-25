@@ -2476,3 +2476,109 @@ fn backward_does_not_deadlock_on_host_fallback_or_deep_deferred_graphs() {
     rx.recv_timeout(std::time::Duration::from_secs(10))
         .expect("backward/gradient completed without deadlocking");
 }
+
+#[test]
+fn empty_outputs_skip_gpu_planning_and_window_indices_check_overflow() {
+    let l = leaves(TensorDevice::Cpu);
+    let source = tensor(float32(&[1.0, 2.0, 3.0, 4.0], &[4]), TensorDevice::Cpu);
+    let idx = indices(&[0], &[1], &l.two);
+
+    deferred(|| {
+        // Empty slice output must not defer into GPU planning (which would emit `/ 0LL`).
+        let empty_slice = node_op(&source, 0, &[0, 2, 2, 1]).unwrap();
+        assert!(
+            node(&empty_slice).is_ready(),
+            "empty slice output should run on host instead of deferring"
+        );
+        assert_eq!(node(&empty_slice).shape(), &[0]);
+
+        // Empty broadcast/expand output must not defer into GPU planning.
+        let empty_expand = node_op(&l.two, 1, &[4, 0]).unwrap();
+        assert!(
+            node(&empty_expand).is_ready(),
+            "empty expand output should run on host instead of deferring"
+        );
+        assert_eq!(node(&empty_expand).shape(), &[4, 0]);
+
+        // Empty index_add output with out-of-range index must fail cleanly on host.
+        let bad_index_add = pair_op(&l.two, &idx, 2, &[0, 0]).unwrap_err();
+        assert_eq!(bad_index_add.code, "AU4007");
+
+        // Rank-0 random output must not defer into GPU planning.
+        let empty_rank_rand = random(0, 7, ArrayDType::Float32, &[], &l.two);
+        if let Ok(made) = empty_rank_rand {
+            assert!(node(&made).is_ready());
+        }
+    });
+
+    // Direct codegen rejects empty and rank-0 plans instead of emitting `/ 0LL`.
+    let empty_slice_plan = Plan {
+        slots: vec![
+            Slot::Leaf {
+                dtype: ArrayDType::Float32 as i64,
+                shape: vec![4],
+            },
+            Slot::Leaf {
+                dtype: ArrayDType::Int64 as i64,
+                shape: vec![1],
+            },
+            Slot::Step {
+                operation: Operation::Slice {
+                    axis: 0,
+                    step: 1,
+                    length: 0,
+                },
+                inputs: vec![0, 1],
+                dtype: ArrayDType::Float32 as i64,
+                shape: vec![0],
+            },
+        ],
+        outputs: vec![2],
+    };
+    let codegen_err = tensor_codegen::generate(&empty_slice_plan).unwrap_err();
+    assert_eq!(codegen_err.code, "AU4007");
+
+    // Overflowing window_indices parameters must fail cleanly with AU4005/AU4007.
+    for window in [
+        [i64::MAX, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, i64::MAX],
+        [1_i64 << 32, 1_i64 << 32, 1, 1, 1, 0],
+        [1_i64 << 20, 1_i64 << 20, 1024, 1024, 1, 0],
+    ] {
+        let error = node_op(&l.a, 13, &window).expect_err(&format!(
+            "window_indices({window:?}) should reject overflow"
+        ));
+        assert!(
+            matches!(error.code.as_str(), "AU4005" | "AU4007"),
+            "unexpected code {} for window {window:?}",
+            error.code
+        );
+    }
+
+    // Rank-0 plans are rejected directly by codegen too.
+    let rank_zero_plan = Plan {
+        slots: vec![Slot::Leaf {
+            dtype: ArrayDType::Float32 as i64,
+            shape: vec![],
+        }],
+        outputs: vec![0],
+    };
+    assert_eq!(
+        tensor_codegen::generate(&rank_zero_plan).unwrap_err().code,
+        "AU4007"
+    );
+
+    // Fallible allocations in tensor_kernels return AU4005 instead of aborting.
+    let huge_filled = tensor_kernels::filled(
+        tensor_kernels::Fill::Count,
+        Box::new([1_usize << 50]),
+        0,
+        ArrayDType::Float32,
+    )
+    .unwrap_err();
+    assert_eq!(huge_filled.code, "AU4005");
+    let huge_index_add =
+        tensor_kernels::index_add(&float32(&[1.0], &[1]), &int64(&[0], &[1]), 0, 1_usize << 50)
+            .unwrap_err();
+    assert_eq!(huge_index_add.code, "AU4005");
+}

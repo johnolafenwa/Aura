@@ -933,6 +933,9 @@ fn planned_result(
         return Ok(None);
     };
     checked_tensor_byte_len(&shape, dtype)?;
+    if shape.is_empty() || shape.contains(&0) {
+        return Ok(None);
+    }
     Ok(Some((dtype, shape)))
 }
 
@@ -2337,13 +2340,24 @@ fn window_indices(device: TensorDevice, window: [i64; 6], name: &str) -> Result<
             "expects a stride of at least 1 and a padding of at least 0",
         ));
     }
-    if kernel_height > height + 2 * padding || kernel_width > width + 2 * padding {
+    let overflow = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "`{}` window dimensions overflow size limits",
+                name.replace("::", ".")
+            ),
+        )
+    };
+    let double_padding = padding.checked_mul(2).ok_or_else(overflow)?;
+    let padded_height = height.checked_add(double_padding).ok_or_else(overflow)?;
+    let padded_width = width.checked_add(double_padding).ok_or_else(overflow)?;
+    let outside = height.checked_mul(width).ok_or_else(overflow)?;
+    if kernel_height > padded_height || kernel_width > padded_width {
         return Err(tensor_error(
             name,
             format!(
-                "expects a kernel no larger than the padded image: the kernel is {kernel_height} by {kernel_width} and the padded image {} by {}",
-                height + 2 * padding,
-                width + 2 * padding
+                "expects a kernel no larger than the padded image: the kernel is {kernel_height} by {kernel_width} and the padded image {padded_height} by {padded_width}",
             ),
         ));
     }
@@ -2351,21 +2365,38 @@ fn window_indices(device: TensorDevice, window: [i64; 6], name: &str) -> Result<
     if let Some(found) = WINDOWS.with(|kept| kept.borrow().get(&key).cloned()) {
         return Ok(found);
     }
-    let rows = (height + 2 * padding - kernel_height) / stride + 1;
-    let columns = (width + 2 * padding - kernel_width) / stride + 1;
-    let mut picks = Vec::with_capacity((rows * columns * kernel_height * kernel_width) as usize);
+    let rows = (padded_height - kernel_height)
+        .checked_div(stride)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(overflow)?;
+    let columns = (padded_width - kernel_width)
+        .checked_div(stride)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(overflow)?;
+    let total = usize::try_from(rows)
+        .ok()
+        .and_then(|r| r.checked_mul(usize::try_from(columns).ok()?))
+        .and_then(|rc| rc.checked_mul(usize::try_from(kernel_height).ok()?))
+        .and_then(|rck| rck.checked_mul(usize::try_from(kernel_width).ok()?))
+        .ok_or_else(overflow)?;
+    checked_tensor_byte_len(&[total], ArrayDType::Int64)?;
+    let mut picks = try_array_buffer(total, "tensor::conv2d window indices")?;
     for row in 0..rows {
+        let row_base = row.checked_mul(stride).ok_or_else(overflow)?;
         for column in 0..columns {
+            let col_base = column.checked_mul(stride).ok_or_else(overflow)?;
             for i in 0..kernel_height {
-                let y = row * stride + i - padding;
+                let y = row_base
+                    .checked_add(i)
+                    .and_then(|value| value.checked_sub(padding))
+                    .ok_or_else(overflow)?;
                 for j in 0..kernel_width {
-                    let x = column * stride + j - padding;
+                    let x = col_base
+                        .checked_add(j)
+                        .and_then(|value| value.checked_sub(padding))
+                        .ok_or_else(overflow)?;
                     let inside = (0..height).contains(&y) && (0..width).contains(&x);
-                    picks.push(if inside {
-                        y * width + x
-                    } else {
-                        height * width
-                    });
+                    picks.push(if inside { y * width + x } else { outside });
                 }
             }
         }
