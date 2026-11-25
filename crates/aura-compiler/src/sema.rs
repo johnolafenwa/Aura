@@ -7041,6 +7041,16 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        )
+                        .with_help(
+                            "keep the loan closure in its matching inferred local and call it directly",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7053,6 +7063,13 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7077,9 +7094,23 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     let actual_key =
                         self.type_expr_consuming_result(&entry.key, locals, key_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_key) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.key.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     key_ty.get_or_insert(actual_key);
                     let actual_value =
                         self.type_expr_consuming_result(&entry.value, locals, value_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_value) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.value.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     value_ty.get_or_insert(actual_value);
                 }
                 Ok(Type::Named(
@@ -8798,6 +8829,16 @@ impl<'a> FunctionChecker<'a> {
                             locals,
                             expected_elements.and_then(|types| types.get(index)),
                         )?;
+                        if type_contains_loan_closure(&ty) {
+                            return Err(Diagnostic::coded_at(
+                                "AU3010",
+                                element.span,
+                                "a closure containing a live view cannot be stored in an aggregate",
+                            )
+                            .with_help(
+                                "keep the loan closure in its matching inferred local and call it directly",
+                            ));
+                        }
                         self.consume_aggregate_literal_element(element, locals)?;
                         Ok(ty)
                     })

@@ -34377,3 +34377,64 @@ def main():
         assert_eq!(error.code, expected_code, "{label}: {error:?}");
     }
 }
+
+#[test]
+fn loan_closure_cannot_be_stored_in_tuple_literal() {
+    let cases = [
+        (
+            "match_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    match (lambda [xs]: len(xs), 1):
+        case (g, _):
+            xs.append(4)
+            print(g())
+"#,
+        ),
+        (
+            "destructure_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    g, _ = (lambda [xs]: len(xs), 1)
+    xs.append(4)
+    print(g())
+"#,
+        ),
+        (
+            "index_tuple_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    print((lambda [xs]: len(xs), 1)[0]())
+"#,
+        ),
+        (
+            "list_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = [lambda [xs]: len(xs)]
+    xs.append(4)
+    print(items[0]())
+"#,
+        ),
+        (
+            "dict_with_loan_closure",
+            r#"
+def main():
+    mut xs = [1, 2, 3]
+    items = {"k": lambda [xs]: len(xs)}
+    xs.append(4)
+    print(items["k"]())
+"#,
+        ),
+    ];
+    for (label, source) in cases {
+        let error = crate::check_source(source)
+            .expect_err(&format!("expected `{label}` to fail with AU3010"));
+        assert_eq!(error.code, "AU3010", "{label}: {error:?}");
+    }
+}
+
