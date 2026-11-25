@@ -14,9 +14,10 @@
 //! NVRTC and runs the actions.
 
 use super::{
-    Operation, Plan, Slot, ERF_OPERATION, NEGATE_OPERATION, PAIR_OPERATION_BASE, SIGMOID_OPERATION,
-    TANH_OPERATION,
+    checked_tensor_byte_len, Operation, Plan, Slot, ERF_OPERATION, NEGATE_OPERATION,
+    PAIR_OPERATION_BASE, SIGMOID_OPERATION, TANH_OPERATION,
 };
+use crate::diag::{Diagnostic, Result};
 use crate::runtime_value::ArrayDType;
 use std::fmt::Write;
 
@@ -161,9 +162,15 @@ fn lane_parts(inner: usize, length: usize) -> Option<usize> {
     if length < shortest {
         return None;
     }
-    let mut parts = 8;
-    while parts * parts < length {
-        parts *= 2;
+    let mut parts = 8_usize;
+    while parts
+        .checked_mul(parts)
+        .is_some_and(|square| square < length)
+    {
+        let Some(next) = parts.checked_mul(2) else {
+            break;
+        };
+        parts = next;
     }
     Some(parts)
 }
@@ -207,15 +214,38 @@ unsigned long long c, unsigned long long count) {
 const WARP_THREADS: usize = 32;
 const WARP_LANE: usize = 256;
 
+fn size_overflow(context: &str) -> Diagnostic {
+    Diagnostic::coded("AU4005", format!("tensor {context} overflows size limits"))
+}
+
+fn checked_mul(left: usize, right: usize, context: &str) -> Result<usize> {
+    left.checked_mul(right)
+        .ok_or_else(|| size_overflow(context))
+}
+
+fn checked_byte_len(count: usize, width: usize, context: &str) -> Result<usize> {
+    count
+        .checked_mul(width)
+        .filter(|&bytes| bytes <= isize::MAX as usize)
+        .ok_or_else(|| size_overflow(context))
+}
+
 /// The C expressions that split the linear index `j` around an axis whose
 /// lanes have `length` elements `inner` apart: the lane number before the
 /// axis, the place on the axis, and the place after it.
-fn split(inner: usize, length: usize) -> (String, String, String) {
-    (
-        format!("(j / {}LL)", inner * length),
+fn split(inner: usize, length: usize) -> Result<(String, String, String)> {
+    if inner == 0 || length == 0 {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "tensor GPU codegen cannot split an empty axis",
+        ));
+    }
+    let span = checked_mul(inner, length, "lane span")?;
+    Ok((
+        format!("(j / {span}LL)"),
         format!("((j / {inner}LL) % {length}LL)"),
         format!("(j % {inner}LL)"),
-    )
+    ))
 }
 
 /// The C expression for the linear index of the element at `at` on an
@@ -227,8 +257,12 @@ fn join(inner: usize, length: usize, lane: &(String, String, String), at: &str) 
     )
 }
 
-fn inner_of(shape: &[usize], axis: usize) -> usize {
-    shape[axis + 1..].iter().product()
+fn inner_of(shape: &[usize], axis: usize) -> Result<usize> {
+    shape[axis + 1..]
+        .iter()
+        .try_fold(1_usize, |product, &dimension| {
+            checked_mul(product, dimension, "lane stride")
+        })
 }
 
 fn dtype_of(code: i64) -> ArrayDType {
@@ -258,68 +292,87 @@ fn is_float(dtype: ArrayDType) -> bool {
 }
 
 /// The row-major stride of each axis of `shape`.
-fn strides(shape: &[usize]) -> Vec<usize> {
+fn strides(shape: &[usize]) -> Result<Vec<usize>> {
     let mut strides = vec![1; shape.len()];
     for axis in (0..shape.len().saturating_sub(1)).rev() {
-        strides[axis] = strides[axis + 1] * shape[axis + 1];
+        strides[axis] = checked_mul(strides[axis + 1], shape[axis + 1], "stride")?;
     }
-    strides
+    Ok(strides)
 }
 
-fn len(shape: &[usize]) -> usize {
-    shape.iter().product()
+fn len(shape: &[usize]) -> Result<usize> {
+    shape.iter().try_fold(1_usize, |product, &dimension| {
+        checked_mul(product, dimension, "element count")
+    })
 }
 
 /// The C expression for coordinate `axis` of the element at linear index
 /// `j` of `shape`.
-fn coordinate(shape: &[usize], axis: usize) -> String {
-    let stride = strides(shape)[axis];
+fn coordinate(shape: &[usize], axis: usize) -> Result<String> {
+    let stride = strides(shape)?[axis];
+    if stride == 0 || shape[axis] == 0 {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            "tensor GPU codegen cannot index an empty axis",
+        ));
+    }
     // A GPU divides 32-bit integers several times faster than 64-bit
     // ones, and the index of a tensor of fewer than 2^32 elements fits.
-    if len(shape) <= u32::MAX as usize {
-        return match (stride, axis) {
+    if len(shape)? <= u32::MAX as usize {
+        return Ok(match (stride, axis) {
             (1, 0) => "j".to_string(),
             (1, _) => format!("((unsigned)j % {}u)", shape[axis]),
             (_, 0) => format!("((unsigned)j / {stride}u)"),
             _ => format!("(((unsigned)j / {stride}u) % {}u)", shape[axis]),
-        };
+        });
     }
-    match (stride, axis) {
+    Ok(match (stride, axis) {
         (1, 0) => "j".to_string(),
         (1, _) => format!("(j % {}LL)", shape[axis]),
         (_, 0) => format!("(j / {stride}LL)"),
         _ => format!("((j / {stride}LL) % {}LL)", shape[axis]),
-    }
+    })
 }
 
 /// The C expression for the linear index in an operand of shape `from`
 /// of the element that broadcasts to linear index `j` of shape `to`.
-fn broadcast_index(to: &[usize], from: &[usize]) -> String {
+fn broadcast_index(to: &[usize], from: &[usize]) -> Result<String> {
     if to == from {
-        return "j".to_string();
+        return Ok("j".to_string());
     }
-    if len(from) == 1 {
-        return "0".to_string();
+    if len(from)? == 1 {
+        return Ok("0".to_string());
     }
-    let from_strides = strides(from);
+    let from_strides = strides(from)?;
     let lead = to.len() - from.len();
-    let terms: Vec<String> = (0..from.len())
-        .filter(|&axis| from[axis] != 1)
-        .map(|axis| format!("{} * {}LL", coordinate(to, lead + axis), from_strides[axis]))
-        .collect();
-    format!("({})", terms.join(" + "))
+    let mut terms = Vec::new();
+    for axis in 0..from.len() {
+        if from[axis] != 1 {
+            terms.push(format!(
+                "{} * {}LL",
+                coordinate(to, lead + axis)?,
+                from_strides[axis]
+            ));
+        }
+    }
+    Ok(format!("({})", terms.join(" + ")))
 }
 
 /// The linear index in an operand of shape `from` of the element that
 /// broadcasts to linear index `index` of shape `to`.
 pub(crate) fn broadcast_offset(to: &[usize], from: &[usize], index: usize) -> usize {
-    let (to_strides, from_strides) = (strides(to), strides(from));
+    let (to_strides, from_strides) = (
+        strides(to).expect("validated shape strides"),
+        strides(from).expect("validated shape strides"),
+    );
     let lead = to.len() - from.len();
     (0..from.len())
         .filter(|&axis| from[axis] != 1)
         .map(|axis| (index / to_strides[lead + axis]) % to[lead + axis] * from_strides[axis])
         .sum()
 }
+
+type LaneKernels = (Vec<Vec<(usize, usize)>>, Vec<bool>);
 
 struct Generator<'a> {
     plan: &'a Plan,
@@ -403,7 +456,21 @@ pub(crate) fn swaps_matrix(operation: &Operation, rank: usize) -> bool {
 }
 
 impl<'a> Generator<'a> {
-    fn new(plan: &'a Plan) -> Self {
+    fn new(plan: &'a Plan) -> Result<Self> {
+        for slot in &plan.slots {
+            let (dtype, shape) = match slot {
+                Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
+            };
+            let dtype = ArrayDType::from_code(dtype)
+                .ok_or_else(|| Diagnostic::coded("AU4007", "tensor plan has an unknown dtype"))?;
+            checked_tensor_byte_len(shape, dtype)?;
+            if shape.is_empty() || shape.contains(&0) {
+                return Err(Diagnostic::coded(
+                    "AU4007",
+                    "tensor GPU codegen requires non-empty shapes with at least one axis",
+                ));
+            }
+        }
         let count = plan.slots.len();
         let mut uses = vec![0_usize; count];
         let mut feeds_matmul = vec![false; count];
@@ -444,7 +511,7 @@ impl<'a> Generator<'a> {
             let Slot::Step { operation, .. } = &plan.slots[index] else {
                 continue;
             };
-            let size = len(slot_shape(&plan.slots[index]));
+            let size = len(slot_shape(&plan.slots[index]))?;
             if !matches!(
                 operation,
                 Operation::Binary(_)
@@ -469,7 +536,7 @@ impl<'a> Generator<'a> {
             let mut waiting = vec![index];
             while let Some(at) = waiting.pop() {
                 if at != index && materialized[at] {
-                    if len(slot_shape(&plan.slots[at])) >= size && !large.contains(&at) {
+                    if len(slot_shape(&plan.slots[at]))? >= size && !large.contains(&at) {
                         large.push(at);
                     }
                     continue;
@@ -601,8 +668,8 @@ impl<'a> Generator<'a> {
                 reader = user[reader];
             }
         }
-        let (lanes, in_lane) = Self::lane_kernels(plan, &materialized, &beside);
-        Self {
+        let (lanes, in_lane) = Self::lane_kernels(plan, &materialized, &beside)?;
+        Ok(Self {
             spread,
             plan,
             materialized,
@@ -614,7 +681,7 @@ impl<'a> Generator<'a> {
             source: PREAMBLE.to_string(),
             actions: Vec::new(),
             buffers: count,
-        }
+        })
     }
 
     /// Finds the elementwise steps that read reductions of their own
@@ -626,7 +693,7 @@ impl<'a> Generator<'a> {
         plan: &Plan,
         materialized: &[bool],
         beside: &[Vec<usize>],
-    ) -> (Vec<Vec<(usize, usize)>>, Vec<bool>) {
+    ) -> Result<LaneKernels> {
         let count = plan.slots.len();
         let mut users = vec![Vec::new(); count];
         for (index, slot) in plan.slots.iter().enumerate() {
@@ -663,18 +730,18 @@ impl<'a> Generator<'a> {
             {
                 continue;
             }
-            let size = len(shape);
+            let size = len(shape)?;
             let lanes_here = size / length;
             // Whether `slot` has the lanes of `index`: the same elements
             // in the same order with the same last axis, or one element
             // for each lane.
             let whole = |slot: usize| {
                 let shape = slot_shape(&plan.slots[slot]);
-                len(shape) == size && shape.last() == Some(&length)
+                len(shape).ok() == Some(size) && shape.last() == Some(&length)
             };
             let one_each = |slot: usize| {
                 let shape = slot_shape(&plan.slots[slot]);
-                len(shape) == lanes_here && shape.last() == Some(&1)
+                len(shape).ok() == Some(lanes_here) && shape.last() == Some(&1)
             };
             // The reduction a kernel of `index` can hold, read through
             // `slot`: one of the last axis of a tensor with these lanes,
@@ -796,7 +863,7 @@ impl<'a> Generator<'a> {
             }
             lanes[index] = found;
         }
-        (lanes, in_lane)
+        Ok((lanes, in_lane))
     }
 
     fn shape(&self, slot: usize) -> &'a [usize] {
@@ -859,9 +926,15 @@ impl<'a> Generator<'a> {
 
     /// Emits the function that computes one element of the fused step
     /// `slot`, after the functions of its fused operands.
-    fn emit_value(&mut self, kernel: usize, slot: usize, leaves: &[usize], done: &mut Vec<usize>) {
+    fn emit_value(
+        &mut self,
+        kernel: usize,
+        slot: usize,
+        leaves: &[usize],
+        done: &mut Vec<usize>,
+    ) -> Result<()> {
         if done.contains(&slot) {
-            return;
+            return Ok(());
         }
         done.push(slot);
         let Slot::Step {
@@ -872,36 +945,39 @@ impl<'a> Generator<'a> {
         };
         for &input in inputs {
             if !self.materialized[input] {
-                self.emit_value(kernel, input, leaves, done);
+                self.emit_value(kernel, input, leaves, done)?;
             }
         }
         let (parameters, arguments) = self.signature(leaves);
         let shape = self.shape(slot);
-        let operand = |position: usize| {
+        let operand = |position: usize| -> Result<String> {
             let input = inputs[position];
             let index = match operation {
                 Operation::Reshape(_) => "j".to_string(),
                 Operation::Permute(axes) => {
                     let source = self.shape(input);
                     let rank = source.len();
-                    let source_strides = strides(source);
-                    let terms: Vec<String> = (0..rank)
-                        .map(|axis| {
-                            let from = if axes.is_empty() {
-                                rank - 1 - axis
-                            } else if axes[axis] < 0 {
-                                (axes[axis] + rank as i64) as usize
-                            } else {
-                                axes[axis] as usize
-                            };
-                            format!("{} * {}LL", coordinate(shape, axis), source_strides[from])
-                        })
-                        .collect();
+                    let source_strides = strides(source)?;
+                    let mut terms = Vec::with_capacity(rank);
+                    for axis in 0..rank {
+                        let from = if axes.is_empty() {
+                            rank - 1 - axis
+                        } else if axes[axis] < 0 {
+                            (axes[axis] + rank as i64) as usize
+                        } else {
+                            axes[axis] as usize
+                        };
+                        terms.push(format!(
+                            "{} * {}LL",
+                            coordinate(shape, axis)?,
+                            source_strides[from]
+                        ));
+                    }
                     format!("({})", terms.join(" + "))
                 }
-                _ => broadcast_index(shape, self.shape(input)),
+                _ => broadcast_index(shape, self.shape(input))?,
             };
-            self.element(kernel, input, &index, &arguments)
+            Ok(self.element(kernel, input, &index, &arguments))
         };
         let operand_dtype = self.dtype(inputs[0]);
         let result = c_type(self.dtype(slot));
@@ -911,24 +987,24 @@ impl<'a> Generator<'a> {
         };
         let source = self.shape(inputs[0]);
         let body = match operation {
-            Operation::Binary(code) => binary(*code, operand_dtype, &operand(0), &operand(1)),
-            Operation::Unary(code) => unary(*code, operand_dtype, &operand(0)),
+            Operation::Binary(code) => binary(*code, operand_dtype, &operand(0)?, &operand(1)?),
+            Operation::Unary(code) => unary(*code, operand_dtype, &operand(0)?),
             Operation::Compare(code) => {
                 let symbol = ["<", "<=", ">", ">=", "==", "!="][*code as usize];
-                format!("(unsigned char)({} {symbol} {})", operand(0), operand(1))
+                format!("(unsigned char)({} {symbol} {})", operand(0)?, operand(1)?)
             }
-            Operation::Where => format!("({} ? {} : {})", operand(0), operand(1), operand(2)),
-            Operation::Reshape(_) | Operation::Permute(_) | Operation::Expand(_) => operand(0),
-            Operation::Cast(_) => format!("({result})({})", operand(0)),
+            Operation::Where => format!("({} ? {} : {})", operand(0)?, operand(1)?, operand(2)?),
+            Operation::Reshape(_) | Operation::Permute(_) | Operation::Expand(_) => operand(0)?,
+            Operation::Cast(_) => format!("({result})({})", operand(0)?),
             Operation::Slice { axis, step, .. } => {
-                let inner = inner_of(shape, *axis);
-                let lane = split(inner, shape[*axis]);
+                let inner = inner_of(shape, *axis)?;
+                let lane = split(inner, shape[*axis])?;
                 let place = format!("({} * {step}LL + (long long){})", lane.1, at(1, "0"));
                 at(0, &join(inner, source[*axis], &lane, &place))
             }
             Operation::Unslice { axis, step, .. } => {
-                let inner = inner_of(shape, *axis);
-                let lane = split(inner, shape[*axis]);
+                let inner = inner_of(shape, *axis)?;
+                let lane = split(inner, shape[*axis])?;
                 let length = source[*axis];
                 let element = at(0, &join(inner, length, &lane, &format!("(c / {step}LL)")));
                 format!(
@@ -940,8 +1016,8 @@ impl<'a> Generator<'a> {
                 )
             }
             Operation::Concat { axis } => {
-                let inner = inner_of(shape, *axis);
-                let lane = split(inner, shape[*axis]);
+                let inner = inner_of(shape, *axis)?;
+                let lane = split(inner, shape[*axis])?;
                 let (first, second) = (source[*axis], self.shape(inputs[1])[*axis]);
                 format!(
                     "({} < {first}LL ? {} : {})",
@@ -956,8 +1032,8 @@ impl<'a> Generator<'a> {
             Operation::Take { axis } => {
                 // An index outside the axis reads as zero. The CPU device
                 // reports it.
-                let inner = inner_of(source, *axis);
-                let lane = split(inner, len(self.shape(inputs[1])));
+                let inner = inner_of(source, *axis)?;
+                let lane = split(inner, len(self.shape(inputs[1]))?)?;
                 let length = source[*axis];
                 format!(
                     "0; long long i = (long long){}; \
@@ -994,13 +1070,15 @@ impl<'a> Generator<'a> {
             "AURA_INLINE {result} v{kernel}_{slot}(long long j{parameters}) {{ {body} }}"
         )
         .expect("writing to a string cannot fail");
+        Ok(())
     }
 
     /// Emits the functions that compute an element of operand `slot`.
-    fn emit_operand(&mut self, kernel: usize, slot: usize, leaves: &[usize]) {
+    fn emit_operand(&mut self, kernel: usize, slot: usize, leaves: &[usize]) -> Result<()> {
         if !self.materialized[slot] {
-            self.emit_value(kernel, slot, leaves, &mut Vec::new());
+            self.emit_value(kernel, slot, leaves, &mut Vec::new())?;
         }
+        Ok(())
     }
 
     /// The slot `slot` is the matrix transpose of, when that slot's
@@ -1024,15 +1102,16 @@ impl<'a> Generator<'a> {
     }
 
     /// A kernel that writes every element of the fused step `slot`.
-    fn map(&mut self, slot: usize) {
+    fn map(&mut self, slot: usize) -> Result<()> {
         let mut leaves = Vec::new();
         self.kernel_leaves(slot, &mut leaves);
         // The step itself is materialized, so emit its function directly.
         self.materialized[slot] = false;
-        self.emit_value(slot, slot, &leaves, &mut Vec::new());
+        let emitted = self.emit_value(slot, slot, &leaves, &mut Vec::new());
         self.materialized[slot] = true;
+        emitted?;
         let (parameters, arguments) = self.signature(&leaves);
-        let count = len(self.shape(slot));
+        let count = len(self.shape(slot))?;
         let result = c_type(self.dtype(slot));
         // The results written beside this one have its shape, and their
         // functions are already emitted as parts of this kernel.
@@ -1052,20 +1131,25 @@ impl<'a> Generator<'a> {
              out[j] = v{slot}_{slot}(j{arguments});{writes}\n}}"
         )
         .expect("writing to a string cannot fail");
-        let more = beside
-            .iter()
-            .map(|&other| (other, count * element_bytes(self.dtype(other))))
-            .collect();
+        let mut more = Vec::with_capacity(beside.len());
+        for &other in &beside {
+            more.push((
+                other,
+                checked_byte_len(count, element_bytes(self.dtype(other)), "buffer size")?,
+            ));
+        }
+        let bytes = checked_byte_len(count, element_bytes(self.dtype(slot)), "buffer size")?;
         self.maps.push(self.actions.len());
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
-            bytes: count * element_bytes(self.dtype(slot)),
+            bytes,
             threads: count,
             inputs: leaves,
             clear: false,
             more,
         });
+        Ok(())
     }
 
     /// Emits `{name}_all`, which a test on the host calls with one array
@@ -1093,7 +1177,7 @@ impl<'a> Generator<'a> {
     /// block apart from its own, a few threads fold what the block wrote,
     /// and thread zero keeps the result for the block. Then the threads
     /// write the lane of the result.
-    fn lane(&mut self, slot: usize) {
+    fn lane(&mut self, slot: usize) -> Result<()> {
         let reductions = self.lanes[slot].clone();
         let operand_of = |generator: &Self, reduction: usize| match &generator.plan.slots[reduction]
         {
@@ -1115,16 +1199,17 @@ impl<'a> Generator<'a> {
         for &(reduction, _) in &reductions {
             let operand = operand_of(self, reduction);
             if !self.materialized[operand] {
-                self.emit_value(slot, operand, &leaves, &mut done);
+                self.emit_value(slot, operand, &leaves, &mut done)?;
             }
         }
         self.materialized[slot] = false;
-        self.emit_value(slot, slot, &leaves, &mut done);
+        let emitted = self.emit_value(slot, slot, &leaves, &mut done);
         self.materialized[slot] = true;
+        emitted?;
         let (parameters, arguments) = self.signature(&leaves);
         let shape = self.shape(slot);
         let length = shape[shape.len() - 1];
-        let count = len(shape);
+        let count = len(shape)?;
         let lanes = count / length;
         // A short lane takes one warp, and a block holds eight lanes:
         // the threads of a warp wait for each other at no cost, where
@@ -1296,19 +1381,20 @@ impl<'a> Generator<'a> {
         self.actions.push(Action::Kernel {
             name,
             output: slot,
-            bytes: count * element_bytes(self.dtype(slot)),
-            threads: lanes * width,
+            bytes: checked_byte_len(count, element_bytes(self.dtype(slot)), "buffer size")?,
+            threads: checked_mul(lanes, width, "kernel thread count")?,
             inputs,
             clear: false,
             more: Vec::new(),
         });
+        Ok(())
     }
 
     /// Emits the kernels of the elementwise actions. Small ones that
     /// follow each other and do not read each other's results share one
     /// launch: each thread runs the body its index falls in. An optimizer
     /// step updates every parameter this way in a few launches.
-    fn launch_maps(&mut self) {
+    fn launch_maps(&mut self) -> Result<()> {
         let maps = std::mem::take(&mut self.maps);
         let actions = std::mem::take(&mut self.actions);
         // A small elementwise kernel whose results no later action reads,
@@ -1370,7 +1456,7 @@ impl<'a> Generator<'a> {
                     && !inputs.iter().any(|input| written.contains(input))
             });
             if !joins {
-                self.launch_group(std::mem::take(&mut group), &mut grouped);
+                self.launch_group(std::mem::take(&mut group), &mut grouped)?;
                 written.clear();
                 pointers = 0;
             }
@@ -1384,20 +1470,21 @@ impl<'a> Generator<'a> {
                     group.push(action);
                 }
                 None if maps.contains(&index) => {
-                    self.launch_group(vec![action], &mut grouped);
+                    self.launch_group(vec![action], &mut grouped)?;
                 }
                 None => grouped.push(action),
             }
         }
-        self.launch_group(group, &mut grouped);
+        self.launch_group(group, &mut grouped)?;
         self.actions = grouped;
+        Ok(())
     }
 
     /// Emits one kernel for the elementwise actions of `group` and adds
     /// its action to `actions`.
-    fn launch_group(&mut self, group: Vec<Action>, actions: &mut Vec<Action>) {
+    fn launch_group(&mut self, group: Vec<Action>, actions: &mut Vec<Action>) -> Result<()> {
         let Some(Action::Kernel { output: first, .. }) = group.first() else {
-            return;
+            return Ok(());
         };
         let first = *first;
         let name = if group.len() == 1 {
@@ -1406,7 +1493,7 @@ impl<'a> Generator<'a> {
             format!("g{first}")
         };
         let (mut outputs, mut inputs): (Vec<(usize, usize)>, Vec<usize>) = (Vec::new(), Vec::new());
-        let (mut body, mut threads) = (String::new(), 0);
+        let (mut body, mut threads) = (String::new(), 0_usize);
         for action in &group {
             let Action::Kernel {
                 output,
@@ -1436,7 +1523,9 @@ impl<'a> Generator<'a> {
                 "    if (j < {count}LL) {{ {call}); return; }}\n    j -= {count}LL;"
             )
             .expect("writing to a string cannot fail");
-            threads += count;
+            threads = threads
+                .checked_add(*count)
+                .ok_or_else(|| size_overflow("kernel thread count"))?;
         }
         let parameters: Vec<String> = outputs
             .iter()
@@ -1469,11 +1558,12 @@ impl<'a> Generator<'a> {
             clear: false,
             more: outputs[1..].to_vec(),
         });
+        Ok(())
     }
 
     /// The buffers a kernel reads to compute `operands`, after emitting
     /// the functions of the ones that are fused into kernel `kernel`.
-    fn emit_operands(&mut self, kernel: usize, operands: &[usize]) -> Vec<usize> {
+    fn emit_operands(&mut self, kernel: usize, operands: &[usize]) -> Result<Vec<usize>> {
         let mut leaves = Vec::new();
         for &operand in operands {
             for leaf in self.operand_leaves(operand) {
@@ -1486,22 +1576,29 @@ impl<'a> Generator<'a> {
         let mut done = Vec::new();
         for &operand in operands {
             if !self.materialized[operand] {
-                self.emit_value(kernel, operand, &leaves, &mut done);
+                self.emit_value(kernel, operand, &leaves, &mut done)?;
             }
         }
-        leaves
+        Ok(leaves)
     }
 
     /// The kernel of the indexed sum `slot`: one thread adds one element
     /// of `updates` into a buffer of zeros.
-    fn index_add(&mut self, slot: usize, axis: usize, size: usize, updates: usize, indices: usize) {
-        let leaves = self.emit_operands(slot, &[updates, indices]);
+    fn index_add(
+        &mut self,
+        slot: usize,
+        axis: usize,
+        size: usize,
+        updates: usize,
+        indices: usize,
+    ) -> Result<()> {
+        let leaves = self.emit_operands(slot, &[updates, indices])?;
         let (parameters, arguments) = self.signature(&leaves);
         let ty = c_type(self.dtype(slot));
         let shape = self.shape(slot);
-        let inner = inner_of(shape, axis);
-        let count = len(self.shape(updates));
-        let lane = split(inner, len(self.shape(indices)));
+        let inner = inner_of(shape, axis)?;
+        let count = len(self.shape(updates))?;
+        let lane = split(inner, len(self.shape(indices))?)?;
         let index = self.element(slot, indices, &lane.1, &arguments);
         let value = self.element(slot, updates, "j", &arguments);
         let target = join(inner, size, &lane, "i");
@@ -1517,23 +1614,30 @@ impl<'a> Generator<'a> {
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
-            bytes: len(shape) * element_bytes(self.dtype(slot)),
+            bytes: checked_byte_len(len(shape)?, element_bytes(self.dtype(slot)), "buffer size")?,
             threads: count,
             inputs: leaves,
             clear: true,
             more: Vec::new(),
         });
+        Ok(())
     }
 
     /// The kernel of `slot`, the place of each lane's largest or smallest
     /// element: one thread reads one lane.
-    fn arg_reduce(&mut self, slot: usize, largest: bool, axis: usize, operand: usize) {
-        let leaves = self.emit_operands(slot, &[operand]);
+    fn arg_reduce(
+        &mut self,
+        slot: usize,
+        largest: bool,
+        axis: usize,
+        operand: usize,
+    ) -> Result<()> {
+        let leaves = self.emit_operands(slot, &[operand])?;
         let (parameters, arguments) = self.signature(&leaves);
         let ty = c_type(self.dtype(operand));
         let source = self.shape(operand);
-        let (length, inner) = (source[axis], inner_of(source, axis));
-        let lanes = len(source) / length;
+        let (length, inner) = (source[axis], inner_of(source, axis)?);
+        let lanes = len(source)? / length;
         let first = self.element(slot, operand, "start", &arguments);
         let next = self.element(slot, operand, "(start + k * step)", &arguments);
         let wins = if largest { ">" } else { "<" };
@@ -1546,7 +1650,7 @@ impl<'a> Generator<'a> {
                 self.element(slot, operand, "(start + k)", &arguments),
                 self.element(slot, operand, "(start + at)", &arguments),
             );
-            let threads = lanes * parts;
+            let threads = checked_mul(lanes, parts, "reduction thread count")?;
             writeln!(
                 self.source,
                 "extern \"C\" __global__ void k{slot}r0(long long* out{parameters}) {{\n    \
@@ -1581,7 +1685,7 @@ impl<'a> Generator<'a> {
             self.actions.push(Action::Kernel {
                 name: format!("k{slot}r0"),
                 output: partial,
-                bytes: threads * 8,
+                bytes: checked_byte_len(threads, 8, "reduction buffer size")?,
                 threads,
                 inputs: leaves.clone(),
                 clear: false,
@@ -1592,13 +1696,13 @@ impl<'a> Generator<'a> {
             self.actions.push(Action::Kernel {
                 name: format!("k{slot}"),
                 output: slot,
-                bytes: lanes * 8,
+                bytes: checked_byte_len(lanes, 8, "reduction buffer size")?,
                 threads: lanes,
                 inputs,
                 clear: false,
                 more: Vec::new(),
             });
-            return;
+            return Ok(());
         }
         writeln!(
             self.source,
@@ -1619,16 +1723,23 @@ impl<'a> Generator<'a> {
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
-            bytes: lanes * 8,
+            bytes: checked_byte_len(lanes, 8, "reduction buffer size")?,
             threads: lanes,
             inputs: leaves,
             clear: false,
             more: Vec::new(),
         });
+        Ok(())
     }
 
     /// The kernels of the reduction step `slot`.
-    fn reduce(&mut self, slot: usize, reduction: i64, axis: Option<i64>, operand: usize) {
+    fn reduce(
+        &mut self,
+        slot: usize,
+        reduction: i64,
+        axis: Option<i64>,
+        operand: usize,
+    ) -> Result<()> {
         let dtype = self.dtype(slot);
         let ty = c_type(dtype);
         let suffix = if dtype == ArrayDType::Float64 {
@@ -1642,10 +1753,10 @@ impl<'a> Generator<'a> {
             _ => format!("{acc} + {value}"),
         };
         let leaves = self.operand_leaves(operand);
-        self.emit_operand(slot, operand, &leaves);
+        self.emit_operand(slot, operand, &leaves)?;
         let (parameters, arguments) = self.signature(&leaves);
         let source = self.shape(operand);
-        let count = len(source);
+        let count = len(source)?;
         let at = |index: &str| self.element(slot, operand, index, &arguments);
         let bytes = element_bytes(dtype);
         match axis {
@@ -1657,7 +1768,7 @@ impl<'a> Generator<'a> {
                     axis as usize
                 };
                 let length = source[axis];
-                let inner = strides(source)[axis];
+                let inner = strides(source)?[axis];
                 let lanes = count / length;
                 let finish = if reduction == 3 {
                     format!("acc / ({ty}){length}")
@@ -1671,7 +1782,7 @@ impl<'a> Generator<'a> {
                     // Thread `t` is place `t % inner` after the axis,
                     // part `(t / inner) % parts`, so threads beside each
                     // other read memory beside each other.
-                    let threads = lanes * parts;
+                    let threads = checked_mul(lanes, parts, "reduction thread count")?;
                     let step = combine("acc", &at("(start + k * step)"));
                     let join = combine("acc", "in[base + part * step]");
                     writeln!(
@@ -1701,7 +1812,7 @@ impl<'a> Generator<'a> {
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}r0"),
                         output: partial,
-                        bytes: threads * bytes,
+                        bytes: checked_byte_len(threads, bytes, "reduction buffer size")?,
                         threads,
                         inputs: leaves,
                         clear: false,
@@ -1710,13 +1821,13 @@ impl<'a> Generator<'a> {
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}"),
                         output: slot,
-                        bytes: lanes * bytes,
+                        bytes: checked_byte_len(lanes, bytes, "reduction buffer size")?,
                         threads: lanes,
                         inputs: vec![partial],
                         clear: false,
                         more: Vec::new(),
                     });
-                    return;
+                    return Ok(());
                 }
                 let (first, next) = (at("start"), at("(start + k * step)"));
                 let step = combine("acc", &next);
@@ -1735,7 +1846,7 @@ impl<'a> Generator<'a> {
                 self.actions.push(Action::Kernel {
                     name: format!("k{slot}"),
                     output: slot,
-                    bytes: lanes * bytes,
+                    bytes: checked_byte_len(lanes, bytes, "reduction buffer size")?,
                     threads: lanes,
                     inputs: leaves,
                     clear: false,
@@ -1788,7 +1899,7 @@ impl<'a> Generator<'a> {
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}r{stage}"),
                         output,
-                        bytes: threads * bytes,
+                        bytes: checked_byte_len(threads, bytes, "reduction buffer size")?,
                         threads,
                         inputs: match input {
                             None => leaves.clone(),
@@ -1806,11 +1917,12 @@ impl<'a> Generator<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     /// The products of the step `product` into the buffer of `slot`:
     /// the step itself, or the reshape that merges its heads.
-    fn matmul(&mut self, slot: usize, product: usize) {
+    fn matmul(&mut self, slot: usize, product: usize) -> Result<()> {
         let Slot::Step { inputs, .. } = &self.plan.slots[product] else {
             unreachable!("a product is a step")
         };
@@ -1825,25 +1937,57 @@ impl<'a> Generator<'a> {
         let lead = &shape[..shape.len() - 2];
         let left_lead = &left_shape[..left_shape.len() - 2];
         let right_lead = &right_shape[..right_shape.len() - 2];
-        let pairs = (0..len(lead))
-            .map(|product| {
-                (
-                    broadcast_offset(lead, left_lead, product) * rows * inner,
-                    broadcast_offset(lead, right_lead, product) * inner * columns,
-                )
-            })
-            .collect();
+        let lead_len = len(lead)?;
+        let left_matrix = checked_mul(rows, inner, "matmul left matrix size")?;
+        let right_matrix = checked_mul(inner, columns, "matmul right matrix size")?;
+        let mut pairs = Vec::new();
+        pairs.try_reserve_exact(lead_len).map_err(|_| {
+            Diagnostic::coded(
+                "AU4007",
+                "matmul batch table exceeds host allocation capacity",
+            )
+        })?;
+        for product in 0..lead_len {
+            let left_offset = checked_mul(
+                broadcast_offset(lead, left_lead, product),
+                left_matrix,
+                "matmul left offset",
+            )?;
+            let right_offset = checked_mul(
+                broadcast_offset(lead, right_lead, product),
+                right_matrix,
+                "matmul right offset",
+            )?;
+            pairs.push((left_offset, right_offset));
+        }
         let dtype = self.dtype(product);
         // Merged heads: product `head` of stack `batch` starts `head`
         // matrices into the rows of its stack, which are all the heads
         // wide.
-        let spread = (slot != product).then(|| {
-            let (heads, width) = (shape[1], shape[1] * columns);
-            let offsets = (0..len(lead))
-                .map(|at| (at / heads) * rows * width + (at % heads) * columns)
-                .collect();
-            (width, offsets)
-        });
+        let spread = if slot != product {
+            checked_byte_len(lead_len, 24, "matmul spread table")?;
+            let heads = shape[1];
+            let width = checked_mul(heads, columns, "matmul spread width")?;
+            let row_stride = checked_mul(rows, width, "matmul spread stride")?;
+            let mut offsets = Vec::new();
+            offsets.try_reserve_exact(lead_len).map_err(|_| {
+                Diagnostic::coded(
+                    "AU4007",
+                    "matmul spread table exceeds host allocation capacity",
+                )
+            })?;
+            for at in 0..lead_len {
+                let batch_offset = checked_mul(at / heads, row_stride, "matmul spread offset")?;
+                let head_offset = checked_mul(at % heads, columns, "matmul spread offset")?;
+                let start = batch_offset
+                    .checked_add(head_offset)
+                    .ok_or_else(|| size_overflow("matmul spread offset"))?;
+                offsets.push(start);
+            }
+            Some((width, offsets))
+        } else {
+            None
+        };
         if spread.is_some() && !self.source.contains(ADDRESSES) {
             self.source.push_str(ADDRESSES);
         }
@@ -1854,7 +1998,7 @@ impl<'a> Generator<'a> {
             left,
             right,
             output: slot,
-            bytes: len(shape) * element_bytes(dtype),
+            bytes: checked_byte_len(len(shape)?, element_bytes(dtype), "buffer size")?,
             double: dtype == ArrayDType::Float64,
             rows,
             inner,
@@ -1863,9 +2007,10 @@ impl<'a> Generator<'a> {
             swapped,
             spread,
         });
+        Ok(())
     }
 
-    fn generate(mut self) -> Program {
+    fn generate(mut self) -> Result<Program> {
         for slot in 0..self.plan.slots.len() {
             let Slot::Step {
                 operation, inputs, ..
@@ -1877,20 +2022,20 @@ impl<'a> Generator<'a> {
                 continue;
             }
             match operation {
-                _ if !self.lanes[slot].is_empty() => self.lane(slot),
+                _ if !self.lanes[slot].is_empty() => self.lane(slot)?,
                 _ if self.spread[slot].is_some() => {
                     let product = self.spread[slot].expect("checked above");
-                    self.matmul(slot, product);
+                    self.matmul(slot, product)?;
                 }
                 Operation::Reduce { reduction, axis } => {
-                    self.reduce(slot, *reduction, *axis, inputs[0]);
+                    self.reduce(slot, *reduction, *axis, inputs[0])?;
                 }
-                Operation::Matmul => self.matmul(slot, slot),
+                Operation::Matmul => self.matmul(slot, slot)?,
                 Operation::IndexAdd { axis, size } => {
-                    self.index_add(slot, *axis, *size, inputs[0], inputs[1]);
+                    self.index_add(slot, *axis, *size, inputs[0], inputs[1])?;
                 }
                 Operation::ArgReduce { largest, axis } => {
-                    self.arg_reduce(slot, *largest, *axis, inputs[0]);
+                    self.arg_reduce(slot, *largest, *axis, inputs[0])?;
                 }
                 Operation::Reshape(_) if self.materialized[inputs[0]] => {
                     self.actions.push(Action::Alias {
@@ -1898,15 +2043,15 @@ impl<'a> Generator<'a> {
                         input: inputs[0],
                     });
                 }
-                _ => self.map(slot),
+                _ => self.map(slot)?,
             }
         }
-        self.launch_maps();
-        Program {
+        self.launch_maps()?;
+        Ok(Program {
             source: self.source,
             actions: self.actions,
             buffers: self.buffers,
-        }
+        })
     }
 }
 
@@ -1982,8 +2127,8 @@ fn unary(code: i64, dtype: ArrayDType, operand: &str) -> String {
 }
 
 /// The CUDA C for `plan` and the actions that run it.
-pub(crate) fn generate(plan: &Plan) -> Program {
-    Generator::new(plan).generate()
+pub(crate) fn generate(plan: &Plan) -> Result<Program> {
+    Generator::new(plan)?.generate()
 }
 
 /// The buffers each action of `program` is the last to read, leaving out
@@ -2007,4 +2152,40 @@ pub(crate) fn finished_buffers(program: &Program, plan: &Plan) -> Vec<Vec<usize>
         }
     }
     finished
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checked_size_helpers_reject_overflow() {
+        assert_eq!(
+            checked_mul(usize::MAX, 2, "product").unwrap_err().code,
+            "AU4005"
+        );
+        assert_eq!(
+            checked_byte_len((1_usize << 62) + 1, 4, "buffer")
+                .unwrap_err()
+                .code,
+            "AU4005"
+        );
+        assert_eq!(
+            checked_byte_len(1_usize << 61, 4, "buffer")
+                .unwrap_err()
+                .code,
+            "AU4005"
+        );
+        assert_eq!(strides(&[2, usize::MAX, 2]).unwrap_err().code, "AU4005");
+        assert_eq!(split(usize::MAX, 2).unwrap_err().code, "AU4005");
+        assert!(lane_parts(1, usize::MAX).is_some());
+        let bad_dtype = Plan {
+            slots: vec![Slot::Leaf {
+                dtype: 99,
+                shape: vec![1],
+            }],
+            outputs: vec![0],
+        };
+        assert_eq!(generate(&bad_dtype).unwrap_err().code, "AU4007");
+    }
 }
