@@ -2,6 +2,19 @@
 
 Last updated: 2026-11-24
 
+## Dict and set speed (in progress)
+
+- Target: John's 2026-11-24 goal of Rust's speed, dict and set half.
+  Details and measurements are in `2026-11-24-dict-and-set-speed.md`.
+- Done: one-call hashing, single-probe `int64` inserts, removes that build
+  no `Lookup`, and loops over `items()`, `keys()` and `values()` that walk
+  the dict and make no list. `dict_remove` went from 9.9 to 2.6 times
+  Rust's instructions and one entry of an `items()` loop from 4,046
+  instructions to 252.
+- Done: a `str` key read from a list is looked
+  up where the list holds it (`keys[i] in table` 4.2 to 1.4 times Rust).
+- Next: one probe and no copy for the counting idiom on a viewed key.
+
 ## Verification in the documentation (complete)
 
 - Target: John's 2026-11-24 request that `aura verify` be prominent across
@@ -26,6 +39,27 @@ Last updated: 2026-11-24
   after they pass, find what `raytracer` and `order_book` run more of,
   keep the set union test out of the plain dictionary lookup, and renew
   the extension publishing token before 2026-12-01.
+
+## Verification gaps (in progress)
+
+- Target: John's 2026-11-24 request to close the gaps a survey of
+  `aura verify` found on 0.17.0. Notes are in
+  `2026-11-24-verification-gaps.md`.
+- Stage 1, wrong answers: a check that reads an unmodeled result is
+  reported as not modeled instead of failed, a contract that can never
+  hold is `AU5120`, `Span`, view and `Array` indexes are checked,
+  generator bodies assume their `requires`, trait implementation methods
+  assume class invariants, and a call keeps the fields its callee cannot
+  write.
+- Stage 1 merged in #321.
+- Stage 2, coverage: lists (membership, slices, sort, comprehension
+  lengths, min/max, lists of lists), integer bit operations, shifts and
+  `math`, `str` methods and f-strings, closures called where they are made,
+  class invariants inside other values, `match` expressions, union calls,
+  package mode with `--deny` and `--must-verify` (`AU5122`),
+  `aura test --verify`, and module-level code.
+- Next: failure recovery, shared state, tensor shapes, fewer solver
+  timeouts, a solver watchdog and a second-solver cross-check.
 
 ## Combined feature verification
 

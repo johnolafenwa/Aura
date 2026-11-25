@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 
 use super::exec::{
-    conjoin, key_sort, lit, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
-    State, Val,
+    array_parts, array_shape, bind_span_views, conjoin, key_sort, lit, not, scalar_val, smt_string,
+    span_range_names, structural_eq, Exec, FloatTy, Goal, IntTy, State, Val,
 };
 use super::ObligationKind;
 use crate::ast::{
@@ -44,7 +44,8 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = pre.iter().cloned().collect();
+        let mut env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut env);
         let display = public_name(callee);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
@@ -66,7 +67,7 @@ impl Exec<'_> {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
                 // No run checks the invariant on entry to a method that
                 // only reads `self`; the method's proof assumes it.
-                let reads_only = self.reads_only(callee);
+                let reads_only = self.reads_only(callee) || self.cx.impl_guard(callee).is_some();
                 let erasing = self.erasing;
                 self.erasing |= reads_only;
                 for clause in clauses {
@@ -120,6 +121,7 @@ impl Exec<'_> {
             }
             self.erasing = erasing;
         }
+        self.prove_inner_arguments(state, callee, pre, span);
     }
 
     /// The invariant clauses of the class of `value`, when it is an object
@@ -154,6 +156,15 @@ impl Exec<'_> {
     /// assume they do.
     pub(super) fn prove_return_invariants(&mut self, state: &State, result: &Val) {
         let mut values = vec![("the result".to_string(), result.clone())];
+        // No run checks the invariant a `mut self` method of a trait
+        // implementation leaves, and its callers assume it.
+        if self.function.receiver == Some(crate::mir::MirReceiverKind::BorrowMut)
+            && self.cx.impl_guard(&self.function.name).is_some()
+        {
+            if let Some(value) = state.env.get("self") {
+                values.push(("`self`".to_string(), value.clone()));
+            }
+        }
         for param in &self.function.params {
             if param.passing == crate::mir::MirReceiverKind::BorrowMut {
                 if let Some(value) = state.env.get(&param.name) {
@@ -185,6 +196,7 @@ impl Exec<'_> {
             }
         }
         self.erasing = erasing;
+        self.prove_inner_returns(state, result);
     }
 
     /// Whether `callee` is a method that only reads `self`.
@@ -208,12 +220,14 @@ impl Exec<'_> {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let pre_env: Env = pre.iter().cloned().collect();
+        let mut pre_env: Env = pre.iter().cloned().collect();
+        bind_span_views(&mut pre_env);
         let checks_invariant = is_invariant_check(callee);
         for clause in &decl.contracts {
             match clause.kind {
                 ContractKind::Ensures => {
                     let mut env: Env = post.iter().cloned().collect();
+                    bind_span_views(&mut env);
                     env.insert("result".to_string(), result.clone());
                     let mut olds_ok = true;
                     let prev_proving = self.proving;
@@ -261,6 +275,7 @@ impl Exec<'_> {
             )
             .collect();
         self.assume_record_invariants(state, &returned);
+        self.assume_inner_results(state, callee, pre, post, result);
     }
 
     /// A named function passed as a callable alias with a contract meets
@@ -438,11 +453,12 @@ impl Exec<'_> {
     /// well-defined: every call proves it.
     pub(super) fn assume_entry_requires(&mut self, state: &State) {
         let name = self.function.name.clone();
-        let Some(decl) = self.cx.decl(&name) else {
+        let Some(decl) = self.cx.entry_decl(&name) else {
             return;
         };
         let decl_module = self.cx.decl_module(decl);
-        let env: Env = state.env.clone();
+        let mut env: Env = state.env.clone();
+        bind_span_views(&mut env);
         for clause in &decl.contracts {
             if clause.kind == ContractKind::Requires {
                 self.assume_clause_in(state, clause, &env, decl_module);
@@ -476,25 +492,72 @@ impl Exec<'_> {
             .filter_map(|param| state.env.get(&param.name).cloned())
             .collect();
         self.assume_record_invariants(state, &values);
+        self.assume_inner_parameters(state);
     }
 
     /// The invariant clauses that hold on entry to `callee` and on its
-    /// return, when it is a public method of a class with invariants that
-    /// takes `mut self` (where they are checked when the program runs) or
-    /// `self` (where each call is proved to keep them).
+    /// return. For a public method of a class with invariants they are
+    /// checked when the program runs if it takes `mut self`, and each call
+    /// is proved to keep them if it takes `self`. For a method of a trait
+    /// implementation no run checks them: each call that names the method
+    /// proves them, and a call on a trait object relies on the object
+    /// holding them (see `verify_guard`). A call whose implementation is
+    /// picked at run time names no class.
     fn guarded_invariant(&self, callee: &str) -> Option<(String, Vec<ContractClause>)> {
-        let decl = self.cx.decl(callee)?;
-        if !decl.public
-            || !matches!(
-                decl.receiver,
-                Some(crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow)
-            )
-        {
+        if self.dynamic_call {
             return None;
         }
-        let (class, _) = base_name(callee).rsplit_once('.')?;
+        let class = match self.cx.impl_guard(callee) {
+            Some(class) => class,
+            None => {
+                let decl = self.cx.decl(callee)?;
+                if !decl.public
+                    || !matches!(
+                        decl.receiver,
+                        Some(
+                            crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow
+                        )
+                    )
+                {
+                    return None;
+                }
+                base_name(callee).rsplit_once('.')?.0
+            }
+        };
         let (module_name, clauses) = self.cx.class_invariant(class)?;
         (!clauses.is_empty()).then(|| (module_name.to_string(), clauses.to_vec()))
+    }
+
+    /// A value that becomes a trait object holds its class invariant when
+    /// a trait implementation method of its class assumes it: a call on
+    /// the object proves nothing about what it holds.
+    pub(super) fn prove_held_invariant(&mut self, state: &State, value: &Val) {
+        let Val::Record(class, _) = value else {
+            return;
+        };
+        if !self.cx.guards_class(class) {
+            return;
+        }
+        let (inv_module, clauses) = self.record_invariant(value).expect("a guarded class");
+        let env: Env = [("self".to_string(), value.clone())].into();
+        let erasing = self.erasing;
+        self.erasing = true;
+        for clause in clauses {
+            let message = format!(
+                "class invariant holds for the value a trait object takes: `{}`",
+                clause.text
+            );
+            self.prove_clause_in(
+                state,
+                ObligationKind::ClassInvariant,
+                self.span,
+                message,
+                &clause,
+                &env,
+                Some(&inv_module),
+            );
+        }
+        self.erasing = erasing;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -593,11 +656,18 @@ impl Exec<'_> {
                         wd.push(ty.contains(&result));
                         Ok(Val::Int(result, ty))
                     }
+                    (UnaryOp::BitNot, Val::Int(term, ty)) => {
+                        Ok(Val::Int(super::integers::bitnot(&term, ty), ty))
+                    }
                     _ => Err("this unary operator is not modeled in contracts yet".into()),
                 }
             }
             ExprKind::Binary { op, left, right } => {
                 self.spec_binary(*op, left, right, env, wd, depth)
+            }
+            ExprKind::Cast { expr: inner, ty } => {
+                let value = self.spec(inner, env, wd, depth)?;
+                super::integers::spec_cast(value, ty, wd)
             }
             ExprKind::CompareChain { first, links } => {
                 let mut previous = self.spec(first, env, wd, depth)?;
@@ -745,17 +815,32 @@ impl Exec<'_> {
                             .ok_or("tuple index out of range".to_string()),
                         _ => Err("a tuple index must be a literal".into()),
                     },
+                    Val::Str(text) => {
+                        let index = self.spec(index, env, wd, depth)?;
+                        self.spec_text(&text, "char_at", &[index], wd)
+                    }
                     _ => Err("indexing this type is not modeled in contracts yet".into()),
                 }
             }
-            ExprKind::Member { object, field } => match self.spec(object, env, wd, depth)? {
-                Val::Record(_, fields) => fields
-                    .iter()
-                    .find(|(name, _)| name == field)
-                    .map(|(_, value)| value.clone())
-                    .ok_or(format!("field `{field}` is not modeled")),
-                _ => Err(format!("`.{field}` on this value is not modeled yet")),
-            },
+            ExprKind::Slice {
+                object, start, end, ..
+            } => self.spec_slice(object, [start, end], env, wd, depth),
+            ExprKind::FString(parts) => self.spec_format(parts, env, wd, depth),
+            ExprKind::IsNone { value, negated, .. } => {
+                let value = self.spec(value, env, wd, depth)?;
+                self.spec_is_none(&value, *negated)
+            }
+            ExprKind::Member { object, field } => {
+                match self.spec_object(object, field, env, wd, depth)? {
+                    value @ Val::Enum(..) => Ok(value),
+                    Val::Record(_, fields) => fields
+                        .iter()
+                        .find(|(name, _)| name == field)
+                        .map(|(_, value)| value.clone())
+                        .ok_or(format!("field `{field}` is not modeled")),
+                    _ => Err(format!("`.{field}` on this value is not modeled yet")),
+                }
+            }
             ExprKind::Call { callee, args } => {
                 if let ExprKind::Member { object, field } = &callee.kind {
                     if let Some(module_path) = self.spec_module_path(object, env) {
@@ -776,6 +861,13 @@ impl Exec<'_> {
                     }
                     // A `spec def` method of the receiver's class.
                     let receiver = self.spec(object, env, wd, depth)?;
+                    if let Some((len, rank, dims)) = array_parts(&receiver) {
+                        return match field.as_str() {
+                            "len" => Ok(Val::Int(len, IntTy::INT64)),
+                            "shape" => Ok(array_shape(rank, dims)),
+                            _ => Err(format!("`Array.{field}` is not modeled in contracts yet")),
+                        };
+                    }
                     if let (Val::List { .. }, "contains", [arg]) =
                         (&receiver, field.as_str(), args.as_slice())
                     {
@@ -783,20 +875,11 @@ impl Exec<'_> {
                         return self.membership(&item, &receiver).map(Val::Bool);
                     }
                     if let Val::Str(text) = &receiver {
-                        let [arg] = args.as_slice() else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        let Val::Str(other) = self.spec(&arg.value, env, wd, depth)? else {
-                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
-                        };
-                        return match field.as_str() {
-                            "starts_with" => {
-                                Ok(Val::Bool(format!("(str.prefixof {other} {text})")))
-                            }
-                            "ends_with" => Ok(Val::Bool(format!("(str.suffixof {other} {text})"))),
-                            "contains" => Ok(Val::Bool(format!("(str.contains {text} {other})"))),
-                            _ => Err(format!("`str.{field}` is not modeled in contracts yet")),
-                        };
+                        let mut values = Vec::new();
+                        for arg in args {
+                            values.push(self.spec(&arg.value, env, wd, depth)?);
+                        }
+                        return self.spec_text(text, field, &values, wd);
                     }
                     let Val::Record(class, _) = &receiver else {
                         return Err(format!(
@@ -830,6 +913,11 @@ impl Exec<'_> {
                 for arg in args {
                     values.push(self.spec(&arg.value, env, wd, depth)?);
                 }
+                if let ("len", [value]) = (name.as_str(), values.as_slice()) {
+                    if let Some((len, ..)) = array_parts(value) {
+                        return Ok(Val::Int(len, IntTy::INT64));
+                    }
+                }
                 match (name.as_str(), values.as_slice()) {
                     (
                         "len",
@@ -838,6 +926,7 @@ impl Exec<'_> {
                     ("len", [Val::Str(text)]) => {
                         Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
                     }
+                    ("str", [value]) => self.spec_display(value),
                     ("abs", [Val::Float(term, float)]) => {
                         Ok(Val::Float(format!("(fp.abs {term})"), *float))
                     }
@@ -942,13 +1031,14 @@ impl Exec<'_> {
         );
         if depth >= limit || self.active_specs.contains(&call_key) {
             if self.proving {
-                wd.push("false".to_string());
+                wd.push(self.spec_cutoff(&spec.name, limit));
                 self.spec_limit_hit = Some(limit);
             }
             return match self.cx.spec_return_type(spec) {
                 Some(Type::Unit) => Ok(Val::Unit),
                 Some(ty) => {
-                    let fresh = self.fresh(ty, &spec.name);
+                    let what = super::shapes::spec_cutoff_name(&spec.name, limit);
+                    let fresh = self.unmodeled(what, |exec| exec.fresh(ty, &spec.name));
                     if matches!(fresh, Val::Opaque) {
                         Err(format!(
                             "`spec def {}` unfolds more than {limit} levels",
@@ -1041,6 +1131,12 @@ impl Exec<'_> {
         }
         let lhs = self.spec(left, env, wd, depth)?;
         let rhs = self.spec(right, env, wd, depth)?;
+        // Any operator but `==` reads a union as the member it holds.
+        let (lhs, rhs) = if matches!(op, BinaryOp::Eq | BinaryOp::NotEq) {
+            (lhs, rhs)
+        } else {
+            (self.spec_member(lhs, wd), self.spec_member(rhs, wd))
+        };
         match op {
             BinaryOp::Eq
             | BinaryOp::NotEq
@@ -1112,6 +1208,18 @@ impl Exec<'_> {
                 };
                 wd.push(ty.contains(&term));
                 Ok(Val::Int(term, ty))
+            }
+            BinaryOp::Pow => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_pow(&lhs, &rhs, literal_left, wd)
+            }
+            BinaryOp::BitAnd
+            | BinaryOp::BitOr
+            | BinaryOp::BitXor
+            | BinaryOp::Shl
+            | BinaryOp::Shr => {
+                let literal_left = matches!(left.kind, ExprKind::Int(_));
+                self.spec_bits(op, &lhs, &rhs, literal_left, wd)
             }
             _ => Err(format!("`{op:?}` is not modeled in contracts yet")),
         }
@@ -1417,8 +1525,13 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
             BinaryOp::GreaterEq => format!("(str.<= {b} {a})"),
             _ => format!("(= {a} {b})"),
         },
-        (Val::Map { .. } | Val::Set { .. }, _) if symbol == "=" => structural_eq(lhs, rhs)
-            .ok_or("comparing these values is not modeled in contracts yet".to_string())?,
+        (Val::Map { .. } | Val::Set { .. } | Val::Union(..) | Val::Enum(..), _)
+        | (_, Val::Union(..))
+            if symbol == "=" =>
+        {
+            structural_eq(lhs, rhs)
+                .ok_or("comparing these values is not modeled in contracts yet".to_string())?
+        }
         _ => return Err("comparing these values is not modeled in contracts yet".into()),
     };
     Ok(if op == BinaryOp::NotEq {
@@ -1537,9 +1650,22 @@ impl<'a> Exec<'a> {
                 // A name the clause binds itself, or a function.
                 continue;
             }
+            if state.is_view(&local) {
+                // A view is left to the lowered code: the local of a span
+                // made here names its whole base list, not its range.
+                continue;
+            }
             let value = self.read_place(state, &local);
+            // A span parameter is read with its range.
+            for hidden in span_range_names(&local) {
+                if self.place_type(&hidden).is_some() {
+                    let value = self.read_place(state, &hidden);
+                    env.insert(hidden, value);
+                }
+            }
             env.insert(name, value);
         }
+        bind_span_views(&mut env);
         env
     }
 }
@@ -1599,7 +1725,7 @@ fn find_condition<'a>(
 }
 
 /// The range facts of each integer a value holds.
-fn int_ranges(value: &Val, facts: &mut Vec<String>) {
+pub(super) fn int_ranges(value: &Val, facts: &mut Vec<String>) {
     match value {
         Val::Int(term, int) => facts.push(int.contains(term)),
         Val::Tuple(items) => items.iter().for_each(|item| int_ranges(item, facts)),

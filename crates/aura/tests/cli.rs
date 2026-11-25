@@ -8041,7 +8041,7 @@ fn help_flags_exit_successfully() {
         );
         assert!(
             stdout.contains(
-                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]"
+                "aura test [-k <substring>] [--format json] [--timeout-ms <n>] [--verify] [path ...]"
             ),
             "help must advertise every maintained test-runner option, stdout was:\n{}",
             stdout
@@ -17753,6 +17753,12 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         "{stderr}"
     );
     assert!(stderr.contains("counterexample: x = "), "{stderr}");
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .contains("not proved: 1 failed, 0 not modeled, 0 undecided"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 
     let output = Command::new(aura_bin())
         .env("AURA_CACHE_DIR", &cache)
@@ -17773,6 +17779,9 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     assert_eq!(report["schema_version"], 1);
     assert_eq!(report["functions"], 1);
     assert_eq!(report["proved"], 0);
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["not_modeled"], 0);
+    assert_eq!(report["undecided"], 0);
     assert_eq!(report["obligations"][0]["status"], "failed");
     assert_eq!(report["obligations"][0]["kind"], "overflow");
     assert_eq!(report["obligations"][0]["line"], 2);
@@ -17786,6 +17795,409 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         .expect("run aura verify with a missing solver");
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("AU5103"));
+}
+
+/// The stdout, stderr and exit code of `aura <args>` run in `dir`, with
+/// an empty proof cache of its own unless `cache` names one.
+fn run_aura_verify_in(dir: &Path, cache: &Path, args: &[&str]) -> (String, String, Option<i32>) {
+    let output = Command::new(aura_bin())
+        .current_dir(dir)
+        .env("AURA_CACHE_DIR", cache)
+        .args(args)
+        .output()
+        .expect("run aura");
+    (
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+        output.status.code(),
+    )
+}
+
+const VERIFY_PACKAGE_MANIFEST: &str =
+    "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n";
+
+/// A package whose entry module proves, and whose `util` module holds
+/// the text of `util`.
+fn write_verify_package(prefix: &str, util: &str) -> TempDir {
+    let temp = TempDir::new(prefix);
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).expect("create src");
+    fs::create_dir_all(temp.path().join("tests")).expect("create tests");
+    fs::write(temp.path().join("Aura.toml"), VERIFY_PACKAGE_MANIFEST).expect("write the manifest");
+    fs::write(
+        src.join("main.au"),
+        "import util\n\ndef main():\n    print(util.half(10))\n",
+    )
+    .expect("write main.au");
+    fs::write(src.join("util.au"), util).expect("write util.au");
+    fs::write(
+        temp.path().join("tests").join("smoke.au"),
+        "def test_smoke():\n    assert 1 + 1 == 2\n",
+    )
+    .expect("write the test");
+    temp
+}
+
+const VERIFY_UTIL_HALF: &str =
+    "public def half(x: int64) -> int64:\n    requires x >= 0\n    ensures result <= x\n    return x // 2\n";
+const VERIFY_UTIL_DOUBLE: &str = "\npublic def double(x: int64) -> int64:\n    return x * 2\n";
+const VERIFY_UTIL_POWER: &str =
+    "\npublic def power(x: float64) -> float64:\n    ensures result >= 0.0\n    return x ** 2.0\n";
+
+#[test]
+fn verify_package_mode_reports_each_file_and_totals() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let util = format!("{VERIFY_UTIL_HALF}{VERIFY_UTIL_DOUBLE}");
+    let temp = write_verify_package("aura-verify-package", &util);
+    let cache = temp.path().join("cache");
+    let main = temp.path().join("src").join("main.au");
+
+    // One file: as before, with a line for the module it did not check.
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["verify", main.to_str().expect("a UTF-8 path")],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(
+        stdout.contains(
+            "imported modules not checked: 1 (util); `aura verify` with no path checks every module"
+        ),
+        "{stdout}"
+    );
+
+    // No path: every module of the package in the current directory.
+    let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["verify"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stdout.contains("verified src/main.au: "), "{stdout}");
+    assert!(
+        stdout.contains("verified src/util.au: 3 of 4 checks proved in 2 functions"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("imported modules not checked"), "{stdout}");
+    // `main.au` was answered from the proof cache of the first run.
+    assert!(
+        stdout.contains(
+            "verified 2 files: 4 of 5 checks proved in 3 functions, 1 from the proof cache; 1 failed, 0 not modeled, 0 undecided\n"
+        ),
+        "{stdout}"
+    );
+    assert!(stderr.contains("error[AU5101]"), "{stderr}");
+    assert!(stderr.contains(" --> src/util.au:7:12"), "{stderr}");
+
+    // A directory, as JSON.
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["verify", "--no-cache", "--format", "json", "."],
+    );
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("a JSON report");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["files"][0]["path"], "src/main.au");
+    assert_eq!(report["files"][0]["proved"], 1);
+    assert_eq!(report["files"][0]["unchecked_modules"][0], "util");
+    assert_eq!(report["files"][1]["path"], "src/util.au");
+    assert_eq!(report["files"][1]["failed"], 1);
+    assert_eq!(report["files"][1]["diagnostics"][0]["code"], "AU5101");
+    assert_eq!(report["totals"]["files"], 2);
+    assert_eq!(report["totals"]["errors"], 0);
+    assert_eq!(report["totals"]["functions"], 3);
+    assert_eq!(report["totals"]["checks"], 5);
+    assert_eq!(report["totals"]["proved"], 4);
+    assert_eq!(report["totals"]["failed"], 1);
+    assert_eq!(report["totals"]["not_modeled"], 0);
+    assert_eq!(report["totals"]["undecided"], 0);
+    assert_eq!(report["totals"]["cached"], 0);
+    assert_eq!(report["unmatched_must_verify"], serde_json::json!([]));
+
+    // Several files are a run of the same kind.
+    let (stdout, _, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["verify", "--no-cache", "src/util.au", "src/main.au"],
+    );
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(stdout.contains("verified 2 files: "), "{stdout}");
+    // The package's `src` directory itself proves the same.
+    let (stdout, _, code) = run_aura_verify_in(temp.path(), &cache, &["verify", "src"]);
+    assert_eq!(code, Some(1), "{stdout}");
+    assert!(stdout.contains("verified 2 files: "), "{stdout}");
+}
+
+#[test]
+fn verify_package_mode_fails_on_open_checks_only_when_denied() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let util = format!("{VERIFY_UTIL_HALF}{VERIFY_UTIL_POWER}");
+    let temp = write_verify_package("aura-verify-deny", &util);
+    let cache = temp.path().join("cache");
+
+    // A check that is not modeled is reported and does not fail the run.
+    let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["verify"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    assert!(stderr.contains("error[AU5104]"), "{stderr}");
+    assert!(
+        stdout.contains("0 failed, 2 not modeled, 0 undecided"),
+        "{stdout}"
+    );
+    for (class, expected) in [("undecided", 0), ("not-modeled", 1), ("all", 1)] {
+        let (stdout, _, code) =
+            run_aura_verify_in(temp.path(), &cache, &["verify", "--deny", class]);
+        assert_eq!(code, Some(expected), "--deny {class}: {stdout}");
+    }
+    let (_, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["verify", "--deny", "bogus"]);
+    assert_eq!(code, Some(2));
+    assert!(
+        stderr.contains("aura verify --deny accepts `not-modeled`, `undecided`, or `all`"),
+        "{stderr}"
+    );
+    // One file keeps the strict rule: it passes only when all is proved.
+    let (stdout, _, code) = run_aura_verify_in(temp.path(), &cache, &["verify", "src/util.au"]);
+    assert_eq!(code, Some(1), "{stdout}");
+    let (stdout, _, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["verify", "--deny", "all", "src/main.au"],
+    );
+    assert_eq!(code, Some(0), "{stdout}");
+}
+
+#[test]
+fn verify_must_verify_reports_a_function_with_open_checks() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let util = format!("{VERIFY_UTIL_HALF}{VERIFY_UTIL_POWER}");
+    let temp = write_verify_package("aura-verify-must", &util);
+    let cache = temp.path().join("cache");
+
+    // `power` has no failed check, and still must not pass.
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["verify", "--must-verify", "power", "--must-verify", "half"],
+    );
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(
+        stderr.contains("error[AU5122]: function `power` marked verified has unproved checks"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("checks not proved: 2"), "{stderr}");
+    assert!(!stderr.contains("function `half` marked"), "{stderr}");
+
+    // A proved function passes, in a package and in one file.
+    for args in [
+        &["verify", "--must-verify", "half"][..],
+        &["verify", "--must-verify", "main", "src/main.au"][..],
+    ] {
+        let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, args);
+        assert_eq!(code, Some(0), "{stdout}{stderr}");
+        assert!(!stderr.contains("AU5122"), "{stderr}");
+    }
+
+    // A name that matches nothing fails the run.
+    for args in [
+        &["verify", "--must-verify", "nope"][..],
+        &["verify", "--must-verify", "nope", "src/main.au"][..],
+    ] {
+        let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, args);
+        assert_eq!(code, Some(1), "{stdout}{stderr}");
+        assert!(
+            stderr.contains("aura verify: `--must-verify nope` names no verified function"),
+            "{stderr}"
+        );
+    }
+
+    let (stdout, _, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &[
+            "verify",
+            "--format",
+            "json",
+            "--must-verify",
+            "power",
+            "--must-verify",
+            "nope",
+        ],
+    );
+    assert_eq!(code, Some(1), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("a JSON report");
+    assert_eq!(report["unmatched_must_verify"], serde_json::json!(["nope"]));
+    let marked = &report["files"][1]["must_verify"][0];
+    assert_eq!(marked["function"], "power");
+    assert_eq!(marked["line"], 6);
+    assert_eq!(marked["open"], 2);
+    let codes: Vec<&str> = report["files"][1]["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .map(|diagnostic| diagnostic["code"].as_str().expect("a code"))
+        .collect();
+    assert_eq!(codes, ["AU5104", "AU5104", "AU5122"]);
+}
+
+#[test]
+fn verify_package_mode_reports_files_it_could_not_verify() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let temp = write_verify_package("aura-verify-broken", VERIFY_UTIL_HALF);
+    let cache = temp.path().join("cache");
+    fs::write(
+        temp.path().join("src").join("broken.au"),
+        "def main():\n    return nope\n",
+    )
+    .expect("write broken.au");
+
+    let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["verify"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("broken.au:2:12"), "{stderr}");
+    assert!(stdout.contains("not verified src/broken.au: "), "{stdout}");
+    assert!(stdout.contains("verified src/util.au: "), "{stdout}");
+    assert!(
+        stdout.contains("0 failed, 0 not modeled, 0 undecided, 1 files not verified\n"),
+        "{stdout}"
+    );
+    let (stdout, _, code) =
+        run_aura_verify_in(temp.path(), &cache, &["verify", "--format", "json"]);
+    assert_eq!(code, Some(1), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("a JSON report");
+    assert_eq!(report["files"][0]["path"], "src/broken.au");
+    assert!(report["files"][0]["error"]["code"].is_string(), "{report}");
+    assert_eq!(report["totals"]["errors"], 1);
+    assert_eq!(report["totals"]["files"], 3);
+
+    // Without a solver the run stops at the first file.
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &[
+            "verify",
+            "--solver",
+            "/nonexistent/z3",
+            "src/main.au",
+            "src/util.au",
+        ],
+    );
+    assert_eq!(code, Some(1), "{stdout}");
+    assert_eq!(stderr.matches("AU5103").count(), 1, "{stderr}");
+    assert!(stdout.contains("verified 0 files: "), "{stdout}");
+
+    // A path that is not there, and a directory with no source.
+    let (_, stderr, code) =
+        run_aura_verify_in(temp.path(), &cache, &["verify", "src", "missing-dir"]);
+    assert_eq!(code, Some(1));
+    assert!(stderr.contains("does not exist"), "{stderr}");
+    let empty = temp.path().join("empty");
+    fs::create_dir_all(&empty).expect("create the empty directory");
+    let (_, stderr, code) = run_aura_verify_in(&empty, &cache, &["verify"]);
+    assert_eq!(code, Some(1));
+    assert!(stderr.contains("no Aura source files found"), "{stderr}");
+}
+
+#[test]
+fn verify_reads_one_file_from_stdin_and_proves_the_module_body() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let temp = TempDir::new("aura-verify-stdin");
+    let source = "mut xs = [1, 2, 3]\nprint(xs[3])\n";
+    let mut child = Command::new(aura_bin())
+        .env("AURA_CACHE_DIR", temp.path().join("cache"))
+        .args(["verify", "--format", "json", "--stdin"])
+        .arg(temp.path().join("script.au"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn aura verify");
+    child
+        .stdin
+        .take()
+        .expect("stdin should be available")
+        .write_all(source.as_bytes())
+        .expect("write the source");
+    let output = child.wait_with_output().expect("collect aura verify");
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("a JSON report");
+    // The statements outside every function are verified as `<module>`.
+    assert_eq!(report["failed"], 1);
+    assert_eq!(report["obligations"][0]["function"], "<module>");
+    assert_eq!(report["obligations"][0]["kind"], "index in range");
+    assert_eq!(report["obligations"][0]["line"], 2);
+    assert_eq!(report["must_verify"], serde_json::json!([]));
+    assert_eq!(report["unchecked_modules"], serde_json::json!([]));
+}
+
+#[test]
+fn aura_test_verify_proves_the_package_before_the_tests() {
+    if !smt_solver_available() {
+        eprintln!("skipping: no SMT solver on PATH");
+        return;
+    }
+    let temp = write_verify_package("aura-test-verify", VERIFY_UTIL_HALF);
+    let cache = temp.path().join("cache");
+
+    let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["test", "--verify"]);
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    let verified = stdout
+        .find("verified 2 files: 4 of 4 checks proved in 2 functions; 0 failed")
+        .unwrap_or_else(|| panic!("no verification summary: {stdout}"));
+    let passed = stdout
+        .find("1 passed; 0 failed")
+        .unwrap_or_else(|| panic!("no test summary: {stdout}"));
+    assert!(verified < passed, "{stdout}");
+
+    let (stdout, stderr, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["test", "--verify", "--format", "json"],
+    );
+    assert_eq!(code, Some(0), "{stdout}{stderr}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert_eq!(report["summary"]["passed"], 1);
+    assert_eq!(report["verification"]["files"], 2);
+    assert_eq!(report["verification"]["proved"], 4);
+    assert_eq!(report["verification"]["failed"], 0);
+    // Without the flag the report says nothing about verification.
+    let (stdout, _, code) = run_aura_verify_in(temp.path(), &cache, &["test", "--format", "json"]);
+    assert_eq!(code, Some(0), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert!(report.get("verification").is_none(), "{report}");
+
+    // A failed check fails the run before any test starts.
+    fs::write(
+        temp.path().join("src").join("util.au"),
+        format!("{VERIFY_UTIL_HALF}{VERIFY_UTIL_DOUBLE}"),
+    )
+    .expect("rewrite util.au");
+    let (stdout, stderr, code) = run_aura_verify_in(temp.path(), &cache, &["test", "--verify"]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("error[AU5101]"), "{stderr}");
+    assert!(stdout.contains("verified 2 files: "), "{stdout}");
+    assert!(!stdout.contains("passed"), "{stdout}");
+    let (stdout, _, code) = run_aura_verify_in(
+        temp.path(),
+        &cache,
+        &["test", "--verify", "--format", "json"],
+    );
+    assert_eq!(code, Some(1), "{stdout}");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("one JSON document");
+    assert_eq!(report["totals"]["failed"], 1);
+    assert!(report.get("tests").is_none(), "{report}");
+    // The tests alone still pass.
+    let (stdout, _, code) = run_aura_verify_in(temp.path(), &cache, &["test"]);
+    assert_eq!(code, Some(0), "{stdout}");
 }
 
 #[test]

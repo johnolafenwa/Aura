@@ -123,6 +123,12 @@ function verificationDiagnostics(report, source) {
       continue;
     }
     let message = status.text(obligation.message);
+    let code = status.code;
+    // A contract no input meets is its own finding, not a failed check.
+    if (obligation.status === "failed" && obligation.kind === "satisfiable contract") {
+      message = `${obligation.message} can never hold`;
+      code = "AU5120";
+    }
     if (obligation.status === "failed" && Array.isArray(obligation.detail)) {
       const values = obligation.detail.map(({ name, value }) => `${name} = ${value}`);
       if (values.length > 0) {
@@ -136,7 +142,7 @@ function verificationDiagnostics(report, source) {
       severity: status.severity,
       range: checkRange(positions, lines, obligation),
       message: `${message} (in \`${obligation.function}\`, ${obligation.kind} check)`,
-      code: status.code,
+      code,
       source: "aura verify"
     });
   }

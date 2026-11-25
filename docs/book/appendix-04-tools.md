@@ -232,7 +232,10 @@ results under `~/.cache/aura/verify` (or under `verify` in
 it relies on, the solver version, and the time limit are all unchanged.
 Verifying again after a small edit solves only what the edit touched.
 
-The command takes one file and follows its imports. Its options are:
+Given one file, the command verifies the functions that file defines and
+uses the contracts of what it imports. Given a directory, several files, or
+no path at all, it verifies every module of the package and ends with one
+line of totals. Its options are:
 
 - `--function name` verifies only the functions whose name contains `name`.
   Use it to work on one function of a large file.
@@ -242,22 +245,31 @@ The command takes one file and follows its imports. Its options are:
   the `AURA_SMT_SOLVER` environment variable if it is set, then `z3`, then
   `cvc5`.
 - `--no-cache` solves every check again and ignores the proof cache.
+- `--deny not-modeled`, `--deny undecided`, or `--deny all` makes a package
+  run fail on those outcomes too. A package run otherwise fails only when a
+  check failed. A run on one file fails unless every check is proved.
+- `--must-verify name` names a function whose checks must all be proved,
+  and reports `AU5122` when one is not. Give it once for each function.
 - `--format json` prints the report as JSON: one entry for each check with
   its kind, function, line, column, and status (`proved`, `failed`,
   `unknown`, or `unsupported`), followed by the diagnostics in the same form
   as `aura check --format json`.
 
-Four diagnostic codes belong to the verifier. `AU5101` means a check can
+Six diagnostic codes belong to the verifier. `AU5101` means a check can
 fail, or the verifier is missing a fact it needs. `AU5102` means the solver
 gave up. `AU5103` means no solver could be started. `AU5104` means the check
-depends on something the verifier does not model.
+depends on something the verifier does not model, and names that step and
+its line. `AU5120` means a function's `requires` clauses can never hold
+together. `AU5122` means a function named with `--must-verify` has a check
+that is not proved.
 [Appendix E](/book/appendix-05-common-diagnostics#proofs) shows each one
 and what to do about it.
 
 Two things about a proof are easy to get wrong. The first is that it is
 about the contracts as written: a function that proves is a function that
-keeps its `ensures` whenever its `requires` holds, and if the `requires`
-asks for something no caller can supply, the proof says very little. The
+keeps its `ensures` whenever its `requires` holds. A `requires` that no
+input can meet is reported as `AU5120`, but one that is merely stronger than
+any real caller can supply still makes the proof say very little. The
 second is that the verifier knows nothing about what most library calls
 return, including everything read from a file, a process, or a socket.
 Code that checks such a value before using it verifies; code that trusts it
