@@ -93,6 +93,31 @@ fn unsupported(message: impl Into<String>) -> ImageError {
     ImageError::Unsupported(message.into())
 }
 
+fn out_of_memory() -> ImageError {
+    unsupported("there is not enough memory for the image")
+}
+
+/// `len` default values, or an error when the memory cannot be had. Image
+/// buffers can be large, so they are reserved without aborting the process.
+pub(crate) fn try_filled<T: Clone + Default>(len: usize) -> Result<Vec<T>, ImageError> {
+    let mut output = Vec::new();
+    output.try_reserve_exact(len).map_err(|_| out_of_memory())?;
+    output.resize(len, T::default());
+    Ok(output)
+}
+
+/// An empty vector with room for `len` values, reserved fallibly.
+fn try_with_capacity<T>(len: usize) -> Result<Vec<T>, ImageError> {
+    let mut output = Vec::new();
+    output.try_reserve_exact(len).map_err(|_| out_of_memory())?;
+    Ok(output)
+}
+
+/// How many bytes of decoded PNG samples one byte of the file can hold at
+/// most: deflate expands a byte to at most 1032, and a one-bit palette
+/// sample can expand to four 8-bit channels, 32 bytes for a raw byte.
+const PNG_MAX_EXPANSION: usize = 1032 * 32;
+
 /// Decoded pixels.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pixels {
@@ -151,23 +176,26 @@ fn checked_pixels(width: usize, height: usize, limit_pixels: usize) -> Result<us
 pub fn header(data: &[u8]) -> Result<Header, ImageError> {
     let format = sniffed(data)?;
     let (width, height, channels) = match format {
-        Format::Png => {
+        Format::Png => guarded(|| {
             // The transparency key and the palette come after the
-            // first header, so read up to the pixel data.
-            let reader = png_decoder(data, 64 << 20)
-                .read_info()
-                .map_err(png_decode_error)?;
+            // first header, so read up to the pixel data. Text and
+            // colour profile chunks are skipped, not inflated.
+            let mut decoder = png_decoder(data, 64 << 20);
+            decoder.set_ignore_text_chunk(true);
+            decoder.set_ignore_iccp_chunk(true);
+            let reader = decoder.read_info().map_err(png_decode_error)?;
             let channels = png_channels(reader.output_color_type().0);
             let info = reader.info();
-            (info.width as usize, info.height as usize, channels)
-        }
-        Format::Jpeg => jpeg_header(data)?,
+            Ok((info.width as usize, info.height as usize, channels))
+        })?,
+        Format::Jpeg => guarded(|| jpeg_header(data))?,
         Format::Pnm => {
             let header = PnmHeader::parse(data)?;
             (header.width, header.height, header.channels())
         }
     };
-    checked_pixels(width, height, usize::MAX)?;
+    // The sides reach the Aura source as `int64`, so they must fit one.
+    checked_pixels(width, height, i64::MAX as usize)?;
     Ok(Header {
         format,
         width,
@@ -240,7 +268,12 @@ fn decode_png(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     let size = reader
         .output_buffer_size()
         .ok_or(ImageError::TooLarge { limit_pixels })?;
-    let mut buffer = vec![0u8; size];
+    // A short file cannot hold a large frame: refuse it before the frame
+    // is allocated.
+    if size / PNG_MAX_EXPANSION > data.len() {
+        return Err(invalid("invalid PNG: the data ends before the pixels"));
+    }
+    let mut buffer = try_filled::<u8>(size)?;
     let frame = reader.next_frame(&mut buffer).map_err(png_decode_error)?;
     let channels = png_channels(frame.color_type);
     buffer.truncate(pixels * channels);
@@ -336,7 +369,7 @@ fn decode_jpeg(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
         .set_max_height(height)
         .jpeg_set_out_colorspace(colorspace);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
-    let mut buffer = vec![0u8; pixels * channels];
+    let mut buffer = try_filled::<u8>(pixels.checked_mul(channels).ok_or_else(out_of_memory)?)?;
     decoder
         .decode_into(&mut buffer)
         .map_err(jpeg_decode_error)?;
@@ -636,7 +669,7 @@ fn decode_pnm(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     let header = PnmHeader::parse(data)?;
     let (width, height, channels) = (header.width, header.height, header.channels());
     let pixels = checked_pixels(width, height, limit_pixels)?;
-    let samples = pixels * channels;
+    let samples = pixels.checked_mul(channels).ok_or_else(out_of_memory)?;
     let body = &data[header.body..];
     let short = || invalid("invalid Netpbm image: the data ends early");
     let mut output = Vec::new();
@@ -843,7 +876,7 @@ struct AxisWeights {
     taps: usize,
 }
 
-fn axis_weights(source: usize, target: usize, filter: Filter) -> AxisWeights {
+fn axis_weights(source: usize, target: usize, filter: Filter) -> Result<AxisWeights, ImageError> {
     let scale = source as f64 / target as f64;
     let stretch = scale.max(1.0);
     let support = filter.support() * stretch;
@@ -861,8 +894,8 @@ fn axis_weights(source: usize, target: usize, filter: Filter) -> AxisWeights {
         })
         .max()
         .unwrap_or(1);
-    let mut starts = Vec::with_capacity(target);
-    let mut weights = Vec::with_capacity(target * taps);
+    let mut starts = try_with_capacity(target)?;
+    let mut weights = try_with_capacity(target.checked_mul(taps).ok_or_else(out_of_memory)?)?;
     for position in 0..target {
         let (centre, first, last) = reach(position);
         // Every position reads `taps` samples, the ones past its reach
@@ -885,11 +918,11 @@ fn axis_weights(source: usize, target: usize, filter: Filter) -> AxisWeights {
         }
         starts.push(start);
     }
-    AxisWeights {
+    Ok(AxisWeights {
         starts,
         weights,
         taps,
-    }
+    })
 }
 
 #[inline]
@@ -936,10 +969,14 @@ fn resample_across<T: Copy + Into<f32> + Sync, const C: usize>(
     width: usize,
     weights: &AxisWeights,
     threads: usize,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, ImageError> {
     let new_width = weights.starts.len();
     let rows = source.len() / (width * C);
-    let mut output = vec![0f32; rows * new_width * C];
+    let len = rows
+        .checked_mul(new_width)
+        .and_then(|len| len.checked_mul(C))
+        .ok_or_else(out_of_memory)?;
+    let mut output = try_filled::<f32>(len)?;
     fill_rows(&mut output, new_width * C, threads, |first_row, part| {
         let source = &source[first_row * width * C..];
         for (target, row) in part
@@ -962,7 +999,7 @@ fn resample_across<T: Copy + Into<f32> + Sync, const C: usize>(
             }
         }
     });
-    output
+    Ok(output)
 }
 
 /// Rows of `row_len` samples resampled down the image.
@@ -971,8 +1008,11 @@ fn resample_down<T: Copy + Into<f32> + Sync>(
     row_len: usize,
     weights: &AxisWeights,
     threads: usize,
-) -> Vec<f32> {
-    let mut output = vec![0f32; row_len * weights.starts.len()];
+) -> Result<Vec<f32>, ImageError> {
+    let len = row_len
+        .checked_mul(weights.starts.len())
+        .ok_or_else(out_of_memory)?;
+    let mut output = try_filled::<f32>(len)?;
     fill_rows(&mut output, row_len, threads, |first_row, part| {
         for ((sums, first), taps) in part
             .chunks_exact_mut(row_len)
@@ -987,7 +1027,7 @@ fn resample_down<T: Copy + Into<f32> + Sync>(
             }
         }
     });
-    output
+    Ok(output)
 }
 
 fn resample_across_any<T: Copy + Into<f32> + Sync>(
@@ -996,7 +1036,7 @@ fn resample_across_any<T: Copy + Into<f32> + Sync>(
     channels: usize,
     weights: &AxisWeights,
     threads: usize,
-) -> Vec<f32> {
+) -> Result<Vec<f32>, ImageError> {
     match channels {
         1 => resample_across::<T, 1>(source, width, weights, threads),
         2 => resample_across::<T, 2>(source, width, weights, threads),
@@ -1006,6 +1046,8 @@ fn resample_across_any<T: Copy + Into<f32> + Sync>(
 }
 
 /// The image resampled to `new_width` by `new_height`. No side may be zero.
+/// The output and the working buffers are reserved fallibly, so an image
+/// too large for the memory left is an error, not an abort.
 pub fn resize(
     data: &[u8],
     width: usize,
@@ -1014,7 +1056,7 @@ pub fn resize(
     new_width: usize,
     new_height: usize,
     filter: Filter,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, ImageError> {
     resize_on(
         data,
         width,
@@ -1037,15 +1079,23 @@ fn resize_on(
     new_height: usize,
     filter: Filter,
     threads: usize,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, ImageError> {
     if width == new_width && height == new_height {
-        return data.to_vec();
+        let mut output = try_with_capacity(data.len())?;
+        output.extend_from_slice(data);
+        return Ok(output);
     }
+    let samples = new_width
+        .checked_mul(new_height)
+        .and_then(|pixels| pixels.checked_mul(channels))
+        .ok_or_else(out_of_memory)?;
     if filter == Filter::Nearest {
-        let columns: Vec<usize> = (0..new_width)
-            .map(|x| ((x * 2 + 1) * width / (new_width * 2)).min(width - 1) * channels)
-            .collect();
-        let mut output = Vec::with_capacity(new_width * new_height * channels);
+        let mut columns: Vec<usize> = try_with_capacity(new_width)?;
+        columns.extend(
+            (0..new_width)
+                .map(|x| ((x * 2 + 1) * width / (new_width * 2)).min(width - 1) * channels),
+        );
+        let mut output = try_with_capacity(samples)?;
         for y in 0..new_height {
             let source_y = ((y * 2 + 1) * height / (new_height * 2)).min(height - 1);
             let row = &data[source_y * width * channels..][..width * channels];
@@ -1053,24 +1103,29 @@ fn resize_on(
                 output.extend_from_slice(&row[column..column + channels]);
             }
         }
-        return output;
+        return Ok(output);
     }
-    let across = axis_weights(width, new_width, filter);
-    let down = axis_weights(height, new_height, filter);
+    let across = axis_weights(width, new_width, filter)?;
+    let down = axis_weights(height, new_height, filter)?;
     // Each pass costs its output samples times its taps, and the pass
     // across costs about twice the pass down, which works on whole rows.
     // The pass that runs second works on what the first left, so the
     // cheaper order depends on which axis shrinks more.
-    let across_first = 2 * new_width * height * across.taps + new_width * new_height * down.taps;
-    let down_first = width * new_height * down.taps + 2 * new_width * new_height * across.taps;
+    let cost = |factors: [usize; 4]| factors.iter().fold(1usize, |cost, &f| cost.saturating_mul(f));
+    let across_first = cost([2, new_width, height, across.taps])
+        .saturating_add(cost([1, new_width, new_height, down.taps]));
+    let down_first = cost([1, width, new_height, down.taps])
+        .saturating_add(cost([2, new_width, new_height, across.taps]));
     let resampled = if down_first <= across_first {
-        let rows = resample_down(data, width * channels, &down, threads);
-        resample_across_any(&rows, width, channels, &across, threads)
+        let rows = resample_down(data, width * channels, &down, threads)?;
+        resample_across_any(&rows, width, channels, &across, threads)?
     } else {
-        let rows = resample_across_any(data, width, channels, &across, threads);
-        resample_down(&rows, new_width * channels, &down, threads)
+        let rows = resample_across_any(data, width, channels, &across, threads)?;
+        resample_down(&rows, new_width * channels, &down, threads)?
     };
-    resampled.iter().map(|&value| to_sample(value)).collect()
+    let mut output = try_with_capacity(resampled.len())?;
+    output.extend(resampled.iter().map(|&value| to_sample(value)));
+    Ok(output)
 }
 
 /// The `crop_width` by `crop_height` part of the image whose top left

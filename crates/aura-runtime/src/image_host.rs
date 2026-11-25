@@ -291,7 +291,8 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let new_height = size(numbers, 4, 1, name, "a height")?;
             let fits = new_width
                 .checked_mul(new_height)
-                .is_some_and(|pixels| pixels as i64 <= image_codec::MAX_PIXEL_LIMIT);
+                .and_then(|pixels| i64::try_from(pixels).ok())
+                .is_some_and(|pixels| pixels <= image_codec::MAX_PIXEL_LIMIT);
             if !fits {
                 return Err(image_error(
                     name,
@@ -304,9 +305,11 @@ pub fn evaluate_image_builtin(name: &str, data: &Value, numbers: &[i64]) -> Resu
             let filter = Filter::from_code(numbers[5]).ok_or_else(|| {
                 image_error(name, format!("knows no filter numbered `{}`", numbers[5]))
             })?;
-            Ok(bytes_value(image_codec::resize(
+            let resized = image_codec::resize(
                 &pixels, width, height, channels, new_width, new_height, filter,
-            )))
+            )
+            .map_err(|error| Diagnostic::coded("AU4005", format!("`image.resize` failed: {error}")))?;
+            Ok(bytes_value(resized))
         }
         "image::__aura_crop" => {
             expect_numbers(name, numbers, 7)?;
