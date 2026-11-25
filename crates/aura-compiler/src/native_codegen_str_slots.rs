@@ -673,6 +673,93 @@ pub(super) fn extended_bytes(function: &MirFunction) -> HashSet<String> {
         .collect()
 }
 
+/// The temporaries of `function` that hold the bytes of a `str` only for
+/// one read of a byte right after, as in `text.to_bytes()[i]`: the read
+/// takes the byte from the `str`'s words, and no list is made unless the
+/// index is out of range. Between the two only the index may be computed,
+/// into locals other than the text, and the temporary is released next.
+pub(super) fn indexed_bytes(function: &MirFunction) -> HashSet<String> {
+    let mut indexed = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::Assign { target, value } = instruction else {
+                continue;
+            };
+            let text_root = match str_to_bytes(value) {
+                Some(Operand::String(_)) => "",
+                Some(Operand::Place(place)) => place.split('.').next().unwrap_or(place),
+                _ => continue,
+            };
+            if !target.starts_with("%t") || target.contains('.') {
+                continue;
+            }
+            let other_local = |place: &str| place.split('.').next() != Some(text_root);
+            let mut rest = block.instructions[index + 1..].iter().filter(|next| {
+                !matches!(
+                    next,
+                    Instruction::SourceLocation { .. } | Instruction::SourceName { .. }
+                )
+            });
+            let read = rest.find(|next| match next {
+                Instruction::Assign {
+                    target: computed,
+                    value: Rvalue::Use(_) | Rvalue::Binary { .. },
+                } => !other_local(computed),
+                _ => true,
+            });
+            let Some(
+                read @ Instruction::Assign {
+                    target: byte,
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    op: RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Uint8)),
+                                    receiver: Some(Operand::Place(receiver)),
+                                    ..
+                                },
+                            ..
+                        },
+                },
+            ) = read
+            else {
+                continue;
+            };
+            let released = matches!(
+                rest.next(),
+                Some(Instruction::Release { place }) if place == target
+            );
+            if receiver != target || !other_local(byte) || !released {
+                continue;
+            }
+            let mut mentions = Vec::new();
+            instruction_place_mentions(read, &mut mentions);
+            let reads = mentions.iter().filter(|place| **place == target.as_str()).count();
+            // The read's mentions and the release's.
+            indexed.insert(target.as_str(), reads + 1);
+        }
+    }
+    if indexed.is_empty() {
+        return HashSet::new();
+    }
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            instruction_place_mentions(instruction, &mut mentions);
+        }
+        mentions.extend(terminator_place_mentions(&block.terminator));
+    }
+    let mut uses = HashMap::<&str, usize>::new();
+    for place in mentions {
+        *uses.entry(place).or_default() += 1;
+    }
+    indexed
+        .into_iter()
+        .filter(|(temp, count)| uses.get(temp) == Some(count))
+        .map(|(temp, _)| temp.to_string())
+        .collect()
+}
+
 /// The `str` locals of `function` that a loan read fills only for the
 /// next operation to push into an f-string, as `f"{first}"` of a `view`
 /// local does. Only source markers lie between the two, and nothing but
@@ -2044,6 +2131,134 @@ impl FunctionCompiler<'_> {
             .results;
         self.release_view_arguments(released.into_iter().collect());
         Ok(Some(made))
+    }
+
+    /// Keeps the words of the `str` whose bytes `value` copies into
+    /// `target`, instead of the copy, when only one byte of it is read
+    /// next (see [`indexed_bytes`]) and this body has the `str` as words or
+    /// as a literal.
+    pub(super) fn defer_indexed_bytes(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        if !self.indexed_bytes.contains(target) {
+            return Ok(false);
+        }
+        let Some(text) = str_to_bytes(value) else {
+            return Ok(false);
+        };
+        let words = match text {
+            Operand::String(text) => {
+                let (ptr, len) = self.string_constant(text.as_bytes())?;
+                let owner = self.builder.iconst(types::I64, 0);
+                ViewArgument {
+                    owner,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+                        Operand::Place(place) if self.owns_counted_str(place) => {
+                let held = self.load_root(place)?.values[0];
+                let (ptr, len) = self.str_box_words(held);
+                ViewArgument {
+                    owner: held,
+                    ptr,
+                    len,
+                    released: None,
+                }
+            }
+            operand => match self.load_place_words(operand)? {     Some(words) => words,
+                None => return Ok(false),
+            },
+        };
+        self.deferred_byte_texts.insert(target.to_string(), words);
+        Ok(true)
+    }
+
+    /// Reads the byte of a deferred `str` (see [`Self::defer_indexed_bytes`])
+    /// that `value` indexes into `target`: from the words when the index is
+    /// in range, and otherwise through the list of the bytes, made only
+    /// then, which counts from the end or reports the index out of range.
+    pub(super) fn index_deferred_bytes(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::IndexScalar(ScalarElement::Uint8)),
+                    receiver: Some(Operand::Place(receiver)),
+                    ..
+                },
+            args,
+            ..
+        } = value
+        else {
+            return Ok(false);
+        };
+        let Some((ptr, len)) = self
+            .deferred_byte_texts
+            .get(receiver.as_str())
+            .map(|words| (words.ptr, words.len))
+        else {
+            return Ok(false);
+        };
+        let [index, line, column] = args.as_slice() else {
+            return Ok(false);
+        };
+        let index = self.load_word(index, ScalarKind::Int64, false)?;
+        let line = self.load_word(line, ScalarKind::Int32, false)?;
+        let column = self.load_word(column, ScalarKind::Int32, false)?;
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        self.builder.set_cold_block(slow_block);
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        let in_range = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
+        self.builder
+            .brif(in_range, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let at = self.builder.iadd(ptr, index);
+        let byte = self.builder.uload8(types::I64, MemFlags::trusted(), at, 0);
+        self.builder.jump(join_block, &[byte]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let list = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringToBytesView], &[ptr, len])
+            .results[0];
+        let bits =
+            self.emit_scalar_list_read(list, index, ScalarElement::Uint8, false, line, column)?;
+        self.release_opaque_handle(list);
+        self.builder.jump(join_block, &[bits]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let byte = self.builder.block_params(join_block)[0];
+        self.store_place(
+            target,
+            ValueRef {
+                values: vec![byte],
+                ty: DirectType::Scalar(ScalarKind::Uint8),
+            },
+        )?;
+        Ok(true)
+    }
+
+    /// Ends a deferred `str`'s bytes (see [`Self::defer_indexed_bytes`]) at
+    /// the release of the temporary that would have held them.
+    pub(super) fn release_deferred_bytes(&mut self, place: &str) -> bool {
+        let Some(words) = self.deferred_byte_texts.remove(place) else {
+            return false;
+        };
+        self.release_view_arguments(words.released.into_iter().collect());
+        true
     }
 
     /// Extends the `list[uint8]` `list` with the deferred bytes `operand`

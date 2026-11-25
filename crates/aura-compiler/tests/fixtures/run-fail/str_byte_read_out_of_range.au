@@ -1,0 +1,7 @@
+def byte_at(text: str, at: int64) -> int64:
+    return text.to_bytes()[at] as int64
+
+
+def main():
+    print(byte_at("abc", 2))
+    print(byte_at("abc", 3))

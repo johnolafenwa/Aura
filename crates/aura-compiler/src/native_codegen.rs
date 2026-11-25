@@ -2987,6 +2987,8 @@ impl<'a> NativeCodegen<'a> {
             },
             appended_copies: str_slots::appended_copies(function),
             extended_bytes: str_slots::extended_bytes(function),
+            indexed_bytes: str_slots::indexed_bytes(function),
+            deferred_byte_texts: HashMap::new(),
             spliced_plan: str_slots::spliced_formats(function, &formatted_reads),
             formatted_reads,
             spliced_formats: HashMap::new(),
@@ -4487,6 +4489,11 @@ struct FunctionCompiler<'a> {
     /// The words of each such copy between the two operations, when this
     /// body has the copied `str` as words.
     deferred_str_copies: HashMap<String, str_slots::ViewArgument>,
+    /// The temporaries that hold the bytes of a `str` only for one read of
+    /// a byte (see [`str_slots::indexed_bytes`]).
+    indexed_bytes: HashSet<String>,
+    /// The words of each such `str` between the copy and the read.
+    deferred_byte_texts: HashMap<String, str_slots::ViewArgument>,
     /// The loan reads that fill a `str` only for the next operation to
     /// push it into an f-string (see `str_slots::formatted_reads`).
     formatted_reads: HashSet<String>,
@@ -6534,6 +6541,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
+            Instruction::Release { place } if self.release_deferred_bytes(place) => {}
             Instruction::Release { place } if self.release_result_slot(place)? => {}
             // A found int64 kept as a word is in no box.
             Instruction::Release { place } if self.map_word_slots.contains_key(place) => {}
@@ -6879,6 +6887,10 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::Assign { target, .. } if self.defer_str_copy(target)? => {}
             Instruction::Assign { target, value }
                 if self.defer_extended_bytes(target, value)? => {}
+            Instruction::Assign { target, value }
+                if self.defer_indexed_bytes(target, value)? => {}
+            Instruction::Assign { target, value }
+                if self.index_deferred_bytes(target, value)? => {}
             Instruction::Assign { target, value } => {
                 if let Rvalue::Closure { captures, .. } = value {
                     let root = target.split('.').next().unwrap_or(target).to_string();

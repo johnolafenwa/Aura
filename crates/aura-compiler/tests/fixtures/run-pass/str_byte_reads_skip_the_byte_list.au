@@ -1,0 +1,28 @@
+# `text.to_bytes()[i]` reads one byte of the text without building the list
+# of its bytes, for a view, a parameter, an owned local, and a literal, and
+# a negative index still counts from the end.
+
+
+class Word:
+    text: str
+
+
+def first_byte(text: str) -> int64:
+    return text.to_bytes()[0] as int64
+
+
+def byte_at(text: str, at: int64) -> int64:
+    return text.to_bytes()[at + 1] as int64
+
+
+def main():
+    words = [Word(text="kalo"), Word(text="mi"), Word(text="é!")]
+    mut total = 0
+    for i in range(words.len()):
+        view text = words[i].text
+        total = total * 7 + (text.to_bytes()[0] as int64) + byte_at(text, -2)
+    mut owned = "zebra"
+    owned = f"{owned}s"
+    print(f"{total} {first_byte(owned)} {owned.to_bytes()[-1]} {"abc".to_bytes()[1]}")
+    bytes = owned.to_bytes()
+    print(f"{bytes[0]} {bytes.len()}")
