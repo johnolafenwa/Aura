@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
+  `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
+  the random tensors on the GPU. They ran on the CPU before. Tensors
+  evaluated together, such as the weights of an optimizer step, run as
+  one MPSGraph, so a training step computes its forward and backward
+  pass once. `AURA_TENSOR_TRACE=1` prints one line for each Metal run.
 - Performance: text-heavy programs do less work. Making and freeing a `str`
   costs about half as much; each later step of a chain of literal `replace`
   calls reuses the string the step before it made; `split` with a literal
