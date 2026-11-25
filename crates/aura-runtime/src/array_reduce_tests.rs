@@ -314,3 +314,33 @@ fn strided_reordered_sums_match_the_packed_elements_bit_for_bit() {
         }
     }
 }
+
+#[test]
+fn empty_axis_mean_returns_float64_dtype() {
+    use crate::runtime_value::{ArrayDType, ArrayPairOp};
+
+    for dtype in [
+        ArrayDType::Int32,
+        ArrayDType::Int64,
+        ArrayDType::Float32,
+        ArrayDType::Float64,
+    ] {
+        let empty = ArrayValue::zeros(dtype, [0, 0].into()).unwrap();
+        let rhs = ArrayValue::zeros(ArrayDType::Float64, [0].into()).unwrap();
+        for reduction in [ArrayReduction::Mean, ArrayReduction::FastMean] {
+            let reduced = empty.reduce_axis(reduction, 0).unwrap();
+            assert_eq!(
+                reduced.dtype(),
+                ArrayDType::Float64,
+                "{dtype:?} {reduction:?} over [0, 0] must return float64"
+            );
+            assert_eq!(&*reduced.shape, &[0]);
+            let combined = reduced
+                .pairwise(&Value::Array(rhs.clone()), ArrayPairOp::Minimum)
+                .unwrap();
+            assert_eq!(combined.dtype(), ArrayDType::Float64);
+            assert_eq!(reduced.reduce(ArrayReduction::Sum).unwrap(), Value::Float(0.0));
+        }
+    }
+}
+

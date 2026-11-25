@@ -380,14 +380,19 @@ impl ArrayValue {
         let means = matches!(reduction, ArrayReduction::Mean | ArrayReduction::FastMean);
         let storage = match &self.base {
             base if len == 0 => {
-                // Every lane is empty, and an empty sum is zero.
+                // Every lane is empty: an empty sum is zero in the input dtype,
+                // while an empty mean always produces float64.
                 let count = lanes.shape.iter().product::<usize>();
-                match base {
-                    ArrayStorage::Int32(_) => ArrayStorage::Int32(vec![0; count].into()),
-                    ArrayStorage::Int64(_) => ArrayStorage::Int64(vec![0; count].into()),
-                    ArrayStorage::Float32(_) => ArrayStorage::Float32(vec![0.0; count].into()),
-                    ArrayStorage::Float64(_) => ArrayStorage::Float64(vec![0.0; count].into()),
-                    ArrayStorage::Bool(_) => unreachable!("a mask was rejected above"),
+                if means {
+                    ArrayStorage::Float64(vec![0.0; count].into())
+                } else {
+                    match base {
+                        ArrayStorage::Int32(_) => ArrayStorage::Int32(vec![0; count].into()),
+                        ArrayStorage::Int64(_) => ArrayStorage::Int64(vec![0; count].into()),
+                        ArrayStorage::Float32(_) => ArrayStorage::Float32(vec![0.0; count].into()),
+                        ArrayStorage::Float64(_) => ArrayStorage::Float64(vec![0.0; count].into()),
+                        ArrayStorage::Bool(_) => unreachable!("a mask was rejected above"),
+                    }
                 }
             }
             ArrayStorage::Int32(values) if means => {
