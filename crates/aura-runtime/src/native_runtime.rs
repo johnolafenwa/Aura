@@ -16695,7 +16695,7 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
         let layout =
             unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
         boxed_value(Value::Instance(InstanceValue {
-            class_name: crate::runtime_value::RuntimeName::from(layout.class_name().to_string()),
+            class_name: layout.runtime_name(),
             fields: InstanceFields::Typed(TypedFields::new(layout)),
         }))
     })

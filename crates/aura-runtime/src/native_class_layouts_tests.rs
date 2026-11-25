@@ -537,6 +537,17 @@ fn generated_code_builds_and_writes_typed_instances() {
         cell.layout
             .store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
         let built = unsafe { aura_direct_instance_new_typed(cell) };
+        // Every instance names its class with the layout's own text, which
+        // lives as long as the program, so building one copies no name.
+        let other = unsafe { aura_direct_instance_new_typed(cell) };
+        let (Value::Instance(first), Value::Instance(second)) =
+            (unsafe { value_ref(built) }, unsafe { value_ref(other) })
+        else {
+            panic!("instances");
+        };
+        assert_eq!(first.class_name.as_str(), layout.class_name());
+        assert!(first.class_name.is_same(&second.class_name));
+        unsafe { aura_direct_release_value(other) };
         let header = unsafe { &*built };
         let block = header.list_elements.get();
         let slot = |name: &str| {
