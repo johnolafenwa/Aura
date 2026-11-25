@@ -15,8 +15,9 @@ use crate::array_layout::{self, Strides};
 use crate::array_simd;
 use crate::diag::{Diagnostic, Result};
 use crate::runtime_value::{
-    reduce_float32_array, reduce_float64_array, reduce_int32_array, reduce_int64_array,
-    try_array_buffer, ArrayReduction, ArrayStorage, ArrayValue, Value,
+    checked_array_element_count, reduce_float32_array, reduce_float64_array, reduce_int32_array,
+    reduce_int64_array, try_array_buffer, try_filled_array_storage, ArrayReduction, ArrayStorage,
+    ArrayValue, Value,
 };
 
 /// An element type an axis reduction accumulates.
@@ -356,9 +357,9 @@ impl ArrayValue {
             shape.push(1);
             strides.push(0);
         }
-        let lanes = shape.iter().product::<usize>();
+        let lane_count = checked_array_element_count(&shape)?;
         let sums = matches!(reduction, ArrayReduction::Sum | ArrayReduction::FastSum);
-        if len == 0 && lanes != 0 && !sums {
+        if len == 0 && lane_count != 0 && !sums {
             return Err(Diagnostic::coded(
                 "AU4007",
                 format!(
@@ -382,15 +383,23 @@ impl ArrayValue {
             base if len == 0 => {
                 // Every lane is empty: an empty sum is zero in the input dtype,
                 // while an empty mean always produces float64.
-                let count = lanes.shape.iter().product::<usize>();
+                let label = "Array.reduce_axis";
                 if means {
-                    ArrayStorage::Float64(vec![0.0; count].into())
+                    ArrayStorage::Float64(try_filled_array_storage(lane_count, 0.0, label)?.into())
                 } else {
                     match base {
-                        ArrayStorage::Int32(_) => ArrayStorage::Int32(vec![0; count].into()),
-                        ArrayStorage::Int64(_) => ArrayStorage::Int64(vec![0; count].into()),
-                        ArrayStorage::Float32(_) => ArrayStorage::Float32(vec![0.0; count].into()),
-                        ArrayStorage::Float64(_) => ArrayStorage::Float64(vec![0.0; count].into()),
+                        ArrayStorage::Int32(_) => ArrayStorage::Int32(
+                            try_filled_array_storage(lane_count, 0, label)?.into(),
+                        ),
+                        ArrayStorage::Int64(_) => ArrayStorage::Int64(
+                            try_filled_array_storage(lane_count, 0, label)?.into(),
+                        ),
+                        ArrayStorage::Float32(_) => ArrayStorage::Float32(
+                            try_filled_array_storage(lane_count, 0.0, label)?.into(),
+                        ),
+                        ArrayStorage::Float64(_) => ArrayStorage::Float64(
+                            try_filled_array_storage(lane_count, 0.0, label)?.into(),
+                        ),
                         ArrayStorage::Bool(_) => unreachable!("a mask was rejected above"),
                     }
                 }

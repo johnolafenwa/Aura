@@ -2586,6 +2586,7 @@ impl ArrayValue {
     pub fn len(&self) -> usize {
         match &self.strided {
             None => self.base.len(),
+            Some(_) if self.shape.contains(&0) => 0,
             // A live shape's product was checked when the view was made.
             Some(_) => self.shape.iter().product(),
         }
@@ -2814,6 +2815,7 @@ impl ArrayValue {
         }
         let shape =
             array_layout::broadcast_shape(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        checked_array_element_count(&shape)?;
         let left = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
         let right = array_layout::broadcast_layout(&other.shape, &other.layout(), &shape);
         let storage = array_simd::widest(
@@ -3251,27 +3253,30 @@ fn checked_array_shape(shape: &[usize]) -> Result<usize> {
 }
 
 pub(crate) fn checked_array_element_count(shape: &[usize]) -> Result<usize> {
-    for dimension in shape {
-        if *dimension > i64::MAX as usize {
+    let mut has_zero = false;
+    let mut nonzero_product = 1_usize;
+    for &dimension in shape {
+        if dimension > i64::MAX as usize {
             return Err(Diagnostic::coded(
                 "AU4005",
                 format!("array dimension {dimension} exceeds the Aura int64 shape limit"),
             ));
         }
+        if dimension == 0 {
+            has_zero = true;
+        } else {
+            nonzero_product = nonzero_product
+                .checked_mul(dimension)
+                .filter(|&product| product <= isize::MAX as usize)
+                .ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!("array shape product overflows host allocation bounds: {shape:?}"),
+                    )
+                })?;
+        }
     }
-    if shape.contains(&0) {
-        return Ok(0);
-    }
-    let mut count = 1_usize;
-    for dimension in shape {
-        count = count.checked_mul(*dimension).ok_or_else(|| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("array shape product overflows host allocation bounds: {shape:?}"),
-            )
-        })?;
-    }
-    Ok(count)
+    Ok(if has_zero { 0 } else { nonzero_product })
 }
 
 fn array_allocation_error(label: &str, len: usize) -> Diagnostic {
@@ -3329,7 +3334,11 @@ pub fn try_array_buffer<T>(len: usize, label: &str) -> Result<Vec<T>> {
     Ok(values)
 }
 
-fn try_filled_array_storage<T: Clone>(len: usize, value: T, label: &str) -> Result<Box<[T]>> {
+pub(crate) fn try_filled_array_storage<T: Clone>(
+    len: usize,
+    value: T,
+    label: &str,
+) -> Result<Box<[T]>> {
     let mut values = try_array_buffer(len, label)?;
     values.resize(len, value);
     Ok(values.into_boxed_slice())
