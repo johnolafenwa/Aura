@@ -60,6 +60,9 @@ pub struct ClassLayout {
     /// The offsets of every field box the layout holds outside an enum or
     /// union payload, nested classes included.
     boxes: Vec<usize>,
+    /// Whether dropping a block only releases the boxes at `boxes`: every
+    /// field is a scalar, a box, or a class or tuple of such fields.
+    drops_boxes_only: bool,
     /// How values move in and out of the block.
     ops: &'static FieldOps,
 }
@@ -152,6 +155,18 @@ fn collect_boxes(table: &LayoutTable, id: LayoutId, base: usize, boxes: &mut Vec
     }
 }
 
+/// Whether dropping a value of `id` only releases the boxes
+/// [`collect_boxes`] finds.
+fn only_boxes(table: &LayoutTable, id: LayoutId) -> bool {
+    match &table.get(id).kind {
+        LayoutKind::Unit | LayoutKind::Scalar(_) | LayoutKind::Handle => true,
+        LayoutKind::Struct { fields, .. } => {
+            fields.iter().all(|field| only_boxes(table, field.layout))
+        }
+        LayoutKind::Indirect(_) | LayoutKind::Tagged { .. } => false,
+    }
+}
+
 impl ClassLayout {
     fn from_descriptor(descriptor: &str, access: u32) -> Result<Self, String> {
         let layout = TypedLayout::from_descriptor(descriptor)?;
@@ -194,6 +209,7 @@ impl ClassLayout {
         }
         let mut boxes = Vec::new();
         collect_boxes(table, layout.root(), 0, &mut boxes);
+        let drops_boxes_only = only_boxes(table, layout.root());
         let class_name = class_name.clone();
         Ok(Self {
             access,
@@ -202,6 +218,7 @@ impl ClassLayout {
             fields,
             by_name,
             boxes,
+            drops_boxes_only,
             ops: &typed_layout::FIELD_OPS,
         })
     }
@@ -674,11 +691,19 @@ impl Drop for TypedFields {
         // SAFETY: the block holds a value of the layout, with null boxes
         // where fields are moved out, and nothing reads it again.
         unsafe {
-            (self.layout.ops.drop)(
-                self.layout.table(),
-                self.layout.layout.root(),
-                self.data.as_ptr(),
-            );
+            if self.layout.drops_boxes_only {
+                // The same releases the layout's drop makes, without
+                // walking its table.
+                for offset in &self.layout.boxes {
+                    drop(field_box(self.data.as_ptr().add(*offset)).take());
+                }
+            } else {
+                (self.layout.ops.drop)(
+                    self.layout.table(),
+                    self.layout.layout.root(),
+                    self.data.as_ptr(),
+                );
+            }
             super::free_layout_block(self.data, self.layout.block_layout());
         }
     }

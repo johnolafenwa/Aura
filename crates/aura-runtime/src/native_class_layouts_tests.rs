@@ -221,6 +221,62 @@ fn classes_register_once_under_one_code() {
 }
 
 #[test]
+fn a_block_of_scalars_and_boxes_drops_by_releasing_its_boxes() {
+    // `Book` holds boxes, a nested class, a tuple, and scalars: dropping
+    // it only releases boxes.
+    let book = layout("DropBoxes", FIRST_TEST_ACCESS + 0x200);
+    assert!(book.drops_boxes_only);
+    let fields = typed_book("DropBoxes", FIRST_TEST_ACCESS + 0x200);
+    let title = fields
+        .data
+        .as_ptr()
+        .wrapping_add(book.field("title").expect("a field").offset);
+    // SAFETY: the slot holds the title's box, which the block owns.
+    let boxed = unsafe { (*title.cast::<Option<ElementBox>>()).as_ref() }
+        .map(ElementBox::as_ptr)
+        .expect("a title box");
+    // SAFETY: the box is live; this keeps it past the drop.
+    unsafe { crate::native_runtime::retain_untracked_value(boxed) };
+    drop(fields);
+    // SAFETY: the reference taken above keeps the box live.
+    let header = unsafe { &*boxed };
+    assert_eq!(header.ref_count.load(Ordering::Relaxed), 1);
+    assert_eq!(unsafe { value_ref(boxed) }, text("t"));
+    // SAFETY: the last reference.
+    unsafe { crate::native_runtime::release_untracked_value(boxed) };
+
+    // A field with variants drops by its layout.
+    let env = LayoutEnv {
+        classes: [(
+            "DropTagged".to_string(),
+            ClassDefinition {
+                type_params: Vec::new(),
+                fields: vec![(
+                    "maybe".to_string(),
+                    Type::normalize_union(
+                        vec![Type::named("str"), Type::Unit],
+                        "main",
+                        &Default::default(),
+                    )
+                    .expect("a valid union"),
+                )],
+            },
+        )]
+        .into(),
+        enums: Default::default(),
+    };
+    let descriptor = encode_descriptor(&Type::named("DropTagged"), &env).expect("a layout");
+    let tagged = register_class_layout(
+        Box::leak(descriptor.into_boxed_str()),
+        FIRST_TEST_ACCESS + 0x201,
+    )
+    .expect("the class is laid out");
+    assert!(!tagged.drops_boxes_only);
+    // With its field moved out, as generated code builds it.
+    drop(TypedFields::new(tagged));
+}
+
+#[test]
 fn only_classes_without_parameters_or_recursion_keep_their_fields_in_place() {
     let env = LayoutEnv {
         classes: [
