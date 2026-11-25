@@ -13070,15 +13070,13 @@ impl<'a> FunctionCompiler<'a> {
         let join_block = self.builder.create_block();
         self.builder.set_cold_block(wrap_block);
         self.builder.set_cold_block(fail_block);
-        self.builder
-            .brif(forward, join_block, &[], wrap_block, &[]);
+        self.builder.brif(forward, join_block, &[], wrap_block, &[]);
 
         self.builder.switch_to_block(wrap_block);
         self.builder.seal_block(wrap_block);
         let from_end = self.builder.iadd(len, index);
         let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
-        self.builder
-            .brif(counted, join_block, &[], fail_block, &[]);
+        self.builder.brif(counted, join_block, &[], fail_block, &[]);
 
         self.builder.switch_to_block(fail_block);
         self.builder.seal_block(fail_block);
