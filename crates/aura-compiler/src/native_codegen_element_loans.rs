@@ -2899,11 +2899,30 @@ pub(super) fn fused_entry_probes(function: &MirFunction) -> HashMap<String, Fuse
 /// [`fused_entry_probes`]), the test copies the entry's value into a box
 /// once and the reads take that box, instead of a test, a probe, and a
 /// walk that copies for each read.
-pub(super) fn entry_copy_loans(function: &MirFunction) -> HashMap<String, bool> {
+///
+/// A clone of the loan is a read too when `dict` says the loan's source is
+/// a dict: `d[k].clone()` then copies from the found value where it lies.
+pub(super) fn entry_copy_loans(
+    function: &MirFunction,
+    dict: impl Fn(&str) -> bool,
+) -> HashMap<String, bool> {
     let mut mentions = HashMap::<&str, usize>::new();
     let mut reads = HashMap::<&str, usize>::new();
     // A clone names its receiver twice, as the operand and its place.
     let mut cloned = HashMap::<&str, usize>::new();
+    let dict_loans = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::BeginElementLoan { loan, source, .. } if dict(source) => {
+                Some(loan.as_str())
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let clone_receiver =
+        |instruction| clone_receiver(instruction).filter(|loan| dict_loans.contains(loan));
     for block in &function.blocks {
         let mut places = Vec::new();
         for instruction in &block.instructions {

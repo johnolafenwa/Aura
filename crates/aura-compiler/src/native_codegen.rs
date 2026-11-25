@@ -2478,7 +2478,12 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
-        let entry_copy_loans = element_loans::entry_copy_loans(function);
+        let entry_copy_loans = element_loans::entry_copy_loans(function, |source| {
+            matches!(
+                variable_types.get(source),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == "dict"
+            )
+        });
         let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
         let fused_entry_probes = element_loans::fused_entry_probes(function);
         // An `Object` payload of a `json.Value` that is only looked up

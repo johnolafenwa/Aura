@@ -131,3 +131,44 @@ fn an_entry_loan_that_reads_or_changes_its_list_another_way_walks_its_path() {
         assert_eq!(push_loans(name), 0, "{name}");
     }
 }
+
+const CLONE_SOURCE: &str = r#"
+def lookup(name: str, context: dict[str, str]) -> str:
+    return context[name].clone()
+
+def pick(names: list[str], index: int64) -> str:
+    return names[index].clone()
+
+def main():
+    mut context: dict[str, str] = {}
+    context["a"] = "b"
+    print(lookup("a", context))
+    print(pick(["x"], 0))
+"#;
+
+#[test]
+fn a_clone_of_a_dict_entry_loan_reads_it_where_it_lies() {
+    let mir = lower_source_to_mir(CLONE_SOURCE).expect("the source should lower");
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should exist")
+    };
+    let dict = |source: &str| source == "context";
+    // The clone is the loan's one read, later in its block, and it only
+    // borrows the found value while it copies it.
+    let copies = super::entry_copy_loans(function("lookup"), dict);
+    assert_eq!(copies.values().collect::<Vec<_>>(), [&true], "{copies:?}");
+    let shadows = super::shadow_entry_copy_loans(
+        function("lookup"),
+        &copies,
+        &std::collections::HashSet::new(),
+        |_| Vec::new(),
+    );
+    assert_eq!(shadows.len(), 1, "{shadows:?}");
+    // A list element's clone keeps its own path, as does a dict's when the
+    // caller does not say the source is a dict.
+    assert!(super::entry_copy_loans(function("pick"), dict).is_empty());
+    assert!(super::entry_copy_loans(function("lookup"), |_| false).is_empty());
+}

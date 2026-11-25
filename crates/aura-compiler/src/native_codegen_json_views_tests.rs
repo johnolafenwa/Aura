@@ -81,7 +81,7 @@ fn function(name: &str) -> MirFunction {
 fn views(name: &str) -> Vec<ObjectView> {
     let function = function(name);
     let probes = fused_entry_probes(&function);
-    let copies = entry_copy_loans(&function);
+    let copies = entry_copy_loans(&function, |_| false);
     object_view_candidates(&function, &probes, &copies)
         .into_values()
         .collect()
