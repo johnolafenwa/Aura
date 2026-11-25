@@ -1,0 +1,11 @@
+class Tokens:
+    pos: int64
+    texts: list[str]
+
+    def is_word(self, text: str) -> bool:
+        return self.texts[self.pos] == text
+
+
+def main():
+    tokens = Tokens(pos=2, texts=["select", "from"])
+    print(tokens.is_word("select"))

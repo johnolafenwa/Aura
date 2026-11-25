@@ -692,6 +692,52 @@ fn dict_index_str(n: i64, run: bool) -> i64 {
     total
 }
 
+fn word_code(word: &str) -> i64 {
+    if word == "north" {
+        return 1;
+    }
+    if word == "coastal" {
+        return 2;
+    }
+    word.len() as i64
+}
+
+fn compass_words() -> Vec<String> {
+    ["north", "south", "east", "west", "central", "coastal", "inland", "upland"]
+        .iter()
+        .map(|word| word.to_string())
+        .collect()
+}
+
+fn str_param_call(n: i64, run: bool) -> i64 {
+    let words = compass_words();
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            total += word_code(&words[(i % 8) as usize]);
+        }
+    }
+    total
+}
+
+fn str_literal_compare(n: i64, run: bool) -> i64 {
+    let words = compass_words();
+    let mut total = 0i64;
+    if run {
+        for i in 0..n {
+            let word = &words[(i % 8) as usize];
+            if word == "north" {
+                total += 1;
+            } else if word == "coastal" {
+                total += 2;
+            } else if word != "east" {
+                total += 3;
+            }
+        }
+    }
+    total
+}
+
 fn checked_scale(i: i64) -> Result<i64, i64> {
     if i % 16 == 15 {
         return Err(i);
@@ -808,6 +854,8 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "element_plain_mut_call" => element_plain_mut_call(n, run),
         "dict_index_str" => dict_index_str(n, run),
         "result_call" => result_call(n, run),
+        "str_param_call" => str_param_call(n, run),
+        "str_literal_compare" => str_literal_compare(n, run),
         "record_swap" => record_swap(n, run),
         "field_list_push" => field_list_push(n, run),
         _ => -1,

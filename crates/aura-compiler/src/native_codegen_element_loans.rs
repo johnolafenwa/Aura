@@ -1128,30 +1128,43 @@ impl FunctionCompiler<'_> {
         if lent || map.contains('.') {
             return Ok(None);
         }
+        // An `int64` key is looked up as a word, any other as a box of
+        // the dict's key type.
+        let key_ty = match self.variable_types.get(map.as_str()) {
+            Some(DirectType::Opaque(Type::Named(_, types))) if *op != DictOp::ContainsKeyInt64 => {
+                types.first().cloned()
+            }
+            _ => None,
+        };
         if self.local_type(&loan)? != DirectType::Scalar(ScalarKind::Int64)
             || !matches!(self.loan_list(map, "dict")?, Some(LoanList::Local(_)))
+            || (key_ty.is_none() && *op != DictOp::ContainsKeyInt64)
         {
             return Ok(None);
         }
         let map_box = self.load_root(map)?.values[0];
-        let (probe_fn, key) = if *op == DictOp::ContainsKeyInt64 {
-            let key = self.load_operand(&args[0].value)?;
-            (RuntimeFn::MapProbeSlotInt64, key.values[0])
-        } else {
-            let Some(DirectType::Opaque(Type::Named(_, types))) =
-                self.variable_types.get(map.as_str())
-            else {
-                return Ok(None);
-            };
-            let key_ty = ensure_direct_type(&types[0], &self.classes, "dict key")?;
-            let key = self.load_operand_as_opaque_direct(&args[0].value, &key_ty)?;
-            (RuntimeFn::MapProbeSlot, key.values[0])
-        };
         let mutable = self.builder.iconst(types::I64, i64::from(mutable));
-        let slot = self
-            .builder
-            .call(self.runtime[probe_fn], &[map_box, key, mutable])
-            .results[0];
+        // A `str` key held as words is looked up from its bytes.
+        let probe = self.runtime[RuntimeFn::MapProbeSlotView];
+        let held = self.call_with_held_str_key(&args[0].value, map_box, probe, &[mutable])?;
+        let slot = match (held, key_ty) {
+            (Some(slot), _) => slot,
+            (None, None) => {
+                let key = self.load_operand(&args[0].value)?;
+                let probe = self.runtime[RuntimeFn::MapProbeSlotInt64];
+                self.builder
+                    .call(probe, &[map_box, key.values[0], mutable])
+                    .results[0]
+            }
+            (None, Some(key_ty)) => {
+                let key_ty = ensure_direct_type(&key_ty, &self.classes, "dict key")?;
+                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_ty)?;
+                let probe = self.runtime[RuntimeFn::MapProbeSlot];
+                self.builder
+                    .call(probe, &[map_box, key.values[0], mutable])
+                    .results[0]
+            }
+        };
         let variable = self.declare_word_var();
         self.builder.def_var(variable, slot);
         self.fused_entry_slots.insert(loan, variable);
@@ -1477,6 +1490,7 @@ impl FunctionCompiler<'_> {
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
+        self.load_deferred_entry_key(loan)?;
         // The probe boxes a scalar key for the runtime walk, so its box is
         // released here, in the block that made it.
         let baseline = self.layout_scratch.clone();

@@ -191,8 +191,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // String slicing and scalar indexing, `with` cleanup of a task group,
     // and task start stay in the backend, as do tests and replacements
     // with literal arguments,
-    // copies read out of a list's `str` view, and the forms of `get` and
-    // `put` a receive slot or a discarded `put` calls.
+    // copies read out of a list's `str` view, the bytes of a `str` passed
+    // as words, and the forms of `get` and `put` a receive slot or a
+    // discarded `put` calls.
     for helper in RuntimeFn::ALL.iter().copied().filter(|helper| {
         let symbol = helper.symbol();
         (symbol.starts_with("aura_direct_string_")
@@ -207,6 +208,9 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
                     | RuntimeFn::StringAffixLiteral
                     | RuntimeFn::StringReplaceLiteral
                     | RuntimeFn::StringFromView
+                    | RuntimeFn::StringBytes
+                    | RuntimeFn::StringClone
+                    | RuntimeFn::StringWords
                     | RuntimeFn::TaskGroupClose
                     | RuntimeFn::TaskArgBufferGuard
                     | RuntimeFn::TaskArgBufferDisarm
@@ -224,8 +228,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
     // are read in place. A plain record element is read, appended,
     // replaced, and popped in place. An empty list literal of a known type
     // is built and tagged in one call, a short one of scalars with room
-    // for its elements, its `str` literals join it without
-    // boxes, and a `str` element copied out of a
+    // for its elements, its `str` literals join it without boxes, as does
+    // a copy of a `str` read from its bytes, and a `str` element copied out of a
     // list that keeps no view is read by index. A `get` whose `Lookup` is kept as its
     // found value calls the `_payload` form of the op's helper, and one
     // whose found value is only read calls the `_lent` form. A `contains_key`
@@ -263,6 +267,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::VecEmptyTagged,
             RuntimeFn::VecEmptyTaggedWithRoom,
             RuntimeFn::VecPushStrLiteral,
+            RuntimeFn::VecPushStrView,
             RuntimeFn::VecLend,
             RuntimeFn::VecPopScalar,
             RuntimeFn::VecCheckIndex,

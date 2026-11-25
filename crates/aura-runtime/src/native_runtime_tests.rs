@@ -8475,6 +8475,20 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
         super::aura_direct_string_byte_len(string_value("é🎉e\u{301}")),
         9
     );
+    let text = string_value("é🎉e\u{301}");
+    // SAFETY: the box is live, and its text has nine bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(super::aura_direct_string_bytes(text), 9) };
+    assert_eq!(bytes, "é🎉e\u{301}".as_bytes());
+    let mut len = 0_i64;
+    let words = super::aura_direct_string_words(text, &mut len);
+    assert_eq!(words, super::aura_direct_string_bytes(text));
+    assert_eq!(len, 9);
+    let copy = super::aura_direct_string_clone(text);
+    assert_ne!(copy, text);
+    assert_eq!(
+        super::aura_direct_string_byte_len(copy),
+        super::aura_direct_string_byte_len(text)
+    );
     assert_eq!(
         super::aura_direct_string_contains(string_value("  Aura Repo  "), string_value("Repo"),),
         1
@@ -24235,6 +24249,25 @@ fn direct_scalar_wrappers_reject_out_of_range_values_and_wrong_receivers() {
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
+            super::aura_direct_string_bytes(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            super::aura_direct_string_clone(int_value(1));
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
+            let mut len = 0_i64;
+            super::aura_direct_string_words(int_value(1), &mut len);
+        }),
+        "expected `str`, found `integer`"
+    );
+    assert_eq!(
+        capture_direct_boundary_error_message(|| {
             super::aura_direct_integer_to_float(string_value("x"));
         }),
         "direct backend expected an integer, found `str`"
@@ -29228,6 +29261,31 @@ fn direct_empty_tagged_lists_start_in_their_element_form() {
                 Value::String("a much longer literal than fits inline".into())
             ]
         ),
+        other => panic!("expected a list, found {other:?}"),
+    }
+    unsafe { release_value(list) };
+
+    // A copy of a `str` joins a list from its bytes, which may be an
+    // element of the same list, and an untyped list takes its type.
+    let list = super::aura_direct_vec_empty();
+    let word = "a much longer text than fits inline";
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), word.len());
+    let copy = super::aura_direct_vec_index(list, 0, 1, 1);
+    super::aura_direct_vec_push_str_view(list, super::aura_direct_string_bytes(copy), word.len());
+    unsafe { release_value(copy) };
+    super::aura_direct_vec_push_str_view(list, word.as_ptr(), 1);
+    match unsafe { value_ref(list) } {
+        Value::Vec(vector) => {
+            assert_eq!(
+                vector.elements.to_vec(),
+                vec![
+                    Value::String(word.into()),
+                    Value::String(word.into()),
+                    Value::String("a".into())
+                ]
+            );
+            assert_eq!(*vector.element_type, Type::named("str"));
+        }
         other => panic!("expected a list, found {other:?}"),
     }
     unsafe { release_value(list) };

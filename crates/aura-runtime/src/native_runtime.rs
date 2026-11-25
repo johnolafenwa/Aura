@@ -8021,6 +8021,21 @@ pub extern "C-unwind" fn aura_direct_string_len(value: *mut OpaqueValue) -> i64 
     })
 }
 
+/// The address of the UTF-8 bytes of the `str` in `value`. They stay where
+/// they are while the box lives.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_bytes(value: *mut OpaqueValue) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match value {
+            Value::String(text) => text.as_str().as_ptr(),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_string_byte_len(value: *mut OpaqueValue) -> i64 {
     task_runtime_boundary(|| unsafe {
@@ -9414,6 +9429,28 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
     })
 }
 
+/// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
+/// `append` of a copy in a box does, with no box made for the copy.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_push_str_view(
+    vec: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+) {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        // The copy is made before the list changes, since the bytes may be
+        // an element of the same list.
+        let value = Value::String(literal_str(ptr, len).into());
+        with_vector_mut(vec, |vector| {
+            if is_unknown_runtime_type(&vector.element_type) {
+                vector.element_type = SharedType::from(inferred_collection_type(&value));
+            }
+            vector.elements.push(value);
+        });
+    })
+}
+
 /// The scalar a list write passes as `bits`, of the
 /// [`DirectScalarKind`] `kind` names.
 fn scalar_list_value(bits: i64, kind: i64) -> Value {
@@ -10265,6 +10302,47 @@ pub unsafe extern "C-unwind" fn aura_direct_string_from_view(
         // SAFETY: the caller's contract; a `str` element's bytes are UTF-8.
         let text = unsafe { str::from_utf8_unchecked(slice::from_raw_parts(ptr, len)) };
         boxed_value(Value::String(text.into()))
+    })
+}
+
+/// The address of the bytes of the `str` `value`, with their length
+/// stored at `len`. They stay valid while `value` lives unchanged.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_words(
+    value: *mut OpaqueValue,
+    len: *mut i64,
+) -> *const u8 {
+    task_runtime_boundary(|| unsafe {
+        let (ptr, bytes) = with_value(value, |value| match value {
+            Value::String(text) => (text.as_str().as_ptr(), text.as_str().len()),
+            other => runtime_error(format!(
+                "expected `str`, found `{}`",
+                value_type_name(other)
+            )),
+        });
+        // SAFETY: generated code passes a slot for one word.
+        len.write(bytes as i64);
+        ptr
+    })
+}
+
+/// A copy of the `str` `value`, as `aura_direct_clone_value` makes one,
+/// without the walk that looks for what else a value holds.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_clone(value: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        crate::runtime_value::representation_stats::note_clone();
+        let runtime_type_name = unsafe { explicit_runtime_type_tag(value) };
+        let text = unsafe {
+            with_value(value, |value| match value {
+                Value::String(text) => text.clone(),
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        boxed_value_with_type(Value::String(text), runtime_type_name)
     })
 }
 

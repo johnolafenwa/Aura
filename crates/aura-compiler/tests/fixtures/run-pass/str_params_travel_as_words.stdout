@@ -1,0 +1,49 @@
+20944316
+20944316
+20944316
+1 2 0 3
+0 6 15
+true false true true
+Ada
+Page
+<b>
+root
+Ada root
+4 -1 9
+ALPHAalpha
+beta
+
+gamma
+quiet
+skip
+IGNOREDignored
+a longer text that no small string holds
+quiet LOUDLoud soft
+16 alpha LITERAL
+106 10 14 1 8
+15 13
+<h1>Page</h1>Adaroot
+<h1>Page</h1>Adaroot
+<h1>Page</h1>Adaroot
+9 alpha a longer text that no small string holds beta
+9 alpha a longer text that no small string holds beta
+9 alpha a longer text that no small string holds beta
+alpha-alpha-0
+beta-alpha-1
+-alpha-2
+gamma-alpha-3
+quiet-alpha-4
+skip-alpha-5
+ignored-alpha-6
+a longer text that no small string holds-alpha-7
+<beta:2:beta><lit:3:lit>
+Ada
+5
+<b>
+4
+222
+1
+`a longer text that no small string holds` is too long
+true false false
+a greeting longer than two words a greeting longer than two wordz a greeting longer than two words
+3 3 1
