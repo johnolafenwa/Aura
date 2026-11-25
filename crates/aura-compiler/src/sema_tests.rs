@@ -33575,6 +33575,69 @@ def run() -> None:
 }
 
 #[test]
+fn extern_c_rejects_oversized_nested_array_structs() {
+    let four_gib = r#"extern "C" class Huge:
+    data: array[array[uint8, 65536], 65536]
+"#;
+    let err = check_ffi_source_for_test(four_gib)
+        .expect_err("oversized nested C array struct must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let too_many_leaves = r#"extern "C" class ManyLeaves:
+    data: array[array[uint8, 2048], 1024]
+"#;
+    let err = check_ffi_source_for_test(too_many_leaves)
+        .expect_err("C array struct exceeding leaf limit must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+
+    let union_overflow = r#"extern "C" union HugeUnion:
+    a: array[array[uint64, 65536], 65536]
+    b: uint64
+"#;
+    let err =
+        check_ffi_source_for_test(union_overflow).expect_err("oversized C union must be rejected");
+    assert_eq!(err.code, "AU2002", "{}", err.message);
+}
+
+#[test]
+fn union_clone_rejects_collections_with_opaque_handles_or_resources() {
+    let list_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: list[Handle] | None = [open_h()]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_handle)
+        .expect_err("cloning list[Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let dict_handle = r#"extern "C" opaque class Handle
+extern "C" def open_h() -> Handle
+
+def run() -> None:
+    xs: dict[str, Handle] | None = {"a": open_h()}
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(dict_handle)
+        .expect_err("cloning dict[str, Handle] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+
+    let list_resource = r#"import fs
+
+def run(f: own fs.File) -> None:
+    xs: list[fs.File] | None = [f]
+    ys = xs.clone()
+    _ = ys
+"#;
+    let err = check_ffi_source_for_test(list_resource)
+        .expect_err("cloning list[fs.File] | None must be rejected");
+    assert_eq!(err.code, "AU3007", "{}", err.message);
+}
+
+#[test]
 fn ffi_admits_named_functions_as_c_callbacks() {
     let program = check_ffi_source_for_test(
         r#"
@@ -33767,6 +33830,36 @@ extern "C" def rows(cursor: Cursor) -> int32
         let error = check_ffi_source_for_test(source).expect_err(message);
         assert_eq!(error.code, "AU2005", "{source}");
         assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_float_return_types() {
+    for ret in ["float32", "float64"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> {ret}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop returning `{ret}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(
+            error.message.contains("floating-point"),
+            "{}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn ffi_drop_rejects_contracted_extern_functions() {
+    for clause in ["requires true", "ensures result == 0"] {
+        let source = format!(
+            "extern \"C\" opaque class Handle drop close_h\nextern \"C\" def close_h(h: own Handle) -> int32:\n    {clause}\n"
+        );
+        let error = check_ffi_source_for_test(&source)
+            .expect_err(&format!("drop with `{clause}` must be rejected"));
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains("contracts"), "{}", error.message);
     }
 }
 

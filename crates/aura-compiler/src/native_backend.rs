@@ -236,6 +236,16 @@ impl HostedTarget {
         }
     }
 
+    /// The operating system, as `std::env::consts::OS` spells it.
+    pub fn os(self) -> &'static str {
+        match self {
+            Self::X86_64LinuxGnu
+            | Self::Aarch64LinuxGnu
+            | Self::X86_64LinuxMusl
+            | Self::Aarch64LinuxMusl => "linux",
+        }
+    }
+
     /// Whether programs for the target link the musl C library, and so
     /// link statically.
     pub fn is_musl(self) -> bool {
@@ -263,6 +273,12 @@ pub fn hosted_target() -> Option<HostedTarget> {
 /// `std::env::consts::ARCH` spells it.
 pub fn target_arch() -> &'static str {
     hosted_target().map_or(std::env::consts::ARCH, HostedTarget::arch)
+}
+
+/// The operating system host objects are compiled for, as
+/// `std::env::consts::OS` spells it.
+pub fn target_os() -> &'static str {
+    hosted_target().map_or(std::env::consts::OS, HostedTarget::os)
 }
 
 /// A machine with no operating system that a freestanding build writes

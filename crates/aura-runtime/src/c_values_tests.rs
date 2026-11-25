@@ -345,3 +345,16 @@ fn a_struct_array_crosses_element_by_element() {
         "list[Point]"
     );
 }
+
+#[test]
+fn pack_elements_rejects_overflowing_layout() {
+    let overflowing = layout(
+        "Huge",
+        false,
+        vec![("data", array(scalar(U64), usize::MAX / 4))],
+    );
+    let value = list("Huge", vec![instance("Huge", vec![])]);
+    let error = pack_elements(&value, &overflowing).expect_err("overflowing layout must fail");
+    assert_eq!(error.code(), "AU4005");
+    assert!(error.to_string().contains("overflows"), "{error}");
+}

@@ -849,6 +849,10 @@ struct MirRuntime {
     /// Whether this runtime runs a generator body, whose traps also name
     /// the calls that resumed it.
     generator_body: bool,
+    /// Runtime-scoped libffi callback trampolines shared across tasks in this
+    /// execution and released when the runtime drops.
+    callback_closures:
+        Arc<Mutex<HashMap<(String, crate::ffi::CCallback), crate::ffi::ScopedCallback>>>,
 }
 
 thread_local! {
@@ -2710,6 +2714,37 @@ impl MirRuntime {
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
             generator_body: false,
+            callback_closures: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Lightweight placeholder swapped into `self` while ownership of the live
+    /// interpreter is temporarily transferred to `CALLBACK_RUNTIME` during an
+    /// `extern "C"` call.
+    fn placeholder_from(other: &Self) -> Self {
+        Self {
+            module: Arc::clone(&other.module),
+            union_layouts: Arc::clone(&other.union_layouts),
+            safepoints_enabled: other.safepoints_enabled,
+            recursive_functions: other.recursive_functions.clone(),
+            functions: Arc::clone(&other.functions),
+            display_functions: Arc::clone(&other.display_functions),
+            float32_slots: Arc::clone(&other.float32_slots),
+            classes: Arc::clone(&other.classes),
+            trait_impls: Arc::clone(&other.trait_impls),
+            stdout: Arc::clone(&other.stdout),
+            stdout_sink: None,
+            cancellation: other.cancellation.clone(),
+            program_args: Arc::clone(&other.program_args),
+            call_depth: 0,
+            call_stack: Vec::new(),
+            task_ancestry: Vec::new(),
+            return_type_stack: Vec::new(),
+            constant_states: Arc::clone(&other.constant_states),
+            pending_returned_view_projection: None,
+            outgoing_returned_view_projection: None,
+            generator_body: false,
+            callback_closures: Arc::clone(&other.callback_closures),
         }
     }
 
@@ -6606,7 +6641,7 @@ impl MirRuntime {
             .zip(&call.params)
             .map(|(argument, param)| match (&param.c_struct, param.pointer) {
                 _ if matches!(param.ty, Type::Function { .. }) => {
-                    ffi_callback_from_runtime(&argument.value, &param.ty)
+                    ffi_callback_from_runtime(&self.callback_closures, &argument.value, &param.ty)
                 }
                 (Some(layout), true) => ffi_struct_elements_from_runtime(&argument.value, layout),
                 (Some(layout), false) => ffi_struct_from_runtime(&argument.value, layout),
@@ -6621,48 +6656,121 @@ impl MirRuntime {
             if let (MirReceiverKind::Value, Value::FfiHandle(handle)) =
                 (param.passing, &argument.value)
             {
-                handle.give_up();
+                if handle.take_ptr().is_null() {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: opaque handle `{}` has already been released",
+                            call.symbol,
+                            handle.type_name()
+                        ),
+                    ));
+                }
             }
         }
 
         // A callback the foreign function calls re-enters this interpreter.
-        let outer = CALLBACK_RUNTIME.replace(self);
-        let result = dispatch(&call.symbol, &signature, &mut arguments);
-        CALLBACK_RUNTIME.set(outer);
+        // Move ownership of `self` into the thread-local slot for the duration
+        // of `dispatch` with an RAII guard so nested callbacks never alias
+        // `&mut MirRuntime` and panics always restore the interpreter.
+        let result = {
+            let _callback_scope = CallbackRuntimeScope::enter(self);
+            dispatch(&call.symbol, &signature, &mut arguments)
+        };
         let callback_failure = CALLBACK_FAILURE.take();
 
-        // A `mut` parameter is copy-in/out: fixed-length bytes, one
-        // scalar, or one nullable handle. Apply what the engine read back
-        // to the original Aura place before interpreting the foreign
-        // return, so both backends share the same post-call state even
-        // when return validation traps.
-        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(arguments) {
+        // Commit opaque handle ownership updates and wrap any returned owned
+        // handle before running potentially-trapping out-parameter validations
+        // (such as bool or struct checks), so mid-writeback traps neither
+        // double-free a replaced handle nor leak a newly returned one.
+        let mut result = result;
+        let mut owned_handle_result = if matches!(result, Ok(FfiValue::OpaqueHandle(_))) {
+            let Ok(value) = std::mem::replace(&mut result, Ok(FfiValue::Unit)) else {
+                unreachable!("matched Ok(OpaqueHandle) above");
+            };
+            Some(
+                runtime_value_from_ffi_with(value, &call.return_type, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                )?,
+            )
+        } else {
+            None
+        };
+        let mut deferred_writebacks = Vec::new();
+        for (((index, param), argument), ffi_value) in
+            call.params.iter().enumerate().zip(&ordered).zip(arguments)
+        {
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
+            if signature.parameters()[index] == FfiType::OpaqueHandleOut {
+                let written = match stored_handle(&argument.value, &ffi_value) {
+                    Some(kept) => kept,
+                    None => runtime_value_from_ffi_with(ffi_value, &param.ty, &call.handle_drops)
+                        .map_err(|error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    })?,
+                };
+                let place = argument.writeback_place.as_deref().ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: mutable parameter `{}` requires a writeback place",
+                            call.symbol, param.name
+                        ),
+                    )
+                })?;
+                env.write_place(place, written)?;
+            } else {
+                deferred_writebacks.push((param, argument, ffi_value));
+            }
+        }
+
+        // A `mut` parameter is copy-in/out: fixed-length bytes, one
+        // scalar, or one struct/array. Apply what the engine read back
+        // to the original Aura place before interpreting the foreign
+        // return, so both backends share the same post-call state even
+        // when return validation traps.
+        let mut writeback_error: Option<Diagnostic> = None;
+        for (param, argument, ffi_value) in deferred_writebacks {
             let written = match ffi_value {
-                FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                FfiValue::Bytes(bytes) => Ok(bytes_runtime_value(&bytes)),
                 FfiValue::Elements(scalar, words) => match &argument.value {
-                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
-                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
+                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed),
+                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol),
                 },
                 FfiValue::Struct(layout, bytes) if param.pointer => {
                     aura_runtime::c_values::unpack_elements(layout, &bytes)
-                        .map_err(|error| c_value_diagnostic(&call.symbol, error))?
+                        .map_err(|error| c_value_diagnostic(&call.symbol, error))
                 }
                 FfiValue::Struct(layout, bytes) => {
-                    struct_runtime_value(layout, &bytes, &call.symbol)?
+                    struct_runtime_value(layout, &bytes, &call.symbol)
                 }
-                other => match stored_handle(&argument.value, &other) {
-                    Some(kept) => kept,
-                    None => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops)
-                        .map_err(|error| {
-                            Diagnostic::coded(
-                                "AU4005",
-                                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-                            )
-                        })?,
-                },
+                other => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                ),
+            };
+            let written = match written {
+                Ok(value) => value,
+                Err(error) => {
+                    if writeback_error.is_none() {
+                        writeback_error = Some(error);
+                    }
+                    continue;
+                }
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -6675,9 +6783,15 @@ impl MirRuntime {
             })?;
             env.write_place(place, written)?;
         }
+        if let Some(error) = writeback_error {
+            return Err(error);
+        }
 
         if let Some(failure) = callback_failure {
             return Err(failure);
+        }
+        if let Some(value) = owned_handle_result.take() {
+            return Ok(value);
         }
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
         if let FfiValue::Struct(layout, bytes) = &result {
@@ -6876,6 +6990,7 @@ impl MirRuntime {
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
             generator_body: false,
+            callback_closures: Arc::clone(&self.callback_closures),
         }
     }
 
@@ -11528,13 +11643,63 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
 
 thread_local! {
     /// The interpreter whose foreign call is running on this thread: the
-    /// one a callback from C re-enters. Null outside a foreign call.
-    static CALLBACK_RUNTIME: std::cell::Cell<*mut MirRuntime> =
-        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// one a callback from C re-enters. `None` outside a foreign call or
+    /// while an active callback owns the runtime.
+    static CALLBACK_RUNTIME: std::cell::RefCell<Option<MirRuntime>> =
+        const { std::cell::RefCell::new(None) };
     /// The failure of a callback that ran during the current foreign
     /// call. It is raised when the foreign function returns.
     static CALLBACK_FAILURE: std::cell::RefCell<Option<Diagnostic>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// Transfers ownership of `MirRuntime` into `CALLBACK_RUNTIME` for the duration
+/// of a foreign call and unconditionally restores it on drop.
+struct CallbackRuntimeScope<'a> {
+    slot: &'a mut MirRuntime,
+    previous: Option<MirRuntime>,
+}
+
+impl<'a> CallbackRuntimeScope<'a> {
+    fn enter(runtime: &'a mut MirRuntime) -> Self {
+        let placeholder = MirRuntime::placeholder_from(runtime);
+        let owned = std::mem::replace(runtime, placeholder);
+        let previous = CALLBACK_RUNTIME.with(|cell| cell.borrow_mut().replace(owned));
+        Self {
+            slot: runtime,
+            previous,
+        }
+    }
+}
+
+impl Drop for CallbackRuntimeScope<'_> {
+    fn drop(&mut self) {
+        let returned = CALLBACK_RUNTIME.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let returned = slot.take();
+            *slot = self.previous.take();
+            returned
+        });
+        if let Some(returned) = returned {
+            *self.slot = returned;
+        }
+    }
+}
+
+/// Holds exclusive ownership of `MirRuntime` during a single C callback
+/// invocation and restores it to `CALLBACK_RUNTIME` on exit or unwind.
+struct ActiveCallbackRuntime {
+    runtime: Option<MirRuntime>,
+}
+
+impl Drop for ActiveCallbackRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            CALLBACK_RUNTIME.with(|cell| {
+                *cell.borrow_mut() = Some(runtime);
+            });
+        }
+    }
 }
 
 /// The C signature of a callback parameter of type `ty`, a function type
@@ -11602,11 +11767,13 @@ pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
 }
 
 /// The address of C code that calls the named function `value` holds, for
-/// a callback parameter of type `ty`. One piece of code serves every call
-/// that passes the same function with the same signature.
-fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
-    type Codes = HashMap<(String, crate::ffi::CCallback), usize>;
-    static CODES: std::sync::Mutex<Option<Codes>> = std::sync::Mutex::new(None);
+/// a callback parameter of type `ty`. One trampoline serves every call
+/// that passes the same function with the same signature within `closures`.
+fn ffi_callback_from_runtime(
+    closures: &Mutex<HashMap<(String, crate::ffi::CCallback), crate::ffi::ScopedCallback>>,
+    value: &Value,
+    ty: &Type,
+) -> Result<FfiValue> {
     let mismatch = || {
         Diagnostic::coded(
             "AU4005",
@@ -11623,34 +11790,47 @@ fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         return Err(mismatch());
     }
     let name = function.name.clone();
-    let mut codes = CODES.lock().unwrap_or_else(|poison| poison.into_inner());
-    let code = *codes
-        .get_or_insert_with(HashMap::new)
+    let mut codes = closures.lock().unwrap_or_else(|poison| poison.into_inner());
+    let code = codes
         .entry((name.clone(), signature.clone()))
         .or_insert_with(|| {
             let shape = signature.clone();
-            crate::ffi::callback_code(
+            crate::ffi::callback_code_scoped(
                 signature,
                 Box::new(move |frame| run_callback(&name, &shape, frame)),
             )
-        });
+        })
+        .code();
     Ok(FfiValue::Callback(code))
 }
 
 /// Runs the Aura function `name` for one call from C. The frame holds the
 /// arguments and takes the results, as `callback_code` describes.
 fn run_callback(name: &str, signature: &crate::ffi::CCallback, frame: &mut [u64]) {
-    let runtime = CALLBACK_RUNTIME.get();
     // After one callback fails, C gets zeros until its function returns.
-    if runtime.is_null() || CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
         return;
     }
-    // SAFETY: the pointer is the interpreter that is waiting in the
-    // foreign call this callback runs under, on this thread. It does
-    // nothing else until that call returns.
-    let runtime = unsafe { &mut *runtime };
-    if let Err(diagnostic) = runtime.call_from_c(name, signature, frame) {
-        CALLBACK_FAILURE.set(Some(diagnostic));
+    let Some(runtime) = CALLBACK_RUNTIME.with(|cell| cell.borrow_mut().take()) else {
+        return;
+    };
+    let mut active = ActiveCallbackRuntime {
+        runtime: Some(runtime),
+    };
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        active
+            .runtime
+            .as_mut()
+            .expect("active callback runtime is present")
+            .call_from_c(name, signature, frame)
+    }));
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(diagnostic)) => CALLBACK_FAILURE.set(Some(diagnostic)),
+        Err(_) => CALLBACK_FAILURE.set(Some(Diagnostic::coded(
+            "AU4001",
+            format!("FFI callback `{name}` panicked during execution"),
+        ))),
     }
 }
 

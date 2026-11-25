@@ -445,6 +445,7 @@ runtime_functions! {
     FfiElements => ("aura_direct_ffi_elements", [I64, I64, I64], Some(I64)),
     FfiElementsMut => ("aura_direct_ffi_elements_mut", [I64, I64, I64], None),
     FfiCheckFlags => ("aura_direct_ffi_check_flags", [I64, I64, I64], None),
+    FfiSanitizeFlags => ("aura_direct_ffi_sanitize_flags", [I64], Some(I64)),
     FfiPackStruct => ("aura_direct_ffi_pack_struct", [I64, I64, I64, I64], None),
     FfiUnpackStruct => ("aura_direct_ffi_unpack_struct", [I64, I64, I64, I64, I64], Some(I64)),
     FfiUnpackStructInto => ("aura_direct_ffi_unpack_struct_into", [I64, I64, I64, I64, I64, I64], None),

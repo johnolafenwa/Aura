@@ -3087,6 +3087,129 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
 }
 
 #[test]
+fn mir_runtime_ffi_commits_handle_writeback_before_flag_validation_trap() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OLD_DROPS: AtomicUsize = AtomicUsize::new(0);
+    extern "C" fn count_old_drop(_ptr: *mut c_void) {
+        OLD_DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+
+    OLD_DROPS.store(0, Ordering::SeqCst);
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let old_ptr = 0x1111usize as *mut c_void;
+    let new_ptr = 0x2222usize as *mut c_void;
+    let nullable_token = Type::normalize_union(
+        vec![Type::named("Token"), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("nullable token union");
+
+    env.define_typed(
+        "flags",
+        Type::Named("list".to_string(), vec![Type::named("bool")]),
+        Value::Vec(VecValue::new(
+            Type::named("bool"),
+            vec![Value::Bool(false)].into(),
+        )),
+    );
+    let old_handle =
+        FfiHandleValue::owned("Token".to_string(), old_ptr, Some(count_old_drop)).expect("old");
+    let Type::Union(union_def) = &nullable_token else {
+        panic!("expected union");
+    };
+    let token_index = union_def
+        .members
+        .iter()
+        .position(|member| *member == Type::named("Token"))
+        .expect("Token member");
+    env.define_typed(
+        "slot",
+        nullable_token.clone(),
+        Value::Union(Box::new(crate::runtime_value::UnionValue {
+            union_type: nullable_token.clone().into(),
+            member_index: token_index,
+            payload: Value::FfiHandle(old_handle),
+        })),
+    );
+
+    let call = MirExternCall {
+        name: String::new(),
+        symbol: "replace_and_flag".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "flags".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::Named("list".to_string(), vec![Type::named("bool")]),
+                c_string: false,
+                pointer: true,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "slot".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: nullable_token.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::Unit,
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Place("flags".to_string()),
+            writeback_place: Some("flags".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("slot".to_string()),
+            writeback_place: Some("slot".to_string()),
+        },
+    ];
+
+    let error = runtime
+        .evaluate_extern_call_with(&call, &args, &mut env, |_symbol, _sig, arguments| {
+            // Simulate C writing non-canonical bool byte `2` to flags[0]
+            // and replacing *slot with `new_ptr` after freeing `old_ptr`.
+            let crate::ffi::FfiValue::Elements(_, words) = &mut arguments[0] else {
+                panic!("expected bool elements");
+            };
+            words[0] = 2;
+            arguments[1] = crate::ffi::FfiValue::OpaqueHandle(
+                crate::ffi::OpaqueHandle::new(new_ptr).expect("new handle"),
+            );
+            Ok(crate::ffi::FfiValue::Unit)
+        })
+        .expect_err("non-canonical bool element must trap");
+    assert_eq!(error.code, "AU4001");
+
+    // `slot` must already hold `new_ptr`, and `old_ptr` must have been given up
+    // so dropping `env` does not double-free `old_ptr`.
+    let updated = env.read_place("slot").expect("slot remains live");
+    match updated {
+        Value::Union(union) => match &union.payload {
+            Value::FfiHandle(handle) => assert_eq!(handle.as_ptr(), new_ptr),
+            other => panic!("expected updated FfiHandle, got {other:?}"),
+        },
+        other => panic!("expected union value, got {other:?}"),
+    }
+    drop(env);
+    assert_eq!(
+        OLD_DROPS.load(Ordering::SeqCst),
+        0,
+        "old handle must be given up before AU4001 trap so drop does not run again"
+    );
+}
+
+#[test]
 fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
@@ -25115,6 +25238,7 @@ def main() -> int32:
         super::ffi_type_for_extern_param(&param).expect("a callback parameter"),
         FfiType::Callback
     );
+    let closures = std::sync::Mutex::new(HashMap::new());
     for (value, ty) in [
         (Value::Bool(true), nothing.clone()),
         (
@@ -25122,7 +25246,7 @@ def main() -> int32:
             Type::named("int32"),
         ),
     ] {
-        let error = super::ffi_callback_from_runtime(&value, &ty)
+        let error = super::ffi_callback_from_runtime(&closures, &value, &ty)
             .expect_err("a callback is a named function of a callback type");
         assert_eq!(error.code, "AU4005");
         assert!(
@@ -25131,12 +25255,18 @@ def main() -> int32:
             error.message
         );
     }
-    let first =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
-    let again =
-        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
-            .expect("a named function");
+    let first = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
+    let again = super::ffi_callback_from_runtime(
+        &closures,
+        &super::mir_function_value("visit", &nothing),
+        &nothing,
+    )
+    .expect("a named function");
     assert_eq!(first, again, "one function and signature share their code");
 
     // Outside a foreign call there is no interpreter to re-enter, and the
@@ -25148,6 +25278,125 @@ def main() -> int32:
         &mut frame,
     );
     assert_eq!(frame, [7]);
+}
+
+#[test]
+fn mir_runtime_nested_reentrant_callbacks_and_panic_containment() {
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" def outer_c(cb: def(x: int32) -> int32, n: int32) -> int32
+extern "C" def inner_c(cb: def(x: int32) -> int32, n: int32) -> int32
+
+def inner_cb(x: int32) -> int32:
+    return x * 3
+
+def outer_cb(x: int32) -> int32:
+    return inner_c(inner_cb, x + 1)
+
+def run() -> int32:
+    return outer_c(outer_cb, 4)
+"#,
+    );
+    // Verify RAII restore when dispatch panics mid-call and nested re-entry
+    // runs without aliasing `&mut MirRuntime`.
+    let mut runtime = MirRuntime::new(
+        module,
+        Arc::new(std::sync::Mutex::new(String::new())),
+        CancellationContext::default(),
+    );
+    let mut env = Env::default();
+    let cb_ty = Type::Function {
+        params: vec![aura_core::types::FunctionParamContract {
+            keyword_only: false,
+            name: "x".to_string(),
+            passing: crate::ast::ReceiverKind::Borrow,
+            ty: Type::named("int32"),
+            has_default: false,
+        }],
+        return_type: Box::new(Type::named("int32")),
+    };
+    let outer_call = MirExternCall {
+        name: String::new(),
+        symbol: "outer_c".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "cb".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: cb_ty.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "n".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("int32"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::named("int32"),
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = vec![
+        MirArg {
+            name: None,
+            value: Operand::Function {
+                name: "inner_cb".to_string(),
+                signature: Box::new(cb_ty.clone()),
+            },
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Int(5),
+            writeback_place: None,
+        },
+    ];
+
+    // Re-entrant nested invocation via the scoped callback trampoline.
+    let nested_result = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            // Invoke callback twice inside one foreign call (and while runtime is
+            // owned by CALLBACK_RUNTIME).
+            let a = cb_fn(5);
+            let b = cb_fn(a);
+            Ok(crate::ffi::FfiValue::I32(b))
+        })
+        .expect("re-entrant callback call should succeed");
+    assert_eq!(nested_result.render(), "45");
+
+    // Panicking inside dispatch must still restore CALLBACK_RUNTIME to None
+    // and return the live MirRuntime cleanly to the caller.
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = runtime.evaluate_extern_call_with(&outer_call, &args, &mut env, |_, _, _| {
+            panic!("simulated dispatch panic");
+        });
+    }));
+    assert!(caught.is_err());
+    assert!(
+        super::CALLBACK_RUNTIME.with(|cell| cell.borrow().is_none()),
+        "CALLBACK_RUNTIME must be cleared after unwind"
+    );
+    // Runtime remains usable after the caught dispatch panic.
+    let after = runtime
+        .evaluate_extern_call_with(&outer_call, &args, &mut env, |_sym, _sig, ffi_args| {
+            let crate::ffi::FfiValue::Callback(code) = ffi_args[0] else {
+                panic!("expected callback");
+            };
+            let cb_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(code) };
+            Ok(crate::ffi::FfiValue::I32(cb_fn(7)))
+        })
+        .expect("runtime must remain intact after unwound dispatch");
+    assert_eq!(after.render(), "21");
 }
 
 // The program calls `posix_memalign` from the C library by name.

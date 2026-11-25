@@ -17305,6 +17305,90 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_sanitizes_all_flag_lists_before_trapping() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def writes_two(first: mut ptr[bool], second: mut ptr[bool]) -> None
+
+def main() -> int32:
+    mut a: list[bool] = [false]
+    mut b: list[bool] = [false]
+    writes_two(a, b)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("multi-flag-list call should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "writes_two",
+        "aura_direct_ffi_sanitize_flags",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn direct_ffi_codegen_commits_handle_writeback_before_flag_and_scalar_checks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" def st_close(store: own Store) -> None
+extern "C" def replace_and_check(
+    flags: mut ptr[bool],
+    ok: mut bool,
+    out: mut Store | None
+) -> None
+
+def main() -> int32:
+    mut flags: list[bool] = [false]
+    mut ok: bool = false
+    mut slot: Store | None = None
+    replace_and_check(flags, ok, slot)
+    return 0
+"#,
+    );
+    let object_bytes =
+        emit_unoptimized_object(&module).expect("handle + flag writeback call should emit");
+    let file = object::File::parse(&*object_bytes).expect("parse object");
+    let mut call_offsets: HashMap<String, u64> = HashMap::new();
+    for section in file.sections() {
+        for (offset, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if let Ok(name) = sym.name() {
+                        let clean = name.trim_start_matches('_').to_string();
+                        call_offsets.entry(clean).or_insert(offset);
+                    }
+                }
+            }
+        }
+    }
+    let stored = *call_offsets
+        .get("aura_direct_ffi_stored_handle")
+        .expect("missing aura_direct_ffi_stored_handle");
+    let check_flags = *call_offsets
+        .get("aura_direct_ffi_check_flags")
+        .expect("missing aura_direct_ffi_check_flags");
+    let bad_bool = *call_offsets
+        .get("aura_direct_ffi_bad_bool")
+        .expect("missing aura_direct_ffi_bad_bool");
+    assert!(
+        stored < check_flags,
+        "handle writeback ({stored}) must precede flag validation ({check_flags})"
+    );
+    assert!(
+        stored < bad_bool,
+        "handle writeback ({stored}) must precede bool scalar validation ({bad_bool})"
+    );
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -17782,6 +17866,48 @@ def main() -> int32:
             "the object should reference `{symbol}`: {referenced:?}"
         );
     }
+
+    // A separate function calling an extern symbol without any callback
+    // parameter must still check for callback failures registered elsewhere.
+    let split = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reg(cb: def(x: int32) -> int32) -> None
+extern "C" def fire() -> int32
+
+def handler(x: int32) -> int32:
+    return x + 1
+
+def setup() -> None:
+    reg(handler)
+
+def trigger() -> int32:
+    return fire()
+
+def main() -> int32:
+    setup()
+    return trigger()
+"#,
+    );
+    let split_obj = emit_unoptimized_object(&split).expect("split callback module should emit");
+    let file = object::File::parse(&*split_obj).expect("parse object");
+    let mut callback_checks = 0usize;
+    for section in file.sections() {
+        for (_, reloc) in section.relocations() {
+            if let RelocationTarget::Symbol(sym_idx) = reloc.target() {
+                if let Ok(sym) = file.symbol_by_index(sym_idx) {
+                    if sym.name().is_ok_and(|name| {
+                        name.trim_start_matches('_') == "aura_direct_ffi_callback_check"
+                    }) {
+                        callback_checks += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        callback_checks >= 2,
+        "both `reg` and `fire` must emit aura_direct_ffi_callback_check, found {callback_checks}"
+    );
 
     // C text reaches a callback as a pointer, which the body copies into
     // a `str` and frees when the function returns.

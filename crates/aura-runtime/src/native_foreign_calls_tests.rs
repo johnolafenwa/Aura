@@ -409,6 +409,52 @@ fn a_c_string_argument_is_a_terminated_copy_and_none_is_null() {
 }
 
 #[test]
+fn temporary_c_string_and_bytes_view_copies_are_tracked_and_freed_on_trap() {
+    let symbol = "open_two";
+    with_direct_task_runtime_scope(|| unsafe {
+        let text = string_value("hello");
+        let boxed = boxed_bytes(&[1, 2, 3]);
+        let before = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        let cstr = aura_direct_ffi_c_string(text, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        assert!(!cstr.is_null());
+        assert!(!bytes.is_null());
+        let during = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(
+            during,
+            before + 2,
+            "temporary CString and boxed BytesView copies must be tracked in the task ledger"
+        );
+        aura_direct_ffi_release_c_string(cstr);
+        aura_direct_ffi_release_bytes(bytes, view.length);
+        let after = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(after, before);
+        aura_direct_release_value(text);
+        aura_direct_release_value(boxed);
+    });
+
+    // Mid-call trap after arg 1 allocates CString and BytesView copies must not
+    // leak either allocation when the task scope unwinds.
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let first = string_value("arg1");
+        let boxed = boxed_bytes(&[9, 8, 7]);
+        let _cstr = aura_direct_ffi_c_string(first, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let _bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        let bad = string_value("bad\0arg2");
+        let _ = aura_direct_ffi_c_string(bad, 1, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+}
+
+#[test]
 fn a_c_string_result_is_copied_into_a_new_str() {
     let symbol = "name";
     unsafe {
@@ -670,6 +716,35 @@ fn a_flag_list_with_a_byte_that_is_not_a_bool_ends_the_task() {
 }
 
 #[test]
+fn sanitize_flags_normalizes_all_non_canonical_bytes_before_reporting() {
+    use super::aura_direct_ffi_sanitize_flags;
+    unsafe {
+        let first = list_value(scalar_flags(&[false, false]));
+        let second = list_value(scalar_flags(&[false, false]));
+        let mut first_view = empty_view();
+        let mut second_view = empty_view();
+        aura_direct_ffi_elements_mut(first, BOOL, &mut first_view);
+        aura_direct_ffi_elements_mut(second, BOOL, &mut second_view);
+        first_view.pointer.cast_mut().add(0).write(2);
+        second_view.pointer.cast_mut().add(1).write(255);
+
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 2);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 255);
+        // Subsequent checks see canonical 0/1 bytes in both lists.
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 0);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 0);
+        assert_eq!(with_value(first, |v| v.render()), "[true, false]");
+        assert_eq!(with_value(second, |v| v.render()), "[false, true]");
+
+        let text = string_value("x");
+        assert_eq!(aura_direct_ffi_sanitize_flags(text), 0);
+        aura_direct_release_value(text);
+        aura_direct_release_value(first);
+        aura_direct_release_value(second);
+    }
+}
+
+#[test]
 fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
     unsafe extern "C-unwind" fn doubles(frame: *mut u64) {
@@ -732,6 +807,49 @@ fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task(
     });
     assert!(returned.load(Ordering::Relaxed));
     assert_eq!(diagnostic.message, "callback trapped");
+}
+
+#[test]
+fn foreign_thread_callback_enables_stack_guard_and_releases_owned_handles() {
+    use super::aura_direct_ffi_callback_guard;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OBSERVED_STACK_LIMIT: AtomicUsize = AtomicUsize::new(0);
+    static TARGET_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn callback_on_foreign_thread(_frame: *mut u64) {
+        let limit =
+            super::super::with_direct_task_runtime_state(|state| state.frames().stack_limit());
+        OBSERVED_STACK_LIMIT.store(limit, Ordering::SeqCst);
+        let name = "ForeignHandle";
+        let ptr = TARGET_ADDR.load(Ordering::SeqCst) as *mut c_void;
+        let _leaked_into_ledger =
+            unsafe { aura_direct_ffi_handle(ptr, name.as_ptr(), name.len(), Some(note_release)) };
+        // Simulate a trap mid-callback on the foreign thread.
+        super::task_runtime_boundary(|| super::runtime_error("foreign callback trapped"));
+    }
+
+    let target = 0u8;
+    let target_ptr = &target as *const u8 as *mut c_void;
+    OBSERVED_STACK_LIMIT.store(0, Ordering::SeqCst);
+    TARGET_ADDR.store(target_ptr as usize, Ordering::SeqCst);
+
+    let thread = std::thread::spawn(|| {
+        let mut frame = 0u64;
+        unsafe { aura_direct_ffi_callback_guard(callback_on_foreign_thread, &mut frame) };
+    });
+    thread.join().expect("foreign thread should finish cleanly");
+
+    assert_ne!(
+        OBSERVED_STACK_LIMIT.load(Ordering::SeqCst),
+        0,
+        "foreign-thread callback must install a non-zero stack guard limit"
+    );
+    assert_eq!(
+        releases_of(target_ptr),
+        1,
+        "owned handle created in a foreign-thread callback must be released on thread exit"
+    );
 }
 
 #[test]
@@ -999,10 +1117,27 @@ fn a_handle_with_a_drop_function_releases_its_object_once() {
         aura_direct_release_value(dropped);
         assert_eq!(releases_of(address(0)), 1);
 
-        // A handle a foreign function took is not the program's to release.
+        // A handle a foreign function took is not the program's to release,
+        // and reading its address or giving it up a second time traps.
         let taken = open(1);
+        let taken_addr = taken as usize;
         aura_direct_ffi_give_up_handle(taken);
-        assert!(aura_direct_ffi_handle_address(taken).is_null());
+        let diagnostic = capture_diagnostic(move || {
+            let _ = aura_direct_ffi_handle_address(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            diagnostic.message.contains("already been released"),
+            "{}",
+            diagnostic.message
+        );
+        let second = capture_diagnostic(move || {
+            aura_direct_ffi_give_up_handle(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            second.message.contains("already been released"),
+            "{}",
+            second.message
+        );
         aura_direct_release_value(taken);
         assert_eq!(releases_of(address(1)), 0);
         let text = string_value("x");

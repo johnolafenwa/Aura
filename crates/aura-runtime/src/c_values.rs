@@ -42,13 +42,18 @@ pub enum CValueError {
     },
     /// C left a byte other than 0 or 1 in a `bool`.
     BadBool(u8),
+    /// A C struct or array byte count overflowed or exceeded layout limits.
+    LayoutOverflow { name: String },
 }
 
 impl CValueError {
     /// The diagnostic code the failure reports under.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Shape { .. } | Self::Length { .. } | Self::UnionLength { .. } => "AU4005",
+            Self::Shape { .. }
+            | Self::Length { .. }
+            | Self::UnionLength { .. }
+            | Self::LayoutOverflow { .. } => "AU4005",
             Self::BadBool(_) => "AU4001",
         }
     }
@@ -80,6 +85,10 @@ impl fmt::Display for CValueError {
             Self::BadBool(byte) => write!(
                 formatter,
                 "C left the byte {byte} in a `bool`, which holds only 0 or 1"
+            ),
+            Self::LayoutOverflow { name } => write!(
+                formatter,
+                "C layout `{name}` byte size overflows addressable memory"
             ),
         }
     }
@@ -350,8 +359,18 @@ pub fn pack_elements(value: &Value, layout: &CStruct) -> Result<Vec<u8>, CValueE
     let Value::Vec(list) = value else {
         return Err(shape(format!("list[{}]", layout.name), value));
     };
-    let size = layout.size();
-    let mut bytes = vec![0_u8; size * list.elements.len()];
+    let size = layout
+        .checked_size()
+        .ok_or_else(|| CValueError::LayoutOverflow {
+            name: layout.name.clone(),
+        })?;
+    let total = size
+        .checked_mul(list.elements.len())
+        .filter(|total| *total <= isize::MAX as usize)
+        .ok_or_else(|| CValueError::LayoutOverflow {
+            name: layout.name.clone(),
+        })?;
+    let mut bytes = vec![0_u8; total];
     for (index, held) in list.elements.iter().enumerate() {
         pack(&held, layout, &mut bytes[index * size..(index + 1) * size])?;
     }
