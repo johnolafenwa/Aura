@@ -907,4 +907,3 @@ fn shared_typed_fields_support_overlapping_and_concurrent_reads() {
     typed.refresh_views();
     assert_eq!(typed.get("title").as_deref(), Some(&text("t")));
 }
-

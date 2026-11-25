@@ -1609,8 +1609,9 @@ fn shared_typed_payloads_support_overlapping_and_concurrent_reads() {
                     assert_eq!(b.as_deref(), Some(expected_named));
                     assert!(box_a.is_some());
                     assert!(shared.boxed_payloads_all(|_| true));
-                    let copied = shared
-                        .copy_with_boxes([expected_circle.clone(), expected_named.clone()].into_iter());
+                    let copied = shared.copy_with_boxes(
+                        [expected_circle.clone(), expected_named.clone()].into_iter(),
+                    );
                     assert_eq!(copied.get(0).as_deref(), Some(expected_circle));
                 }
             });
@@ -1669,9 +1670,8 @@ fn typed_payloads_from_values_drops_only_initialized_slots_on_unwind() {
         ..FIELD_OPS
     };
 
-    let mut custom =
-        EnumLayout::from_descriptor(descriptor("UnwindTest"), FIRST_TEST_ACCESS + 81)
-            .expect("descriptor builds");
+    let mut custom = EnumLayout::from_descriptor(descriptor("UnwindTest"), FIRST_TEST_ACCESS + 81)
+        .expect("descriptor builds");
     custom.ops = &TEST_OPS;
     let custom: &'static EnumLayout = Box::leak(Box::new(custom));
 
@@ -1711,5 +1711,3 @@ fn typed_payloads_from_values_drops_only_initialized_slots_on_unwind() {
         "no uninitialized slot may be dropped when slot 0 unwinds"
     );
 }
-
-

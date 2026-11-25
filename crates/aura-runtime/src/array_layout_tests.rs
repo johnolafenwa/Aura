@@ -299,4 +299,3 @@ fn copy_within_from_handles_mid_drop_third_holder_without_panicking() {
         });
     }
 }
-

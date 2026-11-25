@@ -18792,7 +18792,9 @@ def main() -> None:
             .match_indices(&needle)
             .find_map(|(pos, _)| {
                 let line_start = ir[..pos].rfind('\n').map_or(0, |i| i + 1);
-                ir[line_start..pos].starts_with("define ").then_some(line_start)
+                ir[line_start..pos]
+                    .starts_with("define ")
+                    .then_some(line_start)
             })
             .unwrap_or_else(|| panic!("missing definition for `{fn_name}` in IR"));
         let rest = &ir[def_start..];

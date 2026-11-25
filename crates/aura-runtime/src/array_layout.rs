@@ -91,9 +91,7 @@ impl<T: Copy> ArrayBuf<T> {
     /// Whether this window and `other` are the only two holders of one
     /// buffer.
     pub fn is_shared_only_with(&self, other: &Self) -> bool {
-        self.shares_buffer_with(other)
-            && self.holders() == 2
-            && Arc::strong_count(&self.owner) == 2
+        self.shares_buffer_with(other) && self.holders() == 2 && Arc::strong_count(&self.owner) == 2
     }
 
     /// Copies `source`, the one other window of this buffer, over the

@@ -31039,7 +31039,10 @@ fn every_direct_task_start_test_holds_claim_flag_test_guard() {
             let fn_header = lines[fn_idx];
             let name = fn_header
                 .strip_prefix("fn ")
-                .and_then(|rest| rest.split(|ch: char| ch == '(' || ch == '<' || ch.is_whitespace()).next())
+                .and_then(|rest| {
+                    rest.split(|ch: char| ch == '(' || ch == '<' || ch.is_whitespace())
+                        .next()
+                })
                 .unwrap_or("")
                 .to_string();
             let mut end_idx = fn_idx + 1;
@@ -32289,8 +32292,7 @@ fn generator_suspending_inside_cleanup_isolates_cleanup_stack_from_caller() {
                             std::ptr::null_mut(),
                             0,
                         );
-                        let keep_going =
-                            generator_yield(Value::Int(IntegerValue::from_i64(42)))?;
+                        let keep_going = generator_yield(Value::Int(IntegerValue::from_i64(42)))?;
                         if !keep_going {
                             // Normal close path runs the generator's own cleanup once.
                             super::aura_direct_unregister_cleanup(gen_cleanup);

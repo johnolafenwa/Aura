@@ -34530,4 +34530,3 @@ def main():
         assert_eq!(error.code, "AU3010", "{label}: {error:?}");
     }
 }
-
