@@ -96,8 +96,19 @@ def stored(xs: mut list[int64], ys: mut list[int64], n: int64) -> int64:
         total += xs[i] + ys[i]
     return total
 
+def sift(heap: mut list[int64], start: int64):
+    mut i = start
+    while i > 0:
+        parent = (i - 1) // 2
+        if heap[parent] <= heap[i]:
+            break
+        heap.swap(parent, i)
+        i = parent
+
 def main():
     mut ps = [Point(x=1.0, y=2.0)]
+    mut heap = [3, 2, 1]
+    sift(heap, 2)
     mut ys = [0.5, 0.25, 0.125]
     mut zs = [1, 2, 3]
     mut ws = [4, 5, 6]
@@ -715,4 +726,14 @@ fn loops_over_field_lists_compile_with_their_copies() {
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
         .expect("the loops should compile");
     super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+#[test]
+fn a_loop_that_swaps_elements_may_write_the_list() {
+    // An exchange of two elements keeps the storage, its form, and its
+    // length, as a store of a scalar does.
+    let found = regions("sift");
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].list, "heap");
+    assert!(found[0].writes);
 }

@@ -2478,7 +2478,12 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
-        let entry_copy_loans = element_loans::entry_copy_loans(function);
+        let entry_copy_loans = element_loans::entry_copy_loans(function, |source| {
+            matches!(
+                variable_types.get(source),
+                Some(DirectType::Opaque(Type::Named(name, _))) if name == "dict"
+            )
+        });
         let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
         let fused_entry_probes = element_loans::fused_entry_probes(function);
         // An `Object` payload of a `json.Value` that is only looked up
@@ -12954,10 +12959,7 @@ impl<'a> FunctionCompiler<'a> {
             }
             let (list, index) = self.load_borrowed_list_element(&selection)?;
             let (line, column) = self.span_operands(selection.span);
-            self.builder.call(
-                self.runtime[RuntimeFn::VecCheckIndex],
-                &[list, index, line, column],
-            );
+            self.emit_list_index_check(list, index, line, column);
             return Ok(());
         }
         // An unchecked loan of a callable element of a local list is read
@@ -13005,10 +13007,7 @@ impl<'a> FunctionCompiler<'a> {
             let list = self.load_nested_field_list(&nested, slow_block)?;
             let index = self.builder.use_var(nested.inner.variable);
             let (line, column) = self.span_operands(nested.inner.span);
-            self.builder.call(
-                self.runtime[RuntimeFn::VecCheckIndex],
-                &[list, index, line, column],
-            );
+            self.emit_list_index_check(list, index, line, column);
             self.builder.jump(join_block, &[]);
 
             self.builder.switch_to_block(slow_block);
@@ -13051,10 +13050,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(field_block);
         self.builder.seal_block(field_block);
         let (line, column) = self.span_operands(selector.span);
-        self.builder.call(
-            self.runtime[RuntimeFn::VecCheckIndex],
-            &[field, index, line, column],
-        );
+        self.emit_list_index_check(field, index, line, column);
         self.builder.jump(join_block, &[]);
 
         self.builder.switch_to_block(slow_block);
@@ -13065,6 +13061,38 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
         Ok(true)
+    }
+
+    /// Checks that `index` selects an element of `list`, counting a
+    /// negative one from the end, against the length its list view keeps
+    /// (see `emit_list_len`). An index out of range calls
+    /// `aura_direct_vec_check_index`, which reports it.
+    fn emit_list_index_check(&mut self, list: Val, index: Val, line: Val, column: Val) {
+        let len = self.emit_list_len(list, false);
+        let forward = self.builder.icmp(IntCC::UnsignedLessThan, index, len);
+        let wrap_block = self.builder.create_block();
+        let fail_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(wrap_block);
+        self.builder.set_cold_block(fail_block);
+        self.builder.brif(forward, join_block, &[], wrap_block, &[]);
+
+        self.builder.switch_to_block(wrap_block);
+        self.builder.seal_block(wrap_block);
+        let from_end = self.builder.iadd(len, index);
+        let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, len);
+        self.builder.brif(counted, join_block, &[], fail_block, &[]);
+
+        self.builder.switch_to_block(fail_block);
+        self.builder.seal_block(fail_block);
+        self.builder.call(
+            self.runtime[RuntimeFn::VecCheckIndex],
+            &[list, index, line, column],
+        );
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
     }
 
     /// A span as the line and column words the runtime's indexing helpers
@@ -15229,9 +15257,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fast);
         let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
         let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let capacity = self.list_view_word(list, list_snapshots::ViewWord::Room);
         let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
         self.builder.brif(writable, write, &[], slow, &[]);
 
@@ -21352,6 +21378,25 @@ fn leaf_body_calling(
             }),
         _ => false,
     };
+    // An integer local or literal: an integer division checks its divisor
+    // (and the one quotient that overflows) inline, and each failure path
+    // pushes the frame record the function skipped.
+    let integer_operand = |operand: &Operand| match operand {
+        Operand::Int(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .map(|local| (&local.name, &local.ty))
+            .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+            .any(|(name, ty)| {
+                name == place
+                    && matches!(ty, Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(),
+                            "int8" | "int16" | "int32" | "int64"
+                                | "uint8" | "uint16" | "uint32" | "uint64"))
+            }),
+        _ => false,
+    };
     function.blocks.iter().all(|block| {
         let instructions = block
             .instructions
@@ -21371,7 +21416,10 @@ fn leaf_body_calling(
                     } => {
                         let total = match op {
                             BinaryOp::Div => float_operand(left) && float_operand(right),
-                            BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow => false,
+                            BinaryOp::FloorDiv | BinaryOp::Mod => {
+                                integer_operand(left) && integer_operand(right)
+                            }
+                            BinaryOp::Pow => false,
                             _ => true,
                         };
                         total && plain_operand(left) && plain_operand(right)

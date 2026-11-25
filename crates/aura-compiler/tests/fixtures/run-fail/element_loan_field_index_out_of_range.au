@@ -1,0 +1,16 @@
+class Template:
+    texts: list[str]
+
+
+def shout(text: str) -> str:
+    return text.to_upper()
+
+
+def read(template: Template, index: int64) -> str:
+    return shout(template.texts[index])
+
+
+def main():
+    template = Template(texts=["a", "b"])
+    print(read(template, -2))
+    print(read(template, -3))

@@ -18219,6 +18219,13 @@ class Tally:
     def halved(self) -> int64:
         return self.count // 2
 
+    def advance(mut self) -> int64:
+        self.count = self.count * 48271 % 2147483647
+        return self.count
+
+    def wrapped(self, by: float64) -> float64:
+        return by % 2.0
+
 class Counter:
     name: str
     count: int64
@@ -18284,21 +18291,23 @@ fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
     };
     // A `mut self` leaf keeps its framed body for calls that hand a sink
     // over, and gets a second one.
-    for name in ["Tally.bump", "Counter.bump"] {
+    for name in ["Tally.bump", "Tally.advance", "Counter.bump"] {
         assert!(super::leaf_variant(function(name), &classes), "{name}");
         assert!(!super::frameless_leaf(function(name), &classes), "{name}");
         assert!(super::small_leaf(function(name)), "{name}");
     }
     // A leaf that only reads its receiver needs one body, with no frame.
-    for name in ["Tally.scaled", "Counter.doubled"] {
+    // An integer division checks its divisor inline, and the failure path
+    // pushes the skipped frame record.
+    for name in ["Tally.scaled", "Tally.halved", "Counter.doubled"] {
         assert!(super::frameless_leaf(function(name), &classes), "{name}");
         assert!(!super::leaf_variant(function(name), &classes), "{name}");
     }
-    // A division traps in the runtime, a text field is a box of its own,
-    // an assignment to `self` replaces the box, a call needs the frame,
-    // and a generic class keeps a symbolic layout.
+    // A float remainder runs in the runtime, a text field is a box of its
+    // own, an assignment to `self` replaces the box, a call needs the
+    // frame, and a generic class keeps a symbolic layout.
     for name in [
-        "Tally.halved",
+        "Tally.wrapped",
         "Counter.rename",
         "Counter.label",
         "Counter.reset",

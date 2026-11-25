@@ -32723,3 +32723,32 @@ fn native_decimal_result_slot_is_written_only_for_compact_answers() {
     );
     assert_eq!(out, [-1, 0]);
 }
+
+#[test]
+fn tagged_collections_share_the_tags_type_arguments() {
+    let cell = std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+    let list_of_ints = Type::Named("list".to_string(), vec![Type::named("int64")]);
+    let descriptor = super::canonical_runtime_type_name(&Type::Named(
+        "dict".to_string(),
+        vec![Type::named("str"), list_of_ints.clone()],
+    ));
+    let first = super::aura_direct_map_empty();
+    let second = super::aura_direct_map_empty();
+    for map in [first, second] {
+        super::aura_direct_tag_value_type_cell(map, &cell, descriptor.as_ptr(), descriptor.len());
+    }
+    let types = |map: *mut OpaqueValue| match unsafe { value_ref(map) } {
+        Value::Map(map) => (map.key_type.clone(), map.value_type.clone()),
+        other => panic!("a map, not {other:?}"),
+    };
+    let (first_key, first_value) = types(first);
+    let (second_key, second_value) = types(second);
+    assert_eq!(*first_value, list_of_ints);
+    assert_eq!(*first_key, Type::named("str"));
+    // Both maps hold the tag's one copy of each argument.
+    assert!(std::ptr::eq(&*first_value, &*second_value));
+    assert!(std::ptr::eq(&*first_key, &*second_key));
+    for map in [first, second] {
+        unsafe { release_value(map) };
+    }
+}

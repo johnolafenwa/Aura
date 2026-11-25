@@ -79,6 +79,12 @@ impl ClassLayout {
         &self.class_name
     }
 
+    /// The class's name for an instance of a registered layout, which
+    /// lives as long as the program, so the name shares its text.
+    pub fn runtime_name(&'static self) -> crate::runtime_value::RuntimeName {
+        crate::runtime_value::RuntimeName::from_static(&self.class_name)
+    }
+
     fn table(&self) -> &LayoutTable {
         self.layout.table()
     }

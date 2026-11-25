@@ -935,7 +935,7 @@ fn adopted_views(function: &MirFunction) -> (LentElements, Vec<String>) {
     let views = object_view_candidates(
         function,
         &fused_entry_probes(function),
-        &entry_copy_loans(function),
+        &entry_copy_loans(function, |_| false),
     );
     let adopted = super::adopt_object_views(function, &mut found, &views, |_| Vec::new());
     let mut adopted = adopted.into_iter().collect::<Vec<_>>();

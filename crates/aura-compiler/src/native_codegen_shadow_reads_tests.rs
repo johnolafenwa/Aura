@@ -62,7 +62,7 @@ fn function(name: &str) -> MirFunction {
 
 fn shadow_reads(name: &str) -> usize {
     let function = function(name);
-    let copies = entry_copy_loans(&function);
+    let copies = entry_copy_loans(&function, |_| false);
     shadow_read_loans(&function, &copies, &HashSet::new()).len()
 }
 
@@ -120,7 +120,7 @@ fn node_reads(source: &str, name: &str) -> Vec<Vec<NodePayload>> {
         .into_iter()
         .find(|function| function.name == name)
         .expect("the function should exist");
-    let copies = entry_copy_loans(&function);
+    let copies = entry_copy_loans(&function, |_| false);
     node_read_loans(&function, &copies, &HashSet::new())
         .into_values()
         .map(|read| {
