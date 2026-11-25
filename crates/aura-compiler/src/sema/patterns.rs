@@ -2654,9 +2654,7 @@ impl FunctionChecker<'_> {
         // cover the types exactly when they cover the remaining ones. This
         // keeps a match on a wide tuple from branching on every column.
         if !rows.is_empty()
-            && rows
-                .iter()
-                .all(|row| row.first().is_some_and(|first| irrefutable(first)))
+            && rows.iter().all(|row| row.first().is_some_and(&irrefutable))
             && self.column_type_is_inhabited(first_ty)
         {
             let specialized = rows.iter().map(|row| row[1..].to_vec()).collect::<Vec<_>>();

@@ -12634,20 +12634,15 @@ fn owns_generator(value: &Value) -> bool {
             Value::Union(union) => pending.push(Cow::Borrowed(&union.payload)),
             Value::Map(map) => pending.extend(map.entries.iter().map(|(_, v)| Cow::Borrowed(v))),
             Value::TraitObject(object) => pending.push(Cow::Borrowed(&object.value)),
-            Value::Function(function) => {
+            Value::Function(function)
                 if function
                     .closure_environment
                     .as_ref()
-                    .is_some_and(|env| env.any_capture(owns_generator))
-                {
-                    return true;
-                }
+                    .is_some_and(|env| env.any_capture(owns_generator)) =>
+            {
+                return true;
             }
-            Value::CollectionStore(store) => {
-                if store.any_value(owns_generator) {
-                    return true;
-                }
-            }
+            Value::CollectionStore(store) if store.any_value(owns_generator) => return true,
             _ => {}
         }
     }
@@ -12663,10 +12658,8 @@ impl MirRuntime {
         while let Some(value) = pending.pop() {
             let start = pending.len();
             match value {
-                Value::Generator(generator) => {
-                    if generator.should_close_on_release() {
-                        self.with_generator_resumer(|| generator.close())?;
-                    }
+                Value::Generator(generator) if generator.should_close_on_release() => {
+                    self.with_generator_resumer(|| generator.close())?;
                 }
                 Value::Instance(instance) => match instance.fields {
                     crate::runtime_value::InstanceFields::Map(fields) => {
@@ -12676,19 +12669,15 @@ impl MirRuntime {
                     // list of text. Mutation first converts it to an ordinary map.
                     crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(typed) => {
-                        pending.extend(typed.into_map().into_iter().map(|(_, field)| field));
+                        pending.extend(typed.into_map().into_values());
                     }
                 },
                 Value::Tuple(tuple) => pending.extend(tuple.elements),
-                Value::Vec(vec) => {
-                    if !vec.elements.is_shared() {
-                        pending.extend(vec.elements.into_vec());
-                    }
+                Value::Vec(vec) if !vec.elements.is_shared() => {
+                    pending.extend(vec.elements.into_vec());
                 }
-                Value::Map(map) => {
-                    if !map.entries.is_shared() {
-                        pending.extend(map.entries.into_vec().into_iter().map(|(_, entry)| entry));
-                    }
+                Value::Map(map) if !map.entries.is_shared() => {
+                    pending.extend(map.entries.into_vec().into_iter().map(|(_, entry)| entry));
                 }
                 Value::EnumVariant(variant) => pending.extend(variant.payloads.into_vec()),
                 Value::Union(union) => pending.push(union.payload),
