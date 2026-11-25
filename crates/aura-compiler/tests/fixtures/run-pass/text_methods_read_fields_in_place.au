@@ -1,0 +1,43 @@
+# A `str` method that makes a new value reads a `str` or `list[str]`
+# field of an instance kept in place where it lies, with no copy of the
+# field: of a local, of a parameter, of a loaned list element and of
+# `self`. The fields are unchanged after.
+class Node:
+    tag: str
+    text: str
+    words: list[str]
+
+    def shout(self) -> str:
+        return self.text.to_upper() + "!"
+
+
+def describe(node: Node) -> str:
+    parts = node.text.split_whitespace()
+    joined = "+".join(node.words)
+    return f"{parts.len()} {node.tag.repeat(2)} {joined} {node.text.trim()}"
+
+
+def main():
+    mut nodes: list[Node] = [
+        Node(tag="p", text="  some words here ", words=["a", "b"]),
+        Node(tag="li", text="Item, two", words=[]),
+    ]
+    for index in range(2):
+        view node = nodes[index]
+        print(describe(node))
+        print(node.text.split(",").len())
+        print(node.text.replace("o", "0"))
+        print(node.tag.to_upper())
+        match node.text.strip_prefix("  "):
+            case str as rest:
+                print(f"[{rest}]")
+            case None:
+                print("no prefix")
+        print(node.shout())
+    local = Node(tag="h1", text="Title\nline", words=["x"])
+    print(local.text.lines().len())
+    print(local.text.find("line"))
+    print(local.text.count("i"))
+    print(local.text.to_lower())
+    print(" ".join(local.words))
+    print(f"{local.tag} {local.text.byte_len()} {nodes[0].text.byte_len()}")

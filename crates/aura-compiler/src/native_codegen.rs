@@ -7423,11 +7423,14 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
-        if self.borrow_field_reads || !reads_operands_only(rvalue) {
+        if self.borrow_field_reads
+            || !(reads_operands_only(rvalue) || makes_text_from_operands(rvalue))
+        {
             return self.compile_rvalue_for_target_directly(rvalue, target);
         }
-        // The rvalue gives back a scalar and keeps none of its operands, so
-        // a field box it reads stays the instance's for the whole read.
+        // The rvalue gives back a scalar or a new value and keeps none of
+        // its operands, so a field box it reads stays the instance's for
+        // the whole read.
         if self.field_read_copies.is_empty() {
             self.field_read_copies = (0..FIELD_READS_PER_RVALUE)
                 .map(|_| self.declare_word_var())
@@ -21613,6 +21616,42 @@ fn cannot_be_callable(ty: &Type) -> bool {
         Type::Unit => true,
         _ => false,
     }
+}
+
+/// Whether `rvalue` is a `str` operation that makes a new value from its
+/// text and its arguments and only reads them, so a box field it reads may
+/// stay where it lies, as for [`reads_operands_only`].
+fn makes_text_from_operands(rvalue: &Rvalue) -> bool {
+    matches!(
+        rvalue,
+        Rvalue::Call {
+            callee: CallTarget::Runtime {
+                op: RuntimeOp::Str(
+                    StrOp::Split
+                        | StrOp::Replace
+                        | StrOp::ToLower
+                        | StrOp::ToUpper
+                        | StrOp::StripPrefix
+                        | StrOp::StripSuffix
+                        | StrOp::Trim
+                        | StrOp::Join
+                        | StrOp::TrimStart
+                        | StrOp::TrimEnd
+                        | StrOp::SplitOnce
+                        | StrOp::RsplitOnce
+                        | StrOp::Lines
+                        | StrOp::SplitWhitespace
+                        | StrOp::Find
+                        | StrOp::Count
+                        | StrOp::Repeat
+                        | StrOp::Chars
+                        | StrOp::CharAt
+                ),
+                ..
+            },
+            ..
+        }
+    )
 }
 
 /// The box field reads one rvalue reads in place; a comparison reads two,
