@@ -1694,6 +1694,7 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.deferred_frame = Some((framed, descriptor, enter, free));
     }
 
+    #[cfg(test)]
     fn calls_when_warm(&self, free: &[FuncRef]) -> bool {
         self.calls_when_warm_where(&|callee| !free.contains(&callee))
     }

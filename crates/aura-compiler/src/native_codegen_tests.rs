@@ -18429,6 +18429,28 @@ fn a_mutable_function_that_calls_out_gets_a_sink_free_body() {
     emit_host_object(&mir).expect("the mutable functions should emit optimized");
 }
 
+#[test]
+fn a_function_on_no_cycle_pushes_its_record_where_it_calls_out() {
+    let source = include_str!("../tests/fixtures/run-fail/deferred_frames_name_every_caller.au");
+    let mir = lower_source_to_mir(source).expect("the deferred frames should lower");
+    let object = emit_unoptimized_object(&mir).expect("the deferred frames should emit");
+    // `pick` calls `lookup` on one way only, so it pushes its record there,
+    // in place, through the module's deferred frame entry.
+    let pick = object_function_referenced_symbols(&object, "aura_fn_pick");
+    assert!(
+        pick.iter()
+            .any(|name| name.ends_with("aura_enter_deferred_frame")),
+        "{pick:?}"
+    );
+    assert!(
+        !pick
+            .iter()
+            .any(|name| name.ends_with("aura_direct_enter_frame")),
+        "{pick:?}"
+    );
+    emit_host_object(&mir).expect("the deferred frames should emit optimized");
+}
+
 const FRAMELESS_CALLER_SOURCE: &str = r#"
 copy class Vec2:
     x: float64

@@ -803,6 +803,7 @@ pub(crate) trait FunctionBackend {
     fn defer_frame(&mut self, framed: Var, descriptor: Val, enter: FuncRef, free: &[FuncRef]);
     /// Whether a block the entry reaches without crossing a cold block,
     /// and that does not end in a trap, calls a callee not in `free`.
+    #[cfg(test)]
     fn calls_when_warm(&self, free: &[FuncRef]) -> bool;
     /// As `calls_when_warm`, for a direct call of a callee `needs` picks,
     /// or any indirect call.

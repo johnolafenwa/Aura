@@ -736,6 +736,10 @@ struct NativeCodegen<'a> {
     /// before its first call instead of on entry. `None` when the program
     /// has no such function.
     cycle_frame_entry: Option<FuncHandle>,
+    /// The module's push of a deferred frame record of a function on no
+    /// call cycle (see `define_frame_entry`). `None` in a freestanding
+    /// build, which keeps no records.
+    frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
     /// The functions that only read scalar fields of an instance they are
@@ -1056,6 +1060,20 @@ impl<'a> NativeCodegen<'a> {
         if let Some(entry) = cycle_frame_entry {
             object.mark_inline(entry);
         }
+        let frame_entry = match freestanding {
+            Some(_) => None,
+            None => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_deferred_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the deferred frame entry: {}"
+            )),
+        };
+        if let Some(entry) = frame_entry {
+            object.mark_inline(entry);
+        }
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -1359,6 +1377,7 @@ impl<'a> NativeCodegen<'a> {
             safepoints_enabled,
             recursive_functions,
             cycle_frame_entry,
+            frame_entry,
             total_leaves,
             instance_keepers,
             layout_keepers,
@@ -1456,6 +1475,7 @@ impl<'a> NativeCodegen<'a> {
         }
         self.define_ownership_fast_paths()?;
         self.define_cycle_frame_entry()?;
+        self.define_frame_entry()?;
         self.define_main_wrapper()
     }
 
@@ -1487,6 +1507,33 @@ impl<'a> NativeCodegen<'a> {
                     emit_call_safepoint(builder, &runtime_refs);
                 }
                 emit_stack_check(builder, &runtime_refs);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
+    /// Defines the push of a deferred frame record of a function on no
+    /// call cycle, which it runs where a way first calls out (see
+    /// `defers_frame`): the record goes on the frame stack in place, or
+    /// through the runtime while the stack's flags ask for it, as an entry
+    /// push does. It is inlined into its caller.
+    fn define_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.frame_entry else {
+            return Ok(());
+        };
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the deferred frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
                 builder.return_(&[]);
                 Ok(())
             },
@@ -2198,8 +2245,9 @@ impl<'a> NativeCodegen<'a> {
             builder.switch_to_block(start);
             builder.seal_block(start);
             blocks.insert(function.entry.clone(), start);
-            let enter = match self.cycle_frame_entry {
-                Some(entry) if on_cycle => builder.import_function(entry),
+            let enter = match (self.cycle_frame_entry, self.frame_entry) {
+                (Some(entry), _) if on_cycle => builder.import_function(entry),
+                (_, Some(entry)) => builder.import_function(entry),
                 _ => runtime_refs[RuntimeFn::EnterCall],
             };
             builder.defer_frame(framed, descriptor, enter, &frame_calls(&runtime_refs));
@@ -3258,8 +3306,10 @@ impl<'a> NativeCodegen<'a> {
         // could not read in place. It pushes the record on entry when a
         // warm way calls the runtime for anything else, which pays for the
         // record on that way anyway.
+        // A function on no call cycle does the same: its deferred push is
+        // as cheap as one on entry (see `define_frame_entry`).
         let frame_free = frame_calls(&compiler.runtime);
-        let warm_calls = if on_cycle {
+        let warm_calls = {
             let mut runtime = Vec::new();
             compiler.runtime.map(|callee| runtime.push(*callee));
             let fallbacks = layout_fallbacks(&compiler.runtime);
@@ -3268,8 +3318,6 @@ impl<'a> NativeCodegen<'a> {
                     && !frame_free.contains(&callee)
                     && !fallbacks.contains(&callee)
             })
-        } else {
-            compiler.builder.calls_when_warm(&frame_free)
         };
         if compiler.deferred_frame.is_some() && warm_calls {
             compiler.builder.settle_frame();
