@@ -23,15 +23,21 @@ static Class aura_array_class;
 static Class aura_dictionary_class;
 static int aura_ready;
 
-typedef id<MTLDevice> (*AuraCreateDevice)(void);
+typedef id<MTLDevice> (*AuraCreateDevice)(void) NS_RETURNS_RETAINED;
 
 static void aura_metal_load(void) {
     @autoreleasepool {
-        void *metal = dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_LAZY | RTLD_GLOBAL);
+        void *metal = dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_LAZY | RTLD_LOCAL);
         void *graph = dlopen(
             "/System/Library/Frameworks/MetalPerformanceShadersGraph.framework/MetalPerformanceShadersGraph",
-            RTLD_LAZY | RTLD_GLOBAL);
+            RTLD_LAZY | RTLD_LOCAL);
         if (metal == NULL || graph == NULL) {
+            if (metal != NULL) {
+                dlclose(metal);
+            }
+            if (graph != NULL) {
+                dlclose(graph);
+            }
             return;
         }
         AuraCreateDevice create = (AuraCreateDevice)dlsym(metal, "MTLCreateSystemDefaultDevice");
@@ -73,15 +79,24 @@ void *aura_metal_buffer_new(size_t bytes) {
     }
     @autoreleasepool {
         id<MTLBuffer> buffer = [aura_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+        if (buffer == nil || [buffer contents] == NULL) {
+            return NULL;
+        }
         return (__bridge_retained void *)buffer;
     }
 }
 
 uint8_t *aura_metal_buffer_contents(void *buffer) {
+    if (buffer == NULL) {
+        return NULL;
+    }
     return (uint8_t *)[(__bridge id<MTLBuffer>)buffer contents];
 }
 
 void aura_metal_buffer_release(void *buffer) {
+    if (buffer == NULL) {
+        return;
+    }
     @autoreleasepool {
         // The transfer gives the reference to a temporary, which releases it.
         (void)(__bridge_transfer id<MTLBuffer>)buffer;

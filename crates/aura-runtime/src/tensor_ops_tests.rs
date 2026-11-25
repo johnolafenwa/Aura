@@ -2582,3 +2582,30 @@ fn empty_outputs_skip_gpu_planning_and_window_indices_check_overflow() {
             .unwrap_err();
     assert_eq!(huge_index_add.code, "AU4005");
 }
+
+#[test]
+fn metal_shim_and_buffer_contents_checks() {
+    let shim = include_str!("metal_shim.m");
+    assert!(
+        shim.contains("NS_RETURNS_RETAINED"),
+        "AuraCreateDevice typedef must carry NS_RETURNS_RETAINED"
+    );
+    assert!(
+        !shim.contains("RTLD_GLOBAL"),
+        "metal_shim.m should open frameworks with RTLD_LOCAL"
+    );
+    assert!(
+        shim.contains("RTLD_LOCAL"),
+        "metal_shim.m should open frameworks with RTLD_LOCAL"
+    );
+    assert!(
+        shim.contains("[buffer contents] == NULL"),
+        "aura_metal_buffer_new must reject buffers with NULL contents"
+    );
+
+    let err = checked_non_null_buffer_ptr(std::ptr::null_mut(), "metal").unwrap_err();
+    assert_eq!(err.code, "AU4007");
+    let mut byte = 0_u8;
+    let ptr = std::ptr::from_mut(&mut byte);
+    assert_eq!(checked_non_null_buffer_ptr(ptr, "metal").unwrap(), ptr);
+}

@@ -142,9 +142,10 @@ impl Buffer {
         Ok(Self { handle, bytes })
     }
 
-    fn contents(&self) -> *mut u8 {
+    fn contents(&self) -> Result<*mut u8> {
         // SAFETY: `handle` is a live shared-storage buffer.
-        unsafe { aura_metal_buffer_contents(self.handle) }
+        let ptr = unsafe { aura_metal_buffer_contents(self.handle) };
+        super::checked_non_null_buffer_ptr(ptr, "metal")
     }
 
     /// A buffer holding the elements of a non-empty Array in row-major
@@ -166,9 +167,10 @@ impl Buffer {
             ArrayStorage::Bool(values) => bytes_of::<bool>(values),
         };
         let buffer = Self::new(bytes.len())?;
-        // SAFETY: the buffer holds `bytes.len()` bytes and nothing else
-        // refers to it yet.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.contents(), bytes.len()) };
+        let dst = buffer.contents()?;
+        // SAFETY: `dst` is non-null, the buffer holds `bytes.len()` bytes, and
+        // nothing else refers to it yet.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
         Ok(buffer)
     }
 
@@ -187,11 +189,13 @@ impl Buffer {
         ) -> Result<Box<[T]>> {
             let mut values = try_array_buffer(len, "Metal tensor read")?;
             values.resize(len, T::default());
-            // SAFETY: the buffer holds `expected_bytes` bytes for `len` elements
-            // of `T`, and `values` is a separate allocation of the same size.
+            let src = buffer.contents()?;
+            // SAFETY: `src` is non-null, the buffer holds `expected_bytes`
+            // bytes for `len` elements of `T`, and `values` is a separate
+            // allocation of the same size.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    buffer.contents(),
+                    src,
                     values.as_mut_ptr().cast::<u8>(),
                     expected_bytes,
                 );

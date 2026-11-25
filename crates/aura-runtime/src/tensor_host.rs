@@ -920,6 +920,19 @@ pub(crate) fn checked_concat_axis(left: usize, right: usize) -> Result<usize> {
     })
 }
 
+/// Validates that a host-mapped GPU buffer contents pointer is non-null before
+/// performing memory copies.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn checked_non_null_buffer_ptr(ptr: *mut u8, device: &str) -> Result<*mut u8> {
+    if ptr.is_null() {
+        return Err(Diagnostic::coded(
+            "AU4007",
+            format!("the {device} device returned a buffer with null host contents"),
+        ));
+    }
+    Ok(ptr)
+}
+
 /// The dtype and shape of an operation a GPU library runs, or `None` for
 /// one it does not: an operand that is empty, a dtype or operation the
 /// library lacks or gives a different meaning, or operands the Array rules
