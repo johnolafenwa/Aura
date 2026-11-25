@@ -6,6 +6,12 @@ Last updated: 2026-11-24
 
 Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)
 
+## Freestanding machine code
+
+The three freestanding targets support typed assembly, interrupt entries
+and privileged operations. The x86-64 kernel board checks two interrupt
+returns in QEMU. [Design and local results](2026-11-24-freestanding-machine-code.md)
+
 ## Release 0.18 systems data
 
 The integration branch adds writable freestanding module cells, inline arrays, typed pointers, C layout controls, wide integers and ordered subword atomics. [Implementation and validation](2026-11-24-systems-data.md)

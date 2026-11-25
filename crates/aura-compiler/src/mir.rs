@@ -858,6 +858,12 @@ pub const NATIVE_LOOP_SAFEPOINT_INTERVAL: u64 = 4_096;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Instruction {
+    InlineAsm {
+        asm: crate::inline_asm::MachineAsm,
+        inputs: Vec<Operand>,
+        outputs: Vec<String>,
+        span: Span,
+    },
     /// An initialized class now owns its destructor. Its construction has
     /// finished, including its initializer and invariant checks.
     ArmDrop {
@@ -9671,6 +9677,23 @@ fn validate_loan_instruction(
                 )?;
             }
         }
+        Instruction::InlineAsm {
+            inputs, outputs, ..
+        } => {
+            for input in inputs {
+                validate_loan_operand(function, input, context, state)?;
+            }
+            for place in outputs {
+                validate_checked_loan_place_access(
+                    function,
+                    place,
+                    LoanPlaceAccess::Mutate,
+                    context,
+                    state,
+                    None,
+                )?;
+            }
+        }
         Instruction::PopCleanup { place, .. } => {
             if place_has_borrowed_value_origin(place, state) {
                 return Err(format!(
@@ -10589,6 +10612,14 @@ pub(crate) fn instruction_place_mentions<'a>(
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. } => {}
+        Instruction::InlineAsm {
+            inputs, outputs, ..
+        } => {
+            for input in inputs {
+                operand_place_mention(input, mentions);
+            }
+            mentions.extend(outputs.iter().map(String::as_str));
+        }
         Instruction::ArmDrop { place, .. }
         | Instruction::EndOwner { place }
         | Instruction::Retain { place }
@@ -11187,7 +11218,23 @@ fn lower_unresolved_functions<'a>(
     }
 
     let mut foreign_link = program.foreign_link.clone();
+    crate::inline_asm::append_module(program, &mut foreign_link);
+    foreign_link.asm_externs.sort();
+    foreign_link.asm_externs.dedup();
     foreign_link.exports = exported_functions(program);
+    if program.machine_target.is_some() {
+        foreign_link.machine = crate::machine_attributes::collect(program);
+        foreign_link.placed_data = crate::machine_data::collect(program);
+    }
+    for export in &mut foreign_link.exports {
+        if let Some(symbol) = foreign_link
+            .machine
+            .get(&export.function)
+            .and_then(|a| a.link_name.as_ref())
+        {
+            export.symbol.clone_from(symbol);
+        }
+    }
 
     MirModule {
         foreign_link,
@@ -12118,7 +12165,7 @@ fn lower_function_or_initializer(
         lowerer.emit_initializer_slot(class, return_type);
         lowerer.lower_contract_checks(function, crate::ast::ContractKind::Requires);
         lowerer.lower_stmts(&function.body);
-    } else {
+    } else if !naked::lower_export(&mut lowerer, function, &params, return_type) {
         lowerer.lower_contracted_body(function);
     }
     let default_return = if initializer.is_some() {
@@ -12532,6 +12579,8 @@ struct ReturnedViewCallee {
 
 #[path = "mir_class_drop.rs"]
 mod class_drop;
+#[path = "mir_naked.rs"]
+mod naked;
 
 struct Lowerer<'a> {
     has_class_hooks: bool,
@@ -14974,6 +15023,9 @@ impl<'a> Lowerer<'a> {
                 true
             }
             Stmt::Pass(_) => true,
+            Stmt::Expr(stmt) if crate::inline_asm::is_asm(&stmt.expr) => {
+                self.lower_inline_asm(&stmt.expr)
+            }
             Stmt::Expr(expr_stmt) if self.erased_lemma_call(&expr_stmt.expr) => true,
             Stmt::Assert(assert_stmt) if crate::parser::mentions_ghost(&assert_stmt.condition) => {
                 self.lower_ghost(|this| match &assert_stmt.clause {
@@ -32411,6 +32463,8 @@ fn mir_class_type_name(
         })
 }
 
+#[path = "mir_inline_asm.rs"]
+mod inline_asm;
 #[path = "mir_raw_pointers.rs"]
 mod raw_pointers;
 

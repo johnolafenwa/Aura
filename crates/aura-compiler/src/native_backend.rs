@@ -292,6 +292,8 @@ pub fn target_arch() -> &'static str {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FreestandingTarget {
     X86_64,
+    /// x86-64 with the kernel code model and integer-register soft-float ABI.
+    X86_64Kernel,
     Aarch64,
     Riscv64,
 }
@@ -303,7 +305,7 @@ impl FreestandingTarget {
     /// The name `--target` takes.
     pub fn name(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64-unknown-none",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64-unknown-none",
             Self::Aarch64 => "aarch64-unknown-none",
             Self::Riscv64 => "riscv64gc-unknown-none-elf",
         }
@@ -326,7 +328,7 @@ impl FreestandingTarget {
     /// The architecture, as `std::env::consts::ARCH` spells it.
     pub fn arch(self) -> &'static str {
         match self {
-            Self::X86_64 => "x86_64",
+            Self::X86_64 | Self::X86_64Kernel => "x86_64",
             Self::Aarch64 => "aarch64",
             Self::Riscv64 => "riscv64",
         }
@@ -629,6 +631,7 @@ pub(crate) enum DataAddress {
 /// addresses written into it, in order.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct DataDescription {
+    pub(crate) placement: Option<crate::machine_data::DataPlacement>,
     /// Retain the complete object and its address through whole-module optimization.
     pub(crate) preserve_address: bool,
     pub(crate) bytes: Vec<u8>,
@@ -675,6 +678,12 @@ pub(crate) type FunctionBody<'b> =
 
 /// Declares and defines the functions and data of one object.
 pub(crate) trait ModuleBackend {
+    fn mark_machine(
+        &mut self,
+        function: FuncHandle,
+        attrs: crate::machine_attributes::MachineAttributes,
+    );
+    fn set_module_asm(&mut self, fragments: &[String]);
     fn declare_function(
         &mut self,
         name: &str,
@@ -745,6 +754,12 @@ pub(crate) type VersionEntry = (Blk, Val, Option<(Val, i64)>);
 /// Builds one function body: blocks, variables, stack slots, and
 /// instructions.
 pub(crate) trait FunctionBackend {
+    fn inline_asm(
+        &mut self,
+        asm: &crate::inline_asm::MachineAsm,
+        operands: &[Val],
+        results: &[ScalarType],
+    ) -> Vec<Val>;
     /// The module the function belongs to, for declarations made while the
     /// body is built.
     fn module(&mut self) -> &mut dyn ModuleBackend;

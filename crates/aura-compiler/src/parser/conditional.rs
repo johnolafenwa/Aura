@@ -4,6 +4,9 @@ use super::*;
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+mod machine;
+#[cfg(test)]
+mod machine_tests;
 mod predicates;
 mod resolver;
 mod statements;
@@ -137,6 +140,23 @@ impl Parser {
                             // A runtime guard can still introduce a script-local function.
                             return Some(false);
                         }
+                    }
+                    TokenKind::Identifier(name)
+                        if name == "module_asm"
+                            && matches!(self.peek_kind_at(cursor), Some(TokenKind::LParen))
+                            && matches!(
+                                self.peek_kind_at(cursor - 2),
+                                Some(TokenKind::Indent | TokenKind::Newline | TokenKind::Dedent)
+                            ) =>
+                    {
+                        return Some(true)
+                    }
+                    TokenKind::At
+                        if depth == 1
+                            && matches!(self.peek_kind_at(cursor), Some(TokenKind::Identifier(name)) if name == "machine")
+                            && matches!(self.peek_kind_at(cursor + 1), Some(TokenKind::Dot)) =>
+                    {
+                        return Some(true)
                     }
                     TokenKind::Identifier(name)
                         if name == "const"
@@ -297,6 +317,13 @@ impl Parser {
             *module = parser.parse_module()?;
         }
         statements::select(resolver, module, &self.tokens, &mut inactive)?;
+        if module.asm_span.is_some() {
+            module.asm_span = self
+                .asm_spans
+                .iter()
+                .copied()
+                .find(|span| is_active(*span, &inactive));
+        }
         inactive.sort_by_key(|range| range.start);
         module.inactive_lines = inactive;
         Ok(())

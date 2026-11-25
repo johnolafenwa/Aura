@@ -155,3 +155,8 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 142. [ADR-0142 Typed raw pointers](0142-typed-raw-pointers.md)
 143. [ADR-0143 C record layout controls](0143-c-record-layout-controls.md)
 144. [ADR-0144 Fixed-width bit operations and atomics](0144-fixed-width-bit-operations-and-atomics.md)
+145. [ADR-0145: Freestanding Assembly](0145-freestanding-assembly.md)
+146. [ADR-0146 Machine Entries And Object Placement](0146-machine-function-attributes.md)
+147. [ADR-0147. Privileged hardware operations in mem](0147-privileged-hardware-operations.md)
+148. [ADR-0148: x86-64 Kernel Code Generation](0148-x86-64-kernel-profile.md)
+149. [ADR-0149 PC Interrupts Under QEMU](0149-qemu-x86-64-interrupt-board.md)

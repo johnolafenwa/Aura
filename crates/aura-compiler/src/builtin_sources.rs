@@ -29,6 +29,7 @@ const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
+        "mem" => crate::freestanding_check_target().map(crate::hardware::source),
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
         "collections" => Some(COLLECTIONS_SOURCE),
@@ -86,7 +87,14 @@ pub(crate) fn swap_checked_sources(cache: &mut BTreeMap<String, ModuleNamespace>
 /// The exports of the Aura-source part of builtin module `name`.
 fn source_part(name: &str) -> Option<ModuleNamespace> {
     let source = module_source(name)?;
-    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(name).cloned()) {
+    // The mem source varies by architecture. The target triple cannot collide
+    // with a builtin module name and is shared by both x86-64 profiles.
+    let key = if name == "mem" {
+        crate::freestanding_check_target()?.name()
+    } else {
+        name
+    };
+    if let Some(namespace) = CHECKED.with(|checked| checked.borrow().get(key).cloned()) {
         return Some(namespace);
     }
     let module = crate::parse_source(source)
@@ -133,7 +141,7 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
     CHECKED.with(|checked| {
         checked
             .borrow_mut()
-            .insert(name.to_string(), namespace.clone())
+            .insert(key.to_string(), namespace.clone())
     });
     Some(namespace)
 }

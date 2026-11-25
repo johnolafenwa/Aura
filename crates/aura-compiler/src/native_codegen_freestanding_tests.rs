@@ -871,6 +871,31 @@ fn an_emitter_fault_is_not_a_subset_report() {
     );
 }
 
+#[path = "machine_attributes_tests.rs"]
+mod machine_attributes_tests;
+
+#[test]
+fn kernel_float_operations_and_addresses_use_the_kernel_abi() {
+    let source = include_str!("../tests/fixtures/check-pass/kernel_soft_float.au");
+    let kernel = FreestandingTarget::X86_64Kernel;
+    assert_eq!(kernel.name(), FreestandingTarget::X86_64.name());
+    assert_eq!(kernel.arch(), FreestandingTarget::X86_64.arch());
+    let bytes = object(source, kernel);
+    let (_, _, undefined) = symbols(&bytes);
+    assert!(undefined.contains(&"__adddf3".to_owned()), "{undefined:?}");
+    let file = object::File::parse(&*bytes).expect("object should parse");
+    // The trap hook takes the address of its file name. Kernel-model code
+    // sign-extends an absolute 32-bit relocation into the upper two GiB.
+    assert!(file
+        .sections()
+        .any(|section| section.relocations().any(|(_, relocation)| {
+            relocation.flags()
+                == object::RelocationFlags::Elf {
+                    r_type: object::elf::R_X86_64_32S,
+                }
+        })));
+}
+
 #[test]
 fn frozen_tables_are_read_only_objects_for_each_freestanding_target() {
     let source = r#"

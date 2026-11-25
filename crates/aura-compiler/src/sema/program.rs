@@ -19,6 +19,7 @@ use super::{
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub(crate) machine_target: Option<crate::FreestandingTarget>,
     pub module: Module,
     pub module_name: String,
     pub source_path: Option<String>,
@@ -330,6 +331,7 @@ fn callable_contract_decl(alias: &crate::ast::TypeAliasDecl) -> Result<FunctionD
         span: alias.span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: alias.contracts.clone(),
         spec: false,
@@ -582,6 +584,9 @@ pub(crate) fn check_with_profile(
             return Err(Diagnostic::coded_at("AU3030", cell.span, "hosted module bindings are immutable")
                 .with_help("share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"));
         }
+    }
+    if let Some(span) = module.asm_span {
+        crate::inline_asm::target_at(span)?;
     }
     let mut module = module;
     if freestanding {
@@ -1780,6 +1785,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     span: extern_decl.span,
                     property: None,
                     decorators: Vec::new(),
+                    machine: None,
                     doc: None,
                     contracts: extern_decl.contracts.clone(),
                     spec: false,
@@ -2401,7 +2407,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         .collect::<Vec<_>>();
     local_constants.sort_by_key(|constant| (constant.decl.span.line, constant.decl.span.column));
     constant_init_plan.extend(local_constants);
+    for constant in &constant_init_plan {
+        crate::machine_data::check(constant)?;
+    }
     let mut program = Program {
+        machine_target: crate::freestanding_check_target(),
         aliases,
         type_definitions: type_names.clone(),
         module: module.clone(),

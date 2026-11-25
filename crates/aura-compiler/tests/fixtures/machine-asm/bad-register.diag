@@ -1,0 +1,5 @@
+error[AU2092]: unknown or reserved x86_64 assembly register `r88`
+ --> bad-register.au:2:29
+  |
+2 |     asm("nop", input("r88", value))
+  |                             ^

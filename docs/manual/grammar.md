@@ -245,7 +245,7 @@ module = [ docstring ], { module-element }, EOF ;
 
 docstring = TRIPLE_STRING, NEWLINE ;
 
-module-element = import-declaration | module-constant | item
+module-element = import-declaration | module-constant | module-asm | item
                | conditional-module-suite | statement ;
 
 conditional-module-suite
@@ -295,6 +295,21 @@ identity, or package resolution path.
 A parenthesized import list may span physical lines and may end with a
 trailing comma. Wildcard imports and relative-dot imports are not part of the
 grammar.
+
+### Freestanding assembly and attributes
+
+```ebnf
+module-asm = "module_asm", "(", string-literal, ")", statement-end ;
+asm-statement = "asm", "(", string-literal, { ",", asm-clause }, ")", statement-end ;
+asm-clause = ("input" | "output"), "(", string-literal, ",", expression, ")"
+           | ("clobber" | "options"), "(", string-literal, { ",", string-literal }, ")" ;
+machine-attribute = "@", "machine", ".", identifier, [ "(", literal, ")" ], NEWLINE ;
+```
+
+An output expression must name a mutable scalar. A machine attribute
+precedes a module function or, for section and alignment, a module cell
+or typed scalar constant. The allowed attribute names, argument values and target
+constraints appear in [Freestanding Builds](/manual/freestanding).
 
 ## Items
 
@@ -712,7 +727,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = local-function-statement
+    = asm-statement
+    | local-function-statement
     | assignment-statement
     | view-statement
     | return-statement
@@ -1311,6 +1327,7 @@ The grammar intentionally excludes:
 - multiline f-strings
 - class inheritance
 - local item declarations, attributes, and decorators on classes, enums, or local functions
+- machine attributes outside the freestanding declarations described above
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations

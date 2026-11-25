@@ -127,7 +127,7 @@ impl<'a> Resolver<'a> {
                 .is_some_and(|part| crate::builtin_modules::is_builtin_root_module(part))
             {
                 let imported = loader.resolve_import_path(path, dependency)?;
-                plan.extend(loader.build_constant_init_plan(&imported)?);
+                plan.extend(loader.build_constant_init_plan(&imported, &mut |_, _| {})?);
             }
         }
         let mut program = crate::sema::check_with_context(probe, context)?;

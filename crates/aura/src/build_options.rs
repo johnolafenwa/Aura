@@ -45,10 +45,15 @@ pub(super) fn target_scope(
     next.enter()
 }
 
-pub(super) fn bare_host_scope() -> aura_compiler::build_config::BuildConfigGuard {
-    target_scope(
-        FreestandingTarget::host().map(|target| target.name()),
-        false,
+pub(super) fn bare_target_scope(
+    target: FreestandingTarget,
+) -> (
+    aura_compiler::FreestandingScope,
+    aura_compiler::build_config::BuildConfigGuard,
+) {
+    (
+        aura_compiler::enter_freestanding_target(target),
+        target_scope(Some(target.name()), false),
     )
 }
 
@@ -106,7 +111,12 @@ mod tests {
         assert!(target.debug && !target.release);
         assert_eq!(target.target, "x86_64-unknown-linux-musl");
         assert_eq!(target.cfg["trace"], "true");
-        let _bare = bare_host_scope();
+        let _bare = bare_target_scope(FreestandingTarget::Riscv64);
+        assert_eq!(current_build_config().arch, "riscv64");
+        assert_eq!(
+            aura_compiler::freestanding_check_target(),
+            Some(FreestandingTarget::Riscv64)
+        );
         assert!(current_build_config().freestanding);
     }
 }

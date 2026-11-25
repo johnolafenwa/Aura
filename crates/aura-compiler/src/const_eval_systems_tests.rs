@@ -42,3 +42,22 @@ fn pointer_reads_never_run_in_the_compiler() {
         "AU3025"
     );
 }
+
+#[test]
+fn inline_assembly_never_runs_in_the_constant_interpreter() {
+    let target = crate::FreestandingTarget::X86_64;
+    let config = crate::BuildConfig::for_target(target.name(), false).unwrap();
+    let source = r#"def machine_value() -> int64:
+    asm("nop")
+    return 7
+
+const answer = machine_value()
+"#;
+    let error = crate::with_build_config(config, || {
+        crate::with_freestanding_target(target, || {
+            crate::check_module_with_builtin_imports(crate::parse_source(source).unwrap())
+                .unwrap_err()
+        })
+    });
+    assert_eq!(error.code, "AU3025", "{error:?}");
+}

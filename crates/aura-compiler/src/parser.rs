@@ -83,6 +83,7 @@ fn class_invariant_method(
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: invariants,
         spec: false,
@@ -369,6 +370,7 @@ fn parse_configured(
     let mut module = parser.parse_with_possible_entry()?;
     if let Some(mut resolver) = resolver {
         parser.select_conditionals(&mut module, &mut resolver, declaration_module)?;
+        parser.finish_naked_functions(&mut module)?;
     }
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
@@ -504,6 +506,8 @@ struct Parser {
     c_bit_widths: std::collections::BTreeMap<String, u8>,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
+    asm_spans: Vec<Span>,
+    deferred_naked: bool,
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
@@ -530,6 +534,8 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            asm_spans: Vec::new(),
+            deferred_naked: false,
             c_bit_widths: Default::default(),
             generated_items: Vec::new(),
             module_storage: false,
@@ -580,6 +586,7 @@ impl Parser {
         let mut imports = Vec::new();
         let mut constants = Vec::new();
         let mut items = Vec::new();
+        let mut module_asm = Vec::new();
         let mut top_level_stmts = Vec::new();
         // Module constants are the bindings above the first top-level
         // statement. From the first statement on, `name = value` is an
@@ -601,7 +608,15 @@ impl Parser {
                     constants.append(&mut branch.constants);
                     items.append(&mut branch.items);
                     top_level_stmts.append(&mut branch.top_level_stmts);
+                    module_asm.append(&mut branch.module_asm);
                 }
+            } else if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "module_asm")
+                && matches!(self.peek_kind(1), Some(TokenKind::LParen))
+            {
+                let expr = self.parse_expr()?;
+                module_asm.push(crate::inline_asm::module_template(&expr)?.to_string());
+                self.asm_spans.push(expr.span);
+                self.expect_statement_terminator()?;
             } else if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
             } else if self.at_type_alias_start() {
@@ -618,6 +633,10 @@ impl Parser {
                     self.current_span(),
                     "a public module constant must come before the first top-level statement",
                 ));
+            } else if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                self.parse_decorated_declaration(&mut items, &mut constants, seen_statement)?;
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_simple(&TokenKind::At)
                 || self.at_copy_class_start()
@@ -634,6 +653,15 @@ impl Parser {
                 items.push(self.parse_item()?);
             } else {
                 let statement = self.parse_stmt()?;
+                if let Stmt::Expr(stmt) = &statement {
+                    if crate::inline_asm::is_asm(&stmt.expr) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2093",
+                            stmt.span,
+                            "use module_asm at module scope",
+                        ));
+                    }
+                }
                 seen_statement = true;
                 top_level_stmts.push(statement);
             }
@@ -645,6 +673,8 @@ impl Parser {
         }
         Ok(Module {
             inactive_lines: Vec::new(),
+            module_asm,
+            asm_span: self.asm_spans.first().copied(),
             doc,
             imports,
             constants,
@@ -703,6 +733,7 @@ impl Parser {
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
             required,
+            placement: None,
             mutable,
             public,
             name,
@@ -1688,21 +1719,50 @@ impl Parser {
 
     /// Parses a group of `@expression` lines and the function or method
     /// they decorate. Comments and blank lines may sit inside the group.
+    fn parse_decorated_declaration(
+        &mut self,
+        items: &mut Vec<Item>,
+        constants: &mut Vec<ConstantDecl>,
+        seen_statement: bool,
+    ) -> Result<()> {
+        let first = self.current_span();
+        let decorators = self.parse_decorator_group()?;
+        if !seen_statement
+            && self.at_module_constant_start()
+            && decorators
+                .iter()
+                .any(|d| crate::machine_attributes::attribute(d).is_some())
+        {
+            let mut constant = self.parse_module_constant()?;
+            constant.placement = Some(Box::new(crate::machine_data::placement(&decorators)?));
+            constants.push(constant);
+            return Ok(());
+        }
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let mut function = if self.at_keyword_def() {
+            self.parse_function(public)?
+        } else if self.at_export_def_start() {
+            self.parse_export_function(public)?
+        } else {
+            return Err(misplaced_decorator_error(first));
+        };
+        self.attach_machine_attributes(&mut function, decorators)?;
+        items.push(Item::Function(function));
+        Ok(())
+    }
+
     fn parse_decorated_function(&mut self, method: bool) -> Result<FunctionDecl> {
         let first = self.current_span();
-        let mut decorators = Vec::new();
-        while self.at_simple(&TokenKind::At) {
-            let at = self.expect_simple(TokenKind::At)?.span;
-            if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "property") {
-                return Err(property_target_error(at));
-            }
-            decorators.push(Decorator {
-                expr: self.parse_expr()?,
-                span: at,
-                text: String::new(),
-            });
-            self.expect_newline()?;
-            self.skip_newlines();
+        let decorators = self.parse_decorator_group()?;
+        if let Some(machine) = decorators
+            .iter()
+            .find(|d| crate::machine_attributes::attribute(d).is_some())
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2095",
+                machine.span,
+                "machine attributes require a module-level declaration",
+            ));
         }
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         if !self.at_keyword_def() {
@@ -1718,6 +1778,24 @@ impl Parser {
         let mut function = self.parse_function_with_receiver(method, public)?;
         function.decorators = decorators;
         Ok(function)
+    }
+
+    fn parse_decorator_group(&mut self) -> Result<Vec<Decorator>> {
+        let mut decorators = Vec::new();
+        while self.at_simple(&TokenKind::At) {
+            let at = self.expect_simple(TokenKind::At)?.span;
+            if matches!(self.current_kind(), TokenKind::Identifier(name) if name == "property") {
+                return Err(property_target_error(at));
+            }
+            decorators.push(Decorator {
+                expr: self.parse_expr()?,
+                span: at,
+                text: String::new(),
+            });
+            self.expect_newline()?;
+            self.skip_newlines();
+        }
+        Ok(decorators)
     }
 
     /// Parses the reserved stand-alone `@property` marker.
@@ -1822,6 +1900,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,
@@ -2081,6 +2160,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,
@@ -2345,6 +2425,11 @@ impl Parser {
         self.enter_recursion("statement")?;
         let result = self.parse_stmt_inner();
         self.exit_recursion();
+        if let Ok(Stmt::Expr(stmt)) = &result {
+            if crate::inline_asm::is_asm(&stmt.expr) {
+                self.asm_spans.push(stmt.span);
+            }
+        }
         result
     }
 

@@ -120,6 +120,14 @@ String and format-specification diagnostics are described under
 | `AU2086` | invalid C layout query | A layout query names an ineligible type or field. | Use an addressable C member for `offset_of`. |
 | `AU2087` | invalid atomic ordering | An atomic operation requests an incompatible order or a computed order name. | Use a supported ordering string literal for that operation. |
 | `AU2088` | invalid rotation count type | A rotation count has an incompatible type. | Pass an `int64` count. |
+| `AU2090` | assembly target | Assembly requires freestanding mode. | Select a freestanding target. |
+| `AU2091` | assembly operand type | The register cannot hold this scalar type or width. | Match the operand type and register. |
+| `AU2092` | assembly register | A register is unknown, reserved or overlaps another constraint. | Choose distinct registers supported by the target. |
+| `AU2093` | assembly contract | The template, operand reference, clause or options are invalid. | Correct the assembly declaration. |
+| `AU2094` | machine attribute target | A hosted declaration specifies a machine attribute. | Select a freestanding target. |
+| `AU2095` | machine declaration | An attribute, signature, placement or body violates its contract. | Follow the declaration requirements in Freestanding Builds. |
+| `AU2096` | interrupt convention | The interrupt target differs or the entry is used as an ordinary function. | Use the matching hardware entry convention. |
+| `AU2097` | hardware operation | The selected target does not provide this mem operation. | Choose an operation provided on this target. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -346,6 +354,7 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3031` | fixed array would duplicate a non-copy element | An operation would duplicate an element that is not Copy. | Construct each element individually or use a Copy element type. |
 | `AU3032` | place has no writable stable address | A writable pointer is requested for an immutable place, temporary or bit-field. | Take the address of stable, writable storage. |
 | `AU3033` | borrow of a C bit-field | A borrow requires an independent address for a bit-field. | Read its value into a local or assign to the field directly. |
+| `AU3035` | assembly output binding | An output lacks a distinct writable scalar destination. | Bind each output to its own mutable scalar. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -562,6 +571,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
 | `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU4035` | assembly proof boundary | Verification encountered assembly whose effects it cannot prove. | Keep runtime checks around the machine operation. |
 | `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
 
 ## Diagnostic Structure

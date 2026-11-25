@@ -70,6 +70,8 @@ pub(super) fn evaluate(
     }
     let mut names = roots;
     let mut probe = Module {
+        module_asm: Vec::new(),
+        asm_span: None,
         inactive_lines: Vec::new(),
         doc: None,
         imports: Vec::new(),
@@ -135,6 +137,7 @@ pub(super) fn evaluate(
     // A space makes the compiler's private spelling inaccessible in source.
     let span = crate::analysis::expression_start_span(expression);
     probe.constants.push(ConstantDecl {
+        placement: None,
         mutable: false,
         public: false,
         required: true,

@@ -1,7 +1,10 @@
 //! Check each target without invoking a target linker or executing a program.
 
 use super::{emit_diagnostics, write_stdout, DiagnosticFormat, Input};
-use aura_compiler::{check_path, check_path_with_source, current_build_config, with_build_config};
+use aura_compiler::{
+    check_path, check_path_with_source, current_build_config, enter_freestanding_target,
+    with_build_config, FreestandingTarget,
+};
 use std::path::Path;
 
 pub(super) fn check(input: &Input, format: DiagnosticFormat) {
@@ -9,6 +12,7 @@ pub(super) fn check(input: &Input, format: DiagnosticFormat) {
     let mut diagnostics = Vec::new();
     for (name, config) in current_build_config().supported_targets() {
         let result = with_build_config(config, || {
+            let _target = FreestandingTarget::parse(&name).map(enter_freestanding_target);
             if input.from_stdin {
                 check_path_with_source(path, &input.source)
             } else {

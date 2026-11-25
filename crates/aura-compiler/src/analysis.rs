@@ -843,6 +843,24 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions =
             requests::keyword_argument_completions(self, &source, line, character, &scope);
         completions.extend(self.top_level_completions());
+        if crate::freestanding_check_target().is_some() {
+            let (name, detail) = if line_text.starts_with(char::is_whitespace) {
+                ("asm", "Freestanding inline assembly")
+            } else {
+                ("module_asm", "Module-level assembly")
+            };
+            if line_text
+                .get(..character)
+                .is_some_and(|prefix| name.starts_with(prefix.trim_start()))
+            {
+                completions.push(AnalysisCompletion {
+                    name: name.into(),
+                    kind: "keyword".into(),
+                    detail: detail.into(),
+                    documentation: None,
+                });
+            }
+        }
         completions.retain(|completion| {
             (!matches!(completion.kind.as_str(), "constant" | "variable")
                 || scope.contains_key(&completion.name))
@@ -2894,7 +2912,16 @@ impl<'a> AnalysisBuilder<'a> {
                 self.visit_stmts(&while_stmt.body, &mut loop_scope);
             }
             Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
-            Stmt::Expr(expr_stmt) => self.visit_expr(&expr_stmt.expr, scope),
+            Stmt::Expr(expr_stmt) => {
+                if let Ok(Some(assembly)) = crate::inline_asm::AsmStatement::parse(&expr_stmt.expr)
+                {
+                    for (_, operand) in assembly.inputs.into_iter().chain(assembly.outputs) {
+                        self.visit_expr(operand, scope);
+                    }
+                } else {
+                    self.visit_expr(&expr_stmt.expr, scope);
+                }
+            }
         }
     }
 

@@ -9,6 +9,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { createPositionMapper } = require("./positions");
+const { maskAssemblyTemplates } = require("./machine_syntax");
 const { documentSymbols } = require("./recovery");
 
 const SEMANTIC_TOKEN_TYPES = [
@@ -344,7 +345,7 @@ function implementations(name, sources) {
   const forType = new RegExp(`^\\s*impl\\b.*\\bfor\\s+${word}\\b`);
   const locations = [];
   for (const [uri, text] of sources) {
-    text.split("\n").forEach((lineText, line) => {
+    maskAssemblyTemplates(text).split("\n").forEach((lineText, line) => {
       if (ofTrait.test(lineText) || forType.test(lineText)) {
         const start = lineText.length - lineText.trimStart().length;
         locations.push({
@@ -358,7 +359,7 @@ function implementations(name, sources) {
 }
 
 function wordAt(source, line, character) {
-  const lineText = String(source || "").split("\n")[line] || "";
+  const lineText = maskAssemblyTemplates(String(source || "")).split("\n")[line] || "";
   for (const match of lineText.matchAll(/[A-Za-z_][A-Za-z0-9_]*/g)) {
     if (character >= match.index && character <= match.index + match[0].length) {
       return match[0];

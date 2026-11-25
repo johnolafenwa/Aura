@@ -1,0 +1,5 @@
+error[AU2094]: machine attributes require a freestanding build
+ --> crates/aura-compiler/tests/fixtures/check-fail/machine_attributes_hosted.au:2:1
+  |
+2 | def ordinary() -> None:
+  | ^

@@ -573,6 +573,11 @@ impl Substitution<'_> {
                 Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
                     self.rvalue(value)?
                 }
+                Instruction::InlineAsm { inputs, .. } => {
+                    for input in inputs {
+                        self.operand(input);
+                    }
+                }
                 Instruction::Eval { value } => self.operand(value),
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => self.operand(selector),

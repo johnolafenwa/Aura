@@ -13,8 +13,13 @@ pub use aura_runtime::ffi;
 pub mod format;
 pub use aura_core::integer;
 pub(crate) use aura_runtime::json_codec;
+mod freestanding_mode;
+mod hardware;
+pub(crate) mod inline_asm;
 pub mod lexer;
 pub mod limits;
+mod machine_attributes;
+mod machine_data;
 pub mod mir;
 mod mir_copies;
 pub mod mir_runtime;
@@ -49,6 +54,10 @@ pub use diag::{
     AssertionOperand, Diagnostic, Result, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame,
     Span, StructuredDiagnostic, StructuredEdit, StructuredRuntimeCallFrame,
     StructuredRuntimeSourceSpan, StructuredRuntimeTaskFrame, StructuredSpan,
+};
+pub use freestanding_mode::{
+    enter_freestanding_target, freestanding_check_target, with_freestanding_target,
+    FreestandingScope,
 };
 pub use mir::{lower as lower_to_mir, MirModule};
 pub use mir_runtime::{
@@ -398,8 +407,7 @@ pub fn lower_path_with_source_to_mir(path: &Path, source: &str) -> Result<MirMod
 /// Proves the checks of the program at `path` with an SMT solver
 /// (`aura verify`).
 pub fn verify_path(path: &Path, options: &verify::Options) -> Result<verify::Report> {
-    let program = check_path(path)?;
-    verify_program(&program, options)
+    verify_file(path, None, options)
 }
 
 /// `verify_path` for source text that stands in for the file at `path`.
@@ -408,7 +416,19 @@ pub fn verify_path_with_source(
     source: &str,
     options: &verify::Options,
 ) -> Result<verify::Report> {
-    let program = check_path_with_source(path, source)?;
+    verify_file(path, Some(source), options)
+}
+
+fn verify_file(
+    path: &Path,
+    source: Option<&str>,
+    options: &verify::Options,
+) -> Result<verify::Report> {
+    let mut loader = ModuleLoader::new_with_source(path, source)?;
+    loader.verifying = true;
+    let _config = loader.package_config();
+    let program = loader.load_program_internal(path, source)?;
+    loader.write_lockfile()?;
     verify_program(&program, options)
 }
 
@@ -440,7 +460,11 @@ pub fn lower_program_to_mir_with_proved_checks(
         ..options.clone()
     };
     mir::lower_with_proved_checks(program, debug, |module| {
-        verify::verify_module(program, module, &options).map(|report| report.proved_sites)
+        match verify::verify_module(program, module, &options) {
+            Ok(report) => Ok(report.proved_sites),
+            Err(error) if error.code == "AU4035" => Ok(BTreeSet::new()),
+            Err(error) => Err(error),
+        }
     })
 }
 
@@ -493,16 +517,17 @@ pub(crate) fn check_path_with_source_without_lockfile_profile(
     loader.load_program_with_source(path, source)
 }
 
-/// Select the bare target for this architecture when a caller requests the
-/// freestanding profile without already selecting an explicit bare triple.
+/// Use the active freestanding target, or the bare triple for the selected architecture.
 pub(crate) fn enter_freestanding_build_config() -> Option<build_config::BuildConfigGuard> {
     let current = current_build_config();
-    if current.freestanding {
+    let target = freestanding_check_target().or_else(|| {
+        FreestandingTarget::ALL
+            .into_iter()
+            .find(|target| target.arch() == current.arch)
+    })?;
+    if current.target == target.name() {
         return None;
     }
-    let target = FreestandingTarget::ALL
-        .into_iter()
-        .find(|target| target.arch() == current.arch)?;
     let mut bare = BuildConfig::for_target(target.name(), current.debug)?;
     bare.cfg = current.cfg;
     Some(bare.enter())
@@ -699,6 +724,7 @@ struct LoadedModule {
 }
 
 struct ModuleLoader {
+    verifying: bool,
     freestanding: bool,
     package_root: PathBuf,
     package_graph: Option<PackageGraph>,
@@ -723,6 +749,7 @@ impl ModuleLoader {
             infer_package_root(&absolute_entry, source_override)?
         };
         Ok(Self {
+            verifying: false,
             freestanding: current_build_config().freestanding,
             package_root,
             package_graph,
@@ -786,6 +813,13 @@ impl ModuleLoader {
                     error.with_render_context(display_path.clone(), source.clone())
                 }
             })?;
+        if self.verifying {
+            if let Some(span) = module.asm_span {
+                return Err(
+                    verify::assembly_boundary(span).with_render_context(display_path, source)
+                );
+            }
+        }
         if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
@@ -837,7 +871,12 @@ impl ModuleLoader {
             if let Some(graph) = &self.package_graph {
                 program.foreign_link = graph.foreign_link_plan();
             }
-            program.constant_init_plan = self.build_constant_init_plan(&path)?;
+            program.constant_init_plan =
+                self.build_constant_init_plan(&path, &mut |import, dependency| {
+                    if import != path {
+                        inline_asm::append_module(dependency, &mut program.foreign_link);
+                    }
+                })?;
             const_eval::evaluate(&mut program)?;
             self.cache.insert(
                 path.clone(),
@@ -850,13 +889,18 @@ impl ModuleLoader {
         Ok(program)
     }
 
-    fn build_constant_init_plan(&self, entry_path: &Path) -> Result<Vec<sema::ConstantInfo>> {
+    fn build_constant_init_plan(
+        &self,
+        entry_path: &Path,
+        visit_module: &mut dyn FnMut(&Path, &Program),
+    ) -> Result<Vec<sema::ConstantInfo>> {
         fn visit(
             loader: &ModuleLoader,
             path: &Path,
             imported: bool,
             visited: &mut BTreeSet<PathBuf>,
             plan: &mut Vec<sema::ConstantInfo>,
+            visit_module: &mut dyn FnMut(&Path, &Program),
         ) -> Result<()> {
             let path = absolutize(path);
             if !visited.insert(path.clone()) {
@@ -884,8 +928,9 @@ impl ModuleLoader {
                     continue;
                 }
                 let dependency = loader.resolve_import_path(&path, module_path)?;
-                visit(loader, &dependency, true, visited, plan)?;
+                visit(loader, &dependency, true, visited, plan, visit_module)?;
             }
+            visit_module(&path, &loaded.program);
             let mut local = loaded
                 .program
                 .constants
@@ -908,7 +953,14 @@ impl ModuleLoader {
 
         let mut visited = BTreeSet::new();
         let mut plan = Vec::new();
-        visit(self, entry_path, false, &mut visited, &mut plan)?;
+        visit(
+            self,
+            entry_path,
+            false,
+            &mut visited,
+            &mut plan,
+            visit_module,
+        )?;
         let mut seen = BTreeSet::new();
         plan.retain(|constant| {
             seen.insert((constant.module_name.clone(), constant.decl.name.clone()))
@@ -2259,3 +2311,9 @@ use aura_runtime::array_kernel_corpus;
 
 #[cfg(test)]
 mod conditional_tests;
+
+#[cfg(test)]
+mod inline_asm_tests;
+
+#[cfg(test)]
+mod hardware_tests;

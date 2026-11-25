@@ -1885,6 +1885,7 @@ impl<'a> FunctionChecker<'a> {
         display_name: &str,
         free_function: bool,
     ) -> Result<Type> {
+        crate::machine_attributes::check_callable(function, span)?;
         if function.module_name == "mem"
             && aura_core::atomic_order::AtomicOperation::of(&function.decl.name).is_some()
         {

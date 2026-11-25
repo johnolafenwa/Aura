@@ -1,0 +1,10 @@
+@machine.section(".irq.counters")
+@machine.align(64)
+mut counters: fixed[uint16, 4] = [2, 3, 5, 7]
+
+@machine.section(".board.reserve")
+mut unused: uint64 = 19
+
+export "C" def bump() -> uint16:
+    counters[1] += 1
+    return counters[1]

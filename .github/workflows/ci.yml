@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/integration-0.18]
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -51,6 +51,12 @@ jobs:
     # headroom. With the 0.17 features the macOS runner takes a little over
     # three hours, and one run was still making progress at 210 minutes.
     timeout-minutes: 270
+    env:
+      # Both test builds link LLVM. Keep their Rust debug and incremental
+      # artifacts off disk so the second build fits on the runner.
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+      CARGO_INCREMENTAL: 0
 
     steps:
       - name: Checkout
@@ -440,6 +446,12 @@ jobs:
 
       - name: Build release compiler and runtime
         run: cargo build --release --locked -p aura -p aura-runtime
+
+      - name: Boot freestanding boards and check their serial output
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get install -y clang lld qemu-system-x86 qemu-system-arm qemu-system-misc
+          examples/freestanding/kernel/test.sh target/release/aura
 
       - name: Check the libraries the compiler loads
         run: python3 scripts/check-aura-libraries.py target/release/aura

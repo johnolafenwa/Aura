@@ -1006,13 +1006,14 @@ const workspaceCompiler = path.join(
   process.platform === "win32" ? "aura.exe" : "aura"
 );
 
-async function startWorkspaceServer(t, folders) {
+async function startWorkspaceServer(t, folders, environment = {}) {
   const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
     ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
     : path.resolve(__dirname, "..", "dist", "server.js");
   assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
   const client = startLanguageServer(serverPath, {
-    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler,
+    ...environment
   });
   t.after(() => client.dispose());
   const initialize = await client.request("initialize", {
@@ -1427,4 +1428,83 @@ test("guarded class members retain property and decorator navigation", async (t)
       line: target, character: lines[target].indexOf(name)
     }, lines[line]);
   }
+});
+
+test("freestanding diagnostics and navigation use the selected machine target", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-machine-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "Aura.toml"),
+    '[package]\nname = "machine"\nversion = "0.1.0"\nedition = "2026"\nallow_ffi = true\n');
+  const file = path.join(root, "src", "main.au");
+  const lines = [
+    'export "C" def copy_word(value: uint64) -> uint64:',
+    '    mut result: uint64 = 0',
+    '    asm("movq $1, $0 # value", output("reg", result), input("reg", value), options("pure"))',
+    '    return result',
+    ''
+  ];
+  const text = lines.join("\n");
+  fs.writeFileSync(file, text);
+  const uri = pathToFileURL(file).toString();
+
+  const client = await startWorkspaceServer(t, [root], {
+    AURA_LSP_FREESTANDING_TARGET: "x86_64-unknown-none", AURA_LSP_VERIFY: "0"
+  });
+  const diagnostics = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  assert.deepEqual(await diagnostics, []);
+  const request = async (method, word, inTemplate = false) => {
+    const column = inTemplate ? lines[2].indexOf(word) : lines[2].lastIndexOf(word);
+    const result = await client.request(`textDocument/${method}`, {
+      textDocument: { uri }, position: { line: 2, character: column + 1 }
+    });
+    assert.equal(result.error, undefined);
+    return result.result;
+  };
+  assert.match((await request("hover", "value")).contents.value, /value: uint64/);
+  assert.equal((await request("definition", "result")).range.start.line, 1);
+  assert.equal(await request("hover", "value", true), null);
+  assert.deepEqual(await request("completion", "value", true), []);
+  assert.match((await request("hover", "input")).contents.value, /operand/);
+  assert.ok((await request("completion", "options")).some(item => item.label === "clobber"));
+
+  const invalid = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 2 },
+    contentChanges: [{ text: text.replace('input("reg"', 'input("unknown_register"') }]
+  });
+  assert.ok((await invalid).some(diagnostic => /register/.test(diagnostic.message)));
+});
+
+test("an explicit freestanding editor target selects its build.arch branch", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot], {
+    AURA_LSP_FREESTANDING_TARGET: "riscv64gc-unknown-none-elf",
+    AURA_LSP_VERIFY: "0"
+  });
+  const uri = pathToFileURL(path.join(workspaceRoot, "riscv-editor-guards.au")).href;
+  const lines = [
+    "import build",
+    'if build.freestanding and build.arch == "riscv64":',
+    "    const width: int64 = 64",
+    "else:",
+    "    const width = missing_architecture()",
+    'export "C" def entry() -> int64:',
+    "    return width"
+  ];
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((item) => item.severity === 1), []);
+  assert.deepEqual(diagnostics.filter((item) => item.tags?.includes(1)).map((item) => item.range), [{
+    start: { line: 4, character: 0 }, end: { line: 4, character: lines[4].length }
+  }]);
+  const definition = await client.request("textDocument/definition", {
+    textDocument: { uri }, position: { line: 6, character: lines[6].indexOf("width") }
+  });
+  assert.deepEqual(definition.result?.range.start, { line: 2, character: lines[2].indexOf("width") });
 });

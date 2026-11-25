@@ -1,0 +1,5 @@
+error[AU2093]: pure assembly needs an output and cannot touch memory; noreturn assembly cannot be pure or return an output
+ --> bad-option.au:2:5
+  |
+2 |     asm("nop", options("pure"))
+  |     ^

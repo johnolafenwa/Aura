@@ -2077,6 +2077,10 @@ undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 | `ptr[T]` methods | `read()`, `write(value)`, `volatile_read()`, `volatile_write(value)`, `offset(count)` | Access a typed value or step by a signed count of elements. |
 | C layout | `mem.size_of(T)`, `mem.align_of(T)`, `mem.offset_of(T, field)` | Compile-time size, alignment and member byte offset. |
 | Signed and floating-point access | `mem.read_intN`, `mem.read_floatN` and matching write and volatile forms | Signed widths are 8 through 64. Floating widths are 32 and 64. |
+| `mem.in_uintN`, `mem.out_uintN` | `in_uintN(port: uint16) -> uintN`, `out_uintN(port: uint16, value: uintN) -> None` | x86-64 port transfer for N = 8, 16 or 32. |
+| `mem.read_msr`, `mem.write_msr` | `read_msr(index: uint32) -> uint64`, `write_msr(index: uint32, value: uint64) -> None` | x86-64 model-specific register access. |
+| Named control and system registers | `read_<name>() -> uint64`, `write_<name>(value: uint64) -> None` | [Register names and access directions by target](/manual/mem). |
+| Interrupt control and wait | `enable_interrupts() -> None`, `disable_interrupts() -> None`, `halt() -> None` | Change the interrupt mask or wait for a wakeup. |
 | `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`, at any alignment. |
 | `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
 | `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |
@@ -3911,8 +3915,8 @@ aura check app.au
 | `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
-| `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
-| `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
+| `aura build --freestanding [--target name] [--kernel] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
+| `aura check --freestanding [--target name] [--kernel] file.au` | Type-check, then report what a freestanding build cannot compile. |
 | `aura build --target name -o path file.au` | Build a native binary for another Linux machine. See [Building for Another Machine](#building-for-another-machine). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
@@ -3927,7 +3931,7 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
-| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
+| `aura verify [--freestanding [--target name] [--kernel]] [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -4022,6 +4026,18 @@ under `lib/aura`. It needs only a host C compiler for the final link, or on
 Windows the Microsoft linker from the Visual Studio C++ build tools. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
+
+### Freestanding target selection
+
+Use the same target for source checks and object generation, for example
+`aura check --freestanding --target x86_64-unknown-none --kernel kernel.au`
+and `aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au`.
+The optional x86-64 kernel profile disables the red zone, uses the kernel
+code model and passes floating-point values in integer registers.
+Set `aura.freestandingTarget` in VS Code to check a board for its target.
+The formatter preserves the contents of assembly strings. Verification
+reports AU4035 when it encounters assembly.
+[Freestanding Builds](/manual/freestanding)
 
 ### Debug Builds
 
@@ -8653,6 +8669,15 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
+### Kernel code
+
+Machine assembly, hardware access and machine attributes require a
+64-bit freestanding target. The assembly checker validates declared
+operands and clobbers. The target assembler checks instruction text.
+Proof stops at assembly. The x86-64 kernel profile uses integer registers
+for floating-point values and may need software arithmetic helpers at link
+time. [Freestanding Builds](/manual/freestanding)
+
 ### Tasks
 
 - A mutex can guard any `Transfer` value. Reentering the same mutex traps with `AU4001`. The lock has no timeout, and several locks require a consistent acquisition order across tasks.
@@ -8964,6 +8989,14 @@ String and format-specification diagnostics are described under
 | `AU2086` | invalid C layout query | A layout query names an ineligible type or field. | Use an addressable C member for `offset_of`. |
 | `AU2087` | invalid atomic ordering | An atomic operation requests an incompatible order or a computed order name. | Use a supported ordering string literal for that operation. |
 | `AU2088` | invalid rotation count type | A rotation count has an incompatible type. | Pass an `int64` count. |
+| `AU2090` | assembly target | Assembly requires freestanding mode. | Select a freestanding target. |
+| `AU2091` | assembly operand type | The register cannot hold this scalar type or width. | Match the operand type and register. |
+| `AU2092` | assembly register | A register is unknown, reserved or overlaps another constraint. | Choose distinct registers supported by the target. |
+| `AU2093` | assembly contract | The template, operand reference, clause or options are invalid. | Correct the assembly declaration. |
+| `AU2094` | machine attribute target | A hosted declaration specifies a machine attribute. | Select a freestanding target. |
+| `AU2095` | machine declaration | An attribute, signature, placement or body violates its contract. | Follow the declaration requirements in Freestanding Builds. |
+| `AU2096` | interrupt convention | The interrupt target differs or the entry is used as an ordinary function. | Use the matching hardware entry convention. |
+| `AU2097` | hardware operation | The selected target does not provide this mem operation. | Choose an operation provided on this target. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -9190,6 +9223,7 @@ process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 | `AU3031` | fixed array would duplicate a non-copy element | An operation would duplicate an element that is not Copy. | Construct each element individually or use a Copy element type. |
 | `AU3032` | place has no writable stable address | A writable pointer is requested for an immutable place, temporary or bit-field. | Take the address of stable, writable storage. |
 | `AU3033` | borrow of a C bit-field | A borrow requires an independent address for a bit-field. | Read its value into a local or assign to the field directly. |
+| `AU3035` | assembly output binding | An output lacks a distinct writable scalar destination. | Bind each output to its own mutable scalar. |
 
 The guidance these diagnostics carry is described under
 [Ownership Diagnostics](#ownership-diagnostics).
@@ -9406,6 +9440,7 @@ commands never report them. See [Verification](/manual/verification).
 | `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
 | `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
 | `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU4035` | assembly proof boundary | Verification encountered assembly whose effects it cannot prove. | Keep runtime checks around the machine operation. |
 | `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
 
 ## Diagnostic Structure
@@ -14391,9 +14426,11 @@ declaration. Anywhere else it is an ordinary name. The declaration needs no
 permission in `Aura.toml`. In a hosted build it is an ordinary function and
 the binary does not export it.
 
-A freestanding build needs at least one exported function. It compiles the
-functions the exports reach, in every module of the program, and nothing
-else. An export in an imported module is also defined in the object.
+An exported function is a root for code generation. The compiler follows
+calls from each root across module boundaries. A retained function, a
+placed data definition or a module assembly block can also provide the
+object's contents. An export in an imported module is defined in the
+object.
 
 ## What A Freestanding Program May Hold
 
@@ -14496,6 +14533,97 @@ export "C" def put(byte: uint8) -> None:
     mem.volatile_write_uint8(UART, byte)
 ```
 
+## Assembly
+
+Write `asm` as a statement in a package with `allow_ffi = true`. This
+x86-64 function takes the bit pattern in an integer register, swaps its
+bytes and returns the result:
+
+```aura fragment
+export "C" def swap_bytes(value: uint64) -> uint64:
+    mut swapped: uint64 = 0
+    asm("movq $1, $0\nbswapq $0", output("reg", swapped), input("reg", value), options("pure", "preserves_flags"))
+    return swapped
+```
+
+| Clause | Contract |
+| --- | --- |
+| `input("reg", expr)` | Evaluate an integer or boolean expression once into a general-purpose register. |
+| `output("reg", binding)` | Store into a distinct mutable scalar binding. Its Aura type sets the width. |
+| `input("fpreg", expr)`, `output("fpreg", binding)` | Bind a `float32` or `float64` to a floating-point register. These registers are unavailable under `--kernel`. |
+| `clobber("rax", ...)` | List additional registers the template overwrites. A fixed register mentioned in the text needs an operand or clobber whenever its value matters to generated code. |
+| `options("pure")` | At least one output. The result depends only on the inputs. The template observes and changes no memory and has no other observable effects. |
+| `options("preserves_flags")` | The template preserves condition codes. |
+| `options("noreturn")` | Control never reaches the next statement. The template has no outputs. |
+
+Number the outputs first and the inputs second, starting at `$0`. Use
+`$$` for a literal dollar in inline assembly. On x86-64 use AT&T syntax.
+A register name in place of a class pins the operand, as in
+`input("dx", port)` for a `uint16`. A boolean input holds zero or one.
+A boolean output is true if its low byte is nonzero. For explicit register
+spellings use braced LLVM modifiers, such as `${0:k}` for an x86 32-bit
+general register and `${0:w}` or `${0:s}` for AArch64 integer or floating
+single-word registers. By default assembly can change memory and flags.
+
+Use `module_asm` at module scope for a complete routine. The linker sees
+the symbols you define in the template. Each imported module contributes
+its text once. The formatter preserves spaces and line breaks inside a
+template.
+
+```aura fragment
+module_asm(""".text
+.globl pause_once
+pause_once:
+    pause
+    ret""")
+```
+
+The checker validates the operand types, register names and declared
+clobbers for the selected target. LLVM checks instruction text while
+writing the object. See [Verification](/manual/verification#trust) for
+the proof boundary.
+
+## Machine Attributes
+
+Declare a hardware interrupt entry with `@machine.interrupt`. This handler
+receives an x86 exception's hardware error code. Startup supplies its
+address to the appropriate interrupt gate.
+
+```aura fragment
+@machine.interrupt("x86_64_error")
+@machine.section(".text.fault")
+@machine.align(16)
+@machine.used
+export "C" def fault(code: uint64) -> None:
+    pass
+```
+
+| Convention | Aura parameters | Entry and return |
+| --- | --- | --- |
+| `"x86_64"` | None | Preserves interrupted registers and returns with `iretq`. |
+| `"x86_64_error"` | One `uint64` | Passes the hardware error word to the handler and discards that word before `iretq`. |
+| `"aarch64"` | None | Uses an aligned EL1 stack with FP/NEON enabled. Preserves the exception return state and returns with `eret`. |
+| `"riscv64"` | None | Uses an aligned machine-mode stack. Preserves the exception PC, status and live floating-point state and returns with `mret`. |
+
+Each handler returns `None` and can call ordinary Aura or foreign
+functions. Only a hardware exception may enter it. Ordinary code that
+needs the same operation can call a helper shared with the handler.
+
+| Attribute | Effect |
+| --- | --- |
+| `@machine.naked` | The body is exactly one operand-free `asm("...")`. The template owns the stack, registers and return instruction. |
+| `@machine.section("name")` | Place the definition in a named ELF section. |
+| `@machine.align(bytes)` | Align the definition to a power of two in bytes, up to 2²⁹. |
+| `@machine.link_name("symbol")` | Write a function under the given object symbol. Aura callers use its source name. |
+| `@machine.used` | Keep a function and its section when linking with `--gc-sections`. |
+| `@machine.noinline`, `@machine.always_inline` | Set the function's inlining policy. Choose one. |
+
+Section and alignment also apply to mutable module storage and to explicitly
+typed scalar module constants with literal initializers. For example,
+`@machine.section(".board.config")` and `@machine.align(64)` above
+`MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary. A mutable cell keeps at least
+its natural alignment and remains writable.
+
 ## Targets
 
 `--target` names the machine. Without it the build targets the
@@ -14509,7 +14637,8 @@ architecture of the machine that runs the compiler.
 
 Every target writes an ELF object, on every host.
 
-- Code is position independent. Functions that access mutable module state require synchronization when called from multiple cores or interrupt handlers.
+- The default build emits position-independent code.
+- Synchronize access to mutable module state shared between cores or interrupt handlers.
 - There are no unwind tables and no stack probes.
 - Floats use the hardware float registers. Startup code must enable them
   before the first Aura function runs: SSE on x86-64, FP and NEON on
@@ -14517,6 +14646,30 @@ Every target writes an ELF object, on every host.
 - A C struct passed or returned by value is not supported on RISC-V. Pass a
   `mut` parameter.
 - `--debug` and `--target-cpu` are refused.
+
+## x86-64 Kernel Code
+
+Build every Aura object that can run on an interruptible kernel stack with
+`--kernel`. Pass the same profile to `aura check`.
+
+```sh
+aura check --freestanding --target x86_64-unknown-none --kernel kernel.au
+aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au
+```
+
+| x86-64 setting | Ordinary freestanding build | With `--kernel` |
+| --- | --- | --- |
+| Code placement | Position independent, default code model | Static relocations, kernel code model for addresses in the high 2 GiB |
+| Floating point | SSE2, System V float ABI | Software floating point, integer-register float ABI |
+| Stack | A leaf can use the 128 bytes below the stack pointer, the red zone | Each function reserves the stack space it needs |
+
+Kernel mode disables MMX, SSE, SSE2 and x87 in compiler-generated code.
+Use the same register and stack conventions for foreign code and assembly.
+Floating-point parameters and results cross a call as IEEE bit patterns
+in general-purpose registers. Arithmetic may call compiler-runtime helpers
+such as `__adddf3`. A square root can call `sqrtf` or `sqrt`. Supply those
+routines with the kernel's soft-float ABI. Run `llvm-nm -u kernel.o` to
+see which symbols one object needs.
 
 ## What The Object Needs
 
@@ -14526,6 +14679,7 @@ The object refers to these symbols and no others:
 | --- | --- |
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
+| Soft-float helpers | An x86-64 kernel object needs software arithmetic or square root. |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
 `memset`, or `memcmp`. The object carries a small weak definition of each,
@@ -14570,9 +14724,6 @@ The freestanding benchmark builds six routines with Aura, C and Rust, including 
 ## Current Limits
 
 - No heap values. A freestanding program cannot allocate.
-- No inline assembly and no port I/O instructions. Memory-mapped devices
-  are reached with the [`mem` module](/manual/mem), and everything else
-  through `extern "C"` functions.
 - 32-bit targets are not supported.
 
 ## Source: docs/manual/functions.md
@@ -16874,7 +17025,7 @@ module = [ docstring ], { module-element }, EOF ;
 
 docstring = TRIPLE_STRING, NEWLINE ;
 
-module-element = import-declaration | module-constant | item
+module-element = import-declaration | module-constant | module-asm | item
                | conditional-module-suite | statement ;
 
 conditional-module-suite
@@ -16924,6 +17075,21 @@ identity, or package resolution path.
 A parenthesized import list may span physical lines and may end with a
 trailing comma. Wildcard imports and relative-dot imports are not part of the
 grammar.
+
+### Freestanding assembly and attributes
+
+```ebnf
+module-asm = "module_asm", "(", string-literal, ")", statement-end ;
+asm-statement = "asm", "(", string-literal, { ",", asm-clause }, ")", statement-end ;
+asm-clause = ("input" | "output"), "(", string-literal, ",", expression, ")"
+           | ("clobber" | "options"), "(", string-literal, { ",", string-literal }, ")" ;
+machine-attribute = "@", "machine", ".", identifier, [ "(", literal, ")" ], NEWLINE ;
+```
+
+An output expression must name a mutable scalar. A machine attribute
+precedes a module function or, for section and alignment, a module cell
+or typed scalar constant. The allowed attribute names, argument values and target
+constraints appear in [Freestanding Builds](/manual/freestanding).
 
 ## Items
 
@@ -17341,7 +17507,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = local-function-statement
+    = asm-statement
+    | local-function-statement
     | assignment-statement
     | view-statement
     | return-statement
@@ -17940,6 +18107,7 @@ The grammar intentionally excludes:
 - multiline f-strings
 - class inheritance
 - local item declarations, attributes, and decorators on classes, enums, or local functions
+- machine attributes outside the freestanding declarations described above
 - wildcard and relative-dot import syntax
 - `dict`, `set`, and range patterns
 - call-site capability annotations
@@ -20411,7 +20579,10 @@ diagnostics.
 
 The `mem` module reads and writes scalars at a raw address. It is for
 device registers, memory shared with C, and the lock-free cells a kernel or
-a driver needs. Hosted and [freestanding](/manual/freestanding) builds use the same target memory ordering rules.
+a driver needs. The raw-address functions work in hosted and
+[freestanding](/manual/freestanding) builds. A freestanding target also
+provides the machine operations below.
+Hosted and freestanding builds use the same target memory ordering rules.
 
 ```aura fragment
 import mem
@@ -20498,6 +20669,45 @@ Use `0 as ptr[T]` for null. Comparing pointers of the same type with `==` or `!=
 
 The signed forms `mem.read_intN` and `mem.write_intN` use 8, 16, 32 or 64 bits. The floating forms `mem.read_floatN` and `mem.write_floatN` use 32 or 64 bits. Prefix either form with `volatile_` for a volatile access. A floating read interprets the stored bits in the target's floating-point representation.
 
+## Ports And Processor Registers
+
+Select the target with `aura check --freestanding --target <name>` or
+`aura build --freestanding --target <name>`. The package needs
+`allow_ffi = true`. The processor enforces its privilege rules at run time.
+
+On x86-64, write one byte to a serial port's transmit register like this:
+
+```aura fragment
+import mem
+
+def put(byte: uint8) -> None:
+    mem.out_uint8(0x3f8, byte)
+```
+
+| x86-64 operation | Signature |
+| --- | --- |
+| Read an I/O port | `in_uintN(port: uint16) -> uintN`, for N = 8, 16 or 32 |
+| Write an I/O port | `out_uintN(port: uint16, value: uintN) -> None`, for N = 8, 16 or 32 |
+| Read a model-specific register | `read_msr(index: uint32) -> uint64` |
+| Write a model-specific register | `write_msr(index: uint32, value: uint64) -> None` |
+
+Named registers have a `read_<name>() -> uint64` function. The registers
+in the last column also have `write_<name>(value: uint64) -> None`.
+For example, use `mem.read_mhartid()` on RISC-V or
+`mem.write_vbar_el1(address)` on AArch64.
+
+| Target | Read only in Aura | Read and write |
+| --- | --- | --- |
+| x86-64 | | `cr0`, `cr2`, `cr3`, `cr4`, `cr8` |
+| AArch64 | `midr_el1`, `mpidr_el1`, `currentel`, `cntpct_el0`, `cntfrq_el0` | `sctlr_el1`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `mair_el1`, `vbar_el1`, `esr_el1`, `far_el1`, `elr_el1`, `spsr_el1`, `cntp_ctl_el0`, `cntp_cval_el0` |
+| RISC-V | `mhartid`, `misa`, `cycle`, `time` | `mstatus`, `mie`, `mip`, `mtvec`, `mscratch`, `mepc`, `mcause`, `mtval`, `medeleg`, `mideleg`, `sstatus`, `sie`, `sip`, `stvec`, `sscratch`, `sepc`, `scause`, `stval`, `satp` |
+
+All three targets provide `mem.enable_interrupts()`,
+`mem.disable_interrupts()` and `mem.halt()`, each returning `None`.
+The first two control x86 IF, AArch64's IRQ mask or RISC-V's machine-mode
+interrupt-enable bit. The last emits `hlt` on x86-64 or `wfi` on the other
+targets. Execution can resume after that instruction.
+
 ## A Spin Lock
 
 ```aura fragment
@@ -20513,7 +20723,7 @@ def release(lock: uint64) -> None:
 
 ## Hosted Programs
 
-The module works under `aura run` and in an ordinary `aura build`, with
+The raw-address API works under `aura run` and in an ordinary `aura build`, with
 the same results. An address there comes from C:
 
 ```aura fragment
@@ -20531,8 +20741,7 @@ def main() -> None:
 
 ## Current Limits
 
-- No inline assembly and no port I/O instructions. On x86-64, reach I/O
-  ports through an `extern "C"` function written in assembly.
+- Port numbers are 16 bits. The largest single port transfer is 32 bits.
 
 ## Source: docs/manual/names-and-scopes.md
 
@@ -30407,6 +30616,18 @@ trusts: a wrong proof would turn a trap into an out-of-bounds read, a
 wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+An assembly template can change registers and memory outside the verifier's
+model. When an entry file or an imported module contains `asm` or
+`module_asm`, verification reports `AU4035` at the assembly. The
+`pure` option is a promise to the optimizer and supplies no proof of the
+template's result. A freestanding build with `--remove-proved-checks`
+keeps the runtime checks when its program contains assembly. Put the logic
+you want to prove in a module you can verify on its own.
+
+Use `aura verify --freestanding --target <name> file.au` to check a
+freestanding function with a placement or inlining attribute. Its section,
+alignment and inlining policy provide no assumptions about its values.
 
 A contract on an `extern "C"` function is the other boundary a proof relies on
 without reading its body. The verifier cannot read C, so it proves each
@@ -62779,17 +63000,37 @@ hook reporting the overflow, with the file and line it happened on, from a
 machine that has no operating system at all. Run it with `aarch64` and the
 output is the same.
 
-## What is missing
+## Returning from an interrupt
 
-This is the first step toward systems work in Aura, and it is honest to
-say where it stops. Freestanding code can keep inline values in module
-storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. To address the
-second sample, use `mem.address_of(samples[1])`. The verifier leaves memory
-accesses through raw pointers outside its proofs. Strings and growable
-collections require an allocator, and startup code and x86 port I/O use
-assembly. The
-[Freestanding Builds](/manual/freestanding) and
-[Memory Module](/manual/mem) pages have the exact rules.
+Run `examples/freestanding/kernel/run.sh x86_64`. The board starts in
+long mode and gives Aura addresses for its interrupt table and two event
+bytes. Aura fills the gates, loads the table, then executes `asm("int3")`.
+The processor switches to the breakpoint handler.
+
+```aura fragment
+@machine.interrupt("x86_64")
+export "C" def breakpoint_handler() -> None:
+    serial_text("breakpoint\n")
+    mem.volatile_write_uint8(board_events(), 1)
+```
+
+The generated entry saves the interrupted registers. When the Aura body
+returns, the entry restores them and executes `iretq`. Back in the kernel,
+an assertion checks the byte the handler wrote. The kernel then enables the
+timer. Its handler masks the timer line, acknowledges the interrupt and
+records the second event. Seeing both bytes tells the kernel that it can
+print `ok` and write to the QEMU exit port. The test checks both the serial
+transcript and exit status 33.
+
+The kernel uses `--kernel` throughout so that interrupt entry can use the
+stack below the interrupted stack pointer. The board keeps persistent
+storage in C and accesses it through `mem`. Verification stops at the
+assembly and cannot reason about the contents of raw memory. The
+freestanding profile has no allocator. [Freestanding Builds](/manual/freestanding)
+
+In a freestanding program, fixed arrays can also live in mutable module
+storage, as in `mut samples: fixed[uint16, 2] = [40, 0]`. Use
+`mem.address_of(samples[1])` to get a pointer to the second element.
 
 ## Source: docs/book/ch19-00-final-project.md
 

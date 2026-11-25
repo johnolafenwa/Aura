@@ -237,6 +237,77 @@ test("navigation in a discarded suite prefers its own declarations and avoids am
   assert.ok(completionsForDocument(text, 0, 0).some((item) => item.name === "const"));
 });
 
+test("assembly templates stay opaque to recovery symbols, navigation and completion", () => {
+  const text = [
+    'module_asm("""',
+    'def fictitious():',
+    'call real',
+    '""")',
+    'def real() -> None:',
+    '    asm("call real")'
+  ].join("\n");
+  assert.deepEqual(documentSymbols(text).map(s => s.name), ["real"]);
+  for (const [line, character] of [[2, 6], [5, 15]]) {
+    assert.equal(hoverForPosition(text, line, character), null);
+    assert.equal(definitionForPosition(text, line, character), null);
+    assert.deepEqual(completionsForDocument(text, line, character), []);
+  }
+});
+
+test("contextual machine names offer hover and completion only in their syntax slots", () => {
+  const source = [
+    '@machine.interrupt("x86_64")',
+    'export "C" def irq() -> None:',
+    '    asm("nop",',
+    '        input("reg", helper()),',
+    '        options("preserves_flags"))',
+    '    x = ordinary(input())',
+    '    # asm("call helper")',
+    'def helper() -> uint64:',
+    '    return 1'
+  ].join("\n");
+  const at = (line, word) => source.split("\n")[line].indexOf(word) + 1;
+  assert.match(hoverForPosition(source, 0, at(0, "interrupt")).value, /interrupt/i);
+  assert.match(hoverForPosition(source, 2, at(2, "asm")).value, /assembly/i);
+  assert.match(hoverForPosition(source, 3, at(3, "input")).value, /operand/i);
+  assert.equal(hoverForPosition(source, 5, at(5, "input")), null);
+  assert.equal(definitionForPosition(source, 3, at(3, "helper")).line, 7);
+  assert.deepEqual(completionsForDocument(source, 3, 8).map(item => item.name).sort(),
+    ["clobber", "input", "options", "output"]);
+  assert.deepEqual(completionsForDocument("@machine.", 0, 9, ".").map(item => item.name).sort(),
+    ["align", "always_inline", "interrupt", "link_name", "naked", "noinline", "section", "used"]);
+});
+
+test("an unfinished multiline template and CRLF preserve editor coordinates", () => {
+  const lines = [
+    '# module_asm("""',
+    'class Kernel:',
+    '    asm(',
+    "        r'Kernel',",
+    '        input("reg", Kernel))',
+    "module_asm('''",
+    "😀 Kernel",
+    "def hidden()"
+  ];
+  const text = lines.join("\r\n");
+  assert.deepEqual(documentSymbols(text).map(s => s.name), ["Kernel"]);
+  assert.deepEqual(completionsForDocument(text, 6, 4), []);
+  assert.equal(hoverForPosition(text, 3, 13), null);
+  assert.equal(definitionForPosition(text, 4, 22).line, 1);
+  assert.deepEqual(hoverForPosition(text, 4, 10).range, {
+    start: {line: 4, character: 8}, end: {line: 4, character: 13}
+  });
+});
+
+test("typing at the end of an unfinished assembly string suppresses suggestions", () => {
+  for (const source of ['    asm("mov', "module_asm('''\n", "    asm('mov\\"]) {
+    const lines = source.split("\n");
+    assert.deepEqual(completionsForDocument(source, lines.length - 1, lines.at(-1).length), []);
+  }
+  const complete = '    asm("ret")';
+  assert.ok(completionsForDocument(complete, 0, complete.length).length > 0);
+});
+
 test("recovery navigates C layout and public module storage declarations", () => {
   const lines = [
     'public extern "C" packed align(8) class Header:',
