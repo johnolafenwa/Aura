@@ -2173,7 +2173,17 @@ impl<'a> NativeCodegen<'a> {
             builder.frame_branch(deferred, push, skip);
             builder.switch_to_block(push);
             builder.seal_block(push);
-            emit_frame_push(builder, &runtime_refs, descriptor);
+            // A function on a call cycle also checks the stack and counts
+            // the call as its entry does (see `define_cycle_frame_entry`).
+            match self.cycle_frame_entry {
+                Some(entry) if on_cycle => {
+                    let entry = builder.import_function(entry);
+                    builder.call(entry, &[descriptor]);
+                }
+                _ => {
+                    emit_frame_push(builder, &runtime_refs, descriptor);
+                }
+            }
             let one = builder.iconst(types::I64, 1);
             builder.def_var(framed, one);
             builder.jump(start, &[]);
@@ -3238,12 +3248,25 @@ impl<'a> NativeCodegen<'a> {
         compiler.compile_reachable_blocks(function, &return_ty)?;
         // A function on a call cycle pushes its record where a way first
         // calls out, warm or not.
-        if compiler.deferred_frame.is_some()
-            && !on_cycle
-            && compiler
-                .builder
-                .calls_when_warm(&frame_calls(&compiler.runtime))
-        {
+        // A function on a call cycle defers its record past the calls of
+        // its own code and the runtime's reads of boxes generated code
+        // could not read in place. It pushes the record on entry when a
+        // warm way calls the runtime for anything else, which pays for the
+        // record on that way anyway.
+        let frame_free = frame_calls(&compiler.runtime);
+        let warm_calls = if on_cycle {
+            let mut runtime = Vec::new();
+            compiler.runtime.map(|callee| runtime.push(*callee));
+            let fallbacks = layout_fallbacks(&compiler.runtime);
+            compiler.builder.calls_when_warm_where(&|callee| {
+                runtime.contains(&callee)
+                    && !frame_free.contains(&callee)
+                    && !fallbacks.contains(&callee)
+            })
+        } else {
+            compiler.builder.calls_when_warm(&frame_free)
+        };
+        if compiler.deferred_frame.is_some() && warm_calls {
             compiler.builder.settle_frame();
         }
 
@@ -22131,6 +22154,28 @@ fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<Fu
 /// the stack's flags ask for the runtime or no call is above its floor.
 /// Then `aura_direct_exit_call` does the whole pop.
 /// The calls that push, find, and pop frame records, which need none.
+/// The runtime's reads of a variant or list box that generated code reads
+/// in place when the box is in its layout, and its releases.
+fn layout_fallbacks(runtime: &RuntimeTable<FuncRef>) -> Vec<FuncRef> {
+    [
+        RuntimeFn::VariantMatches,
+        RuntimeFn::VariantPayload,
+        RuntimeFn::VariantPayloadI64,
+        RuntimeFn::VariantPayloadInt64,
+        RuntimeFn::VariantPayloadU64,
+        RuntimeFn::VariantPayloadBool,
+        RuntimeFn::VecLen,
+        RuntimeFn::VecIndex,
+        RuntimeFn::VecIndexScalar,
+        RuntimeFn::TagValueType,
+        RuntimeFn::ReleaseValue,
+        RuntimeFn::ReleaseLastOwnedValue,
+    ]
+    .into_iter()
+    .map(|function| runtime[function])
+    .collect()
+}
+
 fn frame_calls(runtime: &RuntimeTable<FuncRef>) -> [FuncRef; 3] {
     [
         runtime[RuntimeFn::FrameStack],

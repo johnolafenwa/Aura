@@ -1,7 +1,9 @@
 # Payload reads right after a match of their variant, or after another read
 # of the same local, take the check those made; floor division and modulo
 # by negative numbers; a `str` handed in that is turned into bytes; and a
-# loop that keeps the lists another loop proved long enough.
+# loop that keeps the lists another loop proved long enough. A function on
+# a call cycle whose leaves look up a map pushes its frame record on entry,
+# and a failed lookup still names every caller.
 import control
 
 
@@ -31,6 +33,12 @@ def evaluate(node: Expr, cells: list[int64]) -> int64:
             if op == 43:
                 return a + b
             return a * b
+
+
+def total_of(names: list[str], at: int64, env: dict[str, int64]) -> int64:
+    if at == names.len():
+        return 0
+    return env[names[at]] + total_of(names, at + 1, env)
 
 
 def depth(levels: int64) -> int64:
@@ -117,3 +125,11 @@ def main() -> None:
                 print(first)
             case Err(trap):
                 print(trap.message)
+    env = {"a": 1, "b": 20, "c": 300}
+    print(total_of(["a", "b", "c", "b"], 0, env))
+    match control.recover(total_of, ["a", "z"], 0, env):
+        case Ok(value):
+            print(value)
+        case Err(trap):
+            print(trap.message)
+            print(str(trap.frames))

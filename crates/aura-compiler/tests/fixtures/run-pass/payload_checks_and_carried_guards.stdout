@@ -12,3 +12,6 @@ list index `4` is out of bounds for length `4`
 5.0 4.0 2.0 -1.0 0.0
 1.5
 list index `3` is out of bounds for length `3`
+341
+dict key `z` was not present
+[total_of at 38:1, total_of at 38:1]
