@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- Packages: a package fetched from git can depend only on paths inside its
+  own checkout and on remote git sources. A locked git `rev` must be a hex
+  commit id whatever its selector. Git runs in the checkout or the cache
+  directory, ignores `GIT_DIR` and the repository aura was started in, and
+  does not recurse into submodules. An `[ffi] library_paths` entry may not
+  contain `:` or `$`, and `aura build` refuses to record such a run path.
+- `aura verify` uses its proof cache only when the directory belongs to the
+  current user and no other user can write to it, and trusts only entries
+  signed with the cache's private secret. Entries from earlier versions are
+  solved again once.
 - Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
   `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
   the random tensors on the GPU. They ran on the CPU before. Tensors

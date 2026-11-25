@@ -73,7 +73,7 @@ libraries = ["openblas"]
 | Key | Meaning |
 | --- | --- |
 | `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
-| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. No entry may contain `:` or `$`, which a run path reads as a separator or a token. A Windows drive letter is the exception. |
 | `frameworks` | macOS frameworks. Other hosts ignore them. |
 
 `[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that

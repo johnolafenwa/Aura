@@ -391,6 +391,12 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+On Linux and macOS the cache directory must belong to the current user, and
+no other user may be able to write to it. Otherwise `aura verify` solves every check and
+writes nothing. Each entry is signed with a secret kept in the cache
+directory, so an entry that `aura verify` did not write there is solved
+again.
+
 
 In VS Code, the Aura extension runs `aura verify` each time an Aura file
 opens or is saved. Each check it cannot prove shows as a diagnostic at the

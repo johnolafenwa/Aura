@@ -149,6 +149,8 @@ rules:
 - at most 1,024 direct dependencies per package
 - at most 4,096 packages in one resolved graph
 - every package has a readable `src/` directory and a valid package manifest
+- a package fetched from git, and every path dependency it reaches, depends
+  only on paths inside its own checkout and on remote git sources
 
 Two different paths cannot claim the same package name. The graph limits are
 observable Aura 0.17 limits. Raising them requires matching reference and
@@ -183,7 +185,8 @@ has nothing to update and is rejected.
 
 - Path entries record a path relative to the lockfile root.
 - Git entries record the normalized source, the exact resolved revision, and
-  the original tag or branch selector where there is one.
+  the original tag or branch selector where there is one. The revision is
+  always a hex commit id of 7 to 64 digits, whatever the selector.
 
 A conceptual example:
 
@@ -272,7 +275,9 @@ in a shared temporary directory, where another local user could plant one.
 - Cached entries are validated against their recorded revision.
 - Aura refuses symlinked cache paths, symlinked manifests, and symlinked
   content in a git checkout.
-- Clones disable symlink materialization.
+- Clones disable symlink materialization and submodule recursion.
+- Git runs in the checkout it works on, or in the cache directory, and does
+  not read the repository Aura was started in.
 - When placements race, Aura uses an existing checkout only if it validates to
   the same revision.
 
