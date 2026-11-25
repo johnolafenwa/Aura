@@ -731,6 +731,11 @@ struct NativeCodegen<'a> {
     /// check the machine stack, and count the task's call fuel unless
     /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
+    /// The module's entry of a call-cycle frame record (see
+    /// `define_cycle_frame_entry`), which a function on a call cycle runs
+    /// before its first call instead of on entry. `None` when the program
+    /// has no such function.
+    cycle_frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
     /// The functions that only read scalar fields of an instance they are
@@ -1037,6 +1042,20 @@ impl<'a> NativeCodegen<'a> {
         let mut runtime =
             RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
         let ownership = declare_ownership_fast_paths(&mut *object, &mut runtime)?;
+        let cycle_frame_entry = match recursive_functions.is_empty() {
+            true => None,
+            false => Some(try_or_string_error!(
+                object.declare_function(
+                    "aura_enter_cycle_frame",
+                    Linkage::Local,
+                    &cycle_frame_entry_signature(),
+                ),
+                "failed to declare the call-cycle frame entry: {}"
+            )),
+        };
+        if let Some(entry) = cycle_frame_entry {
+            object.mark_inline(entry);
+        }
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
@@ -1336,6 +1355,7 @@ impl<'a> NativeCodegen<'a> {
             reachable_blocks,
             safepoints_enabled,
             recursive_functions,
+            cycle_frame_entry,
             total_leaves,
             instance_keepers,
             layout_keepers,
@@ -1432,10 +1452,44 @@ impl<'a> NativeCodegen<'a> {
             self.define_cleanup_thunks(function)?;
         }
         self.define_ownership_fast_paths()?;
+        self.define_cycle_frame_entry()?;
         self.define_main_wrapper()
     }
 
     /// Defines the module's retain and release.
+    /// Defines the entry of a call-cycle frame record, which a function on
+    /// a call cycle runs where it first calls out, not on entry (see
+    /// `defers_frame`): the push, the call safepoint when the program has
+    /// tasks, and then the check of the machine stack. It is inlined into
+    /// its caller, so the stack check reads that caller's stack pointer,
+    /// the one its entry would have read.
+    fn define_cycle_frame_entry(&mut self) -> std::result::Result<(), String> {
+        let Some(entry) = self.cycle_frame_entry else {
+            return Ok(());
+        };
+        let safepoints = self.safepoints_enabled;
+        self.define_body(
+            entry,
+            &cycle_frame_entry_signature(),
+            "the call-cycle frame entry",
+            |codegen, builder| {
+                let block = builder.create_block();
+                builder.append_block_params_for_function_params(block);
+                builder.switch_to_block(block);
+                builder.seal_block(block);
+                let descriptor = builder.block_params(block)[0];
+                let runtime_refs = codegen.runtime.map(|id| builder.import_function(*id));
+                emit_frame_push(builder, &runtime_refs, descriptor);
+                if safepoints {
+                    emit_call_safepoint(builder, &runtime_refs);
+                }
+                emit_stack_check(builder, &runtime_refs);
+                builder.return_(&[]);
+                Ok(())
+            },
+        )
+    }
+
     fn define_ownership_fast_paths(&mut self) -> std::result::Result<(), String> {
         let paths = self.ownership;
         let frame_stack = self.runtime[RuntimeFn::FrameStack];
@@ -1796,14 +1850,21 @@ impl<'a> NativeCodegen<'a> {
             || frameless_leaf(function, &self.classes)
             || (without_sinks && leaf_body(function, &self.classes))
             || calls_total_leaves;
-        // Any other function on no call cycle with no `mut` parameter,
-        // cleanup, or second frame pushes its record where it first calls
-        // out (see `defer_frame`), unless a way that is not cold does.
+        // Any other function with no `mut` parameter, cleanup, or second
+        // frame pushes its record where it first calls out (see
+        // `defer_frame`). One on no call cycle pushes it on entry after
+        // all when a way that is not cold calls out. One on a call cycle
+        // runs `aura_enter_cycle_frame` there instead, with the safepoint
+        // and stack check of its entry, so a call that makes no call of
+        // its own, such as the leaves of a recursive walk, leaves the
+        // frame stack alone.
+        let on_cycle = !checked_entry
+            && !calls_total_leaves
+            && self.recursive_functions.contains(&function.name);
         let defers_frame = !frameless
             && forwarding_frame.is_none()
             && function.name != "main"
             && !takes_mutable(function)
-            && !self.recursive_functions.contains(&function.name)
             && !function.blocks.iter().any(|block| {
                 block
                     .instructions
@@ -1824,10 +1885,7 @@ impl<'a> NativeCodegen<'a> {
         // the ordinary entry as a possible target of a callback.
         // A function that only calls total leaves is on no cycle, whatever
         // the conservative call graph says of the names in its body.
-        if !checked_entry
-            && !calls_total_leaves
-            && self.recursive_functions.contains(&function.name)
-        {
+        if on_cycle && !defers_frame {
             if self.safepoints_enabled {
                 emit_call_safepoint(builder, &runtime_refs);
             }
@@ -2127,12 +2185,11 @@ impl<'a> NativeCodegen<'a> {
             builder.switch_to_block(start);
             builder.seal_block(start);
             blocks.insert(function.entry.clone(), start);
-            builder.defer_frame(
-                framed,
-                descriptor,
-                runtime_refs[RuntimeFn::EnterCall],
-                &frame_calls(&runtime_refs),
-            );
+            let enter = match self.cycle_frame_entry {
+                Some(entry) if on_cycle => builder.import_function(entry),
+                _ => runtime_refs[RuntimeFn::EnterCall],
+            };
+            builder.defer_frame(framed, descriptor, enter, &frame_calls(&runtime_refs));
             framed
         });
         if function.receiver == Some(MirReceiverKind::BorrowMut) {
@@ -3172,7 +3229,10 @@ impl<'a> NativeCodegen<'a> {
             .unwrap_or_default();
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
+        // A function on a call cycle pushes its record where a way first
+        // calls out, warm or not.
         if compiler.deferred_frame.is_some()
+            && !on_cycle
             && compiler
                 .builder
                 .calls_when_warm(&frame_calls(&compiler.runtime))
@@ -21520,6 +21580,13 @@ fn emit_frame_push(
     builder.seal_block(done);
     builder.switch_to_block(done);
     (done, builder.block_params(done)[0])
+}
+
+/// The signature of `aura_enter_cycle_frame`: the frame descriptor.
+fn cycle_frame_entry_signature() -> Signature {
+    let mut signature = Signature::new(CallConv::C);
+    signature.params.push(types::I64);
+    signature
 }
 
 fn ownership_fast_path_signature(returns_value: bool) -> Signature {
