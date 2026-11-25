@@ -2445,3 +2445,34 @@ fn parameter_sentinel_is_rejected_as_tensor_operand() {
     let again = node_op(&param, 6, &[]).unwrap();
     assert_eq!(node(&again), node(&param));
 }
+
+#[test]
+fn backward_does_not_deadlock_on_host_fallback_or_deep_deferred_graphs() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        deferred(|| {
+            // Case 1: deferred `exp` whose backward pass hits a host-fallback cast.
+            let w64 = watch(&tensor(float64(&[0.5], &[1]), TensorDevice::Cpu));
+            let cast32 =
+                host_tensor_cast(vec![w64.clone(), int(ArrayDType::Float32 as i64)], None).unwrap();
+            let loss = host_tensor_unary(vec![cast32, int(2)], None).unwrap();
+            let grad = gradient(&loss, &w64).unwrap();
+            assert!((floats(&array(&grad))[0] - 0.5_f64.exp()).abs() < 1e-5);
+
+            // Case 2: deferred graph whose backward pass references `deep` and crosses MAX_PENDING_DEPTH.
+            let w32 = watch(&tensor(float32(&[1.0], &[1]), TensorDevice::Cpu));
+            let one = tensor(float32(&[1.0], &[1]), TensorDevice::Cpu);
+            let mut deep = w32.clone();
+            for _ in 0..4_500 {
+                deep = binary(&deep, &one, 2).unwrap();
+            }
+            let deep_exp = host_tensor_unary(vec![deep, int(2)], None).unwrap();
+            node_op(&deep_exp, 10, &[]).unwrap();
+            let deep_grad = node_op(&w32, 11, &[]).unwrap();
+            assert!((floats(&array(&deep_grad))[0] - 1.0_f64.exp()).abs() < 1e-4);
+        });
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(10))
+        .expect("backward/gradient completed without deadlocking");
+}

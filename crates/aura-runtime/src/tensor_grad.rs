@@ -447,15 +447,22 @@ fn unrecorded<T>(work: impl FnOnce() -> T) -> T {
 /// The gradients of `result` with respect to every watched tensor behind
 /// it. The first call computes them, and later calls take them.
 fn gradients(result: &TensorValue) -> Result<Vec<(TensorValue, TensorValue)>> {
+    if let Some(kept) = result
+        .0
+        .gradients
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    {
+        return Ok(kept);
+    }
+    let computed = unrecorded(|| backward(result))?;
     let mut kept = result
         .0
         .gradients
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if kept.is_none() {
-        *kept = Some(unrecorded(|| backward(result))?);
-    }
-    Ok(kept.clone().expect("the gradients were just computed"))
+    Ok(kept.get_or_insert(computed).clone())
 }
 
 /// Adds the gradient of `result` to the gradient kept on every watched
