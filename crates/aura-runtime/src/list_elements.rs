@@ -389,6 +389,19 @@ impl InstanceElements {
         (index < self.len()).then(|| Cow::Owned(self.decode(index)))
     }
 
+    /// Field `name` of element `index`, read where it lies: `None` when
+    /// the class has no such field, `Some(None)` when `index` is out of
+    /// range.
+    fn field(&self, index: usize, name: &str) -> Option<Option<Cow<'_, Value>>> {
+        let stride = self.stride();
+        let Some(element) = self.words.get(index * stride..(index + 1) * stride) else {
+            return self.layout.has_field(name).then_some(None);
+        };
+        // SAFETY: the words hold a live instance's bytes, which the
+        // borrow of `self` keeps.
+        unsafe { self.layout.element_field(element.as_ptr().cast(), name) }.map(Some)
+    }
+
     /// The words to write, copied first, with copies of their boxes, when
     /// another handle shares them.
     fn words_mut(&mut self) -> &mut Vec<u64> {
@@ -783,6 +796,17 @@ fn collect_form<T: Element>(values: &[Value]) -> Option<SharedVec<T>> {
 impl ListElements {
     pub fn new() -> Self {
         Self::Values(SharedVec::new())
+    }
+
+    /// Field `name` of element `index` of a list that keeps instances in
+    /// place, read without copying the element: `Some(None)` when `index`
+    /// is out of range. `None` for any other list, or a name the class
+    /// lacks.
+    pub fn instance_field(&self, index: usize, name: &str) -> Option<Option<Cow<'_, Value>>> {
+        match self {
+            Self::Instances(kept) => kept.field(index, name),
+            _ => None,
+        }
     }
 
     /// Moves a list that keeps instances in place to the `Value` form,

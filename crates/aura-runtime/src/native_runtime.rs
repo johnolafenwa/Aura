@@ -14893,7 +14893,32 @@ fn direct_element_walk<'a>(
     selectors: &mut DirectElementSelectors<'_>,
 ) -> std::result::Result<Cow<'a, Value>, DirectElementPathError> {
     let mut current = Cow::Borrowed(value);
-    for step in steps {
+    let mut steps = steps.iter().peekable();
+    while let Some(step) = steps.next() {
+        // A field of an instance a list keeps in place is read where it
+        // lies, without a copy of the whole element.
+        let borrowed = match &current {
+            Cow::Borrowed(value) => Some(*value),
+            Cow::Owned(_) => None,
+        };
+        if let (
+            Some(Value::Vec(vector)),
+            DirectElementPathStep::Index,
+            Some(DirectElementPathStep::Projection(name)),
+        ) = (borrowed, step, steps.peek())
+        {
+            if vector.elements.instance_field(0, name).is_some() {
+                let index = selectors.next()?;
+                let len = vector.elements.len();
+                let field = normalize_vec_index(index, len)
+                    .and_then(|normalized| vector.elements.instance_field(normalized, name))
+                    .flatten()
+                    .ok_or(DirectElementPathError::OutOfBounds { index, len })?;
+                steps.next();
+                current = field;
+                continue;
+            }
+        }
         current = match current {
             Cow::Borrowed(value) => direct_element_step(value, step, selectors)?,
             Cow::Owned(value) => {
@@ -15092,6 +15117,7 @@ fn promote_element_path(value: &mut Value, steps: &[DirectElementPathStep<'_>], 
             let converts = match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
                 ListElements::Boxes(_) => vector.elements.is_shared(),
+                ListElements::Instances(_) => true,
                 _ => return,
             };
             if converts {
@@ -15164,6 +15190,9 @@ fn path_promotes(value: &Value, steps: &[DirectElementPathStep<'_>], selectors: 
             };
             match &vector.elements {
                 ListElements::Values(values) => lends_element(&values[position]),
+                // An element a loan cannot read in place moves the list to
+                // boxes, which loans read.
+                ListElements::Instances(_) => true,
                 ListElements::Boxes(boxes) => {
                     vector.elements.is_shared()
                         || (!rest.is_empty()

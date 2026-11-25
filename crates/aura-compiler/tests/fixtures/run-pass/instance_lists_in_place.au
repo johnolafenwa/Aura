@@ -148,6 +148,13 @@ def main():
         case Err(trap):
             print(trap.message)
 
+    long = hits("abcdefghijklmnopqrstuvwxyz", 1)
+    shared = long.copy()
+    mut names: list[str] = []
+    for item in long:
+        names.append(item.text.clone())
+    print(f"{names.len()} {names[24]} {shared[3].text} {long[-1].end} {span_sum(long)}")
+
     mut empty: list[Hit] = []
     print(span_sum(empty))
     empty.append(Hit(text="e", start=1, end=2))

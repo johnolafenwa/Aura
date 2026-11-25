@@ -191,6 +191,34 @@ impl ClassLayout {
         }
     }
 
+    /// Whether the class has a field `name`.
+    pub fn has_field(&self, name: &str) -> bool {
+        self.field(name).is_some()
+    }
+
+    /// Field `name` of the instance whose block bytes lie at `ptr`:
+    /// borrowed from its box, or read out of the bytes. `None` when the
+    /// class has no such field, or the field is moved out.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` holds the bytes of a live block, which outlive the result.
+    pub unsafe fn element_field<'a>(&self, ptr: *const u8, name: &str) -> Option<Cow<'a, Value>> {
+        let field = self.field(name)?;
+        // SAFETY: the caller's contract; the field lies inside the bytes.
+        let address = unsafe { ptr.add(field.offset) }.cast_mut();
+        if self.is_box(field.layout) {
+            // SAFETY: the slot holds a box pointer.
+            return unsafe { field_box(address) }
+                .as_ref()
+                .map(|boxed| Cow::Borrowed(boxed.value()));
+        }
+        // SAFETY: the place holds a value of its layout.
+        Some(Cow::Owned(unsafe {
+            (self.ops.read)(self.table(), field.layout, address)
+        }))
+    }
+
     /// Writes an independent copy of the instance at `src` into the dead
     /// bytes at `dst`.
     ///

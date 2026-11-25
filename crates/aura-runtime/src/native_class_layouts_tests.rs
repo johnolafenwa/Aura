@@ -1088,6 +1088,43 @@ fn appended_instances_lie_in_the_list_and_read_as_instances() {
             format!("{:?}", ListElements::from(expected.clone()))
         );
         assert!(elements.value_refs().is_none());
+        // A field of an element reads where it lies.
+        assert_eq!(
+            elements
+                .instance_field(1, "name")
+                .map(|field| field.map(Cow::into_owned)),
+            Some(Some(text("b")))
+        );
+        assert_eq!(
+            elements
+                .instance_field(2, "count")
+                .map(|field| field.map(Cow::into_owned)),
+            Some(Some(int64(3)))
+        );
+        assert_eq!(elements.instance_field(3, "count"), Some(None));
+        assert_eq!(elements.instance_field(0, "missing"), None);
+        assert_eq!(
+            ListElements::from(expected.clone()).instance_field(0, "name"),
+            None
+        );
+        // So does an element path's field, and a whole element is a copy.
+        for (path, selector, want) in [
+            ("[i].name", -1i64, text("c")),
+            ("[i].count", 1, int64(2)),
+            ("[i]", 0, expected[0].clone()),
+        ] {
+            let loaded = aura_direct_element_path_load(
+                list,
+                path.as_ptr(),
+                path.len(),
+                [selector].as_ptr(),
+                1,
+                0,
+                0,
+            );
+            assert_eq!(unsafe { value_ref(loaded) }, want);
+            unsafe { aura_direct_release_value(loaded) };
+        }
         assert!(elements.capacity() >= 3);
         // The copy shares the list's storage.
         assert!(elements.is_shared());
@@ -1121,6 +1158,16 @@ fn appended_instances_lie_in_the_list_and_read_as_instances() {
         assert_eq!(std::mem::take(&mut moved).into_vec(), expected);
         unsafe { aura_direct_release_value(list) };
     });
+    // A field read past the end traps as an index past the end does.
+    let failure = runtime_failure(|| {
+        let meta = register_class_layout(descriptor("Lying", "Meta"), FIRST_TEST_ACCESS + 82)
+            .expect("the class is laid out");
+        let list = meta_list("Lying");
+        push_meta(list, cell_of(meta), "a", 1);
+        let path = "[i].count";
+        aura_direct_element_path_load(list, path.as_ptr(), path.len(), [3i64].as_ptr(), 1, 0, 0);
+    });
+    assert!(failure.contains("out of bounds"), "{failure}");
 }
 
 #[test]
