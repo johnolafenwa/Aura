@@ -1200,3 +1200,41 @@ fn union_drops_right_snapshots_with_excluded_owned_payloads() {
         .iter()
         .eq((0..24).map(record).collect::<Vec<_>>().iter()));
 }
+
+/// The `int64` fast paths of a large dict find what the general lookup
+/// finds: keys of other integer widths, keys after holes, and keys read in
+/// order, and a write through a shared handle leaves the other alone.
+#[test]
+fn int64_fast_paths_agree_with_value_lookups_on_large_dicts() {
+    let mut entries = DictEntries::new();
+    for key in 0..40i64 {
+        let stored = if key % 3 == 0 {
+            Value::Int(IntegerValue::from_u64(key as u64))
+        } else {
+            int(key)
+        };
+        entries.insert(stored, int(key * 10));
+    }
+    entries.remove_i64(7);
+    entries.remove_i64(8);
+    let shared = entries.clone();
+    for key in (-2..45i64).chain((0..40).rev()) {
+        let general = entries.position(&int(key));
+        assert_eq!(entries.position_i64(key), general, "position of {key}");
+        assert_eq!(
+            entries.value_of_i64(key),
+            entries.value_of(&int(key)),
+            "value of {key}"
+        );
+    }
+    assert_eq!(entries.insert_i64(9, int(-9)), Some(int(90)));
+    assert_eq!(entries.insert_i64(7, int(-7)), None);
+    assert_eq!(entries.insert_i64(3, int(-3)), Some(int(30)));
+    assert_eq!(entries.value_of_i64(3), Some(&int(-3)));
+    assert_eq!(entries.value_of_i64(7), Some(&int(-7)));
+    assert_eq!(entries.len(), 39);
+    // The handle taken before the writes still holds the old entries.
+    assert_eq!(shared.value_of_i64(9), Some(&int(90)));
+    assert_eq!(shared.value_of_i64(7), None);
+    assert_eq!(shared.len(), 38);
+}

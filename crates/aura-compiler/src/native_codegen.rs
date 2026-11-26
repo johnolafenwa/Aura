@@ -9653,6 +9653,9 @@ impl<'a> FunctionCompiler<'a> {
         type_args: &BTreeMap<String, Type>,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if let Some(value) = self.compile_box_call(callee, args, target)? {
+            return Ok(value);
+        }
         match callee {
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
@@ -11195,6 +11198,9 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         if let Some(value) = self.compile_memory_access(name, args)? {
+            return Ok(value);
+        }
+        if let Some(value) = self.compile_heap_call(name, args)? {
             return Ok(value);
         }
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
@@ -23370,9 +23376,13 @@ mod foreign;
 mod foreign_reads;
 #[path = "native_codegen_freestanding.rs"]
 mod freestanding;
+#[path = "native_codegen_freestanding_heap.rs"]
+mod freestanding_heap;
 #[cfg(test)]
 #[path = "native_codegen_freestanding_tests.rs"]
 mod freestanding_tests;
+#[path = "native_codegen_freestanding_values.rs"]
+mod freestanding_values;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

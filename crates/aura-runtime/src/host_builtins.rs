@@ -1036,6 +1036,84 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
     }
 }
 
+/// One allocation function of `mem` in a hosted program (ADR-0128): the
+/// process allocator stands where a freestanding program has its
+/// allocation hooks. The caller vouches for the addresses and sizes it
+/// passes back, as C code does for `free`.
+fn host_mem_heap(name: &str, args: Vec<Value>) -> Result<Value> {
+    use std::alloc::{alloc, dealloc, realloc, Layout};
+    let word = |index: usize| -> Result<u64> {
+        match args.get(index) {
+            Some(Value::Int(value)) => value
+                .as_i128()
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(|| mem_argument_error(name)),
+            _ => Err(mem_argument_error(name)),
+        }
+    };
+    let address = |pointer: *mut u8| {
+        IntegerValue::from_typed_unsigned(pointer as usize as u128, IntegerKind::Uint64)
+            .map(Value::Int)
+            .ok_or_else(|| mem_argument_error(name))
+    };
+    // A request for no bytes still gets an address of its own.
+    let layout = |size: u64, align: u64| {
+        let size = usize::try_from(size).ok()?.max(1);
+        Layout::from_size_align(size, usize::try_from(align).ok()?).ok()
+    };
+    match name {
+        "mem::alloc" => {
+            host_expect_arity(name, &args, 2)?;
+            match layout(word(0)?, word(1)?) {
+                // SAFETY: the layout has a size above zero.
+                Some(layout) => address(unsafe { alloc(layout) }),
+                None => address(std::ptr::null_mut()),
+            }
+        }
+        "mem::free" => {
+            host_expect_arity(name, &args, 3)?;
+            let block = word(0)? as usize as *mut u8;
+            if let (false, Some(layout)) = (block.is_null(), layout(word(1)?, word(2)?)) {
+                // SAFETY: the program states that `mem.alloc` or
+                // `mem.realloc` returned the address for this size and
+                // alignment and that nothing freed it since.
+                unsafe { dealloc(block, layout) };
+            }
+            Ok(Value::Unit)
+        }
+        "mem::realloc" => {
+            host_expect_arity(name, &args, 4)?;
+            let block = word(0)? as usize as *mut u8;
+            let (old_size, align, new_size) = (word(1)?, word(2)?, word(3)?);
+            let Some(new) = layout(new_size, align) else {
+                return address(std::ptr::null_mut());
+            };
+            if block.is_null() {
+                // SAFETY: the layout has a size above zero.
+                return address(unsafe { alloc(new) });
+            }
+            match layout(old_size, align) {
+                // SAFETY: the program states that the address holds a
+                // live block of `old_size` bytes at this alignment, and
+                // `new` checked the new size against the alignment.
+                Some(old) => address(unsafe { realloc(block, old, new.size()) }),
+                None => address(std::ptr::null_mut()),
+            }
+        }
+        // The operating system gives a hosted program its memory.
+        "mem::heap_add_region" => {
+            host_expect_arity(name, &args, 2)?;
+            word(0)?;
+            word(1)?;
+            Ok(Value::Unit)
+        }
+        _ => {
+            host_expect_arity(name, &args, 0)?;
+            address(std::ptr::null_mut())
+        }
+    }
+}
+
 fn mem_argument_error(name: &str) -> Diagnostic {
     Diagnostic::coded(
         "AU4001",
@@ -1081,6 +1159,24 @@ host_mem_functions! {
     host_mem_atomic_compare_exchange_uint32 => "mem::atomic_compare_exchange_uint32";
     host_mem_atomic_compare_exchange_uint64 => "mem::atomic_compare_exchange_uint64";
     host_mem_fence => "mem::fence";
+}
+
+macro_rules! host_mem_heap_functions {
+    ($($function:ident => $name:literal;)*) => {
+        $(
+            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+                host_mem_heap($name, args)
+            }
+        )*
+    };
+}
+
+host_mem_heap_functions! {
+    host_mem_alloc => "mem::alloc";
+    host_mem_free => "mem::free";
+    host_mem_realloc => "mem::realloc";
+    host_mem_heap_add_region => "mem::heap_add_region";
+    host_mem_heap_free_bytes => "mem::heap_free_bytes";
 }
 
 /// The owned-argument function for a host builtin, or `None` for a name the
@@ -1133,6 +1229,11 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "mem::atomic_compare_exchange_uint32" => host_mem_atomic_compare_exchange_uint32,
         "mem::atomic_compare_exchange_uint64" => host_mem_atomic_compare_exchange_uint64,
         "mem::fence" => host_mem_fence,
+        "mem::alloc" => host_mem_alloc,
+        "mem::free" => host_mem_free,
+        "mem::realloc" => host_mem_realloc,
+        "mem::heap_add_region" => host_mem_heap_add_region,
+        "mem::heap_free_bytes" => host_mem_heap_free_bytes,
         "math::ceil" => host_math_ceil,
         "math::trunc" => host_math_trunc,
         "math::pow" => host_math_pow,

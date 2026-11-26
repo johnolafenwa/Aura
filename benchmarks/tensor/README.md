@@ -44,6 +44,25 @@ bash benchmarks/tensor/run_workloads.sh small    # sizes that finish in seconds
 CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
 ```
 
+## Real Weights and a Real Text
+
+`gpt2.au` and `gpt2.py` run GPT-2 with the weights OpenAI released, the
+124M model. Each writes 20 tokens after a fixed prompt, one token at a
+time, and then names the next token of 8 rows of 256 tokens ten times.
+Both parts run in `float32` and again in `float16`. The two sides print
+the same tokens.
+
+`nanogpt.au` and `nanogpt.py` train a character model of the nanoGPT
+shape, 6 layers of 384 with 6 heads and a context of 256, for 200 steps
+of 64 rows of Tiny Shakespeare.
+
+```sh
+curl -L -o model.safetensors https://huggingface.co/openai-community/gpt2/resolve/main/model.safetensors
+curl -L -o input.txt https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
+bash benchmarks/tensor/run_models.sh model.safetensors input.txt          # the GPU sides
+bash benchmarks/tensor/run_models.sh model.safetensors input.txt small    # sizes that finish in seconds
+```
+
 ## Results
 
 ### Whole Programs, NVIDIA A40
@@ -71,13 +90,104 @@ layer norm and a softmax are one kernel each, at PyTorch's time for
 each, and the operands of a product start on the GPU while the program
 builds the rest of the step, which is worth about 23 ms of the row
 (`AURA_TENSOR_EARLY_DEPTH=0` turns it off). The products of an
-attention write its merged heads in place. What is left is three
-copies in each layer that put the heads of the queries, keys and
-values beside each other, which PyTorch's attention kernel reads in
-place, and that kernel itself, which is one pass where Aura runs two
-products and a softmax. The loss of `cnn_train`
+attention write its merged heads in place. Since 2026-11-24 the
+products also read the heads of the queries, keys and values in place,
+which removes three copies in each layer. That did not move the row:
+272 to 276 ms with it and 274 to 277 with
+`AURA_TENSOR_HEADS_IN_PLACE=0`, against 268 to 271 for PyTorch on the
+same day. What is left is PyTorch's attention kernel, which is one pass
+where Aura runs two products and a softmax. The loss of `cnn_train`
 differs in its fourth digit between runs on both sides: gradients that
 add into one element add in an order the GPU does not fix.
+
+The same programs on 2026-11-24, on another A40 with driver 595.112,
+CUDA 13.2 and PyTorch 2.8.0, with other tenants holding the processors
+(load average 24 to 41 on 96 cores). The range of four warm runs:
+
+| Program | Aura, CUDA device | PyTorch, CUDA |
+| --- | ---: | ---: |
+| `mlp_train`, 500 steps | 242 to 285 | 418 to 719 |
+| `mlp_infer`, 65,536 rows | 737 to 757 | 899 to 909 |
+| `kmeans`, 200,000 rows | 39 | 68 |
+| `conjugate_gradient`, 4,096 | 20 to 21 | 19 to 20 |
+| `transformer_train`, 4 layers of 256 | 314 to 356 | 192 to 227 |
+| `monte_carlo`, 10,000,000 paths | 3 to 4 | 21 |
+| `cnn_train`, 50 steps | 343 to 358 | 121 to 246 |
+| `gpt_infer`, 12 layers of 768 | 272 to 277 | 268 to 271 |
+
+The two training rows that were level on 2026-11-14 are behind here.
+Aura's times are the same as then and PyTorch's are lower. Both rows
+are bound by host time, which this machine's load changes from run to
+run, and the cause has not been looked into.
+
+### Real Weights and a Real Text, NVIDIA A40
+
+The same A40 and day, 2026-11-24. Milliseconds for the timed passes,
+the range of the warm runs of three.
+
+| Program | Aura, CUDA device | PyTorch, CUDA |
+| --- | ---: | ---: |
+| `gpt2_infer`, 8 rows of 256 tokens, 10 passes | 279 to 286 | 369 to 372 |
+| `gpt2_infer_float16`, the same in half precision | 100 to 101 | 126 to 128 |
+| `gpt2_generate`, 20 tokens | 184 to 276 | 93 to 108 |
+| `gpt2_generate_float16`, 20 tokens | 194 to 264 | 94 to 124 |
+| `nanogpt_train`, 200 steps | 22,371 to 22,970 | 18,431 to 18,698 |
+
+Both sides write the same 20 tokens, in `float32` and in `float16`, and
+name the same next tokens for the batch.
+
+- A batch through GPT-2 is 1.3 times faster in Aura, in both dtypes.
+  Half precision is 2.8 times faster than `float32` on this GPU.
+- Writing text one token at a time is about twice as slow in Aura.
+  Each pass is 12 layers over one short row, so it is bound by the cost
+  of each small piece of work, and every new length is an expression
+  Aura has not seen. On the first run of the program Aura compiles
+  kernels for each length, which took 20 to 27 seconds here. PyTorch
+  pays nothing like it.
+- Training the character model is 1.2 times slower in Aura. The final
+  losses differ, 2.48 against 2.04, because the two sides start from
+  different weights and draw different rows.
+
+A half product adds its terms in `float32`. With cuBLAS's own half
+product, which adds in half precision, GPT-2 named a different token
+from PyTorch on one row of the batch.
+
+### Whole Programs, Apple M2 Pro, Metal
+
+Apple M2 Pro with 16 GB, macOS 26.5, PyTorch 2.8 on MPS, 2026-11-24,
+on mains power. Milliseconds for the timed passes of a row, the range of
+four runs. One `mlp_train` run of 1,089 ms is left out of its range. A
+pass earlier the same day was about 10% faster on both sides.
+
+| Program | Aura, Metal device | PyTorch, MPS | Aura, CPU device | PyTorch, CPU |
+| --- | ---: | ---: | ---: | ---: |
+| `mlp_train`, 500 steps | 524 to 592 | 451 to 509 | 3,367 | 803 |
+| `mlp_infer`, 65,536 rows | 4,510 to 4,693 | 4,699 to 4,756 | 116,888 | 7,989 |
+| `kmeans`, 200,000 rows | 265 to 270 | 724 to 784 | 2,666 | 834 |
+| `conjugate_gradient`, 4,096 | 95 to 117 | 57 to 60 | 703 | 133 |
+| `transformer_train`, 4 layers of 256 | 1,067 to 1,212 | 942 to 958 | 47,194 | 2,567 |
+| `monte_carlo`, 10,000,000 paths | 729 to 770 | 124 to 134 | 3,340 | 1,956 |
+| `cnn_train`, 50 steps | 2,484 to 2,546 | 355 to 387 | 44,825 | 7,101 |
+| `gpt_infer`, 12 layers of 768 | 1,414 to 1,517 | 1,105 to 1,200 | 58,043 | 5,877 |
+
+What the numbers say:
+
+- Aura on Metal is ahead of PyTorch on MPS on `kmeans` by about 2.8
+  times and level on `mlp_infer`. It is 10 to 30% behind on
+  `mlp_train`, `transformer_train` and `gpt_infer`.
+- `cnn_train` is about 7 times behind. Aura builds a convolution from
+  an index select and a matrix product, and a training step is one
+  MPSGraph of 812 steps that runs in about 45 ms. PyTorch calls the
+  library's own convolution.
+- `monte_carlo` is about 6 times behind. Aura makes its normal floats
+  from a 64-bit hash, so a run on Metal gives the CPU device's floats.
+  The hash is integer arithmetic that MPSGraph runs as many separate
+  steps.
+- `conjugate_gradient` is about 1.7 times behind, and PyTorch on MPS
+  prints `nan` for its residual at this size.
+- Each Metal result equals the CPU device's to the last digits. `kmeans`
+  and `cnn_train` differ in the last digits between runs, because a float
+  `index_add` adds repeated indices in an order the GPU does not fix.
 
 ### Single Expressions
 

@@ -198,8 +198,8 @@ evaluation-order, diagnostic, and backend rules.
 
 ## Memory
 
-[Memory Module](/manual/mem) has the rules for alignment, ordering, and
-undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
+[Memory Module](/manual/mem) has the rules for alignment, ordering,
+allocation, and undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
 
 | API | Signature | Contract |
@@ -214,6 +214,11 @@ undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
 | `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
 | `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
 | `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
+| `mem.alloc` | `alloc(size: uint64, align: uint64) -> uint64` | The address of a new block, or 0 when the memory is not there. |
+| `mem.free` | `free(address: uint64, size: uint64, align: uint64) -> None` | Gives the block back. Takes the size and alignment it was made with. |
+| `mem.realloc` | `realloc(address: uint64, old_size: uint64, align: uint64, new_size: uint64) -> uint64` | The block at its new size with its bytes kept, or 0 with the block unchanged. |
+| `mem.heap_add_region` | `heap_add_region(start: uint64, size: uint64) -> None` | Gives a freestanding program's allocator a region of memory. Does nothing in a hosted program. |
+| `mem.heap_free_bytes` | `heap_free_bytes() -> uint64` | The bytes of a freestanding program's regions that no block holds. 0 in a hosted program. |
 
 ## Randomness
 
