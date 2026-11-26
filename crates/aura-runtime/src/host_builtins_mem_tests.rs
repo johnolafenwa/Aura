@@ -146,3 +146,67 @@ fn ordered_atomics_check_order_and_arguments_before_writing() {
     assert_eq!(word(cas(args, None)), 19);
     assert_eq!(cell, 23);
 }
+
+#[test]
+fn allocation_functions_use_the_process_allocator() {
+    let block = word(mem("alloc", &[24, 8]));
+    assert_ne!(block, 0);
+    assert_eq!(block % 8, 0);
+    unit(mem("write_uint64", &[block + 16, 77]));
+    let grown = word(mem("realloc", &[block, 24, 8, 4000]));
+    assert_ne!(grown, 0);
+    assert_eq!(word(mem("read_uint64", &[grown + 16])), 77);
+    unit(mem("free", &[grown, 4000, 8]));
+    // A request for no bytes gets an address of its own, at its alignment.
+    let empty = word(mem("alloc", &[0, 4096]));
+    assert_ne!(empty, 0);
+    assert_eq!(empty % 4096, 0);
+    unit(mem("free", &[empty, 0, 4096]));
+    // `realloc` of address 0 allocates.
+    let fresh = word(mem("realloc", &[0, 0, 16, 64]));
+    assert_ne!(fresh, 0);
+    unit(mem("free", &[fresh, 64, 16]));
+    // Freeing address 0 does nothing.
+    unit(mem("free", &[0, 8, 8]));
+}
+
+#[test]
+fn an_allocation_the_process_cannot_describe_gives_address_zero() {
+    // An alignment that is not a power of two, and a size past the
+    // largest a block may have.
+    assert_eq!(word(mem("alloc", &[8, 3])), 0);
+    assert_eq!(word(mem("alloc", &[u64::MAX, 8])), 0);
+    let block = word(mem("alloc", &[8, 8]));
+    assert_eq!(word(mem("realloc", &[block, 8, 3, 16])), 0);
+    assert_eq!(word(mem("realloc", &[block, 8, 8, u64::MAX])), 0);
+    assert_eq!(word(mem("realloc", &[block, u64::MAX, 8, 16])), 0);
+    // A size and alignment that describe no block free nothing.
+    unit(mem("free", &[block, 8, 3]));
+    unit(mem("free", &[block, 8, 8]));
+}
+
+#[test]
+fn the_region_functions_do_nothing_in_a_hosted_program() {
+    unit(mem("heap_add_region", &[4096, 4096]));
+    assert_eq!(word(mem("heap_free_bytes", &[])), 0);
+}
+
+#[test]
+fn allocation_functions_check_their_arguments() {
+    for (name, count) in [
+        ("alloc", 2),
+        ("free", 3),
+        ("realloc", 4),
+        ("heap_add_region", 2),
+        ("heap_free_bytes", 0),
+    ] {
+        let too_many = vec![8; count + 1];
+        assert!(mem(name, &too_many).is_err(), "{name}");
+        if count > 0 {
+            let args = (0..count).map(|_| Value::Bool(true)).collect();
+            let result =
+                host_builtin_function(&format!("mem::{name}")).expect("a mem builtin")(args, None);
+            assert_eq!(result.expect_err("a bool is no address").code, "AU4001");
+        }
+    }
+}

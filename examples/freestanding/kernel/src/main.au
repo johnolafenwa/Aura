@@ -32,6 +32,13 @@ else:
     extern "C" def console_address() -> uint64
 
 
+# The startup code names the memory the heap may use.
+extern "C" def heap_start() -> uint64
+
+
+extern "C" def heap_size() -> uint64
+
+
 # The scratch region holds a lock word and a counter.
 def lock_cell(scratch: uint64) -> uint64:
     return scratch + 8
@@ -114,6 +121,42 @@ def collatz_steps(start: uint64) -> uint64:
     return steps
 
 
+# The sum of the primes below `limit`. The primes found so far live in a
+# block on the heap, which doubles when it fills.
+def sum_primes(limit: uint64) -> uint64:
+    mut room: uint64 = 4
+    mut count: uint64 = 0
+    mut primes = mem.alloc(room * 8, 8)
+    assert primes != 0, "the heap has no memory"
+    mut candidate: uint64 = 2
+    while candidate < limit:
+        mut prime = true
+        mut index: uint64 = 0
+        while index < count:
+            known = mem.read_uint64(primes + index * 8)
+            if known * known > candidate:
+                break
+            if candidate % known == 0:
+                prime = false
+                break
+            index = index + 1
+        if prime:
+            if count == room:
+                primes = mem.realloc(primes, room * 8, 8, room * 16)
+                assert primes != 0, "the heap is full"
+                room = room * 2
+            mem.write_uint64(primes + count * 8, candidate)
+            count = count + 1
+        candidate = candidate + 1
+    mut total: uint64 = 0
+    mut at: uint64 = 0
+    while at < count:
+        total = total + mem.read_uint64(primes + at * 8)
+        at = at + 1
+    mem.free(primes, room * 8, 8)
+    return total
+
+
 def mean_radius(steps: int64) -> float64:
     mut x: float64 = 1.0
     mut y: float64 = 0.0
@@ -179,6 +222,12 @@ export "C" def kernel_main(scratch: uint64) -> None:
     sample = mem.address_of(samples[1])
     sample.write(samples[0] + 2)
     put_line(uart, 115, samples[1] as uint64)
+    # h: the sum of the primes below 1000, kept in a block on the heap
+    # that grows. f: the bytes still missing from the heap afterwards.
+    mem.heap_add_region(heap_start(), heap_size())
+    free = mem.heap_free_bytes()
+    put_line(uart, 104, sum_primes(1000))
+    put_line(uart, 102, free - mem.heap_free_bytes())
 
     # A failed check reaches `aura_trap`: 255 + 1 does not fit a uint8.
     mut small: uint8 = (mem.atomic_load_uint64(counter) + 155) as uint8

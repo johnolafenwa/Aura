@@ -1,12 +1,13 @@
 # A kernel with no operating system
 
 `src/main.au` is a freestanding Aura program. It prints over a serial
-port, takes a spin lock, and reports a failed check, on a machine with no
+port, takes a spin lock, keeps a growing block on a heap, and reports a
+failed check, on a machine with no
 operating system and no Aura runtime.
 
 | File | Purpose |
 | --- | --- |
-| `src/main.au` | The program: `kernel_main`, the `aura_trap` hook, serial output through the `mem` module |
+| `src/main.au` | The program: `kernel_main`, the `aura_trap` hook, serial output and a heap through the `mem` module |
 | `boards/riscv64.S`, `boards/riscv64.ld` | Startup code and memory layout for QEMU's `virt` RISC-V machine |
 | `boards/aarch64.S`, `boards/aarch64.ld` | The same for QEMU's `virt` AArch64 machine |
 | `src/x86_64.au` | Interrupt table, breakpoint and timer handlers, serial driver and QEMU exit |
@@ -31,7 +32,9 @@ c=111
 r=1000
 n=100
 s=42
-trap 1 main.au:185:13
+h=76127
+f=0
+trap 1 main.au:234:13
 ```
 
 - `p` is the number of primes below 1000 and `c` the Collatz steps from 27.
@@ -39,11 +42,16 @@ trap 1 main.au:185:13
 - `n` is a counter raised 100 times under a lock made of
   `mem.atomic_compare_exchange_uint32`.
 - `s` reads back the second sample after a typed pointer writes it in module storage.
+- `h` is the sum of the primes below 1000. They are kept in a block from
+  `mem.alloc` that `mem.realloc` doubles as it fills. `f` is the number of
+  bytes missing from the heap after `mem.free`.
 - The last line is the `aura_trap` hook reporting a `uint8` overflow the
   program makes on purpose: code 1, then the file, line, and column.
 
 The compiler selects the QEMU serial register from the target architecture
 and computes the decimal lookup table used by the serial output routine.
+The startup code names the megabyte after the stack as the heap's region,
+which the program hands to `mem.heap_add_region`.
 
 On the virt boards, startup sets the stack pointer, enables floating-point
 registers and supplies the board's power-off routine.

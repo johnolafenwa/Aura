@@ -64,21 +64,49 @@ object.
 
 ## What A Freestanding Program May Hold
 
-Scalar and aggregate values live in registers, stack frames or static storage. A fixed array stores its elements inline.
+Every value is one or more machine words. Three kinds of value also own
+blocks on a heap: text, lists, dictionaries, and an enum that holds
+itself. See [Text](#text), [Lists](#lists), [Dictionaries](#dictionaries), and
+[Enums That Hold Themselves](#enums-that-hold-themselves).
+Other values live in registers, stack frames or static storage, and a
+fixed array stores its elements inline.
+A program reaches other heap memory through addresses: see
+[The Heap](#the-heap).
+
+A tuple or an enum whose parts are all available types is available too.
+The compiler keeps it in machine words, as it keeps a class: a tuple is its
+elements, and an enum is the variant's number and room for each variant's
+payloads.
+
+```aura
+enum Reading:
+    Value(int64)
+    Missing
+
+def read(port: uint64) -> (Reading, uint64):
+    if port == 0:
+        return (Reading.Missing, port)
+    return (Reading.Value(42), port + 1)
+```
 
 | Available | Not available |
 | --- | --- |
 | `bool`, `int8` to `int128`, `uint8` to `uint128`, `float32`, `float64` | `Duration` |
-| Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
-| `extern "C"` classes, `fixed[T, N]` arrays and typed raw pointers | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
-| `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
+| Classes whose fields are available types, with methods | Classes that hold a `set` |
+| `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
+| `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
+| `dict` with `int64`, `uint64`, or `str` keys and any value a list may hold, with literals, `d[key]`, `d[key] = value`, `key in d`, `len`, `is_empty`, `keys`, `values`, `items`, and `clear` | Other key types, `get`, `remove`, and the other `dict` methods |
+| `extern "C"` classes, `fixed[T, N]` arrays and typed raw pointers | `set`, `bytes`, `Array` |
+| Tuples of available types | Tuples that hold any other type |
+| Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
+| `T \| None` and other unions of available types, `str \| None` among them | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over a fixed array, a range or a generator call, `match` on a union | `try`, `with`, tasks, queues |
-| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
+| `if`, `while`, `for` over `range`, a fixed array, a list, or a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
+| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
 | Pure module constants, including computed read-only tables, and mutable module cells with static initializers | Module bindings that require runtime initialization |
-| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
+| `extern "C"` calls with scalar, `mut` scalar, struct, text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -98,6 +126,170 @@ The compiler can build a collection in a pure helper on the build machine, then 
 A module declaration such as `mut samples: fixed[uint16, 2] = [40, 0]` creates one writable cell shared by all exports that use it. A zero-initialized cell occupies `.bss`. Other initializers occupy `.data`. The startup code must clear `.bss` and, on boards that load writable data from ROM, copy the initial contents of `.data` to RAM before calling an export.
 
 Use `samples[0]` to read or assign one element and `len(samples)` for its constant length. An unconstrained index is checked before the access. Ordinary hosted packages share mutable data through immutable bindings to synchronization handles. [Names and scopes](/manual/names-and-scopes) · [Fixed arrays](/manual/types)
+
+## Text
+
+A freestanding program holds `str` values: in locals, parameters, results,
+classes, tuples, and enums.
+
+```aura
+def greeting(name: str, tries: int64) -> str:
+    mut text = "hello " + name
+    if tries > 1:
+        text = text + " again"
+    return text
+
+export "C" def greeting_length(tries: int64) -> int64:
+    text = greeting("board", tries)
+    if text.ends_with("again"):
+        return text.len() + 1
+    return text.len()
+```
+
+A `str` lives in a block from the allocation hooks: a reference count, the
+length in bytes, the bytes, and a zero byte after them. The compiler
+counts the references and frees the block with its last one. The
+operations are written in Aura and compiled into the object only when the
+program holds a `str`.
+
+Available: literals, `+`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `len`,
+`byte_len`, `starts_with`, `ends_with`, and `contains`. A literal used in
+an operation is read where it lies in the program's data and allocates
+nothing.
+
+An f-string may hold text, integers of every width up to 64 bits, and
+`bool`: `f"{name}: {count}"`. A float, or a part with a format such as
+`{count:>4}`, is not available yet.
+
+A foreign function takes a `str` value as it takes a literal: a `cstr`
+parameter gets the address of the bytes, which end in a zero byte, and a
+`str` parameter gets the address and the length.
+
+```aura fragment
+extern "C" def uart_write(text: str) -> None
+
+export "C" def report(tries: int64) -> None:
+    uart_write(greeting("board", tries))
+```
+
+```c
+void uart_write(const char *text, size_t length);
+```
+
+The program needs a heap, as in the next section.
+
+## Lists
+
+A freestanding program holds lists of integers, floats, `bool`, text,
+classes, tuples, enums, and other lists.
+
+```aura
+def squares(n: int64) -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(0, n):
+        out.append(i * i)
+    return out
+
+export "C" def sum_of_squares(n: int64) -> int64:
+    mut sum = 0
+    for value in squares(n):
+        sum = sum + value
+    return sum
+```
+
+A list is a header block from the allocation hooks, with a reference
+count, the length, and the capacity, and a buffer of 8-byte words. A
+number takes one word, and a class, a tuple, or an enum takes one for
+each of its words. The buffer doubles when it is full, through
+`aura_realloc`. The compiler frees both with the list's last reference,
+and first releases what each element owns: its text, its list, or its
+tree.
+
+Available: literals, `append`, `pop`, `insert`, `swap`, `reverse`,
+`reserve`, `clear`, `len`, `is_empty`, `items[i]`, `items[i] = value`,
+`view value = items[i]`, and `for value in items`. A negative index
+counts from the end. A write to an element releases the value it replaces. A list of
+`str | None` is available. A list of a union of words alone, such as
+`list[int64 | None]`, is not available yet. A list may be a `mut` parameter, a result, or a field of a
+class, a tuple, or an enum.
+
+An index outside the list is a failed assertion in
+`aura/freestanding_list.au`, trap code 3.
+
+## Dictionaries
+
+A freestanding program holds dictionaries whose keys are `int64`,
+`uint64`, or `str`. A value is anything a list may hold.
+
+```aura
+def count_words(words: list[str]) -> dict[str, int64]:
+    mut counts: dict[str, int64] = {}
+    for word in words:
+        if word in counts:
+            seen = counts[word]
+            counts[word.clone()] = seen + 1
+        else:
+            counts[word.clone()] = 1
+    return counts
+
+export "C" def repeats() -> int64:
+    counts = count_words(["to", "be", "or", "not", "to", "be"])
+    return counts["to"] + counts.len()
+```
+
+A dictionary is a header block from the allocation hooks, a buffer of
+entries in the order they were added, and an index of the entries by
+hash. Both buffers double when they are full. The compiler frees all
+three with the dictionary's last reference, after it releases what each
+key and each value owns.
+
+Available: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+`is_empty`, `keys`, `values`, `items`, `clear`, and `view value =
+d[key]`. `keys`, `values`, and `items` return lists, so `for (key, value)
+in d.items()` runs in the order the keys were added. `get` and `remove`
+are not available yet, because they return a `Lookup`.
+
+`d[key]` for a key the dictionary does not hold is a failed assertion in
+`aura/freestanding_dict.au`, trap code 3.
+
+## Enums That Hold Themselves
+
+An enum may hold itself through an `indirect` payload, which is how a
+program writes a list or a tree:
+
+```aura
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+def sum_of(chain: Chain) -> int64:
+    match chain:
+        case Chain.End:
+            return 0
+        case Chain.Link(value, rest):
+            return value + sum_of(rest)
+
+export "C" def sum_to(n: int64) -> int64:
+    mut chain = Chain.End
+    for i in range(0, n):
+        chain = Chain.Link(i, chain)
+    return sum_of(chain)
+```
+
+Each `indirect` payload lives in a block from the allocation hooks: a
+reference count, then the payload's words. The enum value itself stays in
+machine words and holds the block's address. The compiler counts the
+references, and the program frees a block when its last reference goes, so
+`sum_to` returns with every block freed.
+
+A class, a tuple, or a `Result` may hold such an enum. `match own` moves
+its payloads out, and `try` passes one on in an error.
+
+The program needs a heap: name a region with `mem.heap_add_region` first,
+or define the hooks. See [The Heap](#the-heap). A request the heap turns
+down is a failed assertion, trap code 3.
+
+A program with no such enum allocates nothing and needs no hook.
 
 ## Failed Checks
 
@@ -254,6 +446,90 @@ typed scalar module constants with literal initializers. For example,
 `MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary. A mutable cell keeps at least
 its natural alignment and remains writable.
 
+## The Heap
+
+`mem.alloc`, `mem.free`, and `mem.realloc` give a freestanding program
+blocks of memory. The program first names the memory the heap may use:
+
+```aura fragment
+import mem
+
+export "C" def kernel_main(heap_start: uint64, heap_size: uint64) -> None:
+    mem.heap_add_region(heap_start, heap_size)
+    table = mem.alloc(4096, 16)
+    if table == 0:
+        return
+    mem.write_uint64(table, 1)
+    mem.free(table, 4096, 16)
+```
+
+[Memory Module](/manual/mem#allocation) has the rules of the three
+functions. They call three C symbols, the allocation hooks:
+
+```c
+void *aura_alloc(size_t size, size_t align);
+void aura_free(void *address, size_t size, size_t align);
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size);
+```
+
+A program that calls one of the three functions and declares no hook gets
+Aura's allocator. The build compiles it into the object, which then
+defines these symbols:
+
+| Symbol | C signature | Purpose |
+| --- | --- | --- |
+| `aura_alloc`, `aura_free`, `aura_realloc` | Above | The hooks. |
+| `aura_heap_add_region` | `void aura_heap_add_region(uint64_t start, uint64_t size)` | What `mem.heap_add_region` calls. Startup code in C or assembly may call it too. |
+| `aura_heap_free_bytes` | `uint64_t aura_heap_free_bytes(void)` | What `mem.heap_free_bytes` calls. |
+
+- **Regions.** The heap starts empty, and every request fails until the
+  program adds a region. A program may add several, at any time. A region
+  is never given back. A region too small to hold a 32-byte block is
+  ignored.
+- **Cost.** A block takes its size rounded up to a multiple of 16, plus 8
+  bytes, and at least 32 bytes. The allocator adds 4 to 6 KB of code, by
+  target, to the object.
+- **State.** The allocator keeps its lists in 784 bytes of the object's
+  `.bss` section. Startup code must zero `.bss` before the first
+  allocation, as it must for C.
+- **Reuse.** A freed block joins the free blocks on either side of it, so
+  freeing everything leaves each region whole.
+- **Cores.** A spin lock guards every call, so several cores may
+  allocate. A call from an interrupt handler deadlocks if the handler
+  interrupted an allocation. Turn interrupts off around allocations, or
+  do not allocate in a handler.
+- **Checks.** A failed check inside the allocator, which a damaged heap
+  can cause, calls `aura_trap` with the file `aura/freestanding_heap.au`.
+
+### Your Own Allocator
+
+The five symbols are weak. A definition in C, assembly, or another object
+replaces the build's at link time. Define all three hooks or none: memory
+from one allocator must not reach the `free` of another.
+
+```c
+void *aura_alloc(size_t size, size_t align) { return kernel_alloc(size, align); }
+void aura_free(void *address, size_t size, size_t align) { kernel_free(address, size); }
+void *aura_realloc(void *address, size_t old_size, size_t align, size_t new_size) {
+    return kernel_resize(address, old_size, new_size, align);
+}
+```
+
+A hook written in Aura is an exported function:
+
+```aura fragment
+export "C" def aura_alloc(size: uint64, align: uint64) -> uint64:
+    return bump(size, align)
+```
+
+A program that declares any of the three hooks, as an `export "C" def` or
+an `extern "C" def`, gets no allocator from the build. The object then
+refers to each heap symbol the program calls and does not define.
+
+- A hook returns 0 when it has no memory. `mem.alloc` hands the 0 on.
+- `align` is a power of two, and `size` is at least 1.
+- `aura_free` gets the size and alignment the block was made with.
+
 ## Targets
 
 `--target` names the machine. Without it the build targets the
@@ -310,6 +586,7 @@ The object refers to these symbols and no others:
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
 | Soft-float helpers | An x86-64 kernel object needs software arithmetic or square root. |
+| `aura_alloc`, `aura_free`, `aura_realloc`, `aura_heap_add_region`, `aura_heap_free_bytes` | The program calls the `mem` function for one and declares an allocation hook itself. See [The Heap](#the-heap). |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
 `memset`, or `memcmp`. The object carries a small weak definition of each,
@@ -353,5 +630,14 @@ The freestanding benchmark builds six routines with Aura, C and Rust, including 
 
 ## Current Limits
 
-- No heap values. A freestanding program cannot allocate.
+- The heap values of the language are `str`, lists, dictionaries, and
+  enums that hold themselves: no `set` yet, and a dictionary has no
+  `get` and no `remove`. A program allocates other memory
+  through the [`mem` module](/manual/mem).
+- Text has no indexing or slices, an f-string takes no float and no
+  format spec.
+- A field that holds text, a list, or an enum that holds itself cannot
+  be assigned. Build a new value instead.
+- Releasing a long list calls itself once for each link, so a very long
+  list needs stack to match.
 - 32-bit targets are not supported.

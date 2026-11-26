@@ -13,6 +13,8 @@ c=111
 r=1000
 n=100
 s=42
+h=76127
+f=0
 trap 1 main.au:${line}:13
 TEXT
 for board in riscv64 aarch64; do

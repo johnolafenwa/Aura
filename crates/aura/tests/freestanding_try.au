@@ -1,0 +1,42 @@
+# `try` on results of words, with an error that is an enum. The tests
+# build `total` freestanding and compare it with what `main` prints.
+
+enum Fault:
+    Zero
+    Odd(int64)
+
+class Wide:
+    value: int64
+
+def halve(n: int64) -> Result[int64, Fault]:
+    if n == 0:
+        return Err(Fault.Zero)
+    if n % 2 == 1:
+        return Err(Fault.Odd(n))
+    return Ok(n // 2)
+
+def quarter(n: int64) -> Result[(int64, int64), Fault]:
+    half = try halve(n)
+    w = Wide(value=half)
+    again = try halve(w.value)
+    return Ok((half, again))
+
+def score(n: int64) -> int64:
+    match quarter(n):
+        case Ok(pair):
+            return pair[0] * 100 + pair[1]
+        case Err(fault):
+            match fault:
+                case Fault.Zero:
+                    return 0 - 1
+                case Fault.Odd(k):
+                    return 0 - k
+
+export "C" def total(n: int64) -> int64:
+    mut sum = 0
+    for i in range(0, n):
+        sum = sum + score(i)
+    return sum
+
+def main() -> None:
+    print(total(40))

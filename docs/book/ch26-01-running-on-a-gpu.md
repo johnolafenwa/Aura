@@ -182,6 +182,16 @@ The last row is a model of the shape of Chapter 25's: twelve blocks of
 width 768. Each step reads eight windows of 256 tokens and takes about 28
 ms. Our CPU took most of a second for one window of a few dozen tokens.
 
+The benchmarks also run GPT-2 itself, with the weights of Chapter 25.
+A batch of eight windows of 256 tokens, ten times over, takes 279 to 286
+ms in Aura and 369 to 372 in PyTorch. Converting the weights with
+`to_float16()` and running the model through `tensor.linear`,
+`tensor.layer_norm` and `tensor.scaled_dot_product_attention` brings
+that to 100 ms, against PyTorch's 126, and the model names the same
+tokens. Not every program is ahead. Writing text one token at a time is
+about twice as slow as PyTorch, and training a character model like
+Chapter 24's at a larger size is 1.2 times slower.
+
 The CPU device is a different story, and you have felt it in the last two
 chapters. It is the reference for what every operation means. It runs one
 operation at a time, and its matrix product is several times slower than

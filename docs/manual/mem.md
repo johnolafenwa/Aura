@@ -1,9 +1,10 @@
 # Memory Module
 
-The `mem` module reads and writes scalars at a raw address. It is for
-device registers, memory shared with C, and the lock-free cells a kernel or
-a driver needs. The raw-address functions work in hosted and
-[freestanding](/manual/freestanding) builds. A freestanding target also
+The `mem` module reads and writes scalars at a raw address, and allocates
+and frees blocks of memory. It is for device registers, memory shared with
+C, the lock-free cells a kernel or a driver needs, and data whose size is
+known only when the program runs. The raw-address functions work in hosted
+and [freestanding](/manual/freestanding) builds. A freestanding target also
 provides the machine operations below.
 Hosted and freestanding builds use the same target memory ordering rules.
 
@@ -39,6 +40,11 @@ functions](/manual/ffi) need.
 | `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN, order="seq_cst") -> uintN` | Adds `value`, wrapping, and returns the previous value. |
 | `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN, order="seq_cst", failure_order=…) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
 | `mem.fence` | `fence(order="seq_cst") -> None` | Orders every earlier memory access before every later one. |
+| `mem.alloc` | `alloc(size: uint64, align: uint64) -> uint64` | The address of a new block of `size` bytes at a multiple of `align`, or 0 when the memory is not there. |
+| `mem.free` | `free(address: uint64, size: uint64, align: uint64) -> None` | Gives the block back. |
+| `mem.realloc` | `realloc(address: uint64, old_size: uint64, align: uint64, new_size: uint64) -> uint64` | The address of the block at its new size, or 0 with the block unchanged. |
+| `mem.heap_add_region` | `heap_add_region(start: uint64, size: uint64) -> None` | Gives a freestanding program's allocator the `size` bytes at `start`. |
+| `mem.heap_free_bytes` | `heap_free_bytes() -> uint64` | The bytes of a freestanding program's regions that no block holds. |
 
 The `order` argument takes a string literal. Loads allow `"relaxed"`, `"acquire"` or `"seq_cst"`. Stores allow `"relaxed"`, `"release"` or `"seq_cst"`. Read-modify-write operations allow all five orders, including `"acq_rel"`. A fence accepts all except `"relaxed"`. A compare-exchange failure order must permit a load and must be no stronger than the success order. Omitting it drops release semantics from the success order.
 
@@ -131,6 +137,50 @@ The first two control x86 IF, AArch64's IRQ mask or RISC-V's machine-mode
 interrupt-enable bit. The last emits `hlt` on x86-64 or `wfi` on the other
 targets. Execution can resume after that instruction.
 
+## Allocation
+
+`mem.alloc` returns the address of a block, and `mem.free` gives it back:
+
+```aura fragment
+import mem
+
+def sum_of_squares(count: uint64) -> uint64:
+    squares = mem.alloc(count * 8, 8)
+    if squares == 0:
+        return 0
+    mut i: uint64 = 0
+    while i < count:
+        mem.write_uint64(squares + i * 8, i * i)
+        i = i + 1
+    mut total: uint64 = 0
+    i = 0
+    while i < count:
+        total = total + mem.read_uint64(squares + i * 8)
+        i = i + 1
+    mem.free(squares, count * 8, 8)
+    return total
+```
+
+- **Check for 0.** `alloc` and `realloc` return 0 when no block is large
+  enough. They never stop the program.
+- **`align` is a power of two.** Any other alignment returns 0.
+- **A new block's bytes are not zeroed.** Write before you read.
+- **`free` takes the size and alignment the block was made with.** For a
+  block `realloc` returned, the size is its `new_size`. Freeing address 0
+  does nothing. Freeing a block twice, or with another size or alignment,
+  has undefined behavior.
+- **`realloc` keeps the bytes.** The block's first bytes, up to the smaller
+  of the two sizes, are the same at the address it returns. That address
+  may be the old one. When it returns 0 the old block is still valid.
+  `realloc` of address 0 allocates.
+- **A size of 0 is a size of 1.** Every block has an address of its own.
+
+In a hosted program the blocks come from the process, as with C's
+`malloc`. In a freestanding program they come from the allocation hooks.
+[Freestanding Builds](/manual/freestanding#the-heap) describes the hooks,
+the allocator the build provides, and `heap_add_region`. In a hosted
+program `heap_add_region` does nothing and `heap_free_bytes` returns 0.
+
 ## A Spin Lock
 
 ```aura fragment
@@ -146,22 +196,20 @@ def release(lock: uint64) -> None:
 
 ## Hosted Programs
 
-The raw-address API works under `aura run` and in an ordinary `aura build`, with
-the same results. An address there comes from C:
+The module works under `aura run` and in an ordinary `aura build`, with
+the same results. An address there comes from `mem.alloc` or from C:
 
 ```aura fragment
 import mem
 
-extern "C" def malloc(size: uint64) -> uint64
-extern "C" def free(address: uint64) -> None
-
 def main() -> None:
-    block = malloc(16)
+    block = mem.alloc(16, 4)
     mem.write_uint32(block, 7)
     print(mem.read_uint32(block))
-    free(block)
+    mem.free(block, 16, 4)
 ```
 
 ## Current Limits
 
 - Port numbers are 16 bits. The largest single port transfer is 32 bits.
+- No way to copy or fill a run of bytes in one call. Use a loop.

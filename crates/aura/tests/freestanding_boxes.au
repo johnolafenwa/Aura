@@ -1,0 +1,159 @@
+enum Tree:
+    Leaf
+    Node(indirect Tree, int64, indirect Tree)
+
+enum Expr:
+    Number(int64)
+    Add(indirect Expr, indirect Expr)
+    Negate(indirect Expr)
+    Scale(int64, indirect Expr)
+
+enum Chain:
+    End
+    Link(int64, indirect Chain)
+
+enum Maybe[T]:
+    Nothing
+    Just(T)
+
+class Forest:
+    first: Tree
+    count: int64
+
+def insert(tree: own Tree, value: int64) -> Tree:
+    match own tree:
+        case Tree.Leaf:
+            return Tree.Node(Tree.Leaf, value, Tree.Leaf)
+        case Tree.Node(left, here, right):
+            if value < here:
+                return Tree.Node(insert(left, value), here, right)
+            return Tree.Node(left, here, insert(right, value))
+
+def size(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 0
+        case Tree.Node(left, _, right):
+            return size(left) + 1 + size(right)
+
+def depth(tree: Tree) -> int64:
+    match tree:
+        case Tree.Leaf:
+            return 0
+        case Tree.Node(left, _, right):
+            l = depth(left)
+            r = depth(right)
+            if l > r:
+                return l + 1
+            return r + 1
+
+def leftmost(tree: Tree) -> Result[int64, bool]:
+    match tree:
+        case Tree.Leaf:
+            return Err(false)
+        case Tree.Node(left, here, _):
+            match leftmost(left):
+                case Ok(found):
+                    return Ok(found)
+                case Err(_):
+                    return Ok(here)
+
+def evaluate(expr: Expr) -> int64:
+    match expr:
+        case Expr.Number(n):
+            return n
+        case Expr.Add(a, b):
+            return evaluate(a) + evaluate(b)
+        case Expr.Negate(inner):
+            return 0 - evaluate(inner)
+        case Expr.Scale(k, inner):
+            return k * evaluate(inner)
+
+def swap(expr: own Expr) -> Expr:
+    match own expr:
+        case Expr.Add(a, b):
+            return Expr.Add(b, a)
+        case _:
+            return Expr.Number(0)
+
+def trees(n: int64) -> int64:
+    mut tree = Tree.Leaf
+    mut seed = 7
+    for i in range(0, n):
+        seed = (seed * 31 + 11) % 1009
+        tree = insert(tree, seed)
+    forest = Forest(first=tree, count=n)
+    mut total = size(forest.first) * 1000 + depth(forest.first) + forest.count
+    match leftmost(forest.first):
+        case Ok(smallest):
+            total = total + smallest * 1000000
+        case Err(_):
+            total = total - 1
+    expr = Expr.Add(Expr.Number(n), Expr.Negate(Expr.Scale(3, Expr.Number(5))))
+    before = evaluate(expr)
+    swapped = swap(expr)
+    return total + before * 7 + evaluate(swapped)
+
+def sum_of(chain: Chain) -> int64:
+    match chain:
+        case Chain.End:
+            return 0
+        case Chain.Link(value, rest):
+            return value + sum_of(rest)
+
+def count_up(n: int64) -> Chain:
+    mut chain = Chain.End
+    for i in range(0, n):
+        chain = Chain.Link(i, chain)
+    return chain
+
+def grow(n: int64) -> Result[Chain, Chain]:
+    if n > 30:
+        return Err(count_up(n))
+    return Ok(count_up(n))
+
+def twice(n: int64) -> Result[(Chain, Chain), Chain]:
+    a = try grow(n)
+    b = try grow(n + 3)
+    return Ok((a, b))
+
+def score(n: int64) -> int64:
+    match own twice(n):
+        case Ok(both):
+            match own both:
+                case (a, b):
+                    return sum_of(a) * 100 + sum_of(b)
+        case Err(chain):
+            return 0 - sum_of(chain)
+
+def tail(chain: own Chain) -> Maybe[Chain]:
+    match own chain:
+        case Chain.End:
+            return Maybe.Nothing
+        case Chain.Link(_, rest):
+            return Maybe.Just(rest)
+
+def shared(n: int64) -> int64:
+    mut chain = count_up(n)
+    mut sum = 0
+    match chain:
+        case Chain.End:
+            sum = 1
+        case Chain.Link(value, rest):
+            sum = value + sum_of(rest) + sum_of(rest)
+    mut steps = 0
+    while steps < 3:
+        match own tail(chain):
+            case Maybe.Nothing:
+                chain = Chain.End
+            case Maybe.Just(rest):
+                sum = sum + sum_of(rest)
+                chain = rest
+        steps = steps + 1
+    return sum + sum_of(chain)
+
+export "C" def total(n: int64) -> int64:
+    return trees(n) + score(n) + score(n - 12) + score(n - 39) + shared(n)
+
+def main() -> None:
+    print(total(40))
