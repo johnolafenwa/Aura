@@ -554,6 +554,11 @@ struct DirectTaskRuntimeState {
     /// First trap or cancellation recorded while closing dropped generators
     /// inside a runtime boundary, for that boundary to propagate.
     generator_drop_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
+    /// The task's generators whose suspended bodies hold registered exits,
+    /// by creation order. Nothing resumes them once the task ends, so the
+    /// drain that ends it closes them first, newest first, as when their
+    /// exits shared the task's stack.
+    suspended_generators_with_exits: BTreeMap<u64, crate::runtime_value::WeakGeneratorValue>,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
     cleanup_draining: bool,
@@ -713,6 +718,7 @@ impl Default for DirectTaskRuntimeState {
             foreign_callback_cleanup_base: None,
             foreign_callback_failure: None,
             generator_drop_exit: None,
+            suspended_generators_with_exits: BTreeMap::new(),
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
             cleanup_draining: false,
@@ -5380,6 +5386,7 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         return false;
     }
     let _guard = DirectCleanupDrainGuard { key };
+    close_suspended_generators_with_exits(key);
     let previous_depth = with_direct_task_runtime_state_for_key(key, |state| {
         let previous = state.call_depth();
         state.frames_mut().set_depth(0);
@@ -5422,6 +5429,36 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         drop(take_direct_cleanup_registration(id));
     }
     true
+}
+
+/// Closes the task's suspended generators that hold registered exits, so
+/// each body runs its own exits once before the task's exits run. Inside a
+/// generator body or a foreign callback the task is not ending here: the
+/// body's failure or the callback's caller reaches the outer drain.
+fn close_suspended_generators_with_exits(key: u64) {
+    if crate::runtime_value::running_generator_depth() != 0 {
+        return;
+    }
+    loop {
+        let next = with_direct_task_runtime_state_for_key(key, |state| {
+            if state.foreign_callback_cleanup_base.is_some() {
+                return None;
+            }
+            state.suspended_generators_with_exits.pop_last()
+        });
+        let Some((_, generator)) = next else {
+            return;
+        };
+        let Some(generator) = generator.upgrade() else {
+            continue;
+        };
+        if let Err(diagnostic) = generator.close() {
+            // A trap already unwinding the task stays primary.
+            with_direct_task_runtime_state_for_key(key, |state| {
+                state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+            });
+        }
+    }
 }
 
 /// Runs one exit while the cleanups drain. An exit that traps unwinds back
@@ -17691,12 +17728,20 @@ struct DirectGeneratorFrames {
     boundary_depth: usize,
     drop_trap_exit: Option<crate::runtime_value::PendingGeneratorDropExit>,
     body_box: Option<Arc<AtomicUsize>>,
+    /// Creation order, and a handle to the generator these frames belong
+    /// to, set once the generator exists.
+    sequence: u64,
+    generator: Arc<std::sync::OnceLock<crate::runtime_value::WeakGeneratorValue>>,
 }
+
+static NEXT_DIRECT_GENERATOR_SEQUENCE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 impl DirectGeneratorFrames {
     fn with_body_box(body_box: Arc<AtomicUsize>) -> Self {
         let mut frames = Self::default();
         frames.body_box = Some(body_box);
+        frames.sequence = NEXT_DIRECT_GENERATOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         frames
     }
 
@@ -17755,6 +17800,12 @@ impl Drop for DirectGeneratorFrames {
 
 impl GeneratorHooks for DirectGeneratorFrames {
     fn before_resume(&mut self) {
+        if self.generator.get().is_some() && !self.cleanup_stack.is_empty() {
+            let sequence = self.sequence;
+            with_direct_task_runtime_state(|state| {
+                state.suspended_generators_with_exits.remove(&sequence);
+            });
+        }
         self.swap_task_state();
         let Some(stack) = current_direct_frame_stack() else {
             return;
@@ -17773,6 +17824,17 @@ impl GeneratorHooks for DirectGeneratorFrames {
             self.saved = stack.take_entries_from(self.base);
         }
         self.swap_task_state();
+        if self.cleanup_stack.is_empty() {
+            return;
+        }
+        if let Some(generator) = self.generator.get() {
+            let (sequence, generator) = (self.sequence, generator.clone());
+            with_direct_task_runtime_state(|state| {
+                state
+                    .suspended_generators_with_exits
+                    .insert(sequence, generator);
+            });
+        }
     }
 }
 
@@ -17801,12 +17863,16 @@ fn direct_generator_start(
         }
         Ok(())
     };
-    Ok(Value::Generator(GeneratorValue::new(
+    let frames = DirectGeneratorFrames::with_body_box(body_box);
+    let handle = Arc::clone(&frames.generator);
+    let generator = GeneratorValue::new(
         run,
         DIRECT_GENERATOR_STACK_BYTES,
         false,
-        Some(Box::new(DirectGeneratorFrames::with_body_box(body_box))),
-    )))
+        Some(Box::new(frames)),
+    );
+    let _ = handle.set(generator.downgrade());
+    Ok(Value::Generator(generator))
 }
 
 fn direct_generator_yield(
@@ -23652,7 +23718,8 @@ fn recycle_recovered_state(mut state: Box<DirectTaskRuntimeState>) {
         && state.mutable_sinks.is_empty()
         && state.manager_exit_failures.is_empty()
         && state.rust_boundary_depth() == 0
-        && state.generator_drop_exit.is_none();
+        && state.generator_drop_exit.is_none()
+        && state.suspended_generators_with_exits.is_empty();
     if !clean {
         release_direct_task_runtime_state(state);
         return;
