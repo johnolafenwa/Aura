@@ -1,0 +1,12 @@
+def twice(a: float64) -> float64:
+    return a * 2.0
+
+def ratio(a: float64, b: float64) -> float64:
+    return twice(a) / twice(b)
+
+def outer(a: float64, b: float64) -> float64:
+    return ratio(a, b) + 1.0
+
+def main():
+    print(outer(1.0, 2.0))
+    print(outer(1.0, 2.0 - 2.0))

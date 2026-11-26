@@ -389,6 +389,111 @@ fn shared_vecs_copy_on_the_first_write() {
     assert_ne!(nan, nan.clone());
 }
 
+/// An element that counts its drops, and its clones as new elements.
+#[derive(Debug)]
+struct Counted(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Clone for Counted {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn shared_vecs_drop_their_elements_once_whichever_handle_goes_last() {
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let dropped = || drops.load(std::sync::atomic::Ordering::SeqCst);
+    let make = || SharedVec::from(vec![Counted(drops.clone()), Counted(drops.clone())]);
+
+    // A handle that was never cloned owns its storage alone.
+    let alone = make();
+    assert!(!alone.is_shared());
+    drop(alone);
+    assert_eq!(dropped(), 2);
+
+    // The original first, then the clone; and the other way around.
+    let (first, second) = (make(), make());
+    let (first_clone, second_clone) = (first.clone(), second.clone());
+    drop(first);
+    assert!(!first_clone.is_shared());
+    drop(second_clone);
+    assert!(!second.is_shared());
+    assert_eq!(dropped(), 2);
+    drop(first_clone);
+    drop(second);
+    assert_eq!(dropped(), 6);
+
+    // The last handle left writes the storage it has, with no copy.
+    let mut kept = make();
+    kept.reserve(4);
+    let other = kept.clone();
+    let storage = kept.as_ptr();
+    assert!(kept.unshared_mut().is_none());
+    drop(other);
+    assert!(kept.unshared_mut().is_some());
+    kept.push(Counted(drops.clone()));
+    assert_eq!(kept.len(), 3);
+    kept.truncate(2);
+    assert_eq!((kept.as_ptr(), dropped()), (storage, 7));
+    // It can be shared again, and a write to a shared handle copies.
+    let mut again = kept.clone();
+    assert!(kept.is_shared() && again.is_shared());
+    again.pop();
+    assert_eq!((kept.len(), again.len(), dropped()), (2, 1, 8));
+    assert!(!kept.is_shared() && !again.is_shared());
+    assert_ne!(kept.as_ptr(), again.as_ptr());
+
+    // Moving the elements out copies them only while they are shared.
+    let shared = kept.clone();
+    let copied = shared.into_vec();
+    assert_ne!(copied.as_ptr(), kept.as_ptr());
+    let storage = kept.as_ptr();
+    let moved = kept.into_vec();
+    assert_eq!(moved.as_ptr(), storage);
+    drop((copied, moved, again));
+    assert_eq!(dropped(), 13);
+    assert_eq!(
+        format!("{:?}", SharedVec::from(vec![1, 2])),
+        "SharedVec([1, 2])"
+    );
+}
+
+#[test]
+fn shared_vecs_are_cloned_and_dropped_from_several_threads_at_once() {
+    let drops = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    for _ in 0..200 {
+        // The threads clone one handle that has no count yet, as readers
+        // of a shared list do under its read lock.
+        let original = SharedVec::from(vec![Counted(drops.clone())]);
+        let original = &original;
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(move || {
+                    let mut copy = original.clone();
+                    assert_eq!(copy.len(), 1);
+                    let again = copy.clone();
+                    // A write to a shared handle leaves the others whole.
+                    copy.push(original[0].clone());
+                    assert_eq!((again.len(), copy.len()), (1, 2));
+                });
+            }
+        });
+        assert!(!original.is_shared());
+    }
+    // Each round drops the element, and each thread's copy of it and the
+    // one it appended.
+    assert_eq!(
+        drops.load(std::sync::atomic::Ordering::SeqCst),
+        200 * (1 + 4 * 2)
+    );
+}
+
 #[test]
 fn string_keys_hash_the_same_bare_and_inside_a_union() {
     let text = Value::String("ready".to_string().into());

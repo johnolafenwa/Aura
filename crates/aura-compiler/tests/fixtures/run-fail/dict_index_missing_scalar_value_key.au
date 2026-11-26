@@ -1,0 +1,4 @@
+def main():
+    values = {"present": 0.5}
+    print(values["present"])
+    print(values["missing"])

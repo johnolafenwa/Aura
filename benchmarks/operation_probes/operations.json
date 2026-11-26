@@ -178,5 +178,25 @@
     "count": 100000,
     "plan_step": "element method calls",
     "measures": "`tallies[i].bump(2)`, a `mut self` method call on an element of a list of a class of two integers"
+  },
+  "dict_index_str": {
+    "count": 100000,
+    "plan_step": "scalar dict index",
+    "measures": "`table[key]` on a `dict[str, int64]` of 1,000 keys, added to a total"
+  },
+  "result_call": {
+    "count": 100000,
+    "plan_step": "result words",
+    "measures": "one call of a function that returns a `Result[int64, int64]`, matched by the caller"
+  },
+  "record_swap": {
+    "count": 100000,
+    "plan_step": "list operations",
+    "measures": "`records.swap(i, i + 1)` on a list of a copy class of two integers"
+  },
+  "field_list_push": {
+    "count": 100000,
+    "plan_step": "list operations",
+    "measures": "appending one `int64` to a list field of a class instance and one to an element of its list of lists"
   }
 }

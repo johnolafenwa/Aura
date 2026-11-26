@@ -1,0 +1,84 @@
+# A `get` on a dict of int64 values that is only matched keeps the found
+# value as a word: no box is made for it.
+class Index:
+    slots: dict[str, int64]
+    codes: dict[int64, int64]
+
+    def slot(self, name: str) -> int64:
+        match self.slots.get(name):
+            case Lookup.Found(slot):
+                return slot
+            case Lookup.Missing:
+                return -1
+
+    def code(self, key: int64) -> int64:
+        match self.codes.get(key):
+            case Lookup.Found(code):
+                return code + 1
+            case Lookup.Missing:
+                return 0
+
+def count(words: list[str]) -> dict[str, int64]:
+    mut counts: dict[str, int64] = {}
+    for word in words:
+        match counts.get(word):
+            case Lookup.Found(seen):
+                counts[word.clone()] = seen + 1
+            case Lookup.Missing:
+                counts[word.clone()] = 1
+    return counts
+
+def literal(table: dict[str, int64]) -> str:
+    match table.get("zero"):
+        case Lookup.Found(value):
+            return f"zero is {value}"
+        case Lookup.Missing:
+            return "no zero"
+
+def present(table: dict[int64, int64], key: int64) -> bool:
+    match table.get(key):
+        case Lookup.Found(_):
+            return true
+        case Lookup.Missing:
+            return false
+
+def widened(table: dict[int64, int64], key: int64) -> int64 | None:
+    match table.get(key):
+        case Lookup.Found(value):
+            return value
+        case Lookup.Missing:
+            return None
+
+def owned(table: dict[int64, int64], key: int64) -> int64:
+    match own table.get(key):
+        case Lookup.Found(value):
+            return value
+        case Lookup.Missing:
+            return -7
+
+def nested(rows: list[dict[str, int64]], name: str) -> int64:
+    mut total = 0
+    for row in rows:
+        match row.get(name):
+            case Lookup.Found(value):
+                total += value
+            case Lookup.Missing:
+                total -= 1
+    return total
+
+def kept(table: dict[int64, int64], key: int64) -> Lookup[int64]:
+    return table.get(key)
+
+def main():
+    index = Index(slots={"a": 0, "b": 7}, codes={1: 10, -2: 0})
+    print(f"{index.slot("a")} {index.slot("b")} {index.slot("c")}")
+    print(f"{index.code(1)} {index.code(-2)} {index.code(3)}")
+    counts = count(["x", "y", "x", "x", "z", "y"])
+    print(f"{counts["x"]} {counts["y"]} {counts["z"]}")
+    print(literal({"zero": 0}))
+    print(literal({"one": 1}))
+    table = {5: 0, 6: -9223372036854775807, 7: 9223372036854775807}
+    for key in [4, 5, 6, 7]:
+        print(f"{key} {present(table, key)} {widened(table, key)} {owned(table, key)}")
+        print(kept(table, key))
+    print(nested([{"n": 1}, {"m": 2}, {"n": 40, "m": 3}], "n"))

@@ -1,0 +1,173 @@
+# Appends to a list held in a field, or in an element of a list of lists,
+# go in place while the list has room. Everything that then reaches the
+# list through its holder sees every element: prints, copies, comparisons,
+# sorts, pops, loops, another task, and a holder that is replaced or moved.
+copy class Entry:
+    dist: int64
+    node: int64
+
+
+class Book:
+    ids: list[int64]
+    flags: list[bool]
+    small: list[uint8]
+    weights: list[float64]
+    entries: list[Entry]
+    levels: list[list[int64]]
+    names: list[str]
+    count: int64
+
+    def add(mut self, id: int64):
+        self.ids.append(id)
+        self.flags.append(id % 2 == 0)
+        self.small.append((id % 200) as uint8)
+        self.weights.append((id as float64) * 0.5)
+        self.entries.append(Entry(dist=id * 10, node=id))
+        self.levels[id % 3].append(id)
+        self.count += 1
+
+    def total(self) -> int64:
+        mut sum = 0
+        for id in self.ids:
+            sum += id
+        for entry in self.entries:
+            sum += entry.dist
+        for level in self.levels:
+            for id in level:
+                sum += id
+        return sum
+
+
+class Shelf:
+    books: list[Book]
+    label: str
+
+
+def empty_book() -> Book:
+    return Book(
+        ids=[],
+        flags=[],
+        small=[],
+        weights=[],
+        entries=[],
+        levels=[list[int64](), list[int64](), list[int64]()],
+        names=[],
+        count=0,
+    )
+
+
+def sum_of(values: list[int64]) -> int64:
+    mut sum = 0
+    for value in values:
+        sum += value
+    return sum
+
+
+def grow(values: mut list[int64], n: int64):
+    for i in range(n):
+        values.append(i)
+
+
+def worker(book: Book) -> int64:
+    return book.total() + book.ids.len() + book.levels[1].len()
+
+
+def count_levels(levels: list[list[int64]]) -> int64:
+    mut sum = 0
+    for level in levels:
+        sum += level.len() * 1000 + sum_of(level)
+    return sum
+
+
+def main():
+    mut book = empty_book()
+    for id in range(1, 40):
+        book.add(id)
+    print(book.ids)
+    print(book.flags.len())
+    print(book.small[38])
+    print(book.weights[38])
+    print(book.entries[38])
+    print(book.levels)
+    print(f"{book.count} {book.total()} {book.ids.len()} {book.entries.len()}")
+
+    # A copy taken between appends keeps what it saw.
+    kept = book.ids.copy()
+    kept_levels = book.levels.copy()
+    book.add(40)
+    book.add(41)
+    print(f"{kept.len()} {book.ids.len()} {kept[38]} {book.ids[40]}")
+    print(f"{kept_levels[1].len()} {book.levels[1].len()} {kept_levels == book.levels}")
+    print(f"{sum_of(kept)} {sum_of(book.ids)} {sum_of(book.levels[2])}")
+
+    # The runtime's own changes start from the appended elements.
+    book.add(42)
+    print(book.ids.pop())
+    book.add(43)
+    book.ids.insert(0, -1)
+    book.add(44)
+    book.ids.reverse()
+    print(f"{book.ids[0]} {book.ids[1]} {book.ids[-1]} {book.ids.len()}")
+    book.add(45)
+    book.ids.sort()
+    print(f"{book.ids[0]} {book.ids[-1]} {45 in book.ids} {book.ids.count(45)}")
+    book.add(46)
+    book.levels[1].sort(reverse=true)
+    print(book.levels[1])
+    book.add(47)
+    print(book.entries.pop())
+    book.add(48)
+    print(
+        f"{book.entries[-1].dist} {book.entries.len()} {Entry(dist=480, node=48) in book.entries}"
+    )
+
+    # A list passed on for writing takes appends as a local does.
+    grow(book.ids, 5)
+    grow(book.levels[0], 3)
+    book.add(49)
+    print(
+        f"{book.ids.len()} {book.ids[-1]} {book.ids[-2]} {book.levels[0].len()} {book.levels[1][-1]}"
+    )
+
+    # A field written through the runtime keeps the other fields' elements.
+    book.add(50)
+    book.names.append("fifty")
+    book.add(51)
+    book.names = ["one", "two"]
+    book.add(52)
+    book.levels.append([7, 8])
+    book.levels[3].append(9)
+    book.add(53)
+    print(
+        f"{book.ids.len()} {book.levels.len()} {book.levels[3]} {book.names} {book.total()}"
+    )
+
+    # A holder inside another holder.
+    mut shelf = Shelf(books=[empty_book(), empty_book()], label="shelf")
+    for id in range(20):
+        shelf.books[id % 2].add(id)
+        shelf.books[1].ids.append(id * 100)
+    print(f"{shelf.books[0].ids} {shelf.books[1].ids.len()} {shelf.books[1].levels}")
+    print(shelf.books[0].total() + shelf.books[1].total())
+    moved = shelf.books.pop()
+    print(f"{moved.ids.len()} {moved.entries.len()} {moved.total()}")
+
+    # Another task reads a holder whose lists were just appended to, and
+    # two tasks read a list of lists that was.
+    mut shared = empty_book()
+    mut levels = [list[int64](), list[int64]()]
+    for id in range(30):
+        shared.add(id)
+        levels[id % 2].append(id)
+    with TaskGroup() as tasks:
+        first = tasks.start(count_levels, levels.copy())
+        second = tasks.start(count_levels, levels.copy())
+        third = tasks.start(worker, shared)
+        for task in [first, second, third]:
+            match task.result():
+                case TaskResult.Ready(value):
+                    print(value)
+                case _:
+                    print("no result")
+    levels[1].append(99)
+    print(levels)
