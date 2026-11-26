@@ -360,54 +360,57 @@ fn a_deferred_frame_is_pushed_before_the_calls_that_need_it() {
         .unwrap();
     let indirect = unary.clone();
     let indirect_again = unary.clone();
-    define(
-        &mut module,
-        "cold",
-        Linkage::Export,
-        &unary,
-        move |builder| {
-            let entry = builder.create_block();
-            builder.append_block_params_for_function_params(entry);
-            builder.switch_to_block(entry);
-            builder.seal_block(entry);
-            let param = builder.block_params(entry)[0];
-            let (enter, free, other) = (
-                builder.import_function(enter),
-                builder.import_function(free),
-                builder.import_function(other),
-            );
-            let framed = Var(0);
-            builder.declare_var(framed, types::I64);
-            let zero = builder.iconst(types::I64, 0);
-            builder.def_var(framed, zero);
-            let defers = builder.iconst(types::I64, 1);
-            builder.defer_frame(framed, param, enter, &[free]);
-            builder.call(free, &[param]);
-            let (slow, done) = (builder.create_block(), builder.create_block());
-            builder.set_cold_block(slow);
-            builder.brif(defers, slow, &[], done, &[]);
-            builder.switch_to_block(slow);
-            builder.seal_block(slow);
-            builder.call(other, &[param]);
-            let address = builder.func_addr(types::I64, other);
-            let signature = builder.import_signature(indirect);
-            builder.call_indirect(signature, address, &[param]);
-            builder.jump(done, &[]);
-            builder.switch_to_block(done);
-            builder.seal_block(done);
-            assert!(!builder.calls_when_warm(&[free, enter]));
-            let warm = builder.create_block();
-            builder.jump(warm, &[]);
-            builder.switch_to_block(warm);
-            builder.seal_block(warm);
-            let signature = builder.import_signature(indirect_again);
-            builder.call_indirect(signature, address, &[param]);
-            assert!(builder.calls_when_warm(&[free, enter, other]));
-            builder.call(other, &[param]);
-            assert!(builder.calls_when_warm(&[free, enter]));
-            builder.return_(&[param]);
-        },
-    );
+    // Unoptimized, the body is the one built, which has no slow-path copy.
+    crate::native_backend::without_optimization(|| {
+        define(
+            &mut module,
+            "cold",
+            Linkage::Export,
+            &unary,
+            move |builder| {
+                let entry = builder.create_block();
+                builder.append_block_params_for_function_params(entry);
+                builder.switch_to_block(entry);
+                builder.seal_block(entry);
+                let param = builder.block_params(entry)[0];
+                let (enter, free, other) = (
+                    builder.import_function(enter),
+                    builder.import_function(free),
+                    builder.import_function(other),
+                );
+                let framed = Var(0);
+                builder.declare_var(framed, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(framed, zero);
+                let defers = builder.iconst(types::I64, 1);
+                builder.defer_frame(framed, param, enter, &[free]);
+                builder.call(free, &[param]);
+                let (slow, done) = (builder.create_block(), builder.create_block());
+                builder.set_cold_block(slow);
+                builder.brif(defers, slow, &[], done, &[]);
+                builder.switch_to_block(slow);
+                builder.seal_block(slow);
+                builder.call(other, &[param]);
+                let address = builder.func_addr(types::I64, other);
+                let signature = builder.import_signature(indirect);
+                builder.call_indirect(signature, address, &[param]);
+                builder.jump(done, &[]);
+                builder.switch_to_block(done);
+                builder.seal_block(done);
+                assert!(!builder.calls_when_warm(&[free, enter]));
+                let warm = builder.create_block();
+                builder.jump(warm, &[]);
+                builder.switch_to_block(warm);
+                builder.seal_block(warm);
+                let signature = builder.import_signature(indirect_again);
+                builder.call_indirect(signature, address, &[param]);
+                assert!(builder.calls_when_warm(&[free, enter, other]));
+                builder.call(other, &[param]);
+                assert!(builder.calls_when_warm(&[free, enter]));
+                builder.return_(&[param]);
+            },
+        );
+    });
     let deferred = ir(&module);
     assert_eq!(deferred.matches("call i64 @enter").count(), 4, "{deferred}");
     assert_eq!(deferred.matches("call i64 @free").count(), 1, "{deferred}");

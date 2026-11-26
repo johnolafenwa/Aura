@@ -253,7 +253,8 @@ pub(super) fn array_region_rank(
 /// The kind of scalar the element reads and writes of `region`'s list
 /// name, when the loop has such accesses. A list has one element type, so
 /// they all name one kind, and each checks the view for that kind's access
-/// code.
+/// code. A list in a field is reached through the temporaries the loop
+/// lends it to.
 pub(super) fn region_scalar_element(
     function: &MirFunction,
     region: &ListSnapshotRegion,
@@ -281,7 +282,7 @@ pub(super) fn region_scalar_element(
                         ..
                     },
                 ..
-            } if *receiver == region.list => Some(*kind),
+            } if *receiver == region.list || region.temps.contains(receiver) => Some(*kind),
             _ => None,
         })
 }

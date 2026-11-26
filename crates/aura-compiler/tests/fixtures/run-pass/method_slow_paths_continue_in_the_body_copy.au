@@ -1,0 +1,98 @@
+import control
+
+
+class Ledger:
+    qty: list[int64]
+    names: list[int64]
+    levels: list[list[int64]]
+    total: int64
+    kept: int64
+
+    def grow(mut self, n: int64) -> int64:
+        # Each push past the list's room takes the runtime's way in the
+        # middle of the method, and the method goes on after it.
+        for i in range(n):
+            self.qty.append(i)
+            self.total += self.qty[self.qty.len() - 1]
+            self.names.append(i * 2)
+            self.levels[i % 3].append(i)
+        return self.total + self.qty.len() + self.names.len() + self.levels[1].len()
+
+    def keep_in(mut self, shelf: mut list[Ledger]) -> int64:
+        # A copy of the instance goes into a list in the middle of the method.
+        self.qty.append(7)
+        shelf.append(Ledger(qty=self.qty.copy(), names=self.names.copy(), levels=[[], [], []], total=self.total, kept=1))
+        self.qty.append(8)
+        self.total += self.qty[self.qty.len() - 2]
+        return self.qty.len() + shelf[shelf.len() - 1].qty.len() + self.total
+
+    def size(self) -> int64:
+        # Called on a frozen constant too, which no in-place read reaches.
+        mut total = self.qty.len() + self.names.len()
+        for level in self.levels:
+            total += level.len()
+        return total + self.total + self.qty[0]
+
+    def checked(mut self, at: int64) -> int64:
+        self.qty.append(at)
+        self.total += self.qty[at]
+        self.names.append(at)
+        return self.total
+
+
+def sum_of(ledger: Ledger) -> int64:
+    mut total = 0
+    for value in ledger.qty:
+        total += value
+    return total
+
+
+def sum_list(values: list[int64]) -> int64:
+    mut total = 0
+    for value in values:
+        total += value
+    return total
+
+
+def spread(ledger: mut Ledger) -> int64:
+    ledger.qty.append(3)
+    mut got = 0
+    with TaskGroup() as group:
+        task = group.start(sum_list, ledger.qty.copy())
+        ledger.qty.append(4)
+        got = task.result_or(0, timeout=1s)
+    ledger.qty.append(5)
+    return got * 1000 + ledger.qty.len() + sum_of(ledger)
+
+
+def trap_in_method(at: int64) -> int64:
+    mut small = fresh()
+    small.qty.append(1)
+    # The index read past the end traps inside the method, after a push.
+    return small.checked(at) + small.qty.len()
+
+
+def fresh() -> Ledger:
+    return Ledger(qty=[], names=[], levels=[[], [], []], total=0, kept=0)
+
+
+BASE: Ledger = Ledger(qty=[4, 5], names=[1], levels=[[1], [2, 3], []], total=9, kept=0)
+
+
+def main():
+    print(BASE.size())
+    mut ledger = fresh()
+    print(ledger.grow(100))
+    print(ledger.grow(3))
+    mut shelf: list[Ledger] = []
+    print(ledger.keep_in(shelf))
+    print(ledger.keep_in(shelf))
+    print(f"{shelf[0].qty.len()} {shelf[1].qty.len()} {ledger.qty.len()}")
+    print(spread(ledger))
+    print(ledger.qty.len())
+    for at in [0, 5]:
+        match control.recover(trap_in_method, at):
+            case Ok(value):
+                print(f"ok {value}")
+            case Err(trap):
+                print(f"trap {trap.code}")

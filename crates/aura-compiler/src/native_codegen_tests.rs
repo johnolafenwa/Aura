@@ -17646,7 +17646,9 @@ def main() -> int32:
     return renamed(1)
 "#,
     );
-    let object = emit_host_object(&module).expect("every FFI v1 boundary type should emit");
+    // Unoptimized, the body is the one built, which has no slow-path copy.
+    let object = crate::native_backend::without_optimization(|| emit_host_object(&module))
+        .expect("every FFI v1 boundary type should emit");
     let referenced = object_referenced_symbols(&object);
     let calls = |symbol: &str| {
         referenced

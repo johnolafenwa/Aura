@@ -341,7 +341,11 @@ impl ModuleBackend for LlvmModule {
         if let Err(error) = body(&mut builder) {
             return Err(DefineError::Body(error));
         }
-        let ir = builder.ir;
+        let mut ir = builder.ir;
+        // A debug build keeps one body, as written.
+        if super::optimizes() && !self.debug_info {
+            ir.continue_slow_paths();
+        }
         let decl = &self.functions[function.0 as usize];
         if decl.linkage == Linkage::Import {
             return Err(DefineError::Backend(format!(
@@ -447,7 +451,10 @@ impl LlvmModule {
             };
             let callee_of = |callee: &FuncRef| body.func_refs[callee.0 as usize].0 as usize;
             let mut names = Vec::new();
-            for inst in &body.insts {
+            // A call of the copy `continue_slow_paths` made stands for its
+            // call in the first body.
+            let built = body.insts.len() - body.slow_copy_insts;
+            for inst in &body.insts[..built] {
                 match &inst.op {
                     Op::Call(callee, _) => {
                         let callee = callee_of(callee);
@@ -473,9 +480,10 @@ impl LlvmModule {
             }
         }
         for (index, decl) in self.functions.iter_mut().enumerate() {
-            let small = decl.body.as_ref().is_some_and(|body| {
-                body.insts.len() - body.frame_insts.len() <= COPIED_CALL_INLINE_WEIGHT
-            });
+            let small = decl
+                .body
+                .as_ref()
+                .is_some_and(|body| body.weight() <= COPIED_CALL_INLINE_WEIGHT);
             if decl.linkage == Linkage::Local
                 && small
                 && copies[index] > 0
@@ -965,6 +973,9 @@ struct FunctionIr {
     /// calls (see `defer_frame`), which weigh nothing for inlining or for
     /// splitting the module.
     frame_insts: HashSet<u32>,
+    /// The instructions of the copy `continue_slow_paths` made, the last of
+    /// `insts`, which weigh nothing for inlining.
+    slow_copy_insts: usize,
     /// The copies `version_blocks` made of each select while it was not
     /// settled, by the select's result, so a later call for blocks that
     /// were already copied settles those copies too.
@@ -1118,6 +1129,7 @@ impl FunctionIr {
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
             frame_insts: HashSet::new(),
+            slow_copy_insts: 0,
             select_copies: HashMap::new(),
             select_roots: HashMap::new(),
             settled_selects: HashMap::new(),
@@ -4122,6 +4134,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
 
 #[path = "native_backend_llvm_units.rs"]
 mod units;
+
+#[path = "native_backend_llvm_slow_paths.rs"]
+mod slow_paths;
 
 #[cfg(test)]
 #[path = "native_backend_llvm_tests.rs"]

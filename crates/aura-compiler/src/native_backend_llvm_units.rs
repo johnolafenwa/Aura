@@ -377,8 +377,9 @@ fn reached_functions(object: &LlvmModule) -> Vec<bool> {
     functions
 }
 
-fn function_weight(decl: &super::FunctionDecl) -> usize {
-    decl.body
-        .as_ref()
-        .map_or(0, |body| body.insts.len() - body.frame_insts.len())
+/// The recorded instructions of `decl`'s body. The copy that
+/// `continue_slow_paths` made weighs nothing, so a function keeps the unit
+/// and the copies in other units that its body as built gives it.
+pub(super) fn function_weight(decl: &super::FunctionDecl) -> usize {
+    decl.body.as_ref().map_or(0, super::FunctionIr::weight)
 }
