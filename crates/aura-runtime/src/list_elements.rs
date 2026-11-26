@@ -2213,34 +2213,31 @@ pub struct StrView {
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 
+/// The low bit of a [`StrViewCache`] word that holds a count of view misses
+/// instead of the address of a view: a list read a few times never makes a
+/// view, so counting its misses allocates nothing.
+const MISS_COUNT_TAG: usize = 1;
+
 impl StrViewCache {
-    /// Whether no view was ever made.
+    /// Whether no view was ever made and no miss counted.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.view().is_null()
+        self.0.load(std::sync::atomic::Ordering::Relaxed).is_null()
     }
 
-    /// The view's address, or null while there is none.
+    /// The address of the view, or null when there is none yet.
+    #[inline]
     fn view(&self) -> *mut StrView {
         let word = self.0.load(std::sync::atomic::Ordering::Relaxed);
-        if word.addr() & 1 == 1 {
+        if word as usize & MISS_COUNT_TAG != 0 {
             std::ptr::null_mut()
         } else {
             word
         }
     }
 
-    /// The misses the word counts while there is no view.
-    fn counted_misses(&self) -> usize {
-        let word = self.0.load(std::sync::atomic::Ordering::Relaxed).addr();
-        if word & 1 == 1 {
-            word >> 1
-        } else {
-            0
-        }
-    }
-
-    /// The view, made empty on first use, with the misses counted so far.
+    /// The view, made empty on first use, with the misses counted before
+    /// it was made.
     ///
     /// # Safety
     ///
@@ -2251,8 +2248,9 @@ impl StrViewCache {
         use std::sync::atomic::Ordering;
         let mut view = self.view();
         if view.is_null() {
+            let word = self.0.load(Ordering::Relaxed) as usize;
             view = Box::into_raw(Box::new(StrView {
-                misses: self.counted_misses(),
+                misses: word >> 1,
                 ..StrView::default()
             }));
             self.0.store(view, Ordering::Relaxed);
@@ -2262,28 +2260,37 @@ impl StrViewCache {
         unsafe { &mut *view }
     }
 
-    /// Counts one miss. While there is no view and fewer than `defer`
-    /// misses came, the word counts it and there is no view to return, so
-    /// a short list read a few times before it is dropped makes none.
-    /// Otherwise the view, made on the miss that reaches `defer`, counts it.
+    /// Counts one more miss of the `str` view and returns the count, in
+    /// the view when there is one and otherwise in the cache's own word.
     ///
     /// # Safety
     ///
     /// As for [`Self::get_or_create`].
-    #[allow(clippy::mut_from_ref)]
-    pub unsafe fn note_miss(&self, defer: usize) -> Option<&mut StrView> {
-        if self.view().is_null() {
-            let misses = self.counted_misses() + 1;
-            if misses < defer {
-                let word = std::ptr::without_provenance_mut(misses << 1 | 1);
-                self.0.store(word, std::sync::atomic::Ordering::Relaxed);
-                return None;
+    pub unsafe fn note_miss(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        let view = self.view();
+        if !view.is_null() {
+            // SAFETY: the caller's contract.
+            let view = unsafe { &mut *view };
+            view.misses += 1;
+            return view.misses;
+        }
+        let misses = (self.0.load(Ordering::Relaxed) as usize >> 1).saturating_add(1);
+        match misses.checked_mul(2) {
+            Some(word) => {
+                self.0.store(
+                    std::ptr::without_provenance_mut(word | MISS_COUNT_TAG),
+                    Ordering::Relaxed,
+                );
+                misses
+            }
+            None => {
+                // SAFETY: the caller's contract.
+                let view = unsafe { self.get_or_create() };
+                view.misses = view.misses.saturating_add(1);
+                view.misses
             }
         }
-        // SAFETY: the caller's contract.
-        let view = unsafe { self.get_or_create() };
-        view.misses += 1;
-        Some(view)
     }
 }
 

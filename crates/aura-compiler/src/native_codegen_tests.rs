@@ -14523,6 +14523,7 @@ def main():
         "aura_direct_vec_index",
         "aura_direct_vec_push_in_place",
         "aura_direct_vec_set_index_in_place",
+        "aura_direct_vec_set_index_discarded",
         "aura_direct_instance_get_field",
         "aura_direct_box_plain",
     ] {
@@ -16531,7 +16532,8 @@ def main():
         "{referenced:?}"
     );
     assert!(
-        !referenced.contains("aura_direct_vec_set_index_in_place"),
+        !referenced.contains("aura_direct_vec_set_index_in_place")
+            && !referenced.contains("aura_direct_vec_set_index_discarded"),
         "{referenced:?}"
     );
 }

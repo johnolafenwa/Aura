@@ -1791,14 +1791,14 @@ impl OpaqueValue {
         };
         // SAFETY: the value is confined to this thread, and nothing else
         // holds its view.
-        let Some(view) = (unsafe { vector.str_view.note_miss(STR_VIEW_MIN_MISSES) }) else {
-            return;
-        };
-        if view.misses < STR_VIEW_MIN_MISSES
-            || view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len()
+        let misses = unsafe { vector.str_view.note_miss() };
+        if misses < STR_VIEW_MIN_MISSES
+            || misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len()
         {
             return;
         }
+        // SAFETY: as for `note_miss`.
+        let view = unsafe { vector.str_view.get_or_create() };
         view.misses = 0;
         self.fill_str_view(values, view);
     }
@@ -3174,17 +3174,21 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
     match (value, &*tag.parsed) {
         (Value::Vec(vector), Type::Named(name, args)) => match args.as_slice() {
             [element] if name == "list" => {
-                vector.element_type != *element || is_float32_element(element)
+                !same_type(&vector.element_type, tag.collection_args.first(), element)
+                    || is_float32_element(element)
             }
             _ => true,
         },
         (Value::Set(set), Type::Named(name, args)) => match args.as_slice() {
-            [element] if name == "set" => set.element_type != *element,
+            [element] if name == "set" => {
+                !same_type(&set.element_type, tag.collection_args.first(), element)
+            }
             _ => true,
         },
         (Value::Map(map), Type::Named(name, args)) => match args.as_slice() {
             [key_type, value_type] if name == "dict" => {
-                map.key_type != *key_type || map.value_type != *value_type
+                !same_type(&map.key_type, tag.collection_args.first(), key_type)
+                    || !same_type(&map.value_type, tag.collection_args.get(1), value_type)
             }
             _ => true,
         },
@@ -3199,6 +3203,16 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
         // An Array records its dtype and shape itself.
         (Value::Array(_), _) => false,
         _ => true,
+    }
+}
+
+/// Whether `slot` is the type `ty`, which the tag shares as `shared` when it
+/// keeps a copy: one shared copy is the same type without comparing it.
+#[inline]
+fn same_type(slot: &SharedType, shared: Option<&SharedType>, ty: &Type) -> bool {
+    match shared {
+        Some(shared) => slot == shared,
+        None => *slot == *ty,
     }
 }
 
@@ -10127,17 +10141,18 @@ unsafe fn push_only_str_box(vec: *mut OpaqueValue, value: *mut OpaqueValue) -> b
     if !matches!(cell, Value::String(_)) || named.is_some() {
         return false;
     }
-    let text = std::mem::replace(cell, Value::Unit);
+    // The text moves out of the box where the list takes it, so its words
+    // are copied once instead of through each call on the way.
     with_vector_mut(vec, |vector| {
         if is_unknown_runtime_type(&vector.element_type) {
-            let inferred = inferred_collection_type(&text);
+            let inferred = inferred_collection_type(cell);
             if !is_unknown_runtime_type(&inferred) {
                 vector.element_type = SharedType::from(inferred);
             }
         }
         match &mut vector.elements {
-            ListElements::Values(values) => values.push(text),
-            elements => elements.push(text),
+            ListElements::Values(values) => values.push(std::mem::replace(cell, Value::Unit)),
+            elements => elements.push(std::mem::replace(cell, Value::Unit)),
         }
     });
     let unlinked = current_direct_frame_stack().is_some_and(|stack| {
@@ -11854,7 +11869,7 @@ pub extern "C-unwind" fn aura_direct_vec_element_len(
 ) -> i64 {
     task_runtime_boundary(|| {
         let len = with_vec_element(list, index, line, column, |element| match element {
-            Value::String(text) => text.chars().count(),
+            Value::String(text) => text.char_len(),
             Value::Vec(vector) => vector.elements.len(),
             Value::Map(map) => map.entries.len(),
             Value::Set(set) => set.elements.len(),
@@ -11954,6 +11969,22 @@ pub extern "C-unwind" fn aura_direct_vec_set_index_in_place(
         let value = unsafe { consume_owned_value(value) };
         set_vec_element(vec, index, value, line, column);
         boxed_value(Value::Unit)
+    })
+}
+
+/// [`aura_direct_vec_set_index_in_place`] for a store whose `None` result
+/// nothing reads, so no box of it is made.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_vec_set_index_discarded(
+    vec: *mut OpaqueValue,
+    index: i64,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        set_vec_element(vec, index, value, line, column);
     })
 }
 

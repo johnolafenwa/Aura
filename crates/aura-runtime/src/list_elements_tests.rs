@@ -1177,27 +1177,46 @@ fn scalar_forms_lend_their_elements_as_a_c_array() {
 }
 
 #[test]
+fn str_view_misses_are_counted_without_a_view() {
+    let cache = StrViewCache::default();
+    assert!(cache.is_empty());
+    // SAFETY: the cache is this test's alone.
+    unsafe {
+        assert_eq!(cache.note_miss(), 1);
+        assert_eq!(cache.note_miss(), 2);
+        assert!(cache.view().is_null());
+        // The view takes the misses counted before it.
+        let view = cache.get_or_create();
+        assert_eq!(view.misses, 2);
+        assert!(view.entries.is_empty());
+        assert_eq!(cache.note_miss(), 3);
+        cache.get_or_create().misses = 0;
+        assert_eq!(cache.note_miss(), 1);
+    }
+    // A cache that only counted frees nothing.
+    let counted = StrViewCache::default();
+    // SAFETY: as above.
+    assert_eq!(unsafe { counted.note_miss() }, 1);
+    assert!(!counted.is_empty());
+    drop(counted);
+}
+
+#[test]
 fn a_str_view_cache_counts_early_misses_without_a_view() {
     let cache = StrViewCache::default();
     // SAFETY: the cache is this test's alone.
     unsafe {
-        assert!(cache.note_miss(3).is_none());
-        assert!(cache.note_miss(3).is_none());
-        assert!(cache.is_empty());
-        let view = cache.note_miss(3).expect("the third miss makes the view");
-        assert_eq!(view.misses, 3);
-        assert!(!cache.is_empty());
-        assert_eq!(cache.note_miss(3).expect("the view stays").misses, 4);
+        for misses in 1..=3 {
+            assert_eq!(cache.note_miss(), misses);
+        }
+        assert!(cache.view().is_null());
+        assert_eq!(cache.get_or_create().misses, 3);
+        assert_eq!(cache.note_miss(), 4);
     }
     let counted = StrViewCache::default();
     // SAFETY: as above.
     unsafe {
-        assert!(counted.note_miss(4).is_none());
+        assert_eq!(counted.note_miss(), 1);
         assert_eq!(counted.get_or_create().misses, 1);
     }
-    // A cache that only counts drops nothing.
-    let only_counts = StrViewCache::default();
-    // SAFETY: as above.
-    assert!(unsafe { only_counts.note_miss(2) }.is_none());
-    drop(only_counts);
 }
