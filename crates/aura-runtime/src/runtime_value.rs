@@ -6390,9 +6390,12 @@ enum TaskHandle {
     Completed(TaskExecutionResult),
 }
 
+/// The flags whose setting cancels the running work. They are shared, so a
+/// copy, which every queue operation takes of the current task's, is one
+/// count.
 #[derive(Clone, Default)]
 pub struct CancellationContext {
-    flags: Vec<Arc<RuntimeWakeSignal>>,
+    flags: Arc<[Arc<RuntimeWakeSignal>]>,
 }
 
 struct ReactorRecvSubscription {
@@ -12776,6 +12779,13 @@ pub fn collect_queue_values(value: &Value, queues: &mut Vec<ChannelValue>) {
 }
 
 fn register_current_task_queue_handles(value: &Value) {
+    // A scalar or a `str` holds no queue, so the task is not looked up.
+    if matches!(
+        value,
+        Value::Int(_) | Value::Float(_) | Value::Bool(_) | Value::String(_) | Value::Unit
+    ) {
+        return;
+    }
     let Some(task) = current_lightweight_task() else {
         return;
     };
@@ -18061,9 +18071,10 @@ pub fn io_read_line() -> io::Result<Option<String>> {
 
 impl CancellationContext {
     pub fn merged(&self, other: &CancellationContext) -> CancellationContext {
-        let mut flags = self.flags.clone();
-        flags.extend(other.flags.iter().cloned());
-        CancellationContext { flags }
+        let flags = self.flags.iter().chain(other.flags.iter()).cloned();
+        CancellationContext {
+            flags: flags.collect(),
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -18071,13 +18082,13 @@ impl CancellationContext {
     }
 
     fn subscribe_reactor(&self, subscription: &ReactorSubscription) {
-        for flag in &self.flags {
+        for flag in self.flags.iter() {
             flag.subscribe(subscription);
         }
     }
 
     fn unsubscribe_reactor(&self, subscription: &ReactorSubscription) {
-        for flag in &self.flags {
+        for flag in self.flags.iter() {
             flag.unsubscribe(subscription);
         }
     }
@@ -18099,7 +18110,7 @@ impl TaskGroupValue {
                 cancel_flag: Arc::new(RuntimeWakeSignal::new(false)),
                 failure_wake_flag: Arc::new(RuntimeWakeSignal::new(false)),
                 completion_wake_flag: Arc::new(RuntimeWakeSignal::new(false)),
-                parent_flags: parent.flags.clone(),
+                parent_flags: parent.flags.to_vec(),
             }),
         }
     }
@@ -18107,16 +18118,18 @@ impl TaskGroupValue {
     pub fn child_cancellation(&self) -> CancellationContext {
         let mut flags = self.inner.parent_flags.clone();
         flags.push(self.inner.cancel_flag.clone());
-        CancellationContext { flags }
+        CancellationContext {
+            flags: flags.into(),
+        }
     }
 
     pub fn queue_iteration_signal(&self) -> CancellationContext {
         CancellationContext {
-            flags: vec![
+            flags: Arc::new([
                 self.inner.cancel_flag.clone(),
                 self.inner.failure_wake_flag.clone(),
                 self.inner.completion_wake_flag.clone(),
-            ],
+            ]),
         }
     }
 
