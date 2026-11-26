@@ -58,7 +58,7 @@ def label(slot: Slot[str]) -> str:
 def main() -> int32:
     with TaskGroup() as group:
         first = group.start(grow, 4)
-        second = group.start(grow, 5)
+        second = group.start(grow, 3)
         third = group.start(vacant_ints, 9)
         print(first.result_or(0, timeout=5s))
         print(second.result_or(0, timeout=5s))
