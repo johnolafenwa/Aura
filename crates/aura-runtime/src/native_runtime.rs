@@ -1789,6 +1789,20 @@ impl OpaqueValue {
         let ListElements::Values(values) = &vector.elements else {
             return;
         };
+        // SAFETY: the value is confined to this thread, and the access
+        // holds.
+        unsafe { self.note_str_view_miss_in(vector, values) };
+    }
+
+    /// [`Self::note_str_view_miss`] for a caller that already holds an
+    /// access to the list and checked its view and form.
+    ///
+    /// # Safety
+    ///
+    /// The list is confined to this thread, the caller holds an access to
+    /// it, `vector` is its value, and `values` its elements.
+    #[inline]
+    unsafe fn note_str_view_miss_in(&self, vector: &VecValue, values: &[Value]) {
         // SAFETY: the value is confined to this thread, and nothing else
         // holds its view.
         let misses = unsafe { vector.str_view.note_miss() };
@@ -10189,7 +10203,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_literal(
 ) {
     task_runtime_boundary(|| {
         let value = Value::String(literal_str(ptr, len).into());
-        with_vector_mut(vec, |vector| vector.elements.push(value));
+        with_vector_mut(vec, |vector| push_str_element(&mut vector.elements, value));
     })
 }
 
@@ -10279,9 +10293,20 @@ pub extern "C-unwind" fn aura_direct_vec_push_str_view(
             if is_unknown_runtime_type(&vector.element_type) {
                 vector.element_type = SharedType::from(inferred_collection_type(&value));
             }
-            vector.elements.push(value);
+            push_str_element(&mut vector.elements, value);
         });
     })
+}
+
+/// Appends the `str` `value` to `elements`. A list of `Value`s takes it
+/// with no walk of the other forms, as [`ListElements::push`] would push
+/// it there too: a `str` has no scalar or typed form.
+#[inline(always)]
+fn push_str_element(elements: &mut ListElements, value: Value) {
+    match elements {
+        ListElements::Values(values) => values.push(value),
+        elements => elements.push(value),
+    }
 }
 
 /// The scalar a list write passes as `bits`, of the
@@ -11345,9 +11370,22 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_str_element_words(
             else {
                 direct_vec_index_error(index, len, line, column)
             };
-            match (&vector.elements, vector.elements.value_at(position)) {
-                (ListElements::Values(_), Some(Value::String(text))) if confined => {
-                    Some((text.as_ptr(), text.len()))
+            match &vector.elements {
+                ListElements::Values(values) if confined => {
+                    let Value::String(text) = &values[position] else {
+                        return None;
+                    };
+                    let words = (text.as_ptr(), text.len());
+                    // The miss is counted under this access: the list is
+                    // confined, so nothing changes it in between.
+                    // SAFETY: `list` is the live, confined list read here.
+                    let header = unsafe { &*list };
+                    if header.list_access.load(Ordering::Relaxed) == DirectListAccess::Values as u32
+                    {
+                        // SAFETY: as above, under this access.
+                        unsafe { header.note_str_view_miss_in(vector, values) };
+                    }
+                    Some(words)
                 }
                 _ => None,
             }
@@ -11365,11 +11403,11 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_str_element_words(
                         _ => (std::ptr::null(), 0),
                     })
                 };
+                // SAFETY: `with_vector` checked the handle.
+                unsafe { &*list }.note_str_view_miss();
                 (ptr, len, copy)
             }
         };
-        // SAFETY: `with_vector` checked the handle.
-        unsafe { &*list }.note_str_view_miss();
         // SAFETY: the caller's contract.
         unsafe {
             out.write(len as i64);
