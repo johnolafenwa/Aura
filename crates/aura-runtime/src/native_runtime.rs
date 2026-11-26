@@ -7414,16 +7414,6 @@ fn empty_unit_variant_cells() {
 
 fn clear_direct_module_constants() {
     empty_unit_variant_cells();
-    for slot in frozen_program_value_slots()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .drain(..)
-    {
-        let shared = slot.swap(0, Ordering::AcqRel);
-        // SAFETY: the slot held a frozen box, and the program reads no
-        // value once it ends.
-        unsafe { free_frozen_direct_value(shared as *mut OpaqueValue) };
-    }
     let mut states = lock_direct_module_constants();
     let mut order = direct_module_constant_order()
         .lock()
@@ -7440,6 +7430,20 @@ fn clear_direct_module_constants() {
         }
     }
     states.clear();
+    drop(order);
+    drop(states);
+    // A constant may hold a literal's frozen box, so the literals' boxes
+    // go after every constant.
+    for slot in frozen_program_value_slots()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        let shared = slot.swap(0, Ordering::AcqRel);
+        // SAFETY: the slot held a frozen box, and the program reads no
+        // value once it ends.
+        unsafe { free_frozen_direct_value(shared as *mut OpaqueValue) };
+    }
 }
 
 /// Frees a frozen module constant when the program ends.
@@ -7531,11 +7535,18 @@ pub unsafe extern "C-unwind" fn aura_direct_module_constant(
         }
         let guard = FailedInitialization(key.clone());
         let thunk: NativeThunk = unsafe { std::mem::transmute(initializer_thunk as usize) };
-        let value = unsafe { thunk(std::ptr::null(), 0) };
+        let mut value = unsafe { thunk(std::ptr::null(), 0) };
         if value.is_null() {
             runtime_error(format!(
                 "module constant `{key}` initializer returned a null value"
             ));
+        }
+        // A frozen box the initializer returned, such as a `str` literal's
+        // one box or another constant, has an owner that frees it already,
+        // so the constant keeps a box of its own.
+        if direct_value_is_frozen(value) {
+            // SAFETY: a frozen box stays live until the program ends.
+            value = boxed_value(unsafe { value_ref(value) });
         }
         // The constant keeps the tag of its declared type, since a frozen
         // value takes no other.
