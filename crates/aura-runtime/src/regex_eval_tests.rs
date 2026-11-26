@@ -117,13 +117,11 @@ fn captures_and_replacements_charge_the_text_they_duplicate() {
             // A missing optional group needs no copy of the subject. The
             // whole match and its named group each copy it once.
             assert!(with_allowance(48 * 1024, || captures("none")).is_ok());
-            let Value::Tuple(result) = with_allowance(96 * 1024, || captures(&subject))? else {
-                panic!("expected captures");
-            };
-            let Value::Vec(groups) = &result.elements[0] else {
+            // The texts of the three groups, then a mark for each.
+            let Value::Vec(groups) = with_allowance(96 * 1024, || captures(&subject))? else {
                 panic!("expected capture strings");
             };
-            assert_eq!(groups.elements.len(), 3);
+            assert_eq!(groups.elements.len(), 6);
             assert_eq!(
                 with_allowance(48 * 1024, || captures(&subject))
                     .unwrap_err()
