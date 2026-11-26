@@ -503,8 +503,13 @@ pub(crate) fn kept_arguments(module: &MirModule) -> BTreeMap<String, BorrowingCa
 pub fn operand_roles(instruction: &Instruction) -> Vec<(&Operand, OperandRole)> {
     let mut roles = Vec::new();
     match instruction {
+        Instruction::InlineAsm { inputs, .. } => {
+            roles.extend(inputs.iter().map(|value| (value, OperandRole::Borrow)))
+        }
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
+        | Instruction::ArmDrop { .. }
+        | Instruction::EndOwner { .. }
         | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
@@ -565,6 +570,7 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::TraitObjectTake { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::Try { value: operand, .. } => roles.push((operand, Consume)),
+        Rvalue::ModuleStore { value, .. } => roles.push((value, Borrow)),
         // A projection's result is a fresh owned copy of the part it reads.
         Rvalue::NoneTest { value: operand }
         | Rvalue::TraitObjectHolds { value: operand, .. }
@@ -577,9 +583,16 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         | Rvalue::Member {
             object: operand, ..
         } => roles.push((operand, Borrow)),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            roles.push((address, Borrow));
+            roles.extend(store.iter().map(|value| (value, Borrow)));
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             for capture in captures {
@@ -807,6 +820,9 @@ pub(super) fn type_needs_drop(context: &MirLoanValidationContext<'_>, ty: &Type)
                 }
             }
             Type::Named(name, args) => {
+                if let Some((element, _)) = ty.as_fixed_array() {
+                    return visit(context, element, visiting);
+                }
                 if aura_core::types::is_builtin_copy_named_type(name, args) {
                     return false;
                 }
@@ -951,6 +967,9 @@ pub(crate) fn instruction_accesses_with<'a>(
         accesses[0] = (place, Access::TakePart);
     }
     match instruction {
+        Instruction::InlineAsm { outputs, .. } => {
+            accesses.extend(outputs.iter().map(|name| (name.as_str(), Access::Assign)))
+        }
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
         | Instruction::SourceName { .. }
@@ -995,9 +1014,10 @@ pub(crate) fn instruction_accesses_with<'a>(
             push_rvalue_places(value, &mut accesses);
             accesses.push((target, Access::Assign));
         }
-        Instruction::PushCleanup { place, .. } | Instruction::PopCleanup { place, .. } => {
-            accesses.push((place, Access::Read))
-        }
+        Instruction::ArmDrop { place, .. }
+        | Instruction::EndOwner { place }
+        | Instruction::PushCleanup { place, .. }
+        | Instruction::PopCleanup { place, .. } => accesses.push((place, Access::Read)),
     }
     accesses
 }
@@ -2321,12 +2341,15 @@ fn apply_move_pairs(function: &mut MirFunction, pairs: &[MovePair]) {
 fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option<&'a mut Operand> {
     let mut operands = Vec::new();
     match instruction {
+        Instruction::InlineAsm { inputs, .. } => operands.extend(inputs),
         Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => {
             rvalue_operands_mut(value, &mut operands)
         }
         Instruction::Eval { value } => operands.push(value),
         Instruction::Safepoint
         | Instruction::SourceLocation { .. }
+        | Instruction::ArmDrop { .. }
+        | Instruction::EndOwner { .. }
         | Instruction::SourceName { .. }
         | Instruction::Retain { .. }
         | Instruction::Release { .. }
@@ -2350,8 +2373,9 @@ fn place_operand_mut<'a>(instruction: &'a mut Instruction, name: &str) -> Option
 }
 
 /// Every operand of `value`, as `rvalue_roles` lists them.
-fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
+pub(crate) fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Operand>) {
     match value {
+        Rvalue::ModuleStore { value, .. } => operands.push(value),
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
         | Rvalue::TraitObject { value: operand, .. }
@@ -2369,9 +2393,16 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
         | Rvalue::Member {
             object: operand, ..
         } => operands.push(operand),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            operands.push(address);
+            operands.extend(store.iter_mut());
+        }
         Rvalue::UnionTagTest { .. }
         | Rvalue::UnionTakePayload { .. }
         | Rvalue::TupleTakeElement { .. }
+        | Rvalue::CFieldAddress { .. }
+        | Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
         | Rvalue::ModuleConstant { .. } => {}
         Rvalue::Closure { captures, .. } => {
             operands.extend(captures.iter_mut().map(|capture| &mut capture.value))

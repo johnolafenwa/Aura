@@ -311,10 +311,7 @@ with ``cannot move managed `with` resource `file` ``. We'll come back to that
 error in [Chapter 15](/book/ch15-00-concurrency), where it is the rule that keeps
 tasks from outliving their group.
 
-The third is that `with` is how your own code gets to run at cleanup. Aura
-classes have no destructor. A class can define `__exit__`, but only a `with`
-block calls it. Watch what happens to the same `Section` with and without
-`with`:
+The third is that a `with` block calls the class's `__exit__` when we leave the block. A class can also define `__drop__(mut self)` to release what an instance owns wherever we store it. Our `Section` only defines the context manager methods. Watch what happens with and without `with`:
 
 ```aura
 class Section:

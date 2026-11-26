@@ -1,0 +1,7 @@
+@machine.interrupt("x86_64")
+@machine.section(".text.irq")
+@machine.align(64)
+@machine.link_name("timer_vector")
+@machine.used
+export "C" def tick() -> None:
+    pass

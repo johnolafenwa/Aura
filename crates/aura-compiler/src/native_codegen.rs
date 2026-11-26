@@ -27,6 +27,9 @@ use crate::runtime_ops::{
 use crate::sema::optional_type;
 use crate::sema::{substitute_type, FunctionParamContract, Type};
 
+#[path = "native_freestanding_scale.rs"]
+mod freestanding_scale;
+
 use callables::{CallableShape, CallableShapeKey};
 
 const MODULE_BACKEND_BUSY_ERROR: &str =
@@ -87,6 +90,7 @@ pub fn emit_freestanding_object(
     program_source: &str,
     target: FreestandingTarget,
 ) -> std::result::Result<Vec<u8>, Vec<crate::diag::Diagnostic>> {
+    let _target_scope = crate::enter_freestanding_target(target);
     let module = freestanding::prepare(module)?;
     let internal = |error: String| vec![freestanding::emitter_diagnostic(error)];
     let module = validated_for_emission(&module).map_err(internal)?;
@@ -118,8 +122,12 @@ fn validated_for_emission(module: &MirModule) -> std::result::Result<MirModule, 
         | crate::mir::BoundaryError::Ownership(error)
         | crate::mir::BoundaryError::Checks(error) => error,
     })?;
+    frozen::omit_initializers(&mut module);
     Ok(module)
 }
+
+#[path = "native_codegen_typed_memory.rs"]
+mod typed_memory;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScalarKind {
@@ -350,6 +358,7 @@ enum WideOverflowOp {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum DirectType {
     Scalar(ScalarKind),
+    Fixed(fixed_arrays::FixedArrayLayout),
     PlainClass(PlainClassType),
     /// An inline union: one tag word followed by the payload words of the
     /// widest member (checkpoint Q9 A). Every member is itself inline, so the
@@ -433,6 +442,12 @@ impl DirectUnionType {
             .map(DirectType::value_count)
             .max()
             .unwrap_or(0);
+        let payload_words = members
+            .iter()
+            .filter_map(fixed_arrays::union_member_words)
+            .max()
+            .unwrap_or(0)
+            .max(payload_words);
         let owning = members
             .iter()
             .enumerate()
@@ -470,6 +485,7 @@ impl DirectUnionType {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PlainClassType {
+    c_layout: Option<std::sync::Arc<crate::c_layout::CStruct>>,
     class_name: String,
     fields: Vec<PlainClassField>,
 }
@@ -502,6 +518,7 @@ impl DirectType {
 
     fn abi_types(&self) -> Vec<ScalarType> {
         match self {
+            DirectType::Fixed(layout) => vec![layout.storage()],
             DirectType::Scalar(kind) => vec![kind.signature_type()],
             DirectType::Union(union) => {
                 let mut types = vec![types::I64];
@@ -526,6 +543,7 @@ impl DirectType {
 
     fn scalar_kind(&self) -> Option<ScalarKind> {
         match self {
+            DirectType::Fixed(_) => None,
             DirectType::Scalar(kind) => Some(*kind),
             DirectType::PlainClass(_)
             | DirectType::Union(_)
@@ -536,6 +554,7 @@ impl DirectType {
 
     fn zero_values(&self, builder: &mut dyn FunctionBackend) -> Vec<Val> {
         match self {
+            DirectType::Fixed(layout) => vec![builder.iconst(layout.storage(), 0)],
             DirectType::Scalar(kind) => vec![kind.zero_value(builder)],
             DirectType::PlainClass(class) => {
                 let mut values = Vec::new();
@@ -564,6 +583,9 @@ impl DirectType {
             // the words are reinterpreted by `extract_field`/`replace_nested_field`.
             let index = crate::mir::union_payload_projection_index(field_name)?;
             let member = union.member(index).ok()?;
+            if let Some(words) = fixed_arrays::union_member_words(member) {
+                return Some((1, 1 + words, member.clone()));
+            }
             return Some((1, 1 + member.value_count(), member.clone()));
         }
         let DirectType::PlainClass(class) = self else {
@@ -968,6 +990,9 @@ impl<'a> NativeCodegen<'a> {
         program_path: &str,
         program_source: &str,
     ) -> std::result::Result<Self, String> {
+        if module.constants.iter().any(|cell| cell.state.is_some()) {
+            return Err("mutable module storage requires freestanding execution".into());
+        }
         Self::for_target(module, program_path, program_source, None)
     }
 
@@ -979,6 +1004,9 @@ impl<'a> NativeCodegen<'a> {
         program_source: &str,
         freestanding: Option<FreestandingTarget>,
     ) -> std::result::Result<Self, String> {
+        if freestanding.is_none() && module.foreign_link.asm_arch.is_some() {
+            return Err("machine assembly requires a freestanding target".into());
+        }
         let reachable_blocks = validate_module(module)?;
         // A program with no task-start operation cannot have a runnable sibling
         // for a loop to starve. Keep explicit MIR markers for portability, but
@@ -1348,6 +1376,15 @@ impl<'a> NativeCodegen<'a> {
             .chain(self.module.top_level.iter())
         {
             self.define_function(function)?;
+            if function.receiver == Some(MirReceiverKind::BorrowMut)
+                && self.module.classes.iter().any(|c| {
+                    c.methods.iter().any(|m| {
+                        m.name == crate::sema::DROP_HOOK && m.function_name == function.name
+                    })
+                })
+            {
+                self.define_drop_thunk(function)?;
+            }
             if function.receiver.is_none() {
                 self.define_function_thunk(function)?;
                 self.define_function_default_binder(function)?;
@@ -1767,6 +1804,13 @@ impl<'a> NativeCodegen<'a> {
                 ty,
                 Some(&entry_values[entry_index..end]),
             );
+            if matches!(
+                param.passing,
+                MirReceiverKind::Borrow | MirReceiverKind::BorrowMut
+            ) && param.ty.as_fixed_array().is_some()
+            {
+                builder.bind_array_parameter(variables[&param.name][0], entry_index);
+            }
             entry_index = end;
         }
 
@@ -2741,6 +2785,14 @@ impl<'a> NativeCodegen<'a> {
             });
         }
         let mut compiler = FunctionCompiler {
+            raw_cells: HashMap::new(),
+            addressed_members: HashMap::new(),
+            class_owners: class_drop::Owners::prepare(
+                function,
+                &self.plain_records.owner_types,
+                builder,
+                &mut variable_index,
+            ),
             builder,
             blocks,
             variables,
@@ -2912,6 +2964,15 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        compiler.prepare_raw_cells(function)?;
+        for param in &function.params {
+            if param.passing == MirReceiverKind::Value {
+                compiler.stamp_lexical_owner(&param.name)?;
+            }
+        }
+        if function.receiver == Some(MirReceiverKind::Value) {
+            compiler.stamp_lexical_owner("self")?;
+        }
         compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
@@ -2965,6 +3026,9 @@ impl<'a> NativeCodegen<'a> {
         if matches!(function.name.as_str(), "main" | "__script") {
             let module_constant = builder.import_function(self.runtime[RuntimeFn::ModuleConstant]);
             for constant in &self.module.constants {
+                if constant.frozen.is_some() {
+                    continue;
+                }
                 let initializer =
                     self.function_thunks
                         .get(&constant.initializer)
@@ -3015,6 +3079,10 @@ impl<'a> NativeCodegen<'a> {
                 DirectType::Callable(_) => {
                     // The boxed handle is adopted into the callable's words.
                     lowered_args.extend(unbox_thunk_value(self, builder, raw, param_ty)?);
+                }
+                DirectType::Fixed(layout) => {
+                    lowered_args.push(layout.thunk_convert(self, builder, raw, false)?);
+                    builder.call(release_value, &[raw]);
                 }
                 DirectType::Opaque(_) => lowered_args.push(raw),
                 DirectType::Scalar(
@@ -3257,6 +3325,7 @@ impl<'a> NativeCodegen<'a> {
         let args_ptr = builder.block_params(entry)[0];
         let raw = builder.load(types::I64, MemFlags::new(), args_ptr, 0);
         match &place_ty {
+            DirectType::Fixed(_) => {}
             DirectType::Callable(_) => {}
             DirectType::Union(_) => {}
             DirectType::PlainClass(class_ty) => {
@@ -4164,7 +4233,13 @@ fn direct_reverse_postorder(
     Ok(postorder)
 }
 
+#[path = "native_codegen_class_drop.rs"]
+mod class_drop;
+
 struct FunctionCompiler<'a> {
+    raw_cells: HashMap<String, (crate::c_layout::CStruct, Val)>,
+    addressed_members: HashMap<String, Vec<String>>,
+    class_owners: class_drop::Owners,
     builder: &'a mut dyn FunctionBackend,
     /// The machine of a freestanding object, whose checks call the trap
     /// hook in place of the runtime.
@@ -5400,6 +5475,10 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.freestanding.is_some() && self.compile_scale_offset(block, instruction_index)? {
+                skipped = 3;
+                continue;
+            }
             if self.compile_union_buffer_read(block, instruction_index)? {
                 skipped = 3;
                 continue;
@@ -5478,6 +5557,7 @@ impl<'a> FunctionCompiler<'a> {
             let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
             self.str_append_root = None;
             compiled?;
+            self.after_owner_instruction(instruction)?;
         }
         // No range proof names the terminator.
         self.current_snapshot_instruction = usize::MAX;
@@ -6121,6 +6201,9 @@ impl<'a> FunctionCompiler<'a> {
         instruction_index: usize,
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
+        if self.store_fixed_element_in_place(instruction)? {
+            return Ok(());
+        }
         if let Instruction::Assign { target, .. } = instruction {
             // A part of a `json.Value` literal that is built as a tape
             // emits nothing, and the literal's root builds the tape.
@@ -6264,6 +6347,14 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::SourceLocation { line, column } => {
                 self.builder.set_source_location(*line, *column);
             }
+            Instruction::InlineAsm {
+                asm,
+                inputs,
+                outputs,
+                ..
+            } => self.compile_inline_asm(asm, inputs, outputs)?,
+            Instruction::ArmDrop { place, function } => self.arm_drop_hook(place, function)?,
+            Instruction::EndOwner { .. } => {}
             Instruction::SourceName { .. } => {}
             Instruction::Safepoint => {
                 let Some(fuel_variable) = self.safepoint_fuel else {
@@ -6933,6 +7024,7 @@ impl<'a> FunctionCompiler<'a> {
                 let _ = (message, captures);
                 let (line, column) = self.span_values(Some(*span));
                 let code = match kind {
+                    AssertKind::CBitField => freestanding::TRAP_CAST,
                     AssertKind::Assert => freestanding::TRAP_ASSERT,
                     _ => freestanding::TRAP_CONTRACT,
                 };
@@ -7314,6 +7406,19 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(target).is_some() {
+            if let Rvalue::Use(Operand::Int(value)) = rvalue {
+                return Ok(self.wide_literal(*value, target));
+            }
+            if let Rvalue::Unary {
+                op: UnaryOp::Neg,
+                value: Operand::Int(magnitude),
+                ..
+            } = rvalue
+            {
+                return Ok(self.wide_literal(magnitude.wrapping_neg(), target));
+            }
+        }
         if !self.node_payloads.is_empty() {
             if let Some(made) = self.take_node_payload(rvalue)? {
                 return Ok(made);
@@ -7373,7 +7478,47 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Scalar(ScalarKind::Bool),
                 })
             }
+            Rvalue::CPointerAccess {
+                address,
+                store,
+                layout,
+                volatile,
+            } => self.compile_pointer_class(address, store.as_ref(), layout, *volatile, target),
+            Rvalue::CFieldAddress {
+                root,
+                layout,
+                offset,
+            } if layout.name == "#fixed" => {
+                let (base, _) = self
+                    .fixed_local_address(root)
+                    .ok_or("missing inline storage")?;
+                let address = self.builder.iadd_imm(base, *offset as i64);
+                Ok(ValueRef {
+                    values: vec![address],
+                    ty: DirectType::Scalar(ScalarKind::Uint64),
+                })
+            }
+            Rvalue::CFieldAddress { root, offset, .. } => {
+                let (_, slot) = self.raw_cells.get(root).ok_or("missing C local storage")?;
+                let address = self.builder.iadd_imm(*slot, *offset as i64);
+                Ok(ValueRef {
+                    values: vec![address],
+                    ty: DirectType::Scalar(ScalarKind::Uint64),
+                })
+            }
+            Rvalue::ModuleLoad { key } => self.load_state(key),
+            Rvalue::ModuleStore { key, value } => self.store_state(key, value),
+            Rvalue::ModuleAddress { key } => self.address_of_state(key),
             Rvalue::ModuleConstant { key, initializer } => {
+                if self.freestanding.is_some() && initializer.is_empty() {
+                    return self.frozen_table_address(key, target);
+                }
+                if let Some(constant) = self.module_constants.iter().find(|entry| entry.key == *key)
+                {
+                    if let Some(value) = &constant.frozen {
+                        return self.read_frozen_constant(constant, value, target);
+                    }
+                }
                 let thunk = *self.function_thunk_refs.get(initializer).ok_or_else(|| {
                     format!(
                         "direct backend cannot find module constant initializer `{initializer}`"
@@ -7998,6 +8143,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&value.ty).is_some() {
+            return self.wide_unary(op, value, span);
+        }
         let integer = value.ty.scalar_kind().filter(|kind| kind.is_integer());
         if matches!(value.ty, DirectType::Opaque(_)) || (op == UnaryOp::BitNot && integer.is_none())
         {
@@ -8248,6 +8396,9 @@ impl<'a> FunctionCompiler<'a> {
         target_ty: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&value.ty).is_some() || wide_numbers::signed(target_ty).is_some() {
+            return self.wide_cast(value, target_ty, span);
+        }
         if matches!(value.ty, DirectType::Opaque(_)) || matches!(target_ty, DirectType::Opaque(_)) {
             let boxed = self.ensure_opaque(value)?;
             let (target_ptr, target_len) = self.string_constant(target.to_string().as_bytes())?;
@@ -8830,6 +8981,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<ValueRef, String> {
+        if wide_numbers::signed(&left.ty).is_some() || wide_numbers::signed(&right.ty).is_some() {
+            return self.wide_binary(op, left, right, span);
+        }
         if let (DirectType::Union(left_union), DirectType::Union(right_union)) =
             (&left.ty, &right.ty)
         {
@@ -9579,6 +9733,9 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
     ) -> std::result::Result<(), String> {
         let fail_block = self.builder.create_block();
+        if self.freestanding.is_some() {
+            self.builder.set_cold_block(fail_block);
+        }
         let continue_block = self.builder.create_block();
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
@@ -9657,6 +9814,15 @@ impl<'a> FunctionCompiler<'a> {
             return Ok(value);
         }
         match callee {
+            CallTarget::Name(name)
+                if self.freestanding.is_some()
+                    && freestanding::frozen_tables::is_projection(name) =>
+            {
+                self.frozen_table_projection(name, args, target)
+            }
+            CallTarget::Name(op) if crate::mir::fixed_arrays::is_operation(op) => {
+                self.compile_fixed(op, args, type_args)
+            }
             CallTarget::Name(name) => self.compile_named_call(name, args, type_args),
             CallTarget::Value(function) => self.compile_function_value_call(function, args, target),
             CallTarget::Extern(call) => self.compile_extern_call(call, args, target),
@@ -10646,6 +10812,7 @@ impl<'a> FunctionCompiler<'a> {
             };
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
             let coerced = self.coerce_value(semantic_coerced, abi_expected)?;
+            let coerced = self.fixed_argument_reference(coerced, argument, kept.get(index));
             if let Some(place) = &argument.writeback_place {
                 writeback_tagged.push(
                     type_args.is_empty()
@@ -12089,6 +12256,7 @@ impl<'a> FunctionCompiler<'a> {
             )?,
         };
         match &ty {
+            DirectType::Fixed(_) => Err("fixed arrays use a literal initializer".to_owned()),
             DirectType::Union(_) | DirectType::Callable(_) => Err(format!(
                 "direct backend cannot construct `{}` as a class: it is not a class type",
                 class_name
@@ -12373,6 +12541,9 @@ impl<'a> FunctionCompiler<'a> {
         operand: &Operand,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if let (Some(_), Operand::Int(value)) = (wide_numbers::signed(target), operand) {
+            return Ok(self.wide_literal(*value, target));
+        }
         let hint = target.scalar_kind().filter(|kind| kind.is_integer());
         self.load_operand_with_integer_hint(operand, hint)
     }
@@ -13261,6 +13432,10 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn load_root(&mut self, name: &str) -> std::result::Result<ValueRef, String> {
+        if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
+            let ty = self.local_type(name)?;
+            return self.read_raw_class(&layout, slot, ty);
+        }
         let vars = self.local_vars(name)?;
         let ty = self.local_type(name)?;
         let values = vars
@@ -13274,6 +13449,9 @@ impl<'a> FunctionCompiler<'a> {
                 *handle = self.snapshot_handle(name, *handle);
             }
         }
+        if self.addressed_members.contains_key(name) {
+            value = self.refresh_addressed_members(name, value)?;
+        }
         Ok(value)
     }
 
@@ -13283,6 +13461,7 @@ impl<'a> FunctionCompiler<'a> {
         field: &str,
     ) -> std::result::Result<ValueRef, String> {
         match &object.ty {
+            DirectType::Fixed(_) => Err(format!("fixed array has no field `{field}`")),
             DirectType::PlainClass(_) => {
                 let (start, end, field_ty) = required_direct_field_slice(&object.ty, field)?;
                 Ok(ValueRef {
@@ -13372,6 +13551,12 @@ impl<'a> FunctionCompiler<'a> {
         target: &DirectType,
         span: Option<Span>,
     ) -> std::result::Result<ValueRef, String> {
+        if value.ty != *target
+            && wide_numbers::signed(target).is_some()
+            && value.ty.scalar_kind().is_some()
+        {
+            return self.wide_cast(value, target, span);
+        }
         if &value.ty == target {
             let shaped =
                 matches!(value.values.as_slice(), [word] if self.shaped_boxes.contains(word));
@@ -13517,6 +13702,10 @@ impl<'a> FunctionCompiler<'a> {
 
         if matches!(value.ty, DirectType::Opaque(_)) {
             let result = match target {
+                DirectType::Fixed(layout) => ValueRef {
+                    values: vec![self.fixed_convert(layout, value.values[0], false)?],
+                    ty: target.clone(),
+                },
                 DirectType::Callable(callable) => {
                     let handle = self.transfer_opaque_arg(&value);
                     let words = self.boxed_callable_words(handle, &callable.signature)?;
@@ -15031,6 +15220,12 @@ impl<'a> FunctionCompiler<'a> {
     /// other store, such as a writeback or a field written into an inline
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
+        if let Some((layout, slot)) = self.raw_cells.get(name).cloned() {
+            self.write_raw_class(&layout, &value, slot)?;
+        }
+        if self.addressed_members.contains_key(name) {
+            self.store_addressed_members(name, &value)?;
+        }
         let expected = self.local_type(name)?;
         // These locals may hold a payload box or the null success marker.
         // The declared enum describes the original MIR value.
@@ -15163,6 +15358,11 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<Vec<Val>, String> {
         let member_ty = union.member(index)?.clone();
         let member = self.coerce_value(member, &member_ty)?;
+        if let Some(words) =
+            fixed_arrays::pack_union_member(self.builder, union, index, &member_ty, &member.values)
+        {
+            return Ok(words);
+        }
         let mut words = vec![self.builder.iconst(types::I64, index as i64)];
         for (value, abi) in member.values.iter().zip(member_ty.abi_types()) {
             words.push(if abi == types::F64 {
@@ -15185,6 +15385,14 @@ impl<'a> FunctionCompiler<'a> {
         words: &[Val],
     ) -> std::result::Result<ValueRef, String> {
         let member_ty = union.member(index)?.clone();
+        if let Some(values) =
+            fixed_arrays::unpack_union_member(self.builder, &member_ty, &words[1..])
+        {
+            return Ok(ValueRef {
+                values,
+                ty: member_ty,
+            });
+        }
         let mut values = Vec::new();
         for (word, abi) in words[1..].iter().zip(member_ty.abi_types()) {
             values.push(if abi == types::F64 {
@@ -15390,6 +15598,10 @@ impl<'a> FunctionCompiler<'a> {
 
     fn ensure_opaque(&mut self, value: ValueRef) -> std::result::Result<ValueRef, String> {
         match value.ty {
+            DirectType::Fixed(ref layout) => {
+                let raw = self.fixed_convert(layout, value.values[0], true)?;
+                Ok(self.owned_opaque_result(vec![raw], layout.ty.clone()))
+            }
             DirectType::Callable(ref callable) => {
                 let signature = callable.signature.clone();
                 let handle = self.call_callable_box_on_words(&value.values);
@@ -17846,6 +18058,7 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         match op {
+            ScalarOp::Bits(method) => self.compile_bit_method(method, object, args),
             ScalarOp::Sqrt => Ok(ValueRef {
                 values: vec![self.builder.fsqrt(object.values[0])],
                 ty: object.ty,
@@ -17860,6 +18073,9 @@ impl<'a> FunctionCompiler<'a> {
                 })
             }
             ScalarOp::ToFloat => {
+                if wide_numbers::signed(&object.ty).is_some() {
+                    return self.wide_float(&object, ScalarKind::Float64, false, None);
+                }
                 // A scalar integer converts inline; a boxed one calls the
                 // helper.
                 if let Some(kind) = object.ty.scalar_kind() {
@@ -17977,6 +18193,20 @@ impl<'a> FunctionCompiler<'a> {
         {
             self.clear_temporary_opaque_owned(&object);
             return Ok(self.owned_opaque_result(object.values, result_ty));
+        }
+        if matches!(op, ValueOp::Clone | ValueOp::Copy)
+            && !self.plain_records.owner_types.is_empty()
+            && class_drop::can_hold_owner(&receiver_ty, &self.plain_records.owner_types)
+        {
+            let id = declare_runtime_function(
+                self.builder.module(),
+                "aura_direct_copy_class_owners",
+                &[types::I64],
+                Some(types::I64),
+            )?;
+            let copy = self.builder.import_function(id);
+            let result = self.builder.call(copy, &[object.values[0]]);
+            return Ok(self.owned_opaque_result(result.results, result_ty));
         }
         let results = self.runtime_call_results(
             self.runtime[runtime_op.runtime_call().function],
@@ -19552,7 +19782,15 @@ impl<'a> FunctionCompiler<'a> {
         // receiver, such as a shared instance, an enum, or a scalar, takes
         // the tests by type name below.
         let mut codes = Vec::new();
+        let needs_owner = candidates
+            .iter()
+            .any(|candidate| candidate.owner_type.is_some());
         for (index, candidate) in candidates.iter().enumerate() {
+            // A less specific unguarded candidate must not bypass a more
+            // specific one when the receiver type selects both.
+            if needs_owner {
+                break;
+            }
             let Type::Named(name, args) = &candidate.ty else {
                 continue;
             };
@@ -19581,6 +19819,15 @@ impl<'a> FunctionCompiler<'a> {
         for (candidate, then_block) in candidates.iter().zip(&then_blocks) {
             self.layout_scratch = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
+            let matched = if let Some(owner_ty) = &candidate.owner_type {
+                let owner = self.load_place("self")?;
+                let owner = self.ensure_opaque(owner)?;
+                let owner_matches = self.value_matches_runtime_type(owner.values[0], owner_ty)?;
+                self.release_temporary_owned_since(&caller_owned);
+                self.builder.band(matched, owner_matches)
+            } else {
+                matched
+            };
             let else_block = self.builder.create_block();
             self.builder
                 .brif(matched, *then_block, &[], else_block, &[]);
@@ -20618,6 +20865,7 @@ fn leaf_body_calling(
 ) -> bool {
     fn words_only(ty: &DirectType) -> bool {
         match ty {
+            DirectType::Fixed(_) => true,
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
             DirectType::Union(union) => {
                 union.owning.is_empty() && union.members.iter().all(|member| words_only(&member.ty))
@@ -21700,11 +21948,18 @@ fn validate_function_in_reachable(
                 Instruction::Safepoint
                 | Instruction::SourceLocation { .. }
                 | Instruction::SourceName { .. }
+                | Instruction::EndOwner { .. }
+                | Instruction::ArmDrop { .. }
                 | Instruction::IndexInRange { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. }
                 | Instruction::Lend { .. }
                 | Instruction::EndLend { .. } => {}
+                Instruction::InlineAsm { inputs, .. } => {
+                    for input in inputs {
+                        validate_operand(input)?;
+                    }
+                }
                 Instruction::BeginElementLoan { selector, .. }
                 | Instruction::ReborrowElement { selector, .. } => validate_operand(selector)?,
                 Instruction::BeginLoan { .. }
@@ -21761,6 +22016,16 @@ fn validate_rvalue(
         | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
+        Rvalue::CPointerAccess { address, store, .. } => {
+            validate_operand(address)?;
+            if let Some(value) = store {
+                validate_operand(value)?;
+            }
+            Ok(())
+        }
+        Rvalue::CFieldAddress { .. } => Ok(()),
+        Rvalue::ModuleStore { value, .. } => validate_operand(value),
+        Rvalue::ModuleLoad { .. } | Rvalue::ModuleAddress { .. } => Ok(()),
         Rvalue::ModuleConstant { .. } => Ok(()),
         Rvalue::Closure {
             signature,
@@ -22182,6 +22447,9 @@ fn direct_ffi_type_for_source(
     ty: &Type,
     passing: Option<MirReceiverKind>,
 ) -> std::result::Result<DirectFfiType, String> {
+    if ty.as_raw_pointer().is_some() {
+        return Ok(DirectFfiType::scalar(FfiType::U64));
+    }
     let Type::Named(name, args) = ty else {
         if *ty == Type::Unit && passing.is_none() {
             return Ok(DirectFfiType::scalar(FfiType::Unit));
@@ -22348,6 +22616,8 @@ fn direct_type_inner(
         Type::Function { .. } | Type::Closure { .. } | Type::Callable(_) => {
             Some(DirectType::Callable(DirectCallableType::new(ty.clone())))
         }
+        _ if ty.as_raw_pointer().is_some() => Some(DirectType::Scalar(ScalarKind::Uint64)),
+        ty if ty.as_fixed_array().is_some() => fixed_arrays::direct_layout(ty, classes, visiting),
         Type::Named(name, args) if args.is_empty() && ScalarKind::of_name(name).is_some() => {
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }
@@ -22362,6 +22632,13 @@ fn direct_type_inner(
         }
         Type::Named(name, args) if args.is_empty() => {
             if let Some(class) = classes.get(name) {
+                if class
+                    .methods
+                    .iter()
+                    .any(|method| method.name == crate::sema::DROP_HOOK)
+                {
+                    return Some(DirectType::Opaque(ty.clone()));
+                }
                 if !visiting.insert(name.clone()) {
                     return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                 }
@@ -22387,6 +22664,7 @@ fn direct_type_inner(
                 }
                 visiting.remove(name);
                 return Some(DirectType::PlainClass(PlainClassType {
+                    c_layout: class.c_layout.clone().map(std::sync::Arc::new),
                     class_name: name.clone(),
                     fields,
                 }));
@@ -22636,6 +22914,7 @@ fn scalar_list_slot(kind: ScalarElement) -> (aura_runtime::native_runtime::Direc
 
 fn render_direct_type(ty: &DirectType) -> String {
     match ty {
+        DirectType::Fixed(layout) => layout.ty.to_string(),
         DirectType::Scalar(kind) => kind.type_name().to_string(),
         DirectType::PlainClass(class) => class.class_name.clone(),
         DirectType::Union(union) => union.union_type.to_string(),
@@ -22715,6 +22994,7 @@ fn box_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Val, String> {
     match ty {
+        DirectType::Fixed(layout) => layout.thunk_convert(codegen, builder, values[0], true),
         DirectType::Callable(_) => callables::call_callable_box_adapter(builder, values),
         DirectType::Union(union) => {
             let union_inject = builder.import_function(codegen.runtime[RuntimeFn::UnionInject]);
@@ -22729,6 +23009,17 @@ fn box_thunk_value(
                 &[types::I64],
                 |builder, index| {
                     let member_ty = &union.members[index].ty;
+                    if let Some(values) =
+                        fixed_arrays::unpack_union_member(builder, member_ty, &words)
+                    {
+                        let payload = box_thunk_value(codegen, builder, &values, member_ty)?;
+                        let index_value = builder.iconst(types::I64, index as i64);
+                        return Ok(vec![
+                            builder
+                                .call(union_inject, &[ptr, len, index_value, payload])
+                                .results[0],
+                        ]);
+                    }
                     let mut member_values = Vec::new();
                     for (word, abi) in words.iter().zip(member_ty.abi_types()) {
                         member_values.push(if abi == types::F64 {
@@ -22826,6 +23117,7 @@ fn unbox_thunk_value(
     ty: &DirectType,
 ) -> std::result::Result<Vec<Val>, String> {
     match ty {
+        DirectType::Fixed(layout) => Ok(vec![layout.thunk_convert(codegen, builder, raw, false)?]),
         DirectType::Callable(callable) => {
             callables::boxed_callable_words(codegen, builder, raw, &callable.signature)
         }
@@ -22853,6 +23145,15 @@ fn unbox_thunk_value(
                     // is the copy itself and travels with the union words.
                     if !matches!(member_ty, DirectType::Opaque(_) | DirectType::Callable(_)) {
                         let _ = builder.call(release_value, &[payload]);
+                    }
+                    if let Some(words) = fixed_arrays::pack_union_member(
+                        builder,
+                        union,
+                        index,
+                        member_ty,
+                        &member_values,
+                    ) {
+                        return Ok(words);
                     }
                     let mut words = vec![builder.iconst(types::I64, index as i64)];
                     for (value, abi) in member_values.iter().zip(member_ty.abi_types()) {
@@ -22980,6 +23281,7 @@ fn release_direct_values(
     ty: &DirectType,
 ) -> std::result::Result<(), String> {
     match ty {
+        DirectType::Fixed(_) => {}
         DirectType::Callable(_) => {
             callables::call_callable_unary_adapter(builder, values, callables::DESCRIPTOR_DROP)?;
         }
@@ -23175,6 +23477,7 @@ fn describe_debug_variables(
 fn debug_variable(name: &str, ty: &DirectType) -> Option<DebugVariable> {
     let encoding = match ty {
         DirectType::Scalar(ScalarKind::Unit) => return None,
+        DirectType::Fixed(_) => return None,
         DirectType::Scalar(ScalarKind::Bool) => DebugEncoding::Bool,
         DirectType::Scalar(kind) if kind.is_float() => DebugEncoding::Float,
         DirectType::Scalar(kind) if kind.is_unsigned_integer() => DebugEncoding::Unsigned,
@@ -23251,6 +23554,7 @@ fn mangle_cleanup_thunk_symbol(function_name: &str, place: &str, index: usize) -
 
 fn direct_type_to_type(ty: &DirectType) -> Type {
     match ty {
+        DirectType::Fixed(layout) => layout.ty.clone(),
         DirectType::Scalar(ScalarKind::Unit) => Type::Unit,
         DirectType::Scalar(kind) => Type::named(kind.type_name()),
         DirectType::PlainClass(class) => Type::named(&class.class_name),
@@ -23383,6 +23687,8 @@ mod freestanding_heap;
 mod freestanding_tests;
 #[path = "native_codegen_freestanding_values.rs"]
 mod freestanding_values;
+#[path = "native_codegen_inline_asm.rs"]
+mod inline_asm;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]
@@ -23393,13 +23699,19 @@ mod key_loops;
 mod list_snapshots;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
+#[path = "native_codegen_machine.rs"]
+mod machine;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_module_state.rs"]
+mod module_state;
 #[path = "native_codegen_range_loops.rs"]
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
+#[path = "native_codegen_fixed_arrays.rs"]
+mod fixed_arrays;
 #[path = "native_codegen_ordered.rs"]
 mod ordered;
 #[path = "native_codegen_plain.rs"]
@@ -23437,3 +23749,12 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
                 && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }
+
+#[path = "native_codegen_frozen.rs"]
+mod frozen;
+
+#[path = "native_integer_bits.rs"]
+mod integer_bits;
+
+#[path = "native_freestanding_i128.rs"]
+pub(crate) mod wide_numbers;

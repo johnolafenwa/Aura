@@ -38,6 +38,7 @@ tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"
 webpki-roots = "1"
 zune-jpeg = "0.5"
+libm = { version = "0.2", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1.1"

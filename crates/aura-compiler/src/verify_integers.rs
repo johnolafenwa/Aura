@@ -50,7 +50,26 @@ const MAX_EXPONENT: i128 = 63;
 impl IntTy {
     /// The number of bits of the type.
     pub(super) fn width(self) -> u32 {
-        (self.hi - self.lo + 1).trailing_zeros()
+        self.0.bit_width()
+    }
+
+    /// Whether the bit operations, shifts, powers and fixed-width methods
+    /// here model the type. Their arithmetic counts the values of the
+    /// type in an `i128`, which a 128-bit type does not fit.
+    pub(super) fn modeled(self) -> bool {
+        self.width() < 128
+    }
+
+    /// The type's smallest value. Only for a type that is `modeled`.
+    pub(super) fn lo(self) -> i128 {
+        debug_assert!(self.modeled());
+        self.bounds().0
+    }
+
+    /// The type's largest value. Only for a type that is `modeled`.
+    pub(super) fn hi(self) -> i128 {
+        debug_assert!(self.modeled());
+        self.bounds().1 as i128
     }
 }
 
@@ -119,7 +138,7 @@ fn and_literal(x: &str, mask: i128) -> String {
 pub(super) fn bitnot(a: &str, ty: IntTy) -> String {
     // For a signed type that is `-a - 1`; an unsigned one counts down
     // from its largest value.
-    let top = if ty.lo == 0 { ty.hi } else { -1 };
+    let top = if ty.lo() == 0 { ty.hi() } else { -1 };
     match literal(a) {
         Some(value) => lit(top - value),
         None => format!("(- {} {a})", lit(top)),
@@ -140,11 +159,14 @@ pub(super) fn spec_cast(value: Val, ty: &TypeRef, wd: &mut Vec<String>) -> Resul
             wd.push(int.contains(&term));
             Ok(Val::Int(term, int))
         }
+        (_, Some(int), _) if !int.modeled() => {
+            Err("a cast to a 128-bit integer is not modeled in contracts yet".into())
+        }
         (Val::Float(term, from), Some(int), _) => {
             wd.push(format!(
                 "(and {} {})",
-                from.above(&term, int.lo - 1),
-                from.below(&term, int.hi + 1)
+                from.above(&term, int.lo() - 1),
+                from.below(&term, int.hi() + 1)
             ));
             let truncated = format!("(to_int (fp.to_real (fp.roundToIntegral RTZ {term})))");
             Ok(Val::Int(truncated, int))
@@ -207,7 +229,7 @@ impl Exec<'_> {
         if term.contains("k!q") {
             return term;
         }
-        let (lo, hi) = (lit(ty.lo), lit(ty.hi));
+        let (lo, hi) = (lit(ty.lo()), lit(ty.hi()));
         self.unmodeled(what, |exec| {
             exec.define_with("Int", "bitand", term, |r| {
                 // `a | b` is `a + b - r` and `a ^ b` is `a + b - 2r`;
@@ -215,7 +237,7 @@ impl Exec<'_> {
                 let ranges = format!(
                     "(<= (- (+ {a} {b}) {hi}) {r}) (<= (- (+ {a} {b}) {hi}) (* 2 {r})) (<= (* 2 {r}) (- (+ {a} {b}) {lo}))"
                 );
-                if ty.lo == 0 {
+                if ty.lo() == 0 {
                     return format!("(and (<= 0 {r}) (<= {r} {a}) (<= {r} {b}) {ranges})");
                 }
                 // Clearing bits of a value that is not negative keeps it
@@ -316,6 +338,9 @@ impl Exec<'_> {
             return Err("a bit operation on these operands is not modeled yet".into());
         };
         let ty = if literal_left { *bty } else { *aty };
+        if !ty.modeled() {
+            return Err("a bit operation on a 128-bit integer is not modeled yet".into());
+        }
         if !matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
             return Ok(Val::Int(self.bitwise(op, a, b, ty), ty));
         }
@@ -346,8 +371,8 @@ impl Exec<'_> {
             BinaryOp::Shr => return self.shift(op, a, b, ty),
             _ => self.shift(op, a, b, ty),
         };
-        let (lo, hi) = (lit(ty.lo), lit(ty.hi));
-        let size = ty.hi - ty.lo + 1;
+        let (lo, hi) = (lit(ty.lo()), lit(ty.hi()));
+        let size = ty.hi() - ty.lo() + 1;
         let body = match (wraps, op) {
             // A sum or a difference is off by at most one whole range.
             (true, BinaryOp::Add | BinaryOp::Sub) => {
@@ -416,7 +441,7 @@ impl Exec<'_> {
                 let mut powers = vec![1i128];
                 while let Some(next) = powers[powers.len() - 1]
                     .checked_mul(base)
-                    .filter(|next| (ty.lo..=ty.hi).contains(next))
+                    .filter(|next| (ty.lo()..=ty.hi()).contains(next))
                 {
                     powers.push(next);
                 }
@@ -506,6 +531,9 @@ impl Exec<'_> {
             return Err("`**` on these operands is not modeled in contracts yet".into());
         };
         let ty = if literal_left { *bty } else { *aty };
+        if !ty.modeled() {
+            return Err("`**` on a 128-bit integer is not modeled in contracts yet".into());
+        }
         let Some((term, exponent, in_type)) = self.pow_term(a, b, ty) else {
             return Err(
                 "`**` of two values that are not constants is not modeled in contracts yet".into(),
@@ -598,8 +626,8 @@ impl Exec<'_> {
                 let int = IntTy::INT64;
                 let fits = format!(
                     "(and {} {})",
-                    float.above(&x, int.lo - 1),
-                    float.below(&x, int.hi + 1)
+                    float.above(&x, int.lo() - 1),
+                    float.below(&x, int.hi() + 1)
                 );
                 exact(
                     Val::Int(
@@ -655,7 +683,7 @@ impl Exec<'_> {
                 // Both are symmetric: one order, so both name one term.
                 let (a, b) = if a <= b { (a, b) } else { (b, a) };
                 let (size_a, size_b) = (magnitude(a), magnitude(b));
-                let lo = lit(IntTy::INT64.lo);
+                let lo = lit(IntTy::INT64.lo());
                 if name == "gcd" {
                     let result = self.applied(("gcd!", "(Int Int)", "Int"), &[a, b], what, |r| {
                         format!(

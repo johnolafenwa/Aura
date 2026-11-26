@@ -1,0 +1,5 @@
+copy class Badge:
+    number: int64
+
+    def __drop__(mut self):
+        pass

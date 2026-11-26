@@ -141,7 +141,11 @@ function requestCompiler(method, params, cancellationToken) {
     });
     compilerServiceKey = key;
   }
-  return compilerService.request(method, params, cancellationToken);
+  return compilerService.request(
+    method,
+    process.env.AURA_LSP_FREESTANDING === "1" ? { ...params, freestanding: true } : params,
+    cancellationToken
+  );
 }
 
 class CompilerService {
@@ -412,9 +416,9 @@ function compilerCompletionToLsp(item, kind) {
   return result;
 }
 
-function compilerDiagnosticsToLsp(analysis, documentUri) {
+function compilerDiagnosticsToLsp(analysis, documentUri, source) {
   const positions = analysisPositions(analysis);
-  return (analysis.diagnostics || []).map((diagnostic) => {
+  const diagnostics = (analysis.diagnostics || []).map((diagnostic) => {
     const result = {
       severity: diagnostic.severity,
       range: positions.range(
@@ -458,6 +462,24 @@ function compilerDiagnosticsToLsp(analysis, documentUri) {
     }
     return result;
   });
+  if (analysis.inactive_lines?.length) {
+    const lines = (source ?? analyzedSources.get(analysis)?.source)?.split(/\r?\n/);
+    for (const { start, end } of analysis.inactive_lines) {
+      diagnostics.push({
+        severity: 4,
+        tags: [1], // DiagnosticTag.Unnecessary dims the whole discarded suite.
+        range: {
+          start: { line: start, character: 0 },
+          end: lines
+            ? { line: end - 1, character: lines[end - 1].length }
+            : { line: end, character: 0 }
+        },
+        source: "aura-compiler",
+        message: "Inactive for this build configuration"
+      });
+    }
+  }
+  return diagnostics;
 }
 
 function compilerSymbolsToLsp(analysis) {

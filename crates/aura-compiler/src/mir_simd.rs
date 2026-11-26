@@ -171,6 +171,7 @@ impl Lowerer<'_> {
                         unreachable!("a lane element is an index expression")
                     };
                     self.lower_assign(&AssignStmt {
+                        member_span: None,
                         mutable: false,
                         target: AssignTarget::Index { object, index },
                         annotation: None,

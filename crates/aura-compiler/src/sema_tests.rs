@@ -331,14 +331,14 @@ fn s1_sema_fourth_match_statements_and_expressions_pin_shape_diagnostics() {
 fn s1_sema_fifth_entry_module_rules_and_constant_plan_are_observable() {
     let mutable_module = crate::check_source("mut state = 1\n\ndef main():\n    pass\n")
         .expect_err("module-level mutable state must be rejected before entrypoint checking");
-    assert_eq!(mutable_module.code, "AU3003");
+    assert_eq!(mutable_module.code, "AU3030");
     assert_eq!(
         mutable_module.message,
-        "module bindings are immutable; `mut` module state is not supported"
+        "hosted module bindings are immutable"
     );
     assert_eq!(
         mutable_module.help,
-        vec!["put mutable state in a local value owned by `main` or another explicit owner"]
+        vec!["share an immutable sync.AtomicInt or sync.Mutex binding, or keep the value local to its task"]
     );
 
     let return_type = crate::check_source("def main() -> str:\n    return \"bad\"\n")
@@ -7964,6 +7964,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         span: Span::new(1, 1),
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: Vec::new(),
         spec: false,
@@ -8032,6 +8033,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        layout_controls: Default::default(),
         c_union: None,
     }
 }
@@ -8227,6 +8229,7 @@ fn assign_stmt(
     value: Expr,
 ) -> AssignStmt {
     AssignStmt {
+        member_span: None,
         mutable,
         target,
         annotation,
@@ -8623,6 +8626,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![not_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
@@ -8651,6 +8655,7 @@ fn checker_expression_helper_paths_cover_collection_specialization_and_control_e
                 methods: vec![neg_decl.clone()],
                 span: Span::new(1, 1),
                 derived: false,
+                delegation: None,
                 assoc_types: Vec::new(),
             },
             type_params: Vec::new(),
@@ -20351,6 +20356,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
     };
     let program = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("main"))],
@@ -20366,6 +20374,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_class = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Class(class_decl("RemoteBox", false, Vec::new()))],
@@ -20389,6 +20400,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_enum = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Enum(EnumDecl {
@@ -20420,6 +20434,9 @@ fn check_with_context_covers_imported_binding_registration_and_duplicate_item_pa
 
     let duplicate_function = check_with_context(
         Module {
+            inactive_lines: Vec::new(),
+            asm_span: None,
+            module_asm: Vec::new(),
             constants: Vec::new(),
             imports: Vec::new(),
             items: vec![Item::Function(function_decl("remote_fn"))],
@@ -33392,6 +33409,11 @@ def run() -> int32:
     };
     assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
 
+    check_ffi_source_for_test(
+        "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+    )
+    .expect("assigning a mutable union member checks");
+
     for (source, message, code) in [
         (
             "extern \"C\" union U:\n    name: str\n",
@@ -33402,11 +33424,6 @@ def run() -> int32:
             "extern \"C\" union U:\n    names: array[str, 2]\n",
             "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
             "AU2002",
-        ),
-        (
-            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
-            "",
-            "",
         ),
         (
             "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
@@ -34208,5 +34225,73 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
     assert!(
         error.message.contains("BigInt") && error.message.contains("int64"),
         "{error:?}"
+    );
+}
+
+#[test]
+fn fixed_arrays_check_element_counts_and_iteration() {
+    let good = include_str!("../tests/fixtures/run-pass/fixed_arrays.au");
+    crate::check_source(good).expect("the inline array should type check");
+    let bad = include_str!("../tests/fixtures/check-fail/fixed_array_wrong_length.au");
+    assert_eq!(crate::check_source(bad).unwrap_err().code, "AU2082");
+}
+
+#[test]
+fn fixed_array_layouts_reject_heap_elements_and_oversized_objects() {
+    for ty in [
+        "fixed[int32, 0]",
+        "fixed[fixed[uint64, 1048576], 1048576]",
+        "fixed[str, 2]",
+        "fixed[Message, 2]",
+    ] {
+        let source = format!(
+            "class Message:\n    text: str\n\ndef f(row: {ty}) -> int64:\n    return len(row)\n"
+        );
+        let error = crate::check_source(&source).expect_err(ty);
+        assert_eq!(error.code, "AU2081", "{ty}: {error}");
+    }
+}
+
+#[test]
+fn c_bit_field_cannot_be_lent_as_an_independent_scalar() {
+    let source = "extern \"C\" class Flags:\n    code: uint8 bits(3)\n\ndef set(value: mut uint8) -> None:\n    value = 127\n\ndef change() -> None:\n    mut f = Flags(code=1)\n    set(f.code)\n";
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU3033"
+    );
+}
+
+#[test]
+fn fixed_array_diagnostics_identify_lengths_element_types_and_copy_requirements() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_length_zero.au"),
+            "AU2081",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_element_type.au"),
+            "AU2082",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/fixed_array_noncopy_repeat.au"),
+            "AU3031",
+        ),
+    ] {
+        assert_eq!(crate::check_source(source).unwrap_err().code, code);
+    }
+}
+
+#[test]
+fn fixed_array_size_accounts_for_explicit_c_alignment() {
+    let source = r#"
+extern "C" align(128) class Header:
+    byte: uint8
+
+def unused(rows: fixed[fixed[Header, 1024], 32768]):
+    pass
+"#;
+    assert_eq!(
+        check_ffi_source_for_test(source).unwrap_err().code,
+        "AU2081"
     );
 }

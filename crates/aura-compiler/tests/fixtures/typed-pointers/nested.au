@@ -1,0 +1,22 @@
+import mem
+
+extern "C" class Point:
+    x: uint16
+    y: uint16
+
+class Holder:
+    point: Point
+    words: fixed[uint16, 3]
+
+export "C" def nested() -> uint16:
+    mut h = Holder(point=Point(x=3, y=4), words=[5, 6, 7])
+    x = mem.address_of(h.point.x)
+    word = mem.address_of(h.words[2])
+    x.write(8)
+    word.write(9)
+    h.point.y = 2
+    h.words[0] = 1
+    return h.point.x + h.point.y + h.words[2] + word.read()
+
+def main() -> None:
+    assert nested() == 28

@@ -203,6 +203,15 @@ impl Fields {
     }
 
     fn format(&self, pattern: &str) -> std::result::Result<String, String> {
+        if crate::builtin_limit::active() {
+            // A directive produces at most a nanosecond field or a month name.
+            let bound = (pattern.len() as u64).saturating_add(
+                (pattern.bytes().filter(|b| *b == b'%').count() as u64).saturating_mul(12),
+            );
+            if !crate::builtin_limit::fits(bound) {
+                return Err("formatted date exceeds the output allowance".to_string());
+            }
+        }
         let mut out = String::with_capacity(pattern.len() + 16);
         let mut chars = pattern.chars();
         while let Some(ch) = chars.next() {

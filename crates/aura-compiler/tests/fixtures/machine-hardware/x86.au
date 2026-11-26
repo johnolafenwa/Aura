@@ -1,0 +1,15 @@
+import mem as hw
+from mem import read_msr as model_register
+
+export "C" def ports(port: uint16) -> None:
+    hw.out_uint8(port, hw.in_uint8(port))
+    hw.out_uint16(port, hw.in_uint16(port))
+    hw.out_uint32(port, hw.in_uint32(port))
+
+export "C" def registers(index: uint32, value: uint64) -> uint64:
+    hw.disable_interrupts()
+    hw.write_cr3(hw.read_cr3())
+    hw.write_msr(index, value)
+    hw.enable_interrupts()
+    hw.halt()
+    return model_register(index)

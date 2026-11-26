@@ -309,6 +309,7 @@ impl Values {
         if !self.text {
             self.text = true;
             let class = MirClass {
+                c_layout: None,
                 name: TEXT_CLASS.to_string(),
                 type_params: Vec::new(),
                 fields: vec![MirClassField {
@@ -341,6 +342,7 @@ impl Values {
         if !self.lists.contains_key(&name) {
             self.lists.insert(name.clone(), element.clone());
             let class = MirClass {
+                c_layout: None,
                 name: name.clone(),
                 type_params: Vec::new(),
                 fields: vec![MirClassField {
@@ -566,6 +568,7 @@ impl Values {
                 _ => true,
             });
         let class = MirClass {
+            c_layout: None,
             name: name.to_string(),
             type_params: Vec::new(),
             fields,
@@ -3329,16 +3332,21 @@ fn box_functions(values: &mut Values) -> Vec<MirFunction> {
 }
 
 /// The scalars of a value of type `ty`, in the order of its words.
-fn leaf_kinds(ty: &DirectType, kinds: &mut Vec<ScalarKind>) {
+fn leaf_kinds(ty: &DirectType, kinds: &mut Vec<ScalarKind>) -> Result<(), String> {
     match ty {
         DirectType::Scalar(kind) => kinds.push(*kind),
         DirectType::PlainClass(class) => {
             for field in &class.fields {
-                leaf_kinds(&field.ty, kinds);
+                leaf_kinds(&field.ty, kinds)?;
             }
+        }
+        // A box holds one word for each scalar; an inline array is not one.
+        DirectType::Fixed(_) => {
+            return Err("a `fixed` array in a heap block is not supported yet".into());
         }
         DirectType::Union(_) | DirectType::Callable(_) | DirectType::Opaque(_) => {}
     }
+    Ok(())
 }
 
 /// Where word `index` of the value in a box lies: after the reference
@@ -3386,7 +3394,7 @@ impl FunctionCompiler<'_> {
         if kind.starts_with(STORE) {
             let address = self.load_operand(&args[0].value)?.values[0];
             let value = self.load_operand(&args[1].value)?;
-            leaf_kinds(&value.ty, &mut kinds);
+            leaf_kinds(&value.ty, &mut kinds)?;
             for (index, (kind, word)) in kinds.into_iter().zip(&value.values).enumerate() {
                 self.store_leaf(box_leaf(index, kind), *word, address);
             }
@@ -3394,7 +3402,7 @@ impl FunctionCompiler<'_> {
         }
         if kind.starts_with(LOAD) {
             let address = self.load_operand(&args[0].value)?.values[0];
-            leaf_kinds(target, &mut kinds);
+            leaf_kinds(target, &mut kinds)?;
             let values = kinds
                 .into_iter()
                 .enumerate()

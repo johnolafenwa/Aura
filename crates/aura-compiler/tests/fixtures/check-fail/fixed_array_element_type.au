@@ -1,0 +1,3 @@
+def main():
+    slots: fixed[uint8, 2] = [1, true]
+    print(len(slots))

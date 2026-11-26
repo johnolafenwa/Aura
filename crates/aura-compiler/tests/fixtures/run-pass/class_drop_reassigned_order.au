@@ -1,0 +1,19 @@
+import control
+
+class Ticket:
+    label: str
+    def __drop__(mut self):
+        print("drop " + self.label)
+
+def broken():
+    mut first = Ticket("replaced")
+    second = Ticket("second")
+    first = Ticket("first")
+    assert false, "finish"
+
+def main():
+    match control.recover(broken):
+        case Err(trap):
+            print(trap.message)
+        case _:
+            print("unexpected success")

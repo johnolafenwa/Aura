@@ -1,0 +1,61 @@
+import mem
+
+export "C" def exercise(block: uint64) -> bool:
+    p_int8 = block as ptr[int8]
+    p_int8.write(-87)
+    if mem.read_int8(block) != -87:
+        return false
+    mem.volatile_write_int8(block, -87)
+    if p_int8.volatile_read() != -87:
+        return false
+    p_int16 = block as ptr[int16]
+    p_int16.write(-32000)
+    if mem.read_int16(block) != -32000:
+        return false
+    mem.volatile_write_int16(block, -32000)
+    if p_int16.volatile_read() != -32000:
+        return false
+    p_int32 = block as ptr[int32]
+    p_int32.write(-1000000)
+    if mem.read_int32(block) != -1000000:
+        return false
+    mem.volatile_write_int32(block, -1000000)
+    if p_int32.volatile_read() != -1000000:
+        return false
+    p_int64 = block as ptr[int64]
+    p_int64.write(-20000000000)
+    if mem.read_int64(block) != -20000000000:
+        return false
+    mem.volatile_write_int64(block, -20000000000)
+    if p_int64.volatile_read() != -20000000000:
+        return false
+    p_float32 = block as ptr[float32]
+    p_float32.write(1.5)
+    if mem.read_float32(block) != 1.5:
+        return false
+    mem.volatile_write_float32(block, 1.5)
+    if p_float32.volatile_read() != 1.5:
+        return false
+    p_float64 = block as ptr[float64]
+    p_float64.write(-108.5)
+    if mem.read_float64(block) != -108.5:
+        return false
+    mem.volatile_write_float64(block, -108.5)
+    if p_float64.volatile_read() != -108.5:
+        return false
+    p_bool = block as ptr[bool]
+    p_bool.write(true)
+    if mem.read_bool(block) != true:
+        return false
+    mem.volatile_write_bool(block, true)
+    if p_bool.volatile_read() != true:
+        return false
+    return true
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    block = malloc(8)
+    assert exercise(block)
+    free(block)

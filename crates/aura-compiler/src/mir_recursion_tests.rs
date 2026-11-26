@@ -126,3 +126,36 @@ def main() -> int32:
     let names = recursive_functions(&module);
     assert_eq!(user(&names), vec!["burn"], "{names:?}");
 }
+
+#[test]
+fn callback_dispatch_preserves_cycles_for_all_two_function_graphs() {
+    for edge_mask in 0u8..16 {
+        let direct = (0..2)
+            .map(|from| {
+                (0..2)
+                    .filter(|to| edge_mask & (1 << (2 * from + to)) != 0)
+                    .collect()
+            })
+            .collect::<Vec<Vec<usize>>>();
+        for opaque_mask in 0u8..4 {
+            let opaque = [opaque_mask & 1 != 0, opaque_mask & 2 != 0];
+            for escape_mask in 0u8..4 {
+                let escaping = (0..2)
+                    .filter(|to| escape_mask & (1 << to) != 0)
+                    .collect::<Vec<_>>();
+                let mut expanded = direct.clone();
+                for (callees, calls_back) in expanded.iter_mut().zip(opaque) {
+                    if calls_back {
+                        callees.extend_from_slice(&escaping);
+                    }
+                }
+                let expected = cyclic_nodes(&expanded);
+                let actual = super::cyclic_functions(direct.clone(), &opaque, escaping);
+                assert_eq!(
+                    actual, expected,
+                    "direct={edge_mask}, opaque={opaque_mask}, escaping={escape_mask}"
+                );
+            }
+        }
+    }
+}

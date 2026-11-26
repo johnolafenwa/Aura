@@ -29,6 +29,11 @@
     "mir_interpreter": [
       "aura_compiler::mir_runtime::"
     ],
+    "class_drop": [
+      "runtime_value::class_drop::RELEASED",
+      "native_runtime::class_drop::drain_released_hooks",
+      "aura_direct_arm_class_drop"
+    ],
     "recovery": [
       "runtime_value::recovered_trap_value",
       "runtime_value::recovered_trap_fields",
@@ -87,6 +92,7 @@
     "hello_world": {
       "source": "examples/basics/hello_world.au",
       "absent": [
+        "class_drop",
         "recovery",
         "aws_lc",
         "llvm",
@@ -113,6 +119,7 @@
     "reference_agent": {
       "source": "examples/agents/tool_runner/src/main.au",
       "absent": [
+        "class_drop",
         "aws_lc",
         "llvm",
         "parser",
@@ -138,6 +145,7 @@
     "json": {
       "source": "examples/json/dynamic_values.au",
       "absent": [
+        "class_drop",
         "aws_lc",
         "llvm",
         "parser",
@@ -156,6 +164,7 @@
     "tls": {
       "source": "examples/io/unix_tls_roundtrip.au",
       "absent": [
+        "class_drop",
         "aws_lc",
         "llvm",
         "parser",
@@ -177,6 +186,7 @@
     "websocket": {
       "source": "examples/io/websocket_roundtrip.au",
       "absent": [
+        "class_drop",
         "aws_lc",
         "llvm",
         "parser",
@@ -196,11 +206,11 @@
   },
   "baselines": {
     "linux-x86_64": {
-      "hello_world": 1077072,
-      "reference_agent": 2580760,
-      "json": 1838368,
-      "tls": 3671424,
-      "websocket": 3953416
+      "hello_world": 1163776,
+      "reference_agent": 2714904,
+      "json": 2022744,
+      "tls": 3857512,
+      "websocket": 4159808
     },
     "darwin-arm64": {
       "hello_world": 1157192,

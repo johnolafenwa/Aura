@@ -7,15 +7,9 @@ _start:
     mov x0, #(3 << 20)         // CPACR_EL1.FPEN: turn FP and NEON on
     msr cpacr_el1, x0
     isb
-    ldr x0, =0x09000000        // the PL011 serial port
-    ldr x1, =scratch
+    ldr x0, =scratch
     bl kernel_main
     bl power_off
-
-    .globl console_address
-console_address:
-    ldr x0, =0x09000000
-    ret
 
     // The memory after the stack is the heap's.
     .globl heap_start
@@ -27,7 +21,6 @@ heap_start:
 heap_size:
     ldr x0, =0x100000
     ret
-
     .globl power_off
 power_off:
     ldr x0, =0x84000008        // PSCI SYSTEM_OFF

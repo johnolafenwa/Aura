@@ -1,0 +1,2 @@
+def wrong(value: uint32, n: str) -> uint32:
+    return value.rotate_left(n)

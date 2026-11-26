@@ -1,0 +1,10 @@
+extern "C" def malloc(size: uint64) -> ptr[fixed[uint16, 4]]
+extern "C" def memset(buffer: mut ptr[fixed[uint16, 4]], value: int32, count: uint64) -> uint64
+extern "C" def free(buffer: mut ptr[fixed[uint16, 4]]) -> None
+
+def main() -> None:
+    block = malloc(8)
+    memset(block, 1, 8)
+    row = block.read()
+    assert row[3] == 257
+    free(block)

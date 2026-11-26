@@ -1006,13 +1006,14 @@ const workspaceCompiler = path.join(
   process.platform === "win32" ? "aura.exe" : "aura"
 );
 
-async function startWorkspaceServer(t, folders) {
+async function startWorkspaceServer(t, folders, environment = {}) {
   const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
     ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
     : path.resolve(__dirname, "..", "dist", "server.js");
   assert.equal(fs.existsSync(serverPath), true, `language server bundle not found: ${serverPath}`);
   const client = startLanguageServer(serverPath, {
-    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH || workspaceCompiler,
+    ...environment
   });
   t.after(() => client.dispose());
   const initialize = await client.request("initialize", {
@@ -1296,3 +1297,214 @@ test(
     assert.equal(fs.existsSync(verifyMarker), false, "untitled buffer triggered aura verify");
   }
 );
+
+test("bundled language server dims discarded suites and resolves declarations in them", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const uri = pathToFileURL(path.join(workspaceRoot, "build-branches.au")).href;
+  const text = [
+    "import build",
+    "public const limit = 4",
+    "if build.hosted:",
+    "    def answer() -> int64:",
+    "        return limit",
+    "else:",
+    "    def answer() -> int64:",
+    "        return missing_target_function()",
+    "    def fallback() -> int64:",
+    "        return answer()",
+    "",
+    "def main():",
+    "    print(answer())",
+    ""
+  ].join("\n");
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((entry) => entry.severity === 1), []);
+  assert.ok(diagnostics.some((entry) =>
+    entry.tags?.includes(1) && entry.range.start.line <= 6 && entry.range.end.line >= 9));
+  const params = { textDocument: { uri }, position: { line: 9, character: 16 } };
+  const hover = await client.request("textDocument/hover", params);
+  assert.match(hover.result?.contents?.value, /answer/);
+  const definition = await client.request("textDocument/definition", params);
+  assert.deepEqual(definition.result?.range, {
+    start: { line: 6, character: 8 }, end: { line: 6, character: 14 }
+  });
+});
+
+test("saving package cfg updates the dimmed branch of an open document", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-editor-cfg-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const manifest = path.join(dir, "Aura.toml");
+  const base = '[package]\nname = "branch_demo"\nversion = "0.1.0"\nedition = "2026"\n';
+  fs.writeFileSync(manifest, base);
+  fs.mkdirSync(path.join(dir, "src"));
+  const file = path.join(dir, "src", "main.au");
+  const text = [
+    "import build",
+    "def main():",
+    '    if "trace" in build.cfg:',
+    '        print("on")',
+    "    else:",
+    '        print("off")'
+  ].join("\n");
+  fs.writeFileSync(file, text);
+  const uri = pathToFileURL(file).href;
+  const client = await startWorkspaceServer(t, [workspaceRoot, dir]);
+  const faded = (line) => (items) =>
+    items.some((item) =>
+      item.tags?.includes(1) && item.range.start.line <= line && line <= item.range.end.line);
+  let update = publishedDiagnostics(client, uri, faded(3));
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  assert.ok(!faded(5)(await update));
+
+  fs.writeFileSync(manifest, base + '\n[build.cfg]\ntrace = true\n');
+  update = publishedDiagnostics(client, uri, faded(5));
+  client.notify("workspace/didChangeWatchedFiles", {
+    changes: [{ uri: pathToFileURL(manifest).href, type: 2 }]
+  });
+  assert.ok(!faded(3)(await update));
+});
+
+test("guarded class members retain property and decorator navigation", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot]);
+  const uri = pathToFileURL(path.join(workspaceRoot, "guarded-class-editor.au")).href;
+  const lines = [
+    "import build",
+    "type Answer = Callable[def() -> int64]",
+    "def traced(f: own Answer) -> Answer:",
+    "    return f",
+    "class Counter:",
+    "    stored: int64",
+    "    if build.hosted:",
+    "        @property",
+    "        def count(self) -> int64:",
+    "            return self.stored",
+    "        @count.setter",
+    "        def count(mut self, value: int64):",
+    "            self.stored = value",
+    "        @traced",
+    "        def answer() -> int64:",
+    "            return 42",
+    "    else:",
+    "        @traced",
+    "        def alternative() -> int64:",
+    "            return missing_target_function()",
+    "def main():",
+    "    mut counter = Counter(stored=0)",
+    "    counter.count += 1",
+    "    print(counter.count)",
+    "    print(Counter.answer())",
+    ""
+  ];
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((entry) => entry.severity === 1), []);
+  const hints = diagnostics.filter((entry) => entry.tags?.includes(1));
+  assert.deepEqual(hints.map(({ range }) => range), [{
+    start: { line: 17, character: 0 },
+    end: { line: 19, character: lines[19].length }
+  }]);
+  for (const [line, name, target, hoverPattern] of [
+    [10, "count", 8, /property count: int64/],
+    [13, "traced", 2, /traced/],
+    [17, "traced", 2, /traced/],
+    [22, "count", 11, /@count\.setter/],
+    [23, "count", 8, /property count: int64/],
+    [24, "answer", 14, /@traced\nmethod answer/]
+  ]) {
+    const params = { textDocument: { uri }, position: { line, character: lines[line].lastIndexOf(name) } };
+    const hover = await client.request("textDocument/hover", params);
+    assert.match(hover.result?.contents?.value || "", hoverPattern, lines[line]);
+    const definition = await client.request("textDocument/definition", params);
+    assert.deepEqual(definition.result?.range.start, {
+      line: target, character: lines[target].indexOf(name)
+    }, lines[line]);
+  }
+});
+
+test("freestanding diagnostics and navigation use the selected machine target", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-machine-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "Aura.toml"),
+    '[package]\nname = "machine"\nversion = "0.1.0"\nedition = "2026"\nallow_ffi = true\n');
+  const file = path.join(root, "src", "main.au");
+  const lines = [
+    'export "C" def copy_word(value: uint64) -> uint64:',
+    '    mut result: uint64 = 0',
+    '    asm("movq $1, $0 # value", output("reg", result), input("reg", value), options("pure"))',
+    '    return result',
+    ''
+  ];
+  const text = lines.join("\n");
+  fs.writeFileSync(file, text);
+  const uri = pathToFileURL(file).toString();
+
+  const client = await startWorkspaceServer(t, [root], {
+    AURA_LSP_FREESTANDING_TARGET: "x86_64-unknown-none", AURA_LSP_VERIFY: "0"
+  });
+  const diagnostics = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text }
+  });
+  assert.deepEqual(await diagnostics, []);
+  const request = async (method, word, inTemplate = false) => {
+    const column = inTemplate ? lines[2].indexOf(word) : lines[2].lastIndexOf(word);
+    const result = await client.request(`textDocument/${method}`, {
+      textDocument: { uri }, position: { line: 2, character: column + 1 }
+    });
+    assert.equal(result.error, undefined);
+    return result.result;
+  };
+  assert.match((await request("hover", "value")).contents.value, /value: uint64/);
+  assert.equal((await request("definition", "result")).range.start.line, 1);
+  assert.equal(await request("hover", "value", true), null);
+  assert.deepEqual(await request("completion", "value", true), []);
+  assert.match((await request("hover", "input")).contents.value, /operand/);
+  assert.ok((await request("completion", "options")).some(item => item.label === "clobber"));
+
+  const invalid = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didChange", {
+    textDocument: { uri, version: 2 },
+    contentChanges: [{ text: text.replace('input("reg"', 'input("unknown_register"') }]
+  });
+  assert.ok((await invalid).some(diagnostic => /register/.test(diagnostic.message)));
+});
+
+test("an explicit freestanding editor target selects its build.arch branch", async (t) => {
+  const client = await startWorkspaceServer(t, [workspaceRoot], {
+    AURA_LSP_FREESTANDING_TARGET: "riscv64gc-unknown-none-elf",
+    AURA_LSP_VERIFY: "0"
+  });
+  const uri = pathToFileURL(path.join(workspaceRoot, "riscv-editor-guards.au")).href;
+  const lines = [
+    "import build",
+    'if build.freestanding and build.arch == "riscv64":',
+    "    const width: int64 = 64",
+    "else:",
+    "    const width = missing_architecture()",
+    'export "C" def entry() -> int64:',
+    "    return width"
+  ];
+  const published = publishedDiagnostics(client, uri);
+  client.notify("textDocument/didOpen", {
+    textDocument: { uri, languageId: "aura", version: 1, text: lines.join("\n") }
+  });
+  const diagnostics = await published;
+  assert.deepEqual(diagnostics.filter((item) => item.severity === 1), []);
+  assert.deepEqual(diagnostics.filter((item) => item.tags?.includes(1)).map((item) => item.range), [{
+    start: { line: 4, character: 0 }, end: { line: 4, character: lines[4].length }
+  }]);
+  const definition = await client.request("textDocument/definition", {
+    textDocument: { uri }, position: { line: 6, character: lines[6].indexOf("width") }
+  });
+  assert.deepEqual(definition.result?.range.start, { line: 2, character: lines[2].indexOf("width") });
+});

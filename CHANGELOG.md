@@ -23,6 +23,21 @@ in this file.
   without a box (`interpreter` runs a third fewer instructions), a `for`
   over a short literal of numbers builds no list, and lists cost less to
   create and grow.
+- Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
+- The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
+- The editor dims inactive suites and provides navigation for identifiable declarations in them.
+- Freestanding x86-64, AArch64 and RISC-V programs can use typed assembly,
+  machine entry and placement attributes, and privileged operations in
+  `mem`. The new x86-64 `--kernel` profile disables the red zone and
+  vector registers. The QEMU kernel example now boots an x86-64 board
+  and returns from breakpoint and timer interrupts.
+- Freestanding modules can keep writable state in `.data` and `.bss`. Use `fixed[T, N]` for inline arrays and `ptr[T]` for typed access to cells, elements and C fields.
+- C records support packing, explicit alignment, unsigned bit-fields, C layout queries and writable union members.
+- Integers gain rotations, bit counts and byte swapping. Freestanding functions can use 128-bit integers. Memory atomics support 8-, 16-, 32- and 64-bit cells and explicit memory orders.
+- Forward a trait and its supertraits to an owned field with `impl Trait for Class by field`. A suite can override individual methods.
+- Pair a computed getter with `@name.setter` to accept assignment and compound assignment on a mutable receiver.
+- Define `__drop__(mut self)` to run cleanup when ownership ends, including collection release and trap recovery.
+- Apply callable decorators to instance and associated methods. Instance methods pass their receiver as the first argument.
 - Freestanding builds have a heap. `mem.alloc`, `mem.free`, and
   `mem.realloc` hand out blocks of memory at a `uint64` address, and
   `mem.heap_add_region` names the memory the heap may use. They call three

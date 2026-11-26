@@ -56,9 +56,11 @@ declaration. Anywhere else it is an ordinary name. The declaration needs no
 permission in `Aura.toml`. In a hosted build it is an ordinary function and
 the binary does not export it.
 
-A freestanding build needs at least one exported function. It compiles the
-functions the exports reach, in every module of the program, and nothing
-else. An export in an imported module is also defined in the object.
+An exported function is a root for code generation. The compiler follows
+calls from each root across module boundaries. A retained function, a
+placed data definition or a module assembly block can also provide the
+object's contents. An export in an imported module is defined in the
+object.
 
 ## What A Freestanding Program May Hold
 
@@ -66,6 +68,8 @@ Every value is one or more machine words. Three kinds of value also own
 blocks on a heap: text, lists, dictionaries, and an enum that holds
 itself. See [Text](#text), [Lists](#lists), [Dictionaries](#dictionaries), and
 [Enums That Hold Themselves](#enums-that-hold-themselves).
+Other values live in registers, stack frames or static storage, and a
+fixed array stores its elements inline.
 A program reaches other heap memory through addresses: see
 [The Heap](#the-heap).
 
@@ -87,22 +91,22 @@ def read(port: uint64) -> (Reading, uint64):
 
 | Available | Not available |
 | --- | --- |
-| `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
+| `bool`, `int8` to `int128`, `uint8` to `uint128`, `float32`, `float64` | `Duration` |
 | Classes whose fields are available types, with methods | Classes that hold a `set` |
 | `str` with literals, `+`, comparisons, `len`, `byte_len`, `starts_with`, `ends_with`, `contains`, and f-strings of text, integers, and `bool` | Every other `str` method, indexing, slices, floats and format specs in f-strings, `str \| None` |
 | `list` of integers, floats, `bool`, `str`, classes, tuples, enums, lists, or unions of those, with literals, `append`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`, `len`, `is_empty`, element reads and writes, `view` of an element, and `for` loops | Lists of unions of words alone such as `list[int64 \| None]`, the other `list` methods, slices |
 | `dict` with `int64`, `uint64`, or `str` keys and any value a list may hold, with literals, `d[key]`, `d[key] = value`, `key in d`, `len`, `is_empty`, `keys`, `values`, `items`, and `clear` | Other key types, `get`, `remove`, and the other `dict` methods |
-| `extern "C"` classes | `set`, `Array` |
+| `extern "C"` classes, `fixed[T, N]` arrays and typed raw pointers | `set`, `bytes`, `Array` |
 | Tuples of available types | Tuples that hold any other type |
 | Enums and `Result` whose payloads are scalars, classes, tuples, or enums of available types, and `indirect` payloads of the enum's own type | Enums that hold a union or a collection, and `Lookup` |
 | `T \| None` and other unions of available types, `str \| None` among them | Unions that hold any other type |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range`, over a list, or over a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
+| `if`, `while`, `for` over `range`, a fixed array, a list, or a call of a generator function, `match` on a union or an enum, `try` on a `Result` of available types | `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print` |
 | `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
-| Module constants with a literal value | Module constants computed when the program starts |
-| `extern "C"` calls with scalar, `mut` scalar, struct, text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+| Pure module constants, including computed read-only tables, and mutable module cells with static initializers | Module bindings that require runtime initialization |
+| `extern "C"` calls with scalar, `mut` scalar, struct, text, and callback arguments | Opaque handles and `bytes` arguments that need hosted storage. |
 
 `aura check --freestanding` and the build report each construct outside the
 subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
@@ -114,6 +118,14 @@ error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
 
 Only reached functions are checked. A package may hold hosted helpers and
 tests that a freestanding build never compiles.
+
+The compiler can build a collection in a pure helper on the build machine, then emit its values in the destination object's read-only data. Read the computed table from an export, using a runtime index if needed. The kernel uses this for its decimal digits. [Compile-Time Evaluation](/manual/compile-time)
+
+## Module Storage
+
+A module declaration such as `mut samples: fixed[uint16, 2] = [40, 0]` creates one writable cell shared by all exports that use it. A zero-initialized cell occupies `.bss`. Other initializers occupy `.data`. The startup code must clear `.bss` and, on boards that load writable data from ROM, copy the initial contents of `.data` to RAM before calling an export.
+
+Use `samples[0]` to read or assign one element and `len(samples)` for its constant length. An unconstrained index is checked before the access. Ordinary hosted packages share mutable data through immutable bindings to synchronization handles. [Names and scopes](/manual/names-and-scopes) · [Fixed arrays](/manual/types)
 
 ## Text
 
@@ -300,6 +312,8 @@ void aura_trap(uint32_t code, const char *file, size_t file_length,
 | 6 | Shift count out of range |
 | 7 | A foreign `bool` that is neither 0 nor 1 |
 | 8 | Unreachable code was reached |
+| 9 | Fixed-array index out of bounds |
+| 10 | A frozen sequence index is out of range or a frozen dictionary key is absent |
 
 - `file` is the source file's path relative to the directory of the file
   that was built. It is not NUL-terminated. `file_length` is its length in
@@ -340,6 +354,97 @@ UART: uint64 = 268435456
 export "C" def put(byte: uint8) -> None:
     mem.volatile_write_uint8(UART, byte)
 ```
+
+## Assembly
+
+Write `asm` as a statement in a package with `allow_ffi = true`. This
+x86-64 function takes the bit pattern in an integer register, swaps its
+bytes and returns the result:
+
+```aura fragment
+export "C" def swap_bytes(value: uint64) -> uint64:
+    mut swapped: uint64 = 0
+    asm("movq $1, $0\nbswapq $0", output("reg", swapped), input("reg", value), options("pure", "preserves_flags"))
+    return swapped
+```
+
+| Clause | Contract |
+| --- | --- |
+| `input("reg", expr)` | Evaluate an integer or boolean expression once into a general-purpose register. |
+| `output("reg", binding)` | Store into a distinct mutable scalar binding. Its Aura type sets the width. |
+| `input("fpreg", expr)`, `output("fpreg", binding)` | Bind a `float32` or `float64` to a floating-point register. These registers are unavailable under `--kernel`. |
+| `clobber("rax", ...)` | List additional registers the template overwrites. A fixed register mentioned in the text needs an operand or clobber whenever its value matters to generated code. |
+| `options("pure")` | At least one output. The result depends only on the inputs. The template observes and changes no memory and has no other observable effects. |
+| `options("preserves_flags")` | The template preserves condition codes. |
+| `options("noreturn")` | Control never reaches the next statement. The template has no outputs. |
+
+Number the outputs first and the inputs second, starting at `$0`. Use
+`$$` for a literal dollar in inline assembly. On x86-64 use AT&T syntax.
+A register name in place of a class pins the operand, as in
+`input("dx", port)` for a `uint16`. A boolean input holds zero or one.
+A boolean output is true if its low byte is nonzero. For explicit register
+spellings use braced LLVM modifiers, such as `${0:k}` for an x86 32-bit
+general register and `${0:w}` or `${0:s}` for AArch64 integer or floating
+single-word registers. By default assembly can change memory and flags.
+
+Use `module_asm` at module scope for a complete routine. The linker sees
+the symbols you define in the template. Each imported module contributes
+its text once. The formatter preserves spaces and line breaks inside a
+template.
+
+```aura fragment
+module_asm(""".text
+.globl pause_once
+pause_once:
+    pause
+    ret""")
+```
+
+The checker validates the operand types, register names and declared
+clobbers for the selected target. LLVM checks instruction text while
+writing the object. See [Verification](/manual/verification#trust) for
+the proof boundary.
+
+## Machine Attributes
+
+Declare a hardware interrupt entry with `@machine.interrupt`. This handler
+receives an x86 exception's hardware error code. Startup supplies its
+address to the appropriate interrupt gate.
+
+```aura fragment
+@machine.interrupt("x86_64_error")
+@machine.section(".text.fault")
+@machine.align(16)
+@machine.used
+export "C" def fault(code: uint64) -> None:
+    pass
+```
+
+| Convention | Aura parameters | Entry and return |
+| --- | --- | --- |
+| `"x86_64"` | None | Preserves interrupted registers and returns with `iretq`. |
+| `"x86_64_error"` | One `uint64` | Passes the hardware error word to the handler and discards that word before `iretq`. |
+| `"aarch64"` | None | Uses an aligned EL1 stack with FP/NEON enabled. Preserves the exception return state and returns with `eret`. |
+| `"riscv64"` | None | Uses an aligned machine-mode stack. Preserves the exception PC, status and live floating-point state and returns with `mret`. |
+
+Each handler returns `None` and can call ordinary Aura or foreign
+functions. Only a hardware exception may enter it. Ordinary code that
+needs the same operation can call a helper shared with the handler.
+
+| Attribute | Effect |
+| --- | --- |
+| `@machine.naked` | The body is exactly one operand-free `asm("...")`. The template owns the stack, registers and return instruction. |
+| `@machine.section("name")` | Place the definition in a named ELF section. |
+| `@machine.align(bytes)` | Align the definition to a power of two in bytes, up to 2²⁹. |
+| `@machine.link_name("symbol")` | Write a function under the given object symbol. Aura callers use its source name. |
+| `@machine.used` | Keep a function and its section when linking with `--gc-sections`. |
+| `@machine.noinline`, `@machine.always_inline` | Set the function's inlining policy. Choose one. |
+
+Section and alignment also apply to mutable module storage and to explicitly
+typed scalar module constants with literal initializers. For example,
+`@machine.section(".board.config")` and `@machine.align(64)` above
+`MAGIC: uint32 = 0x12345678` emit a four-byte value on a 64-byte boundary. A mutable cell keeps at least
+its natural alignment and remains writable.
 
 ## The Heap
 
@@ -438,8 +543,8 @@ architecture of the machine that runs the compiler.
 
 Every target writes an ELF object, on every host.
 
-- Code is position independent and uses no thread-local or global state,
-  so every function is reentrant.
+- The default build emits position-independent code.
+- Synchronize access to mutable module state shared between cores or interrupt handlers.
 - There are no unwind tables and no stack probes.
 - Floats use the hardware float registers. Startup code must enable them
   before the first Aura function runs: SSE on x86-64, FP and NEON on
@@ -447,6 +552,30 @@ Every target writes an ELF object, on every host.
 - A C struct passed or returned by value is not supported on RISC-V. Pass a
   `mut` parameter.
 - `--debug` and `--target-cpu` are refused.
+
+## x86-64 Kernel Code
+
+Build every Aura object that can run on an interruptible kernel stack with
+`--kernel`. Pass the same profile to `aura check`.
+
+```sh
+aura check --freestanding --target x86_64-unknown-none --kernel kernel.au
+aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au
+```
+
+| x86-64 setting | Ordinary freestanding build | With `--kernel` |
+| --- | --- | --- |
+| Code placement | Position independent, default code model | Static relocations, kernel code model for addresses in the high 2 GiB |
+| Floating point | SSE2, System V float ABI | Software floating point, integer-register float ABI |
+| Stack | A leaf can use the 128 bytes below the stack pointer, the red zone | Each function reserves the stack space it needs |
+
+Kernel mode disables MMX, SSE, SSE2 and x87 in compiler-generated code.
+Use the same register and stack conventions for foreign code and assembly.
+Floating-point parameters and results cross a call as IEEE bit patterns
+in general-purpose registers. Arithmetic may call compiler-runtime helpers
+such as `__adddf3`. A square root can call `sqrtf` or `sqrt`. Supply those
+routines with the kernel's soft-float ABI. Run `llvm-nm -u kernel.o` to
+see which symbols one object needs.
 
 ## What The Object Needs
 
@@ -456,6 +585,7 @@ The object refers to these symbols and no others:
 | --- | --- |
 | `aura_trap` | The object holds a check. |
 | The program's `extern "C"` functions | The program calls them. |
+| Soft-float helpers | An x86-64 kernel object needs software arithmetic or square root. |
 | `aura_alloc`, `aura_free`, `aura_realloc`, `aura_heap_add_region`, `aura_heap_free_bytes` | The program calls the `mem` function for one and declares an allocation hook itself. See [The Heap](#the-heap). |
 
 The compiler may copy or compare a large value through `memcpy`, `memmove`,
@@ -487,22 +617,16 @@ image does not use.
 
 ## Size And Speed
 
-`benchmarks/freestanding` builds five routines with Aura, C, and Rust
-without its standard library, and links each with one harness. On an
-x86-64 Linux machine:
+The freestanding benchmark builds six routines with Aura, C and Rust, including a 16-element inline array updated over twenty million iterations. On x86-64 Linux, each executable ran on the same dedicated CPU core. The table gives the best elapsed time from nine runs per routine with the same C harness. The ratio compares Aura with the faster of C and Rust with overflow checks off. All four builds returned the same results.
 
-| Routine | Aura | C (`clang -O2`) | Rust | Rust with overflow checks |
-| --- | --- | --- | --- | --- |
-| `crc32` | 50 ms | 195 ms | 50 ms | 54 ms |
-| `collatz` | 231 ms | 157 ms | 139 ms | 302 ms |
-| `isqrt_sum` | 98 ms | 105 ms | 145 ms | 164 ms |
-| `gcd_sum` | 201 ms | 131 ms | 156 ms | 175 ms |
-| `orbit` | 832 ms | 882 ms | 778 ms | 756 ms |
-
-Aura keeps its overflow and divisor checks, and `%` rounds toward negative
-infinity, which costs a few instructions over C's remainder. The five
-functions are 993 bytes of code against 914 for C. The Aura object also
-holds 115 bytes of memory routines and the file name for the trap hook.
+| Routine | Aura | C | Rust | Rust with overflow checks | Aura / fastest C or Rust |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `crc32` | 45.6 ms | 144.8 ms | 45.2 ms | 46.1 ms | 1.01× |
+| `collatz` | 158.9 ms | 122.3 ms | 121.4 ms | 228.1 ms | 1.31× |
+| `isqrt_sum` | 120.0 ms | 119.8 ms | 139.9 ms | 129.0 ms | 1.00× |
+| `gcd_sum` | 171.7 ms | 120.2 ms | 121.7 ms | 136.4 ms | 1.43× |
+| `orbit` | 880.5 ms | 1007.6 ms | 883.6 ms | 884.7 ms | 1.00× |
+| `ring_mix` | 19.5 ms | 17.9 ms | 19.7 ms | 16.5 ms | 1.09× |
 
 ## Current Limits
 
@@ -516,9 +640,4 @@ holds 115 bytes of memory routines and the file name for the trap hook.
   be assigned. Build a new value instead.
 - Releasing a long list calls itself once for each link, so a very long
   list needs stack to match.
-- No inline assembly and no port I/O instructions. Memory-mapped devices
-  are reached with the [`mem` module](/manual/mem), and everything else
-  through `extern "C"` functions.
-- No mutable module-level state. Keep state in the entry function's locals,
-  behind `mut` parameters, or in C.
 - 32-bit targets are not supported.

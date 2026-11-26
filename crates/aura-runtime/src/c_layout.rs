@@ -11,12 +11,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::ffi::FfiScalar;
 
+mod placement;
+pub use placement::{bit_chunks, LayoutControls, StoragePart};
+
 /// A C struct or union: its fields in declaration order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CStruct {
     /// The Aura name of the class.
     pub name: String,
     pub fields: Vec<CField>,
+    #[serde(default, skip_serializing_if = "LayoutControls::is_default")]
+    pub layout_controls: Box<LayoutControls>,
     /// The fields are the members of a union: each starts at offset 0.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub union: bool,
@@ -85,6 +90,7 @@ impl CFieldKind {
             Self::Scalar(scalar) => leaves.push(CLeaf {
                 offset: base,
                 scalar: *scalar,
+                bits: None,
             }),
             Self::Struct(inner) => inner.push_leaves(base, leaves),
             Self::Array(element, count) => {
@@ -101,6 +107,7 @@ impl CFieldKind {
 /// union, and array flattened. The scalars of a union's members overlap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CLeaf {
+    pub bits: Option<(u8, u8)>,
     pub offset: usize,
     pub scalar: FfiScalar,
 }
@@ -236,47 +243,51 @@ impl CStruct {
 
     /// The alignment of the struct in bytes: that of its strictest field.
     pub fn align(&self) -> usize {
-        self.fields
-            .iter()
-            .map(|field| field.kind.align())
-            .max()
-            .unwrap_or(1)
-    }
-
-    /// Places one field at its aligned offset and advances the struct's end.
-    fn place_field(&self, field: &CField, end: &mut usize) -> usize {
-        let offset = if self.union {
-            0
+        let natural = if self.layout_controls.packed {
+            1
         } else {
-            end.next_multiple_of(field.kind.align())
+            self.fields
+                .iter()
+                .map(|field| field.kind.align())
+                .max()
+                .unwrap_or(1)
         };
-        *end = (*end).max(offset + field.kind.size());
-        offset
+        natural.max(self.layout_controls.alignment.unwrap_or(1))
     }
 
-    /// Fields and their byte offsets in declaration order. All members of
-    /// a union start at byte zero.
+    /// Every addressable field's byte offset, and the first byte of a bit-field.
     pub(crate) fn fields_with_offsets(&self) -> impl Iterator<Item = (&CField, usize)> {
-        let mut end = 0;
-        self.fields
-            .iter()
-            .map(move |field| (field, self.place_field(field, &mut end)))
+        self.positions().map(|(field, pos)| (field, pos.byte))
     }
 
     /// Whether the struct is scalars only, each at one offset: it is not a
     /// union and holds no array and no union at any depth. Generated code
     /// keeps such a class as one word per scalar.
     pub fn is_plain(&self) -> bool {
-        !self.union && self.fields.iter().all(|field| field.kind.is_plain())
+        if self.union {
+            return self.layout_controls.inline_union;
+        }
+        self.fields.iter().all(|field| {
+            self.layout_controls.inline_arrays.contains(&field.name) || field.kind.is_plain()
+        })
+    }
+
+    /// A modifier anywhere in a nested record can change the outer ABI.
+    pub fn has_controlled_layout(&self) -> bool {
+        fn controlled(kind: &CFieldKind) -> bool {
+            match kind {
+                CFieldKind::Struct(inner) => inner.has_controlled_layout(),
+                CFieldKind::Array(inner, _) => controlled(inner),
+                CFieldKind::Scalar(_) => false,
+            }
+        }
+        !self.layout_controls.is_default()
+            || self.fields.iter().any(|field| controlled(&field.kind))
     }
 
     /// The size of the struct in bytes, as `sizeof` gives it.
     pub fn size(&self) -> usize {
-        let mut end = 0;
-        for field in &self.fields {
-            self.place_field(field, &mut end);
-        }
-        end.next_multiple_of(self.align())
+        self.controlled_size()
     }
 
     /// The byte offset of each field, in order.
@@ -300,8 +311,14 @@ impl CStruct {
     }
 
     fn push_leaves(&self, base: usize, leaves: &mut Vec<CLeaf>) {
-        for (field, offset) in self.fields_with_offsets() {
-            field.kind.push_leaves(base + offset, leaves);
+        for (field, position) in self.positions() {
+            field.kind.push_leaves(base + position.byte, leaves);
+            if let Some(bits) = position.bits {
+                leaves
+                    .last_mut()
+                    .expect("a bit-field is a scalar leaf")
+                    .bits = Some(bits);
+            }
         }
     }
 
@@ -318,6 +335,11 @@ impl CStruct {
             return None;
         }
         let count = self.size() / first.size();
+        if self.has_controlled_layout()
+            && (0..count).any(|i| !leaves.iter().any(|leaf| leaf.offset == i * first.size()))
+        {
+            return None;
+        }
         (1..=4).contains(&count).then_some((first, count))
     }
 
@@ -346,28 +368,39 @@ impl CStruct {
                 CPassing::Memory
             };
         }
+        if abi == CAbi::SysV64
+            && leaves
+                .iter()
+                .any(|leaf| leaf.bits.is_none() && leaf.offset % leaf.scalar.size() != 0)
+        {
+            return CPassing::Memory;
+        }
         if size > 16 {
             return CPassing::Memory;
         }
         let pieces = (0..size)
             .step_by(8)
-            .map(|offset| {
-                let piece = (size - offset).min(8);
-                // Natural alignment keeps a scalar inside one eightbyte.
-                let all_float = leaves
+            .filter_map(|offset| {
+                // A packed bit-field may begin in one eightbyte and continue
+                // into the next. Both contain integer data for the SysV ABI.
+                let mut occupied = leaves
                     .iter()
-                    .filter(|leaf| leaf.offset / 8 == offset / 8)
-                    .all(is_float);
-                match (abi, all_float) {
-                    (CAbi::SysV64, true) => CPiece::Sse {
-                        offset,
-                        size: piece,
-                    },
-                    _ => CPiece::Int {
-                        offset,
-                        size: piece,
-                    },
+                    .filter(|leaf| {
+                        let bytes = leaf.bits.map_or(leaf.scalar.size(), |(start, width)| {
+                            usize::from(start + width).div_ceil(8)
+                        });
+                        leaf.offset < offset + 8 && leaf.offset + bytes > offset
+                    })
+                    .peekable();
+                if abi == CAbi::SysV64 && occupied.peek().is_none() {
+                    return None;
                 }
+                let size = (size - offset).min(8);
+                Some(if abi == CAbi::SysV64 && occupied.all(is_float) {
+                    CPiece::Sse { offset, size }
+                } else {
+                    CPiece::Int { offset, size }
+                })
             })
             .collect();
         CPassing::Registers(pieces)

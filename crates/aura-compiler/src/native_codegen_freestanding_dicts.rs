@@ -95,6 +95,7 @@ impl Values {
                 },
             );
             let class = MirClass {
+                c_layout: None,
                 name: name.clone(),
                 type_params: Vec::new(),
                 fields: vec![MirClassField {
