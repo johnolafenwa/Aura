@@ -412,9 +412,12 @@ See `2026-11-17-ordered-collections.md`.
   an early start of a product's operands, `tensor.set_grad_enabled`.
   `gpt_infer` on the A40 went from 338 to 362 ms to 274 to 277 ms
   against PyTorch's 270 to 272.
-- Remaining: the Mac runs, Metal support for the new operations,
-  `float16`, and the whole-program benchmarks listed in
-  `2026-11-12-gpu-tensors.md`.
+- Done 2026-11-24: `float16` tensors, attention heads read in place by
+  the CUDA products (ADR-0118), and the `gpt2` and `nanogpt` programs
+  with real weights and a real text beside PyTorch. See
+  `2026-11-24-float16-tensors.md`.
+- Remaining: the Mac runs, Metal support for the new operations and for
+  `float16`.
 
 ## Release 0.15.0-preview (complete)
 
