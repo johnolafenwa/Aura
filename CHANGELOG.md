@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- Speed: a `Result` that a function returns and its caller matches or
+  unwraps with `try` no longer allocates. `bank_ledger` runs half the
+  instructions it did in 0.17.0.
 - Checker: more ownership and narrowing rules hold in every position.
   - An `is None` test no longer applies after a `[mut x]` closure capture
     of the tested place, after a write through a `view mut` of it, or after
@@ -33,9 +36,6 @@ in this file.
   generic function over a union such as `T | int64` when `T` sorts before
   the other member.
 
-- Speed: a `Result` that a function returns and its caller matches or
-  unwraps with `try` no longer allocates. `bank_ledger` runs half the
-  instructions it did in 0.17.0.
 - Speed: `swap` on a list of a copy class, and an append to a list held
   in a field or in a list of lists, are compiled in place. `graph_paths`
   runs half the instructions it did in 0.17.0, and `order_book` two
