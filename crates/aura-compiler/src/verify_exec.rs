@@ -1210,23 +1210,9 @@ impl<'a> Exec<'a> {
             }
             None => {}
         }
-        // A view of a part a `str` method returned reads the part.
-        if let Some(Loan::Element { list, index, .. }) = state.loans.get(&root).cloned() {
-            let list = self.read_place(state, &list);
-            if self.is_part_list(&list) {
-                return self.element(&list, &index, &root);
-            }
-        }
+        // Every loan returned above, so the root is a plain local here.
         if !state.env.contains_key(&root) {
-            let lent = match state.loans.get(&root).cloned() {
-                Some(Loan::Element {
-                    list,
-                    index,
-                    projection,
-                }) => self.lent_element(state, &list, &index, &projection),
-                _ => None,
-            };
-            let value = lent.unwrap_or_else(|| self.fresh_local(&root));
+            let value = self.fresh_local(&root);
             state.env.insert(root.clone(), value);
         }
         if rest.is_empty() {

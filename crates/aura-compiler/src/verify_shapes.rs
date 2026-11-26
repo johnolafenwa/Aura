@@ -17,8 +17,8 @@
 use std::collections::BTreeMap;
 
 use super::exec::{
-    and, conjoin, element_sort, project, scalar_term, set_in, structural_eq, symbols, Exec, Goal,
-    State, Val, MAX_DEPTH,
+    and, conjoin, element_sort, scalar_term, set_in, structural_eq, symbols, Exec, Goal, State,
+    Val, MAX_DEPTH,
 };
 use super::ObligationKind;
 use crate::ast::{ContractClause, Expr, ExprKind, ReceiverKind};
@@ -639,28 +639,6 @@ impl<'a> Exec<'a> {
     }
 
     // ----- Borrowed list elements ------------------------------------------
-
-    /// The value a loan of the element at `index` of the list at `list`
-    /// reads, `projection` deep inside the element, when the list's
-    /// elements are modeled. The list cannot change while the loan lasts,
-    /// except through the loan.
-    pub(super) fn lent_element(
-        &mut self,
-        state: &mut State,
-        list: &str,
-        index: &str,
-        projection: &str,
-    ) -> Option<Val> {
-        let list = self.read_place(state, list);
-        let Val::List { data: Some(_), .. } = &list else {
-            return None;
-        };
-        let element = self.element(&list, index, "element");
-        projection
-            .split('.')
-            .filter(|segment| !segment.is_empty())
-            .try_fold(element, |value, segment| project(&value, segment))
-    }
 
     /// Writes `value` to `path`, a place under a loan of the element at
     /// `index` of the list at `list`, into the list itself: the element

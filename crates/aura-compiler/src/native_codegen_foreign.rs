@@ -635,25 +635,20 @@ fn struct_slot_size(layout: &CStruct) -> std::result::Result<u32, String> {
     layout
         .validate_bounds()
         .map_err(|reason| format!("direct backend cannot allocate C struct slot: {reason}"))?;
+    // `validate_bounds` keeps the size and its 8-byte slot within the
+    // 32-bit signed offsets a stack slot takes.
     let size = layout
         .checked_size()
         .and_then(|size| size.checked_next_multiple_of(8))
-        .ok_or_else(|| {
-            format!(
-                "direct backend C struct `{}` slot size overflows usize",
-                layout.name
-            )
-        })?;
-    let size_u32 = u32::try_from(size)
-        .ok()
-        .filter(|rounded| i32::try_from(*rounded).is_ok())
-        .ok_or_else(|| {
-            format!(
-                "direct backend C struct `{}` slot size {size} exceeds 32-bit signed offset range",
-                layout.name
-            )
-        })?;
-    Ok(size_u32)
+        .and_then(|size| u32::try_from(size).ok())
+        .filter(|rounded| i32::try_from(*rounded).is_ok());
+    let Some(size) = size else {
+        return Err(format!(
+            "direct backend C struct `{}` slot size exceeds 32-bit signed offset range",
+            layout.name
+        ));
+    };
+    Ok(size)
 }
 
 /// The LLVM aggregate shape for an AArch64 stack-spilled by-value struct.
@@ -1280,15 +1275,12 @@ impl FunctionCompiler<'_> {
             self.ensure_opaque(value)?
         };
         let label = crate::ffi::reinterpret_label(&call.name);
-        let from_size = from.checked_size().ok_or_else(|| {
-            format!(
-                "direct backend C struct `{}` size overflows usize",
-                from.name
-            )
-        })?;
-        let to_size = to
-            .checked_size()
-            .ok_or_else(|| format!("direct backend C struct `{}` size overflows usize", to.name))?;
+        let (Some(from_size), Some(to_size)) = (from.checked_size(), to.checked_size()) else {
+            return Err(format!(
+                "direct backend C struct `{}` or `{}` size overflows usize",
+                from.name, to.name
+            ));
+        };
         let slot = self.foreign_struct_slot(if from_size >= to_size { from } else { to })?;
         self.store_foreign_struct(from, &value, slot)?;
         let return_direct = ensure_direct_type(
@@ -1326,13 +1318,8 @@ impl FunctionCompiler<'_> {
         let address = self.builder.stack_addr(types::I64, slot, 0);
         let zero = self.builder.iconst(types::I64, 0);
         if size <= 256 {
-            for offset in (0..size).step_by(8) {
-                let offset = i32::try_from(offset).map_err(|_| {
-                    format!(
-                        "direct backend C struct `{}` offset {offset} overflows i32",
-                        layout.name
-                    )
-                })?;
+            // An offset below 256 always fits an `i32`.
+            for offset in (0..size as i32).step_by(8) {
                 self.builder
                     .store(MemFlags::trusted(), zero, address, offset);
             }
