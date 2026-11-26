@@ -742,6 +742,9 @@ struct NativeCodegen<'a> {
     frame_entry: Option<FuncHandle>,
     /// The functions a frameless function may call (see `total_leaves`).
     total_leaves: HashSet<String>,
+    /// The parameters a call may pass an element a list keeps in place
+    /// as its bytes (see `element_loans::block_params`).
+    block_params: HashMap<(String, usize), element_loans::BlockParam>,
     /// The functions that only read scalar fields of an instance they are
     /// passed: a leaf's body with calls of total leaves, and no `mut`
     /// parameter.
@@ -1109,6 +1112,7 @@ impl<'a> NativeCodegen<'a> {
             })
             .collect::<HashSet<_>>();
         let total_leaves = total_leaves(module, &classes);
+        let block_params = element_loans::block_params(module, &classes);
         let instance_keepers = module
             .functions
             .iter()
@@ -1382,6 +1386,7 @@ impl<'a> NativeCodegen<'a> {
             cycle_frame_entry,
             frame_entry,
             total_leaves,
+            block_params,
             instance_keepers,
             layout_keepers,
             debug_info: false,
@@ -3256,7 +3261,13 @@ impl<'a> NativeCodegen<'a> {
             element_calls: HashMap::new(),
             deferred_element_retain: None,
             field_box_receiver: false,
+            block_loans: element_loans::block_passed_loans(
+                function,
+                &native_loan_uses,
+                &self.block_params,
+            ),
             native_loan_uses,
+            stand_in_slots: HashMap::new(),
             element_lend_temps,
             native_loans: HashMap::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
@@ -4942,6 +4953,13 @@ struct FunctionCompiler<'a> {
     /// temporaries their lends lend to one runtime operation. See
     /// `element_loans::native_element_loans`.
     native_loan_uses: HashMap<String, element_loans::LoanUse>,
+    /// The followed loans passed only to parameters that read scalar
+    /// fields, with those fields (see `element_loans::block_passed_loans`).
+    block_loans: HashMap<String, element_loans::BlockParam>,
+    /// The stack slot of the stand-in box header each of `block_loans`
+    /// lends an element kept in place by (see
+    /// `element_loans::emit_element_stand_in`).
+    stand_in_slots: HashMap<String, crate::native_backend::Slot>,
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,

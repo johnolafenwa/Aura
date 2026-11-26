@@ -1,0 +1,109 @@
+# A function that only reads scalar fields of a borrowed class parameter
+# reads an element a list keeps in place where it lies, whether a key sort
+# or a call names the element: no element is boxed or copied for it. A
+# function that reads a text field, keeps, or passes on its parameter gets
+# the element as before.
+
+
+class Job:
+    id: int64
+    rank: int64
+    weight: float64
+    done: bool
+    title: str
+
+
+class Backlog:
+    jobs: list[Job]
+
+    def heaviest(self) -> int64:
+        mut best = 0
+        for i in range(self.jobs.len()):
+            if score(self.jobs[i]) > score(self.jobs[best]):
+                best = i
+        return best
+
+
+def priority(job: Job) -> int64:
+    # Rank descending, then id ascending.
+    return (100 - job.rank) * 1000 + job.id
+
+
+def score(job: Job) -> float64:
+    if job.done:
+        return 0.0
+    return job.weight * (job.rank as float64)
+
+
+def title_length(job: Job) -> int64:
+    return job.title.byte_len()
+
+
+def summary(job: Job) -> str:
+    return f"{job.id}:{job.title}"
+
+
+def relay(job: Job) -> int64:
+    return priority(job) + 1
+
+
+def remember(job: Job, seen: mut list[Job]) -> int64:
+    seen.append(
+        Job(
+            id=job.id,
+            rank=job.rank,
+            weight=job.weight,
+            done=job.done,
+            title=job.title.clone(),
+        )
+    )
+    return seen.len()
+
+
+def same_rank(left: Job, right: Job) -> bool:
+    return left.rank == right.rank
+
+
+def show(jobs: list[Job]) -> str:
+    mut parts: list[str] = []
+    for job in jobs:
+        parts.append(f"{job.id}/{job.rank}")
+    return " ".join(parts)
+
+
+def main():
+    mut jobs: list[Job] = []
+    titles = ["build", "test", "lint", "deploy", "audit", "pack"]
+    for i in range(12):
+        jobs.append(
+            Job(
+                id=i,
+                rank=(i * 7) % 5,
+                weight=(i % 4) as float64 + 0.5,
+                done=i % 5 == 3,
+                title=titles[i % 6].clone(),
+            )
+        )
+    mut by_priority = jobs.copy()
+    by_priority.sort(key=priority)
+    print(show(by_priority))
+    by_priority.sort(key=priority, reverse=true)
+    print(show(by_priority))
+    by_priority.sort(key=title_length)
+    print(show(by_priority))
+    mut total = 0
+    mut heavy = 0.0
+    for i in range(jobs.len()):
+        total += priority(jobs[i]) + relay(jobs[i])
+        heavy += score(jobs[i])
+    print(f"total={total} heavy={heavy}")
+    print(summary(jobs[4]))
+    mut seen: list[Job] = []
+    print(remember(jobs[2], seen))
+    print(remember(jobs[-1], seen))
+    print(show(seen))
+    print(same_rank(jobs[0], jobs[5]))
+    print(same_rank(jobs[1], jobs[2]))
+    queue = Backlog(jobs=jobs.copy())
+    print(queue.heaviest())
+    print(priority(queue.jobs[3]))

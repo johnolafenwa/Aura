@@ -362,6 +362,62 @@ fn instance_lists_in_place_free_every_box() {
     assert_frees_everything("leak-instance-lists", source, expected, 0);
 }
 
+/// Elements a list keeps in place, passed to functions that read only
+/// their scalar fields, by a key sort and by calls: the native run frees
+/// every box.
+#[test]
+fn element_args_read_in_place_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/element_args_read_in_place.au");
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/element_args_read_in_place.stdout"
+    );
+    assert_frees_everything("leak-element-args", source, expected, 0);
+}
+
+/// An overflow in a function that reads an element a list keeps in place
+/// where it lies, called by a loop and by a key sort, names both frames
+/// and frees every box.
+#[test]
+fn an_overflow_reading_an_element_in_place_names_both_frames() {
+    let source = r#"class Cell:
+    id: int64
+    big: int64
+
+def weight(cell: Cell) -> int64:
+    return cell.big * 3 + cell.id
+
+def main() -> None:
+    mut cells: list[Cell] = []
+    for i in range(40):
+        cells.append(Cell(id=i, big=i))
+    cells.append(Cell(id=40, big=4611686018427387904))
+    SORT
+    mut total = 0
+    for i in range(cells.len()):
+        total += weight(cells[i])
+    print(total)
+"#;
+    for sort in ["pass", "cells.sort(key=weight)"] {
+        let source = source.replace("SORT", sort);
+        for backend in ["mir", "direct"] {
+            let result = run("element-in-place-overflow", &source, backend);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stdout.is_empty(), "{}", result.stdout);
+            assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+            assert!(
+                result.stderr.contains("weight at 5:1 -> main at 8:1"),
+                "{}",
+                result.stderr
+            );
+            if backend == "direct" {
+                let (allocated, freed) = result.boxes.expect("direct runtime stats");
+                assert_eq!(allocated, freed, "{}", result.stderr);
+            }
+        }
+    }
+}
+
 #[test]
 fn a_decorated_module_function_owns_its_captures_until_shutdown() {
     let source = r#"
