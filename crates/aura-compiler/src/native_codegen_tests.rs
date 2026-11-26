@@ -19022,7 +19022,10 @@ enum Cell:
     Text(value: str)
 
 def positive(cell: Cell) -> bool:
-    match cell:
+    # A copy of the parameter keeps the tag its callers give it (see
+    # `untagged_args`).
+    held = cell
+    match held:
         case Cell.Int(v):
             return v > 0
         case Cell.Text(_):
