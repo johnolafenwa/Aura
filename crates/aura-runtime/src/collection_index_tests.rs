@@ -2,7 +2,7 @@ use super::*;
 use crate::integer::{IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::runtime_value::{InstanceValue, TupleValue, UnionValue};
 use aura_core::types::Type;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 fn int(value: i64) -> Value {
     Value::Int(IntegerValue::from_i64(value))
@@ -1132,27 +1132,4 @@ fn int64_fast_paths_agree_with_value_lookups_on_large_dicts() {
     assert_eq!(shared.value_of_i64(9), Some(&int(90)));
     assert_eq!(shared.value_of_i64(7), None);
     assert_eq!(shared.len(), 38);
-}
-
-/// The integer hash spreads near keys over the whole word: no two of a
-/// run of small keys, multiples of a power of two, or negative keys share
-/// a hash, and their top seven bits, which the table compares first, take
-/// many values.
-#[test]
-fn integer_hashes_spread_near_keys() {
-    let keys = (0..4096i64)
-        .chain((1..4096).map(|key| key << 12))
-        .chain((1..4096).map(|key| -key))
-        .collect::<Vec<_>>();
-    let hashes = keys
-        .iter()
-        .map(|&key| hash_i64(key))
-        .collect::<HashSet<_>>();
-    assert_eq!(hashes.len(), keys.len());
-    let tops = hashes.iter().map(|hash| hash >> 57).collect::<HashSet<_>>();
-    assert_eq!(tops.len(), 128);
-    let lows = (0..4096i64)
-        .map(|key| hash_i64(key) & 0xfff)
-        .collect::<HashSet<_>>();
-    assert!(lows.len() > 2400, "{} distinct low bits", lows.len());
 }

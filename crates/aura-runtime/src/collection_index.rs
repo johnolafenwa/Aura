@@ -397,36 +397,10 @@ pub fn hash_str(text: &str) -> u64 {
 
 /// [`hash_value`] of an integer value equal to `integer`, of any width,
 /// without building one.
-///
-/// An integer key takes two keyed folded multiplies, the mix `foldhash`
-/// and `hashbrown`'s default hasher use, instead of SipHash: about ten
-/// instructions instead of ninety. The keys are this process's secret
-/// keys, so colliding keys cannot be chosen without them, though the mix
-/// gives weaker guarantees than SipHash against an attacker who can
-/// measure lookups. `str` keys, which more often come from outside the
-/// program, keep SipHash.
 #[inline]
 pub fn hash_i64(integer: i64) -> u64 {
     let (k0, k1) = hash_keys();
-    mix_word(k0, k1, integer as u64)
-}
-
-/// The high and low halves of the full product of `x` and `y`, folded.
-#[inline(always)]
-fn folded_multiply(x: u64, y: u64) -> u64 {
-    let full = u128::from(x) * u128::from(y);
-    (full as u64) ^ ((full >> 64) as u64)
-}
-
-/// A keyed hash of one word in two folded multiplies. The second spreads
-/// the first's bits into the top seven, which the table compares first.
-#[inline(always)]
-fn mix_word(k0: u64, k1: u64, word: u64) -> u64 {
-    // Fractional digits of pi, so neither factor is zero for the zero key.
-    const C0: u64 = 0x243f_6a88_85a3_08d3;
-    const C1: u64 = 0x1319_8a2e_0370_7344;
-    let first = folded_multiply(word ^ k0, k1 ^ C0);
-    folded_multiply(first ^ k1, k0 ^ C1)
+    KeyedHasher::hash_word(k0, k1, integer as u64)
 }
 
 /// Writes an integer key as one word. Integers of different widths compare
