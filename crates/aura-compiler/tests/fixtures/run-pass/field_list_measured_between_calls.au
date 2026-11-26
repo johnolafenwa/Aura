@@ -1,0 +1,41 @@
+# A loop whose way past its calls only measures a list in a field of a
+# local instance: that part of the loop is entered again after each call,
+# and reads the length where it lies.
+
+
+class Book:
+    orders: list[int64]
+    levels: list[list[int64]]
+    cancels: int64
+
+    def submit(mut self, price: int64):
+        self.orders.append(price)
+        self.levels[price % 3].append(price)
+
+    def cancel(mut self, order: int64):
+        if self.orders[order] != 0:
+            self.orders[order] = 0
+            self.cancels += 1
+
+
+def run(n: int64) -> int64:
+    mut book = Book(orders=[], levels=[[], [], []], cancels=0)
+    mut measured = 0
+    for step in range(n):
+        kind = step % 7
+        if kind < 3:
+            book.submit(step)
+        elif kind < 5:
+            orders = book.orders.len()
+            if orders > 0:
+                book.cancel((step * 5) % orders)
+            measured += orders
+        else:
+            measured += book.orders.len() * 2
+    return measured * 10 + book.cancels
+
+
+def main():
+    print(run(0))
+    print(run(10))
+    print(run(1000))

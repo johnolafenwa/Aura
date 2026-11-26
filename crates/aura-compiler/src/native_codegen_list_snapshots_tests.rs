@@ -467,6 +467,28 @@ class Shelf:
             sum += self.weights[i]
         return sum
 
+    def measures(mut self) -> int64:
+        mut sum = 0
+        while sum < self.weights.len():
+            sum += 1
+        return sum
+
+    def measures_between(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            if i % 2 == 0:
+                self.add(i)
+            sum += self.weights.len()
+        return sum
+
+    def reads_between(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            if i % 2 == 0:
+                self.add(i)
+            sum += self.weights[0]
+        return sum
+
 def owner(n: int64) -> int64:
     mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0, open=true)
     mut sum = 0
@@ -474,7 +496,7 @@ def owner(n: int64) -> int64:
         for i in range(s.weights.len()):
             sum += s.weights[i] * round
         s.seen += 1
-    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1) + s.untouched(1) + s.flagged()
+    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1) + s.untouched(1) + s.flagged() + s.measures() + s.measures_between(1) + s.reads_between(1)
 
 def main():
     print(owner(2))
@@ -537,6 +559,20 @@ fn a_loop_that_only_reads_a_list_in_a_field_reads_its_view_once() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].list, "s.weights");
     assert_eq!(found[0].temps.len(), 2, "{found:?}");
+}
+
+#[test]
+fn a_loop_that_only_measures_a_list_in_a_field_reads_its_view_once_only_where_entered_once() {
+    let found = field_regions("Shelf.measures", false, true);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].entries.len(), 1, "{found:?}");
+    // The part of a loop that skips its call is entered again after each
+    // call: checking the view there costs more than the length it reads.
+    assert_eq!(field_regions("Shelf.measures_between", false, true), Vec::new());
+    // A loop entered so that reads elements keeps reading the view once.
+    let found = field_regions("Shelf.reads_between", false, true);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found[0].entries.len() > 1, "{found:?}");
 }
 
 #[test]

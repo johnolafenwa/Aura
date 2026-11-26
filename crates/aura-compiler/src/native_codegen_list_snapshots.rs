@@ -697,6 +697,23 @@ fn keeps_receiver_body(
     keeps.then_some(stores)
 }
 
+/// Whether `instruction` is a call of a list's `len`.
+fn measures(instruction: &Instruction) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::Runtime {
+                    op: RuntimeOp::List(ListOp::Len),
+                    ..
+                },
+                ..
+            },
+            ..
+        }
+    )
+}
+
 /// Whether `instruction`, which names the instance `root`, leaves the
 /// instance in its layout and the list in its field `list` as it is: it
 /// reads or writes a scalar field in the block, lends another field's box
@@ -821,6 +838,8 @@ pub(super) fn field_list_snapshot_regions(
         // temporaries each lends the list to.
         let field = list.split_once('.').map_or("", |(_, field)| field);
         let mut clean = HashMap::<&str, (Vec<&str>, bool)>::new();
+        // The blocks that hand the list to an operation other than `len`.
+        let mut reads_elements = HashSet::<&str>::new();
         'blocks: for block in &function.blocks {
             let mut temps = Vec::new();
             let mut writes = false;
@@ -842,6 +861,9 @@ pub(super) fn field_list_snapshot_regions(
                     // about its index.
                     _ if lent.is_some_and(|temp| mentioned_roots(instruction).contains(temp)) => {
                         let temp = lent.expect("checked above");
+                        if !measures(instruction) {
+                            reads_elements.insert(block.label.as_str());
+                        }
                         match view_use(instruction, temp) {
                             Some(ViewUse::Reads) => {}
                             // A store of an element of the list's own kind.
@@ -900,7 +922,14 @@ pub(super) fn field_list_snapshot_regions(
                     }
                 }
             }
-            if entries.is_empty() {
+            // A loop that only measures the list and is entered on more
+            // than one way, as the part of a longer loop that skips its
+            // calls, would check the view at each entry to save one read
+            // of the length.
+            if entries.is_empty()
+                || entries.len() > 1
+                    && !component.iter().any(|label| reads_elements.contains(label))
+            {
                 continue;
             }
             regions.push(ListSnapshotRegion {
