@@ -5726,67 +5726,87 @@ fn finish_task_boundary_failure(mut diagnostic: Diagnostic) -> Diagnostic {
 
 #[track_caller]
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
-    let (outcome, drop_exit_armed) = {
-        let depth_guard = RustBoundaryDepthGuard::enter();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-        // SAFETY: as in `RustBoundaryDepthGuard::enter`.
-        let armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
-        (outcome, armed)
-    };
-    // Read only on the failure paths: a boundary that returns normally must
-    // stay cheap, because generated code calls one per runtime operation.
-    let enclosing_rust_boundary = || current_rust_boundary_depth() > 0;
-    let in_foreign_callback =
-        || with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_some());
+    // Only the normal return path lives in this generic function: generated
+    // code calls one boundary per runtime operation, and debug builds of
+    // the runtime run that code too. The failure paths are out of line.
+    let depth_guard = RustBoundaryDepthGuard::enter();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    // SAFETY: as in `RustBoundaryDepthGuard::enter`.
+    let drop_exit_armed = unsafe { (*depth_guard.stack).generator_drop_exit_armed };
+    drop(depth_guard);
     match outcome {
         Ok(value) => {
-            if !drop_exit_armed {
-                return value;
-            }
-            if let Some(exit) = take_generator_drop_exit() {
-                let (enclosing_rust_boundary, in_foreign_callback) =
-                    (enclosing_rust_boundary(), in_foreign_callback());
-                match exit {
-                    crate::runtime_value::PendingGeneratorDropExit::Trap(diagnostic) => {
-                        if direct_cleanup_is_draining() {
-                            with_direct_task_runtime_state(|state| {
-                                state.primary_runtime_diagnostic.get_or_insert(diagnostic);
-                            });
-                            std::panic::panic_any(CleanupTrapSignal);
-                        }
-                        if enclosing_rust_boundary || in_foreign_callback {
-                            std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
-                        }
-                        let diagnostic = finish_task_boundary_failure(diagnostic);
-                        fail_current_lightweight_task(diagnostic)
-                    }
-                    crate::runtime_value::PendingGeneratorDropExit::Cancelled => {
-                        if in_foreign_callback {
-                            drain_direct_cleanup_stack();
-                            std::panic::panic_any(TaskCancelledSignal);
-                        }
-                        if enclosing_rust_boundary {
-                            std::panic::panic_any(TaskCancelledSignal);
-                        }
-                        if let Some(diagnostic) = drain_cleanups_for_task_exit() {
-                            fail_current_lightweight_task(diagnostic)
-                        }
-                        cancel_current_lightweight_task_boundary()
-                    }
-                }
+            if drop_exit_armed {
+                propagate_generator_drop_exit();
             }
             value
         }
+        Err(payload) => task_runtime_boundary_unwound(payload),
+    }
+}
+
+fn enclosing_rust_boundary() -> bool {
+    current_rust_boundary_depth() > 0
+}
+
+fn in_foreign_callback() -> bool {
+    with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_some())
+}
+
+/// Propagates the exit a dropped generator recorded inside a runtime
+/// boundary whose work returned. Returns only when no exit is pending.
+#[cold]
+#[inline(never)]
+fn propagate_generator_drop_exit() {
+    if let Some(exit) = take_generator_drop_exit() {
+        let (enclosing_rust_boundary, in_foreign_callback) =
+            (enclosing_rust_boundary(), in_foreign_callback());
+        match exit {
+            crate::runtime_value::PendingGeneratorDropExit::Trap(diagnostic) => {
+                if direct_cleanup_is_draining() {
+                    with_direct_task_runtime_state(|state| {
+                        state.primary_runtime_diagnostic.get_or_insert(diagnostic);
+                    });
+                    std::panic::panic_any(CleanupTrapSignal);
+                }
+                if enclosing_rust_boundary || in_foreign_callback {
+                    std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
+                }
+                let diagnostic = finish_task_boundary_failure(diagnostic);
+                fail_current_lightweight_task(diagnostic)
+            }
+            crate::runtime_value::PendingGeneratorDropExit::Cancelled => {
+                if in_foreign_callback {
+                    drain_direct_cleanup_stack();
+                    std::panic::panic_any(TaskCancelledSignal);
+                }
+                if enclosing_rust_boundary {
+                    std::panic::panic_any(TaskCancelledSignal);
+                }
+                if let Some(diagnostic) = drain_cleanups_for_task_exit() {
+                    fail_current_lightweight_task(diagnostic)
+                }
+                cancel_current_lightweight_task_boundary()
+            }
+        }
+    }
+}
+
+/// Handles a panic that unwound out of a runtime boundary's work.
+#[cold]
+#[inline(never)]
+fn task_runtime_boundary_unwound(payload: Box<dyn std::any::Any + Send>) -> ! {
+    match payload {
         // The callback guard is the nearest boundary. A forced task exit
         // here would bypass C's cleanup and the entry's argument releases.
-        Err(payload) if in_foreign_callback() => {
+        payload if in_foreign_callback() => {
             drop(take_generator_drop_exit());
             if payload.is::<TaskCancelledSignal>() {
                 drain_direct_cleanup_stack();
             }
             std::panic::resume_unwind(payload)
         }
-        Err(payload) if payload.is::<TaskCancelledSignal>() => {
+        payload if payload.is::<TaskCancelledSignal>() => {
             drop(take_generator_drop_exit());
             if enclosing_rust_boundary() {
                 std::panic::resume_unwind(payload)
@@ -5796,7 +5816,7 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
             }
             cancel_current_lightweight_task_boundary()
         }
-        Err(payload) => match payload.downcast::<LightweightTaskFailureSignal>() {
+        payload => match payload.downcast::<LightweightTaskFailureSignal>() {
             Ok(signal) => {
                 drop(take_generator_drop_exit());
                 // Free the `Box<LightweightTaskFailureSignal>` before any
