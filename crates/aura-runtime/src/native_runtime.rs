@@ -10262,6 +10262,39 @@ pub extern "C-unwind" fn aura_direct_concat_str_words(
     })
 }
 
+/// `+` along a chain of `str`s, such as `a + ", " + b`, in one new box:
+/// `parts` holds `count` pairs of a text's bytes and length, in order. The
+/// first `+` whose result is over the string limit stops the program at
+/// `line` and `column`, as the chain's own steps would.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_concat_str_parts(
+    parts: *const usize,
+    count: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller passes `count` pairs of words.
+        let words = unsafe { slice::from_raw_parts(parts, count * 2) };
+        let texts = words
+            .chunks_exact(2)
+            .map(|pair| literal_str(pair[0] as *const u8, pair[1]));
+        let len = texts
+            .clone()
+            .fold(0_usize, |len, text| len.saturating_add(text.len()));
+        let mut joined = String::with_capacity(len.min(crate::runtime_value::MAX_STRING_BYTES));
+        for text in texts {
+            if joined.len() + text.len() > crate::runtime_value::MAX_STRING_BYTES {
+                let error = concat_text_checked(joined.into(), text)
+                    .expect_err("a text over the limit does not concatenate");
+                runtime_diagnostic_error_at(error, runtime_span(line, column));
+            }
+            joined.push_str(text);
+        }
+        boxed_value(Value::String(joined.into()))
+    })
+}
+
 /// Appends a copy of the `str` whose bytes are at `ptr` to a list, as
 /// `append` of a copy in a box does, with no box made for the copy.
 #[cfg_attr(not(coverage), no_mangle)]

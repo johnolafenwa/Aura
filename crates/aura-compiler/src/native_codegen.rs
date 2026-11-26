@@ -3263,6 +3263,7 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_probes,
             pending_try_read: None,
             pending_try_event: None,
+            pending_str_chain: None,
             word_tuples: HashMap::new(),
             pending_try_write: None,
             fused_entry_slots: HashMap::new(),
@@ -4956,6 +4957,9 @@ struct FunctionCompiler<'a> {
     /// The result temporary, words address, and failure word address of
     /// a fused event read whose `try` is next (see `event_reads`).
     pending_try_event: Option<(String, Val, Val)>,
+    /// The last step of a run of `+` on `str`s being compiled, with the
+    /// run's parts and span (see `str_chains`).
+    pending_str_chain: Option<(*const Rvalue, Vec<Operand>, Span)>,
     /// The tuples of fused event reads, held as words (see `event_reads`).
     word_tuples: HashMap<String, event_reads::WordTuple>,
     /// The result temporary of a `try` write (see
@@ -6087,6 +6091,15 @@ impl<'a> FunctionCompiler<'a> {
             }
             if self.compile_indexed_str_comparison(&block.instructions[instruction_index..])? {
                 skipped = 2;
+                continue;
+            }
+            if let Some(chain) = self.opens_with_str_chain(
+                &block.label,
+                instruction_index,
+                &block.instructions[instruction_index..],
+            ) {
+                skipped = chain.covered - 1;
+                self.compile_str_chain_run(block, instruction_index, chain)?;
                 continue;
             }
             if let Some(write) = self.opens_with_try_write(&block.instructions[instruction_index..])
@@ -8215,6 +8228,9 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 }
                 if *op == BinaryOp::Add {
+                    if let Some(result) = self.compile_pending_str_chain(rvalue)? {
+                        return Ok(result);
+                    }
                     if let Some(result) = self.compile_str_slot_concat(left, right, *span)? {
                         return Ok(result);
                     }
@@ -25072,6 +25088,8 @@ mod quiet_sinks;
 mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
+#[path = "native_codegen_str_chains.rs"]
+mod str_chains;
 
 #[path = "native_codegen_ordered.rs"]
 mod ordered;

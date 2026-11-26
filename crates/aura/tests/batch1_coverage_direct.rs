@@ -165,3 +165,20 @@ fn direct_backend_runs_closures_tuples_durations_and_unit_variants() {
         "4\n3\n1\n3000.0\n3\nfast\n",
     );
 }
+
+#[test]
+fn direct_backend_reports_a_str_plus_run_over_the_limit_at_its_span() {
+    // The run of `+` is joined in one call, which stops the program at the
+    // run's span as its own steps would.
+    let (_build, run) = build_and_run_direct_source(
+        "aura-cov-str-plus-limit",
+        "def join(left: str, right: str) -> str:\n    return left + \", \" + right + \"!\"\ndef main():\n    half = \"x\".repeat(33554432)\n    print(join(\"a\", \"b\"))\n    print(join(half, half).byte_len())\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "a, b!\n");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("error[AU4005]: string output exceeds the maintained"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("main.au:2:12"), "{stderr}");
+}
