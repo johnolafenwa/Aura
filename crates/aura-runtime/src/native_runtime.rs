@@ -9754,7 +9754,9 @@ thread_local! {
 ///
 /// `value` is live and confined to this thread, its count has reached
 /// zero, and no ledger links it.
-#[inline]
+// Inlined into each caller: as a call of its own, it costs every release
+// of the last reference more than it saves.
+#[inline(always)]
 unsafe fn keep_spare_list(value: *mut OpaqueValue) -> bool {
     // SAFETY: the caller's contract.
     let header = unsafe { &*value };
@@ -11095,6 +11097,10 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
     other: *mut OpaqueValue,
 ) -> i64 {
     task_runtime_boundary(|| {
+        // SAFETY: the caller owns its reference to `other`.
+        if unsafe { extend_keeping_spare(vec, other) } {
+            return 1;
+        }
         let other = unsafe { consume_owned_value(other) };
         let Value::Vec(other) = other else {
             runtime_error("`extend` requires another `list[T]` value");
@@ -11102,6 +11108,63 @@ pub extern "C-unwind" fn aura_direct_vec_extend_in_place(
         with_vector_mut(vec, |vector| vector.elements.append(other.elements));
         1
     })
+}
+
+/// `extend` of a non-empty `vec` by `other`, a confined list of unboxed
+/// scalars its caller holds the only reference to: the elements are copied,
+/// and `other`'s emptied box becomes the thread's spare list (see
+/// [`SpareList`]) instead of being freed, so the next empty list a loop
+/// makes (`entry = []` ... `out.extend(entry)`) takes the same box and
+/// storage. `false`, with nothing changed, for any other pair; the caller
+/// then consumes `other`.
+///
+/// # Safety
+///
+/// The caller owns a reference to each of `vec` and `other`.
+unsafe fn extend_keeping_spare(vec: *mut OpaqueValue, other: *mut OpaqueValue) -> bool {
+    if std::ptr::eq(vec, other) {
+        return false;
+    }
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { other.as_ref() }) else {
+        return false;
+    };
+    let access = header.list_access.load(Ordering::Relaxed);
+    if header.ref_count.load(Ordering::Acquire) != 1
+        || !header.shared_lock.load(Ordering::Acquire).is_null()
+        || !(crate::list_elements::ListForm::Int64.access()
+            ..=crate::list_elements::ListForm::Float32.access())
+            .contains(&access)
+    {
+        return false;
+    }
+    let copied = {
+        // Takes in the elements generated code appended in place.
+        let _access = header.access(false);
+        // SAFETY: the caller holds the only reference, and nothing writes
+        // `other` while `vec`, a different box, changes.
+        let Value::Vec(more) = (unsafe { &*header.value.get() }) else {
+            return false;
+        };
+        with_vector_mut(vec, |vector| {
+            vector.elements.append_scalars_from(&more.elements)
+        })
+    };
+    if !copied {
+        return false;
+    }
+    crate::runtime_value::representation_stats::note_release();
+    let owned = unregister_direct_owned_value(other);
+    check_released_value_is_owned(other, owned);
+    header.ref_count.store(0, Ordering::Relaxed);
+    // SAFETY: the count reached zero, the value is confined, and the
+    // ledger no longer links it.
+    unsafe {
+        if !keep_spare_list(other) {
+            free_direct_value(other);
+        }
+    }
+    true
 }
 
 /// Appends the `len` bytes at `ptr`, the UTF-8 of a `str`, to the

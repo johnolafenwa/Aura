@@ -1911,17 +1911,28 @@ impl FunctionCompiler<'_> {
     /// it in while that holds the view, and from the list otherwise.
     pub(super) fn list_view_word(&mut self, list: Val, word: ViewWord) -> Val {
         let layout = aura_runtime::native_runtime::direct_list_layout();
-        let flags = MemFlags::trusted();
+        let flags = MemFlags::trusted_in;
         let read = match word {
-            ViewWord::Access => self.builder.uload32(flags, list, layout.access_offset),
-            ViewWord::Len => self
-                .builder
-                .load(types::I64, flags, list, layout.len_offset),
-            ViewWord::Elements => {
+            ViewWord::Access => {
                 self.builder
-                    .load(types::I64, flags, list, layout.elements_offset)
+                    .uload32(flags(AliasClass::BoxAccess), list, layout.access_offset)
             }
-            ViewWord::Room => self.builder.uload32(flags, list, layout.capacity_offset),
+            ViewWord::Len => self.builder.load(
+                types::I64,
+                flags(AliasClass::BoxLen),
+                list,
+                layout.len_offset,
+            ),
+            ViewWord::Elements => self.builder.load(
+                types::I64,
+                flags(AliasClass::BoxElements),
+                list,
+                layout.elements_offset,
+            ),
+            ViewWord::Room => {
+                self.builder
+                    .uload32(flags(AliasClass::BoxRoom), list, layout.capacity_offset)
+            }
         };
         let Some(&index) = self.snapshot_vals.get(&list) else {
             return read;

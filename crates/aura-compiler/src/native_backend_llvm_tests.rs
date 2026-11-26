@@ -1036,6 +1036,61 @@ fn frame_stack_accesses_of_different_classes_never_overlap() {
 }
 
 #[test]
+fn box_header_words_class_fields_and_list_elements_never_overlap() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    let classes = [
+        AliasClass::BoxAccess,
+        AliasClass::BoxElements,
+        AliasClass::BoxLen,
+        AliasClass::BoxRoom,
+        AliasClass::ClassFields,
+        AliasClass::ListElements,
+    ];
+    for (index, kept) in classes.into_iter().enumerate() {
+        let other = classes[(index + 1) % classes.len()];
+        let name = format!("kept_{index}");
+        define(&mut module, &name, Linkage::Export, &sig, move |builder| {
+            let entry_block = builder.create_block();
+            builder.append_block_params_for_function_params(entry_block);
+            builder.switch_to_block(entry_block);
+            let first = builder.block_params(entry_block)[0];
+            let second = builder.block_params(entry_block)[1];
+            let kept = MemFlags::trusted_in(kept);
+            let word = builder.iconst(types::I64, 7);
+            builder.store(kept, word, first, 0);
+            let other_word = builder.iconst(types::I64, 9);
+            builder.store(MemFlags::trusted_in(other), other_word, second, 0);
+            let reloaded = builder.load(types::I64, kept, first, 0);
+            builder.return_(&[reloaded]);
+        });
+    }
+
+    let ir = ir(&module);
+    for name in [
+        "aura box access code",
+        "aura box element address",
+        "aura box length",
+        "aura box room",
+        "aura class fields",
+        "aura list elements",
+    ] {
+        assert!(ir.contains(name), "{ir}");
+    }
+    let optimized = optimized_ir(&module);
+    for index in 0..classes.len() {
+        let start = optimized
+            .find(&format!("@kept_{index}("))
+            .expect("the function is defined");
+        let end = optimized[start..].find("\n}").expect("the body ends") + start;
+        assert!(
+            optimized[start..end].contains("ret i64 7"),
+            "a store of another class cannot change the word: {optimized}"
+        );
+    }
+}
+
+#[test]
 fn branches_to_cold_blocks_carry_branch_weights() {
     let mut module = module();
     let effect = signature(CallConv::C, &[], &[]);

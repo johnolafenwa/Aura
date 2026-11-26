@@ -722,7 +722,7 @@ impl FunctionCompiler<'_> {
         let layout = aura_runtime::native_runtime::direct_list_layout();
         self.builder.load(
             types::I64,
-            MemFlags::trusted(),
+            MemFlags::trusted_in(AliasClass::BoxElements),
             object,
             layout.elements_offset,
         )
@@ -1058,15 +1058,14 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
         let block = self.class_block(object);
+        let fields = MemFlags::trusted_in(AliasClass::ClassFields);
         let values = match &slot.kind {
             SlotKind::Leaves(leaves) => leaves
                 .iter()
-                .map(|leaf| self.load_leaf(*leaf, block))
+                .map(|leaf| self.load_leaf_in(*leaf, block, fields))
                 .collect::<Vec<_>>(),
             SlotKind::Handle => {
-                let boxed = self
-                    .builder
-                    .load(types::I64, MemFlags::trusted(), block, slot.offset);
+                let boxed = self.builder.load(types::I64, fields, block, slot.offset);
                 // A moved-out field takes the runtime read, which reports it.
                 let present_block = self.builder.create_block();
                 self.builder
@@ -1159,8 +1158,9 @@ impl FunctionCompiler<'_> {
                 self.builder.switch_to_block(fast_block);
                 self.builder.seal_block(fast_block);
                 let block = self.class_block(object);
+                let fields = MemFlags::trusted_in(AliasClass::ClassFields);
                 for (leaf, word) in leaves.iter().zip(&value.values) {
-                    self.store_leaf(*leaf, *word, block);
+                    self.store_leaf_in(*leaf, *word, block, fields);
                 }
                 self.builder.jump(join_block, &[]);
 
@@ -1268,9 +1268,8 @@ impl FunctionCompiler<'_> {
         self.builder.seal_block(fast_block);
         let block = self.class_block(object);
         let field_slot = self.builder.iadd_imm(block, i64::from(slot.offset));
-        let mut boxed = self
-            .builder
-            .load(types::I64, MemFlags::trusted(), field_slot, 0);
+        let fields = MemFlags::trusted_in(AliasClass::ClassFields);
+        let mut boxed = self.builder.load(types::I64, fields, field_slot, 0);
         let mut present = self.builder.icmp_imm(IntCC::NotEqual, boxed, 0);
         if let Some(snapshot) = snapshot {
             // The loop's copy knows the box its entry found in the field.
@@ -1350,7 +1349,8 @@ impl FunctionCompiler<'_> {
         let unchanged = if self.read_only_field_lends.contains(temp) {
             self.builder.iconst(types::I8, 1)
         } else {
-            let held = self.builder.load(types::I64, flags, field_slot, 0);
+            let fields = MemFlags::trusted_in(AliasClass::ClassFields);
+            let held = self.builder.load(types::I64, fields, field_slot, 0);
             let kept = self.builder.icmp(IntCC::Equal, held, boxed);
             let count = self
                 .builder

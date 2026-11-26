@@ -1675,6 +1675,23 @@ impl ListElements {
         )
     }
 
+    /// Appends a copy of every element of `other` when both lists hold the
+    /// same scalar form and this one is not empty, and returns whether it
+    /// did. `other` keeps its elements and its storage.
+    pub fn append_scalars_from(&mut self, other: &ListElements) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        same_scalar_forms!(
+            (&mut *self, other),
+            (values, more) => {
+                values.extend_from_slice(more);
+                true
+            },
+            _ => false
+        )
+    }
+
     /// Removes the elements in `start..end` and returns them as a list.
     ///
     /// # Panics
