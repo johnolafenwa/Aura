@@ -1684,7 +1684,9 @@ impl FunctionCompiler<'_> {
     /// `left + right` on `str` values where a side is an element this
     /// function holds as words: both sides join from their words, so the
     /// element gets no box of its own. The other side is a literal, another
-    /// such element, or a local's box, which stays its local's.
+    /// such element, or a local's box, which stays its local's. A `+` of
+    /// two boxes, or of a box and a literal, joins from their words too, so
+    /// a literal side gets no box and the step skips the generic path.
     pub(super) fn compile_str_slot_concat(
         &mut self,
         left: &Operand,
@@ -1694,7 +1696,12 @@ impl FunctionCompiler<'_> {
         let slots = &self.str_slots;
         let held = |operand: &Operand| matches!(operand, Operand::Place(place) if slots.contains_key(place.as_str()));
         let sides = [(left, held(left)), (right, held(right))];
-        if !(sides[0].1 || sides[1].1) || !concat_side(left) || !concat_side(right) {
+        if !concat_side(left) || !concat_side(right) {
+            return Ok(None);
+        }
+        let joinable =
+            sides[0].1 || sides[1].1 || (self.is_str_part(left) && self.is_str_part(right));
+        if !joinable {
             return Ok(None);
         }
         let mut words = Vec::new();

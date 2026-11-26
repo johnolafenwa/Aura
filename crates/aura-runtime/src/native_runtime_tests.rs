@@ -30492,6 +30492,49 @@ fn literal_affix_tests_and_str_element_copies_read_text_in_place() {
     );
     assert_eq!(diagnostic.span, Some(Span::new(3, 7)));
 
+    // `text = text + other` appends to the only reference in place, copies
+    // a shared box and leaves it as it was, copies bytes of the text
+    // itself before it grows, and stops a result over the limit at the
+    // step's span.
+    let append = |text: *mut OpaqueValue, other: &str| {
+        super::aura_direct_str_append_words(text, other.as_ptr(), other.len(), 4, 9)
+    };
+    let text = string_value("ab");
+    let grown = append(text, "cd");
+    assert_eq!(grown, text, "the only reference grows in place");
+    let grown = append(grown, &long);
+    assert_eq!(grown, text);
+    assert_eq!(expect_string(grown), format!("abcd{long}"));
+    let shared = string_value("x");
+    let kept = unsafe { retain_value(shared) };
+    let copy = append(shared, "é");
+    assert_ne!(copy, shared, "a shared box is copied");
+    assert_eq!(expect_string(copy), "xé");
+    assert_eq!(expect_string(kept), "x");
+    let own = string_value(&long);
+    let own_words = unsafe {
+        super::with_value(own, |value| match value {
+            Value::String(text) => (text.as_str().as_ptr(), text.len()),
+            _ => unreachable!(),
+        })
+    };
+    let doubled = super::aura_direct_str_append_words(own, own_words.0, own_words.1, 4, 9);
+    assert_eq!(expect_string(doubled), format!("{long}{long}"));
+    let diagnostic = capture_direct_boundary_diagnostic(move || {
+        let half = "x".repeat(crate::runtime_value::MAX_STRING_BYTES / 2 + 1);
+        let text = string_value(&half);
+        append(text, &half);
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(4, 9)));
+    let number = int_value(3);
+    let address = number as usize;
+    let message = capture_direct_boundary_error_message(move || {
+        append(address as *mut OpaqueValue, "a");
+    });
+    assert_eq!(message, "expected `str`, found `integer`");
+    unsafe { release_value(number) };
+
     let limit = crate::runtime_value::MAX_STRING_BYTES;
     let left = crate::text::Text::from("x".repeat(limit));
     let right = crate::text::Text::from("y");

@@ -352,14 +352,6 @@ impl KeyFds {
             }
         }
     }
-
-    /// The descriptors in ascending order.
-    fn into_sorted(self) -> Vec<RawFd> {
-        match self {
-            Self::One(fd) => vec![fd],
-            Self::Many(descriptors) => descriptors.into_iter().collect(),
-        }
-    }
 }
 
 /// Single-owner persistent poller. Registration methods are called by the
@@ -623,24 +615,28 @@ impl RuntimeReactor {
         self.events.clear();
         retry_on_interrupt(|| self.poll.poll(&mut self.events, timeout))?;
 
+        // Each event wakes its waiters where the poller left it: waking
+        // touches only the wait tables, never the event buffer.
         #[cfg(unix)]
-        let fd_events: Vec<_> = self
+        for event in self
             .events
             .iter()
             .filter(|event| event.token() != WAKER_TOKEN)
-            .map(|event| {
-                let closed = event.is_read_closed() || event.is_write_closed();
+        {
+            let closed = event.is_read_closed() || event.is_write_closed();
+            dispatch_fd_event_in(
+                &self.fds,
+                &self.token_fds,
+                &self.active_epochs,
+                &mut self.ready_set,
+                &mut self.ready,
+                event.token(),
                 (
-                    event.token(),
                     event.is_readable() || event.is_read_closed() || event.is_priority(),
                     event.is_writable() || event.is_write_closed(),
                     event.is_error() || closed,
-                )
-            })
-            .collect();
-        #[cfg(unix)]
-        for (token, readable, writable, error) in fd_events {
-            self.dispatch_fd_event(token, readable, writable, error);
+                ),
+            );
         }
         #[cfg(windows)]
         if !self.socket_waits.is_empty() {
@@ -734,9 +730,12 @@ impl RuntimeReactor {
     }
 
     fn mark_ready(&mut self, key: WaitKey) {
-        if self.is_waiting(key) && self.ready_set.insert(key) {
-            self.ready.push_back(key);
-        }
+        mark_ready_in(
+            &self.active_epochs,
+            &mut self.ready_set,
+            &mut self.ready,
+            key,
+        );
     }
 
     fn remove_from_ready(&mut self, key: WaitKey) {
@@ -824,19 +823,21 @@ impl RuntimeReactor {
         {
             // Each removal below unlinks its descriptor from the key, so
             // the key's set leaves the map first.
-            let descriptors = self
-                .key_fds
-                .remove(&key)
-                .map(KeyFds::into_sorted)
-                .unwrap_or_default();
-            let mut first_error = None;
-            for fd in descriptors {
-                if let Err(error) = self.remove_fd_waiter(key, fd) {
-                    first_error.get_or_insert(error);
+            // A wait on one descriptor, the usual one, needs no list.
+            match self.key_fds.remove(&key) {
+                None => {}
+                Some(KeyFds::One(fd)) => self.remove_fd_waiter(key, fd)?,
+                Some(KeyFds::Many(descriptors)) => {
+                    let mut first_error = None;
+                    for fd in descriptors {
+                        if let Err(error) = self.remove_fd_waiter(key, fd) {
+                            first_error.get_or_insert(error);
+                        }
+                    }
+                    if let Some(error) = first_error {
+                        return Err(error);
+                    }
                 }
-            }
-            if let Some(error) = first_error {
-                return Err(error);
             }
         }
         #[cfg(windows)]
@@ -1048,30 +1049,17 @@ impl RuntimeReactor {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(test, unix))]
     fn dispatch_fd_event(&mut self, token: Token, readable: bool, writable: bool, error: bool) {
-        let Some(fd) = self.token_fds.get(&token).copied() else {
-            return;
-        };
-        let Some(entry) = self.fds.get(&fd) else {
-            return;
-        };
-        if entry.token != token {
-            return;
-        }
-        let ready: Vec<_> = entry
-            .waiters
-            .iter()
-            .filter_map(|(key, interest)| {
-                (error
-                    || (readable && interest.contains(IoInterest::READABLE))
-                    || (writable && interest.contains(IoInterest::WRITABLE)))
-                .then_some(*key)
-            })
-            .collect();
-        for key in ready {
-            self.mark_ready(key);
-        }
+        dispatch_fd_event_in(
+            &self.fds,
+            &self.token_fds,
+            &self.active_epochs,
+            &mut self.ready_set,
+            &mut self.ready,
+            token,
+            (readable, writable, error),
+        );
     }
 
     #[cfg(unix)]
@@ -1105,6 +1093,47 @@ impl RuntimeReactor {
     #[cfg(all(test, unix))]
     fn fd_interest(&self, fd: RawFd) -> Option<IoInterest> {
         self.fds.get(&fd).map(|entry| entry.interest)
+    }
+}
+
+/// Queues `key` to wake once, while its wait is the current one.
+fn mark_ready_in(
+    active_epochs: &IdHashMap<u64, u64>,
+    ready_set: &mut IdHashSet<WaitKey>,
+    ready: &mut VecDeque<WaitKey>,
+    key: WaitKey,
+) {
+    if active_epochs.get(&key.0) == Some(&key.1) && ready_set.insert(key) {
+        ready.push_back(key);
+    }
+}
+
+/// Wakes the waits on the descriptor `token` names that `event`, its
+/// readable, writable and error flags, satisfies. A token the descriptor
+/// no longer holds wakes nothing.
+#[cfg(unix)]
+fn dispatch_fd_event_in(
+    fds: &IdHashMap<RawFd, FdEntry>,
+    token_fds: &IdHashMap<Token, RawFd>,
+    active_epochs: &IdHashMap<u64, u64>,
+    ready_set: &mut IdHashSet<WaitKey>,
+    ready: &mut VecDeque<WaitKey>,
+    token: Token,
+    (readable, writable, error): (bool, bool, bool),
+) {
+    let Some(entry) = token_fds.get(&token).and_then(|fd| fds.get(fd)) else {
+        return;
+    };
+    if entry.token != token {
+        return;
+    }
+    for (key, interest) in entry.waiters.iter() {
+        if error
+            || (readable && interest.contains(IoInterest::READABLE))
+            || (writable && interest.contains(IoInterest::WRITABLE))
+        {
+            mark_ready_in(active_epochs, ready_set, ready, *key);
+        }
     }
 }
 

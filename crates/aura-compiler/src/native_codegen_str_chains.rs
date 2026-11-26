@@ -24,7 +24,7 @@ pub(super) struct StrChain {
 
 impl FunctionCompiler<'_> {
     /// Whether `operand` is a `str` a run of `+` takes as a part.
-    fn is_str_part(&self, operand: &Operand) -> bool {
+    pub(super) fn is_str_part(&self, operand: &Operand) -> bool {
         match operand {
             Operand::String(_) => true,
             Operand::Place(place) => {
