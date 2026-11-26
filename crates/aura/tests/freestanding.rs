@@ -1195,7 +1195,9 @@ fn kernel_profile_reserves_space_for_leaf_spills() {
         let red_zone = text
             .lines()
             .any(|line| line.contains("-0x") && line.contains("(%rsp)"));
-        assert_eq!(red_zone, !kernel, "{text}");
+        // Every freestanding x86-64 function avoids the red zone: an
+        // interrupt may arrive in any of them, kernel profile or not.
+        assert!(!red_zone, "{text}");
     }
 }
 
