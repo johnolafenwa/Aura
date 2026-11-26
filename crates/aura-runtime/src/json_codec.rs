@@ -138,7 +138,11 @@ pub fn check_input_len(length: usize) -> Result<(), JsonCodecError> {
 
 pub fn check_output_len(current: usize, added: usize) -> Result<(), JsonCodecError> {
     match current.checked_add(added) {
-        Some(total) if total <= MAX_JSON_OUTPUT_BYTES => Ok(()),
+        Some(total)
+            if crate::builtin_limit::fits(total as u64) && total <= MAX_JSON_OUTPUT_BYTES =>
+        {
+            Ok(())
+        }
         _ => Err(JsonCodecError::OutputTooLarge {
             limit_bytes: MAX_JSON_OUTPUT_BYTES as u64,
         }),
@@ -328,7 +332,8 @@ impl<'a, T: JsonTree> FastJsonParser<'a, T> {
 
     fn value(&mut self, depth: usize) -> Option<T> {
         self.nodes += 1;
-        if self.nodes > MAX_JSON_VALUE_NODES {
+        if self.nodes > MAX_JSON_VALUE_NODES || !crate::builtin_limit::fits(self.nodes as u64 * 16)
+        {
             return None;
         }
         self.skip_whitespace();
@@ -919,7 +924,9 @@ impl JsonMaterializationBudget {
     }
 
     fn claim<E: de::Error>(&mut self) -> Result<(), E> {
-        if self.remaining == 0 {
+        if self.remaining == 0
+            || !crate::builtin_limit::fits((MAX_JSON_VALUE_NODES - self.remaining + 1) as u64 * 16)
+        {
             Err(E::custom(JSON_MATERIALIZATION_TOO_LARGE_SENTINEL))
         } else {
             self.remaining -= 1;

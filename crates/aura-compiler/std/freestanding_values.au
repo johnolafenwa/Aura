@@ -1,0 +1,40 @@
+# The boxes of a freestanding program.
+#
+# A box is a block from the allocation hooks: a reference count in its
+# first 8 bytes, then the words of one value, 8 bytes each. The compiler
+# keeps a value in a box where a type holds itself, as the rest of a
+# linked list does. `aura build --freestanding` adds these functions to a
+# program that needs them.
+
+import mem
+
+
+# A new box for a value of `words` words, with one reference.
+def value_box_new(words: uint64) -> uint64:
+    address = mem.alloc(8 + words * 8, 8)
+    assert address != 0, "out of memory"
+    mem.write_uint64(address, 1)
+    return address
+
+
+# One more reference to the box at `address`. Address 0 is no box.
+def value_box_retain(address: uint64) -> None:
+    if address != 0:
+        mem.write_uint64(address, mem.read_uint64(address) + 1)
+
+
+# One reference fewer. Returns whether that was the last one, so the
+# caller releases what the box holds and frees it.
+def value_box_release(address: uint64) -> bool:
+    if address == 0:
+        return false
+    count = mem.read_uint64(address)
+    if count > 1:
+        mem.write_uint64(address, count - 1)
+        return false
+    return true
+
+
+# Gives back the box at `address`, which held a value of `words` words.
+def value_box_free(address: uint64, words: uint64) -> None:
+    mem.free(address, 8 + words * 8, 8)

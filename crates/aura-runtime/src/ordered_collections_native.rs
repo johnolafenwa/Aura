@@ -18,7 +18,7 @@ fn field_mut<R>(
         return Err(invalid_store());
     };
     match &mut instance.fields {
-        InstanceFields::Recovered(_) => Err(invalid_store()),
+        InstanceFields::Hooked(_) | InstanceFields::Recovered(_) => Err(invalid_store()),
         InstanceFields::Map(fields) => action(fields.get_mut(name).ok_or_else(invalid_store)?),
         InstanceFields::Typed(fields) => fields
             .with_field_mut(name, action)

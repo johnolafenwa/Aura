@@ -884,3 +884,101 @@ test("local function capture lists have a declaration scope", () => {
     ["def", "add"]);
   assert.equal(rule.beginCaptures["2"].name, "entity.name.function.aura");
 });
+
+test("syntax grammar identifies the const marker on module bindings", async () => {
+  const tokens = await tokenizeAura("public const width: int64 = 64\nconstant = 1");
+  assert.ok(scopesAt(tokens, 0, "const").includes("storage.modifier.const.aura"));
+  assert.ok(!scopesAt(tokens, 1, "constant").includes("storage.modifier.const.aura"));
+});
+
+test("machine attributes and assembly clauses have contextual scopes", async () => {
+  const tokenized = await tokenizeAura([
+    '@machine.section(".irq")',
+    'export "C" def copy_word(word: uint64) -> None:',
+    '    asm("""',
+    '        input("reg", word)',
+    '        ret',
+    '    """, output("reg", word), input("reg", input(word)), clobber("memory"), options("pure"))',
+    'module_asm("ret")',
+    'def input(value: uint64) -> uint64:',
+    '    return value'
+  ].join("\n"));
+
+  assert.ok(scopesAt(tokenized, 0, "@machine.section").includes("storage.modifier.machine.aura"));
+  assert.ok(scopesAt(tokenized, 2, "asm").includes("keyword.control.assembly.aura"));
+  assert.ok(scopesAt(tokenized, 6, "module_asm").includes("keyword.control.assembly.aura"));
+  for (const clause of ["output", "input", "clobber", "options"]) {
+    assert.ok(scopesAt(tokenized, 5, clause).includes("keyword.other.assembly-clause.aura"), clause);
+  }
+  assert.ok(scopesAt(tokenized, 3, "input").some(scope => scope.startsWith("string.")));
+  assert.ok(!scopesAt(tokenized, 5, "input", 1).includes("keyword.other.assembly-clause.aura"));
+  assert.ok(!scopesAt(tokenized, 7, "input").includes("keyword.other.assembly-clause.aura"));
+});
+
+test("workspace can choose a freestanding target for the compiler language service", () => {
+  const target = require("../package.json").contributes.configuration.properties["aura.freestandingTarget"];
+  assert.equal(target.default, "");
+  assert.deepEqual(target.enum, ["", "x86_64-unknown-none", "aarch64-unknown-none", "riscv64gc-unknown-none-elf"]);
+});
+
+test("systems data uses layout modifiers only in declarations", async () => {
+  const source = [
+    'public extern "C" packed align(8) class Header:',
+    '    flags: uint16 bits(3)',
+    '    samples: fixed[uint8, 3]',
+    'mut slots: fixed[ptr[Header], 2] = [0 as ptr[Header]] * 2',
+    'def bits(align: int64) -> int64:',
+    '    packed = bits(align)',
+    '    fixed = packed',
+    'extern "C" align(16) class Wide:',
+    '    x: int64',
+    'extern "C" packed class Short:',
+    '    tag: uint8'
+  ].join("\n");
+  const tokens = await tokenizeAura(source);
+  for (const [line, word] of [[0, "packed"], [0, "align"], [1, "bits"], [7, "align"], [9, "packed"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("storage.modifier.layout.aura"), word);
+  }
+  for (const [line, word] of [[0, "Header"], [7, "Wide"], [9, "Short"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("entity.name.type.aura"), word);
+  }
+  for (const [line, word] of [[2, "fixed"], [3, "fixed"], [3, "ptr"]]) {
+    assert.ok(scopesAt(tokens, line, word).includes("support.type.primitive.aura"), word);
+  }
+  for (const [line, word] of [[4, "bits"], [4, "align"], [5, "packed"], [5, "bits"]]) {
+    assert.ok(!scopesAt(tokens, line, word).includes("storage.modifier.layout.aura"), word);
+  }
+  assert.ok(!scopesAt(tokens, 6, "fixed").includes("support.type.primitive.aura"));
+});
+
+test("alignment and bit-field widths retain Aura integer literal spellings", async () => {
+  const tokens = await tokenizeAura([
+    'extern "C" align(0x10) packed class Header:',
+    '    lower: uint64 bits(0b1_000)',
+  ].join("\n"));
+  for (const name of ["align", "packed"]) {
+    assert.ok(scopesAt(tokens, 0, name).includes("storage.modifier.layout.aura"));
+  }
+  assert.ok(scopesAt(tokens, 0, "0x10").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 1, "0b1_000").includes("constant.numeric.aura"));
+  assert.ok(scopesAt(tokens, 0, "Header").includes("entity.name.type.aura"));
+});
+
+test("grammar highlights class-item syntax in its declaration context", async () => {
+  const tokens = await tokenizeAura([
+    "impl[T: Named] Named for Car[T] by engine: # override",
+    "by = 5",
+    "class Car:",
+    "    @count.setter",
+    "    def count(mut self, value: int64):",
+    "        pass",
+    "    @tools.traced",
+    "    def __drop__(mut self):",
+    "        pass",
+  ].join("\n"));
+  assert.ok(scopesAt(tokens, 0, "by").includes("keyword.control.delegation.aura"));
+  assert.ok(!scopesAt(tokens, 1, "by").includes("keyword.control.delegation.aura"));
+  assert.ok(scopesAt(tokens, 3, "setter").includes("storage.modifier.attribute.aura"));
+  assert.ok(scopesAt(tokens, 6, "traced").includes("storage.modifier.attribute.aura"));
+  assert.ok(scopesAt(tokens, 7, "__drop__").includes("entity.name.function.aura"));
+});

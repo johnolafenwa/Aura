@@ -331,3 +331,30 @@ test("workspaceSymbols traverses deeply nested declarations without recursion ov
   assert.equal(matches[0].name, "Deep5999");
 });
 
+test("workspace search returns module const declarations as LSP constants", () => {
+  const uri = "file:///settings.au";
+  const symbols = workspaceSymbols("lanes", new Map([[uri, "public const lanes = 4"]]));
+  assert.equal(symbols.length, 1);
+  assert.equal(symbols[0].kind, 14);
+  assert.deepEqual(symbols[0].location.range, {
+    start: { line: 0, character: 13 }, end: { line: 0, character: 18 }
+  });
+});
+
+test("module storage has a variable token without the readonly modifier", () => {
+  const source = "mut tick: uint64 = 0\n";
+  const analysis = { occurrences: [occurrence(0, 4, 8, "module binding tick: uint64", [0, 4, 8])] };
+  assert.deepEqual(semanticTokens(analysis, source).data, [
+    0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("variable"), 1
+  ]);
+});
+
+test("workspace search publishes module storage as a variable symbol", () => {
+  const matches = workspaceSymbols("ring", new Map([["file:///kernel.au", 'mut ring: uint8 = 0\nexport "C" def head() -> uint8:\n    return ring']]));
+  assert.equal(matches[0].kind, 13);
+});
+
+test("semantic tokens use the method signature below decorator lines", () => {
+  const analysis = { occurrences: [occurrence(0, 4, 8, "@traced\n@tag(1)\nmethod call(self) -> int64", null)] };
+  assert.deepEqual(semanticTokens(analysis, "obj.call()").data, [0, 4, 4, SEMANTIC_TOKEN_TYPES.indexOf("method"), 0]);
+});

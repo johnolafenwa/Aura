@@ -1,4 +1,4 @@
-// Times one build of the five routines. `P` is the symbol prefix.
+// Times one build of the routines. `P` is the symbol prefix.
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +13,7 @@ uint64_t NAME(P, collatz)(uint64_t);
 uint64_t NAME(P, isqrt_sum)(uint64_t);
 int64_t NAME(P, gcd_sum)(int64_t);
 double NAME(P, orbit)(int64_t);
+uint32_t NAME(P, ring_mix)(uint32_t);
 
 void aura_trap(uint32_t code, const char *file, uint64_t length, uint32_t line, uint32_t column) {
     fprintf(stderr, "trap %u at %.*s:%u:%u\n", code, (int)length, file, line, column);
@@ -41,7 +42,12 @@ static double now(void) {
     } while (0)
 
 int main(void) {
-    uint32_t result_crc32;
+    if (NAME(P, ring_mix)(0) != UINT32_C(0x13579bdf) ||
+        NAME(P, ring_mix)(64) != UINT32_C(0x82d80971)) {
+        fputs("ring_mix returned an incorrect checksum\n", stderr);
+        return 1;
+    }
+    uint32_t result_crc32, result_ring_mix;
     uint64_t result_collatz, result_isqrt_sum;
     int64_t result_gcd_sum;
     double result_orbit;
@@ -50,5 +56,6 @@ int main(void) {
     TIME(isqrt_sum, "%" PRIu64, NAME(P, isqrt_sum)(5000000));
     TIME(gcd_sum, "%" PRId64, NAME(P, gcd_sum)(3000000));
     TIME(orbit, "%.12f", NAME(P, orbit)(50000000));
+    TIME(ring_mix, "%" PRIu32, NAME(P, ring_mix)(20000000));
     return 0;
 }

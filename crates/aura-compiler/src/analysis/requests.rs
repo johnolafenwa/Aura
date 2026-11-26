@@ -680,8 +680,7 @@ pub fn signature_help_path_source(
     let cursor = line_start.checked_add(character)?;
     let (open, ordinal, argument_start) = active_call(source, cursor)?;
     let callee = callee_before_open(source, open)?;
-    let mut checker =
-        |candidate: &str| crate::check_path_with_source_without_lockfile(path, candidate);
+    let mut checker = |candidate: &str| profile::check(path, candidate);
     let program = checker(source).ok().or_else(|| {
         recover_checked_program_after_position(source, line, character, &mut checker)
     })?;

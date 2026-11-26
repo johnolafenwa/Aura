@@ -71,6 +71,13 @@ public copy class Device:
         return self.kind != 0
 
 
+public class float16:
+    """The dtype of a `Tensor[float16]`: IEEE half-precision floats, 16
+    bits each. It names a tensor's elements only. Aura has no `float16`
+    number: a `Tensor[float16]` takes and gives `float32` numbers and
+    arrays, and keeps each element as the nearest half."""
+
+
 public class Tensor[T]:
     """Numbers of one dtype on a device. A tensor is never changed: each
     operation gives a new one. Shapes follow the `Array` rules."""
@@ -276,6 +283,11 @@ public class Tensor[T]:
     public def to_int64(self) -> Tensor[int64]:
         return Tensor[int64](node=tensor.__aura_cast(self.node, 1))
 
+    public def to_float16(self) -> Tensor[float16]:
+        """The elements as half-precision floats: each is rounded to the
+        nearest half, and one past the largest half is an infinity."""
+        return Tensor[float16](node=tensor.__aura_cast(self.node, 5))
+
     public def to_float32(self) -> Tensor[float32]:
         return Tensor[float32](node=tensor.__aura_cast(self.node, 2))
 
@@ -350,6 +362,16 @@ public def load_float32(path: str, name: str, device: Device) -> Result[Tensor[f
     match own tensor.__aura_weights_load(path, name, 2, device.kind):
         case Ok(node):
             return Ok(Tensor[float32](node=node))
+        case Err(message):
+            return Err(message)
+
+
+public def load_float16(path: str, name: str, device: Device) -> Result[Tensor[float16], str]:
+    """The float tensor `name` of the safetensors file at `path` as
+    half-precision floats. A tensor stored at another width is rounded."""
+    match own tensor.__aura_weights_load(path, name, 5, device.kind):
+        case Ok(node):
+            return Ok(Tensor[float16](node=node))
         case Err(message):
             return Err(message)
 
@@ -632,7 +654,33 @@ public def dropout(x: Tensor[float32], p: float64, seed: int64) -> Tensor[float3
     return where(kept, x / (1.0 - p), x.scalar(0.0))
 
 
-public def scaled_dot_product_attention(query: Tensor[float32], key: Tensor[float32], value: Tensor[float32], is_causal: bool = false) -> Tensor[float32]:
+public def linear[T](x: Tensor[T], weight: Tensor[T], bias: Tensor[T]) -> Tensor[T]:
+    """What a `Linear` layer computes, for float tensors of any dtype:
+    the last axis of `x` times `weight`, an `[in, out]` matrix, plus
+    `bias`."""
+    mut shape = x.shape()
+    last = shape.len() - 1
+    flat = x.reshape([-1, shape[last]]).matmul(weight) + bias
+    shape[last] = weight.shape()[1]
+    return flat.reshape(shape)
+
+
+public def layer_norm[T](x: Tensor[T], weight: Tensor[T], bias: Tensor[T], eps: float64 = 0.00001) -> Tensor[T]:
+    """What a `LayerNorm` layer computes, for float tensors of any
+    dtype."""
+    # A `float16` tensor is normalized in `float32`: the square of an
+    # element overflows a half long before the result does.
+    none = list[int64]()
+    wide = Tensor[T](node=tensor.__aura_node_op(x.node, 15, none))
+    scale = Tensor[T](node=tensor.__aura_node_op(weight.node, 15, none))
+    shift = Tensor[T](node=tensor.__aura_node_op(bias.node, 15, none))
+    centered = wide - wide.mean(-1, true)
+    spread = (centered * centered).mean(-1, true)
+    normed = centered / (spread + eps).sqrt() * scale + shift
+    return Tensor[T](node=tensor.__aura_pair_op(normed.node, x.node, 5, none))
+
+
+public def scaled_dot_product_attention[T](query: Tensor[T], key: Tensor[T], value: Tensor[T], is_causal: bool = false) -> Tensor[T]:
     """Scaled dot-product attention over the last two axes: for each
     query row, the rows of `value` weighted by the softmax of the query's
     products with the rows of `key`. With `is_causal`, row `i` attends to
@@ -651,7 +699,7 @@ public def scaled_dot_product_attention(query: Tensor[float32], key: Tensor[floa
         rows = arange(shape[rank - 2], query.device())
         columns = arange(key.shape()[rank - 2], query.device())
         seen = rows.reshape([-1, 1]).greater_equal(columns.reshape([1, -1]))
-        scores = where(seen, scores, scores.scalar(-1.0e30))
+        scores = where(seen, scores, Tensor[T](node=tensor.__aura_scalar_like_f64(scores.node, -1.0e30)))
     return scores.softmax(-1).matmul(value)
 
 
@@ -1427,6 +1475,26 @@ impl Elements[Array[float32], float32] for Tensor[float32]:
 
     def scalar(self, value: float32) -> Tensor[float32]:
         return Tensor[float32](node=tensor.__aura_full_f32([1], value, 2, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[float32], float32] for Tensor[float16]:
+    def from_array(values: Array[float32], device: Device) -> Tensor[float16]:
+        return Tensor[float16](node=tensor.__aura_cast(tensor.__aura_from_array_f32(values, device.kind), 5))
+
+    def full(shape: list[int64], value: float32, device: Device) -> Tensor[float16]:
+        return Tensor[float16](node=tensor.__aura_full_f32(shape, value, 5, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[float16]:
+        return Tensor[float16](node=tensor.__aura_full_f32(shape, 0.0, 5, device.kind))
+
+    def to_array(self) -> Array[float32]:
+        return tensor.__aura_to_array_f32(self.node)
+
+    def item(self) -> float32:
+        return tensor.__aura_item_f32(self.node)
+
+    def scalar(self, value: float32) -> Tensor[float16]:
+        return Tensor[float16](node=tensor.__aura_full_f32([1], value, 5, tensor.__aura_device(self.node)))
 
 
 impl Elements[Array[float64], float64] for Tensor[float64]:

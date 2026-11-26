@@ -1,0 +1,2 @@
+export "C" def entry() -> None:
+    asm("nop", options("pure"))

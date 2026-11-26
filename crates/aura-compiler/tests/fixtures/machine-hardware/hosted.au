@@ -1,0 +1,4 @@
+import mem as hw
+
+def interrupt() -> None:
+    hw.disable_interrupts()

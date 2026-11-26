@@ -7,6 +7,84 @@ in this file.
 
 ## Unreleased
 
+- Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
+- The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
+- The editor dims inactive suites and provides navigation for identifiable declarations in them.
+- Freestanding x86-64, AArch64 and RISC-V programs can use typed assembly,
+  machine entry and placement attributes, and privileged operations in
+  `mem`. The new x86-64 `--kernel` profile disables the red zone and
+  vector registers. The QEMU kernel example now boots an x86-64 board
+  and returns from breakpoint and timer interrupts.
+- Freestanding modules can keep writable state in `.data` and `.bss`. Use `fixed[T, N]` for inline arrays and `ptr[T]` for typed access to cells, elements and C fields.
+- C records support packing, explicit alignment, unsigned bit-fields, C layout queries and writable union members.
+- Integers gain rotations, bit counts and byte swapping. Freestanding functions can use 128-bit integers. Memory atomics support 8-, 16-, 32- and 64-bit cells and explicit memory orders.
+- Forward a trait and its supertraits to an owned field with `impl Trait for Class by field`. A suite can override individual methods.
+- Pair a computed getter with `@name.setter` to accept assignment and compound assignment on a mutable receiver.
+- Define `__drop__(mut self)` to run cleanup when ownership ends, including collection release and trap recovery.
+- Apply callable decorators to instance and associated methods. Instance methods pass their receiver as the first argument.
+- Freestanding builds have a heap. `mem.alloc`, `mem.free`, and
+  `mem.realloc` hand out blocks of memory at a `uint64` address, and
+  `mem.heap_add_region` names the memory the heap may use. They call three
+  allocation hooks, the C symbols `aura_alloc`, `aura_free`, and
+  `aura_realloc`. A program that defines none of them gets an allocator
+  written in Aura, which `aura build --freestanding` compiles into the
+  object as weak symbols, so the build still writes one object and links
+  nothing. In a hosted program the same functions use the process
+  allocator. The values the language keeps on a heap, such as `str` and
+  `list`, are still not available in a freestanding build.
+- Freestanding builds compile tuples, enums, and `Result` whose parts are
+  all numbers, `bool`, classes of those, or other such tuples and enums,
+  with `match` and `try` on them. The compiler keeps each in machine words with no
+  heap. An enum that holds a collection or a union is still reported as
+  `AU2052`.
+- Freestanding builds compile dictionaries with `int64`, `uint64`, or
+  `str` keys: literals, `d[key]`, `d[key] = value`, `key in d`, `len`,
+  `is_empty`, `keys`, `values`, `items`, and `clear`. The hash table is
+  written in Aura and keeps the order the keys were added in. `clone` of
+  a text is available too.
+- Freestanding builds compile unions of values that own heap memory,
+  such as `str | None` and `list[int64] | None`, as locals, parameters,
+  results, fields, and list elements, with `is None` and `match` on them.
+- Freestanding builds compile `str`: literals, values in locals, classes,
+  tuples, and enums, `+`, the comparisons, `len`, `byte_len`,
+  `starts_with`, `ends_with`, and `contains`. A `str` lives in a counted
+  block from the allocation hooks, and its operations are written in
+  Aura. A foreign function takes a `str` value as an address, or as an
+  address and a length. An f-string may hold text, integers, and `bool`.
+  Indexing, the other text methods, and floats or format specs in
+  f-strings are still reported as `AU2052`.
+- Freestanding builds compile lists of integers, floats, `bool`, text,
+  classes, tuples, enums, and lists: literals, `append`, `len`,
+  `is_empty`, `pop`, `insert`, `swap`, `reverse`, `reserve`, `clear`,
+  element reads and writes, `view` of an element, and `for` loops. A list releases what its
+  elements own when its last reference goes. A list is a counted header and a buffer that
+  grows through `aura_realloc`, and its operations are written in Aura.
+  An index out of range calls the trap hook with code 3.
+- Freestanding builds compile an enum with an `indirect` payload of its own
+  type, such as a list or a tree. Each such payload lives in a block from
+  the allocation hooks with a reference count, and the program frees
+  every block when its last reference goes. Classes, tuples, and `Result`
+  may hold such an enum, and `match own` and `try` work on them.
+- Tensors: `Tensor[float16]` holds IEEE half-precision floats. It takes
+  and gives `float32` numbers and arrays, rounds every result to the
+  nearest half, and does not mix with `float32` in one operation.
+  `to_float16()` converts a tensor, `load_float16` reads a safetensors
+  tensor of any float width as halves, and `save` writes halves as
+  `F16`. On the CUDA device the tensor is stored as halves and its
+  products are cuBLAS half products. On the Metal device it stays in
+  host memory for now.
+- Tensors: `tensor.linear` and `tensor.layer_norm` compute what the
+  layers compute for float tensors of any dtype, and
+  `scaled_dot_product_attention` takes any float dtype, so a trained
+  transformer runs in half precision.
+- Tensors, CUDA: the products of an attention read the heads of the
+  queries, keys and values where they lie in their rows. The three
+  copies a layer made to split the heads are gone.
+  `AURA_TENSOR_HEADS_IN_PLACE=0` turns this off.
+- Benchmarks: `benchmarks/tensor/gpt2.au` runs GPT-2 with its real
+  weights in `float32` and `float16`, and `benchmarks/tensor/nanogpt.au`
+  trains a character model on a real text, each beside the same program
+  in PyTorch.
 - Tensors: the Metal device runs `tanh`, `sigmoid`, `erf`, `slice`,
   `index_select`, `index_add`, `cat`, `expand`, `argmax`, `argmin`, and
   the random tensors on the GPU. They ran on the CPU before. Tensors

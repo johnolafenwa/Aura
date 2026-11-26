@@ -440,7 +440,7 @@ fn named(name: &str, span: crate::diag::Span) -> TypeRef {
 }
 
 /// `ty` with each bare name in `substitutions` replaced, at `span`.
-fn substitute(
+pub(super) fn substitute(
     ty: &TypeRef,
     substitutions: &BTreeMap<String, TypeRef>,
     span: crate::diag::Span,

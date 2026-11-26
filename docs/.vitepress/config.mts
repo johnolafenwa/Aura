@@ -82,6 +82,7 @@ export default defineConfig({
             { text: 'Status And Compatibility', link: '/manual/status-and-compatibility' },
             { text: 'Lexical Structure', link: '/manual/lexical-structure' },
             { text: 'Complete Grammar', link: '/manual/grammar' },
+            { text: 'Compile-Time Evaluation', link: '/manual/compile-time' },
             { text: 'Names And Scopes', link: '/manual/names-and-scopes' },
             { text: 'Types', link: '/manual/types' },
             { text: 'Static Semantics', link: '/manual/static-semantics' },

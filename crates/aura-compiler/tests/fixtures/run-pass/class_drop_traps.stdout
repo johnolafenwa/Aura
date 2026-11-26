@@ -1,0 +1,8 @@
+drop inner
+drop outer
+caught body
+drop inner
+drop outer
+caught inner
+returned to caller
+drop returned

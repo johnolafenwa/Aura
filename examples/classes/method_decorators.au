@@ -1,0 +1,20 @@
+"""Double a counter's reported score while retaining ordinary method calls."""
+
+type Score = Callable[def(self: Counter) -> int64]
+
+
+def twice(f: own Score) -> Score:
+    return Score(lambda [own f] self: f(self) * 2)
+
+
+class Counter:
+    value: int64
+
+    @twice
+    def score(self) -> int64:
+        return self.value
+
+
+def main():
+    counter = Counter(value=21)
+    print(counter.score())

@@ -1,0 +1,5 @@
+error[AU2082]: fixed array needs 3 elements, found 2
+ --> crates/aura-compiler/tests/fixtures/check-fail/fixed_array_wrong_length.au:2:28
+  |
+2 |     row: fixed[uint8, 3] = [1, 2]
+  |                            ^

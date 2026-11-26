@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the five routines as freestanding objects with Aura, C, and Rust,
+# Builds the freestanding routines as freestanding objects with Aura, C, and Rust,
 # links each with the same harness, and prints times and code sizes.
 # Usage: benchmarks/freestanding/run.sh [path to aura]
 set -euo pipefail
@@ -8,7 +8,7 @@ aura="${1:-aura}"
 out="$(mktemp -d)"
 trap 'rm -rf "$out"' EXIT
 
-"$aura" build --freestanding -o "$out/aura.o" "$here/kernels.au" 2>/dev/null
+"$aura" build --freestanding -o "$out/aura.o" "$here/kernels.au"
 clang -O2 -ffreestanding -fno-builtin -c "$here/kernels.c" -o "$out/c.o"
 # Rust's division and overflow checks call into `core`, so the timed build
 # is a static library that carries it. The size is that of the object alone.

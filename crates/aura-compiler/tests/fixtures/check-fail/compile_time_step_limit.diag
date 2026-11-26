@@ -1,0 +1,6 @@
+error[AU3027]: while evaluating module constant `total`: constant evaluation exceeds the limit of 100000 MIR steps
+ --> crates/aura-compiler/tests/fixtures/check-fail/compile_time_step_limit.au:1:1
+  |
+1 | def sum_up() -> int64:
+  | ^
+  = note: Aura call chain (innermost first): sum_up at 1:1 -> const total at 7:7

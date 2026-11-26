@@ -76,24 +76,6 @@ pub(super) fn names(path: &str) -> std::result::Result<Vec<String>, String> {
     read_header(path).map(|(_, entries, _)| entries.into_iter().map(|entry| entry.name).collect())
 }
 
-/// A half-precision float as a `float32`.
-fn half(bits: u16) -> f32 {
-    let sign = u32::from(bits >> 15) << 31;
-    let exponent = u32::from(bits >> 10) & 0x1F;
-    let fraction = u32::from(bits) & 0x3FF;
-    let bits = match (exponent, fraction) {
-        (0, 0) => sign,
-        (0, _) => {
-            // A subnormal half is a normal float32.
-            let shift = fraction.leading_zeros() - 21;
-            sign | ((113 - shift) << 23) | ((fraction << shift) & 0x3FF) << 13
-        }
-        (0x1F, _) => sign | 0x7F80_0000 | (fraction << 13),
-        _ => sign | ((exponent + 112) << 23) | (fraction << 13),
-    };
-    f32::from_bits(bits)
-}
-
 /// The tensor `name` of the file at `path`, as elements of `dtype`. A
 /// float tensor of any width loads as either float dtype, and an integer
 /// tensor as either integer dtype.
@@ -140,7 +122,9 @@ pub(super) fn load(
         chunks.clone().map(|chunk| match entry.dtype.as_str() {
             "F64" => f64::from_le_bytes(chunk.try_into().expect("eight bytes")),
             "F32" => f32::from_le_bytes(chunk.try_into().expect("four bytes")).into(),
-            "F16" => half(u16::from_le_bytes([chunk[0], chunk[1]])).into(),
+            "F16" => {
+                tensor_kernels::half_to_single(u16::from_le_bytes([chunk[0], chunk[1]])).into()
+            }
             // The top half of a float32.
             _ => f32::from_bits(u32::from(u16::from_le_bytes([chunk[0], chunk[1]])) << 16).into(),
         })
@@ -185,17 +169,22 @@ pub(super) fn load(
 }
 
 /// Writes `tensors` to the file at `path` and gives the file's length.
-/// The file appears whole or not at all.
+/// Each is a name, the elements, and whether they are a `float16`
+/// tensor's. The file appears whole or not at all.
 pub(super) fn save(
     path: &str,
-    tensors: &[(String, ArrayValue)],
+    tensors: &[(String, ArrayValue, bool)],
 ) -> std::result::Result<u64, String> {
     let mut header = serde_json::Map::new();
     let mut data: Vec<u8> = Vec::new();
-    for (name, elements) in tensors {
+    for (name, elements, half) in tensors {
         let start = data.len();
         let storage = elements.elements().map_err(|error| error.message)?;
         let dtype = match &*storage {
+            ArrayStorage::Float32(_) if *half => {
+                data.extend(tensor_kernels::half_bytes(elements).map_err(|error| error.message)?);
+                "F16"
+            }
             ArrayStorage::Int32(values) => {
                 data.extend(values.iter().flat_map(|value| value.to_le_bytes()));
                 "I32"
@@ -304,7 +293,11 @@ mod tests {
             ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice().into()),
         )
         .unwrap();
-        let written = save(target.to_str().unwrap(), &[("w".to_string(), sample)]).unwrap();
+        let written = save(
+            target.to_str().unwrap(),
+            &[("w".to_string(), sample, false)],
+        )
+        .unwrap();
         assert!(written > 0);
         assert_eq!(std::fs::read(&sentinel).unwrap(), b"original-sentinel");
         let loaded = load(target.to_str().unwrap(), "w", ArrayDType::Float32).unwrap();
