@@ -2723,8 +2723,10 @@ impl<'a> NativeCodegen<'a> {
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
-        let mut element_locals =
-            classes::instance_element_locals(function, &element_candidates, |class, field| {
+        let mut element_locals = classes::instance_element_locals(
+            function,
+            &element_candidates,
+            |class, field| {
                 self.classes[class].fields.iter().any(|candidate| {
                     candidate.name == field
                         && matches!(
@@ -2732,9 +2734,16 @@ impl<'a> NativeCodegen<'a> {
                             Ok(DirectType::Scalar(_))
                         )
                 })
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+            },
+            |class, field| {
+                self.classes[class]
+                    .fields
+                    .iter()
+                    .any(|candidate| candidate.name == field && candidate.ty == Type::named("str"))
+            },
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
         element_locals.sort();
         let mut instance_element_blocks = HashMap::new();
         for local in element_locals {
@@ -22524,7 +22533,8 @@ fn cannot_be_callable(ty: &Type) -> bool {
 }
 
 /// Whether `rvalue` is a `str` operation that makes a new value from its
-/// text and its arguments and only reads them, so a box field it reads may
+/// text and its arguments and only reads them, or a `clone` or `copy`,
+/// which makes a new value from its receiver, so a box field it reads may
 /// stay where it lies, as for [`reads_operands_only`].
 fn makes_text_from_operands(rvalue: &Rvalue) -> bool {
     matches!(
@@ -22551,7 +22561,7 @@ fn makes_text_from_operands(rvalue: &Rvalue) -> bool {
                         | StrOp::Repeat
                         | StrOp::Chars
                         | StrOp::CharAt
-                ),
+                ) | RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy),
                 ..
             },
             ..

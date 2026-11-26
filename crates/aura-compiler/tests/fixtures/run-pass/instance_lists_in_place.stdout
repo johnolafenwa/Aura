@@ -7,11 +7,13 @@ ab 0 2
 [Hit(end=2, start=0, text=ab), Hit(end=5, start=3, text=de), Hit(end=8, start=6, text=gh), Hit(end=11, start=9, text=jk), Hit(end=14, start=12, text=mn)]
 5 6 0 7
 false
+[ab, de, gh, jk, mn] [ab, de, gh, jk, mn, zz]
 true
 de@3;gh@6;
 ab@0;gh@6;mn@12;
 mn@12;jk@9;gh@6;de@3;ab@0;
 ab@0;de@3;gh@6;jk@9;mn@12;
+gh@6;de@3;ab@0;jk@9;mn@12;
 2
 1
 true

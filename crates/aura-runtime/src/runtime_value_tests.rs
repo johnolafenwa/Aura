@@ -4324,6 +4324,37 @@ fn fd_reads_check_deadline_and_size_before_ready_reads() {
         Some(b"abc".to_vec())
     );
 
+    // Bounds above the scratch read into a buffer of their own; smaller
+    // ones after them reuse the scratch and return only their bytes.
+    let large = vec![7u8; 70 * 1024];
+    let mut large_reader = io::Cursor::new(large.clone());
+    assert_eq!(
+        read_some_with_fd_deadline(&mut large_reader, -1, 80 * 1024, libc::POLLIN, None, None)
+            .expect("a read above the scratch bound should succeed"),
+        Some(large)
+    );
+    for _ in 0..2 {
+        let mut short_reader = io::Cursor::new(b"de".to_vec());
+        assert_eq!(
+            read_some_with_fd_deadline(&mut short_reader, -1, 4096, libc::POLLIN, None, None)
+                .expect("a scratch read should return its bytes"),
+            Some(b"de".to_vec())
+        );
+    }
+    let mut empty_some_reader = io::empty();
+    assert_eq!(
+        read_some_with_fd_deadline(
+            &mut empty_some_reader,
+            -1,
+            80 * 1024,
+            libc::POLLIN,
+            None,
+            None
+        )
+        .expect("the end of the stream is no error"),
+        None
+    );
+
     struct FailingReader;
 
     impl Read for FailingReader {

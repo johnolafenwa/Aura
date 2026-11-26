@@ -237,16 +237,47 @@ pub(super) fn instance_append_temps(function: &MirFunction) -> HashSet<String> {
 /// of a class a list keeps in place, which generated code may read where
 /// the list keeps the element (see `emit_list_lend`). Each candidate,
 /// with its class, is one `lents` reads from a list, and `scalar_field`
-/// says whether a field of its class is a scalar. A local qualifies when
-/// its only assignment is one read, the only other mention of the bare
-/// local is its `Release`, and every other mention reads a scalar field
-/// (`local.field`), so nothing needs the element's box.
+/// says whether a field of its class is a scalar, and `text_field`
+/// whether it is a `str`. A local qualifies when its only assignment is
+/// one read, the only other mention of the bare local is its `Release`,
+/// and every other mention reads a scalar field (`local.field`) or clones
+/// a `str` field (`local.field.clone()`), which borrows the field's box
+/// where it lies, so nothing needs the element's box.
 pub(super) fn instance_element_locals(
     function: &MirFunction,
     candidates: &HashMap<String, String>,
     scalar_field: impl Fn(&str, &str) -> bool,
+    text_field: impl Fn(&str, &str) -> bool,
 ) -> HashSet<String> {
     use crate::mir::{instruction_place_mentions, terminator_place_mentions};
+    // The clone of a `str` field of a candidate into a temporary.
+    let text_clone = |instruction: &Instruction| match instruction {
+        Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy),
+                            receiver: Some(Operand::Place(place)),
+                            receiver_place,
+                        },
+                    args,
+                    ..
+                },
+        } if args.is_empty()
+            && !candidates.contains_key(place_root(target))
+            && receiver_place.as_deref().is_none_or(|other| other == place) =>
+        {
+            place.split_once('.').is_some_and(|(root, field)| {
+                !field.contains('.')
+                    && candidates
+                        .get(root)
+                        .is_some_and(|class| text_field(class, field))
+            })
+        }
+        _ => false,
+    };
     let mut refused = HashSet::<String>::new();
     let mut assigned = HashMap::<String, usize>::new();
     let check = |place: &str, refused: &mut HashSet<String>| {
@@ -287,6 +318,7 @@ pub(super) fn instance_element_locals(
                     }
                     continue;
                 }
+                _ if text_clone(instruction) => continue,
                 _ => {}
             }
             let mut places = Vec::new();
@@ -727,6 +759,40 @@ impl FunctionCompiler<'_> {
                 .map(|leaf| self.load_leaf(*leaf, address))
                 .collect::<Vec<_>>();
             self.builder.jump(join_block, &values);
+            self.builder.switch_to_block(boxed_block);
+            self.builder.seal_block(boxed_block);
+            let loaded = self.load_boxed_class_place(place, &root, &slot, ty.clone())?;
+            self.builder.jump(join_block, &loaded.values);
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+            let values = self.builder.block_params(join_block).to_vec();
+            return Ok(Some(ValueRef { values, ty }));
+        }
+        if let (Some(block_var), SlotKind::Handle) =
+            (self.instance_element_blocks.get(&root).copied(), &slot.kind)
+        {
+            // A `str` field of an element a list keeps in place is the box
+            // the list holds at its offset, which the clone that reads it
+            // borrows (see `instance_element_locals`); a box the element's
+            // read lent takes the instance's way.
+            if !(self.borrow_field_reads && self.field_read_copies.len() > self.field_read_count) {
+                return Err(format!(
+                    "direct backend copies `{place}` out of a kept element"
+                ));
+            }
+            let element_block = self.builder.create_block();
+            let boxed_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            self.builder.append_block_param(join_block, types::I64);
+            let address = self.builder.use_var(block_var);
+            self.builder
+                .brif(address, element_block, &[], boxed_block, &[]);
+            self.builder.switch_to_block(element_block);
+            self.builder.seal_block(element_block);
+            let boxed = self
+                .builder
+                .load(types::I64, MemFlags::trusted(), address, slot.offset);
+            self.builder.jump(join_block, &[boxed]);
             self.builder.switch_to_block(boxed_block);
             self.builder.seal_block(boxed_block);
             let loaded = self.load_boxed_class_place(place, &root, &slot, ty.clone())?;

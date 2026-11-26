@@ -1192,14 +1192,6 @@ fn edits_of_kept_instances_take_the_value_form_first() {
                 list.insert(1, Value::Unit);
                 Value::Unit
             }),
-            ("swap", |list| {
-                list.swap(0, 2);
-                Value::Unit
-            }),
-            ("reverse", |list| {
-                list.reverse();
-                Value::Unit
-            }),
             ("keep_every", |list| {
                 list.keep_every(2);
                 Value::Unit
@@ -1238,6 +1230,41 @@ fn edits_of_kept_instances_take_the_value_form_first() {
             assert_eq!(left, right, "{name}");
             assert!(!matches!(left, ListElements::Instances(_)), "{name}");
         }
+        // A swap, a reversal and a sort by keys move the instances' words
+        // and keep the form, in a list that shares them or not.
+        type Move = fn(&mut ListElements);
+        let moves: Vec<(&str, Move)> = vec![
+            ("swap", |list| list.swap(0, 2)),
+            ("swap back", |list| list.swap(2, 0)),
+            ("swap itself", |list| list.swap(1, 1)),
+            ("reverse", ListElements::reverse),
+        ];
+        for (name, edit) in moves {
+            let mut left = kept.clone();
+            let mut right = values.clone();
+            edit(&mut left);
+            edit(&mut right);
+            assert_eq!(left, right, "{name}");
+            assert!(matches!(left, ListElements::Instances(_)), "{name}");
+            // Twice, the second time on storage the first one unshared.
+            edit(&mut left);
+            edit(&mut right);
+            assert_eq!(left, right, "{name}");
+        }
+        assert_eq!(kept, values);
+        let keys = ListElements::from(vec![int64(2), int64(0), int64(1)]);
+        let mut left = kept.clone();
+        let mut right = values.clone();
+        crate::list_sort::sort_elements_by_keys(&mut left, &keys, false).expect("sorted");
+        crate::list_sort::sort_elements_by_keys(&mut right, &keys, false).expect("sorted");
+        assert_eq!(left, right);
+        assert!(matches!(left, ListElements::Instances(_)));
+        let swapped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kept.clone().swap(0, 3)))
+                .expect_err("a swap past the end panics");
+        assert!(swapped
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains("out of range for length 3")),);
         // Sorting reports what sorting the values reports.
         let mut left = kept.clone();
         let mut right = values.clone();

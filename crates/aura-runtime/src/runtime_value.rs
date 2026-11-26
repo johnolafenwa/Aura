@@ -13899,21 +13899,53 @@ where
     R: Read,
 {
     let max_bytes = validate_requested_read_size("read_bytes(...)", max_bytes)?;
-    let mut buffer = vec![0u8; max_bytes.max(1)];
     loop {
         check_deadline_and_cancellation(deadline, cancellation)?;
-        match reader.read(&mut buffer) {
-            Ok(0) => return Ok(None),
-            Ok(bytes) => {
-                buffer.truncate(bytes);
-                return Ok(Some(buffer));
-            }
+        match read_some_once(reader, max_bytes) {
             Err(error) if is_retryable_network_error(&error) => {
                 wait_for_fd_event(fd, readiness_events, deadline, cancellation)?;
             }
-            Err(error) => return Err(error),
+            read => return read,
         }
     }
+}
+
+/// One read of at most `max_bytes`: the bytes, or `None` at the end of
+/// the stream. A bounded read is usually far shorter than its bound, so
+/// it reads into this thread's zeroed scratch and copies out only the
+/// bytes it got, rather than zeroing a buffer of the bound for each read.
+/// The scratch is back in place before a wait, which may run another
+/// task's read on this thread.
+fn read_some_once<R>(reader: &mut R, max_bytes: usize) -> io::Result<Option<Vec<u8>>>
+where
+    R: Read,
+{
+    if max_bytes > READ_SCRATCH_BYTES {
+        let mut buffer = vec![0u8; max_bytes];
+        return reader.read(&mut buffer).map(|bytes| {
+            (bytes > 0).then(|| {
+                buffer.truncate(bytes);
+                buffer
+            })
+        });
+    }
+    let mut scratch = READ_SCRATCH.take();
+    if scratch.len() < max_bytes {
+        scratch.resize(max_bytes, 0);
+    }
+    let read = reader
+        .read(&mut scratch[..max_bytes])
+        .map(|bytes| (bytes > 0).then(|| scratch[..bytes].to_vec()));
+    READ_SCRATCH.set(scratch);
+    read
+}
+
+/// The largest bound [`read_some_with_fd_deadline`] reads into its
+/// thread's scratch; a larger one reads into a buffer of its own.
+const READ_SCRATCH_BYTES: usize = 64 * 1024;
+
+thread_local! {
+    static READ_SCRATCH: std::cell::Cell<Vec<u8>> = const { std::cell::Cell::new(Vec::new()) };
 }
 
 fn read_some_with_deadline<R>(
