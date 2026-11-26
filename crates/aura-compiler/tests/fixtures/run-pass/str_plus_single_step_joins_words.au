@@ -1,0 +1,42 @@
+# A lone `+` on two `str`s joins from their words: two boxes, a box and a
+# literal on either side, the same box twice, a loaned element, a field
+# and a call result, in a loop that grows a local and in a branch.
+
+class Label:
+    name: str
+
+def suffix(flag: bool) -> str:
+    if flag:
+        return "!"
+    return "?"
+
+def join(left: str, right: str) -> str:
+    return left + right
+
+def main():
+    first = "alpha".to_upper()
+    second = "beta".to_lower()
+    print(first + second)
+    print(first + "-")
+    print("<" + second)
+    print(first + first)
+    mut word = "go"
+    for index in range(4):
+        if index % 2 == 0:
+            word = word + "\n"
+        else:
+            word = word + " "
+    print(word.replace("\n", "|").replace(" ", "_"))
+    pool = ["the", "and", "data"]
+    mut parts: list[str] = []
+    for index in range(6):
+        joined = pool[index % 3] + pool[(index + 1) % 3]
+        parts.append(joined)
+    print(parts)
+    label = Label(name="tag")
+    print(label.name + suffix(true))
+    print(suffix(false) + label.name)
+    print(join("", "") + join("é", "ü"))
+    _ = first + second
+    text = "é".to_upper() + "ß"
+    print(f"{text} {text.byte_len()} {text.len()}")
