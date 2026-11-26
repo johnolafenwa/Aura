@@ -362,6 +362,135 @@ fn instance_lists_in_place_free_every_box() {
     assert_frees_everything("leak-instance-lists", source, expected, 0);
 }
 
+/// Elements a list keeps in place, passed to functions that read only
+/// their scalar fields, by a key sort and by calls: the native run frees
+/// every box.
+#[test]
+fn element_args_read_in_place_free_every_box() {
+    let source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/element_args_read_in_place.au");
+    let expected = include_str!(
+        "../../aura-compiler/tests/fixtures/run-pass/element_args_read_in_place.stdout"
+    );
+    assert_frees_everything("leak-element-args", source, expected, 0);
+}
+
+/// An overflow in a function that reads an element a list keeps in place
+/// where it lies, called by a loop and by a key sort, names both frames
+/// and frees every box.
+#[test]
+fn an_overflow_reading_an_element_in_place_names_both_frames() {
+    let source = r#"class Cell:
+    id: int64
+    big: int64
+
+def weight(cell: Cell) -> int64:
+    return cell.big * 3 + cell.id
+
+def main() -> None:
+    mut cells: list[Cell] = []
+    for i in range(40):
+        cells.append(Cell(id=i, big=i))
+    cells.append(Cell(id=40, big=4611686018427387904))
+    SORT
+    mut total = 0
+    for i in range(cells.len()):
+        total += weight(cells[i])
+    print(total)
+"#;
+    for sort in ["pass", "cells.sort(key=weight)"] {
+        let source = source.replace("SORT", sort);
+        for backend in ["mir", "direct"] {
+            let result = run("element-in-place-overflow", &source, backend);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert!(result.stdout.is_empty(), "{}", result.stdout);
+            assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+            assert!(
+                result.stderr.contains("weight at 5:1 -> main at 8:1"),
+                "{}",
+                result.stderr
+            );
+            if backend == "direct" {
+                let (allocated, freed) = result.boxes.expect("direct runtime stats");
+                assert_eq!(allocated, freed, "{}", result.stderr);
+            }
+        }
+    }
+}
+
+/// A caller that defers its frame record calls a function that only reads
+/// variants and compares them without pushing the record. A trap in the
+/// caller after such a call, or in a callee that may trap, still names
+/// every frame, and the native run frees every box.
+#[test]
+fn a_trap_after_a_frame_free_call_names_every_frame() {
+    let source = r#"enum Value:
+    Int(value: int64)
+    Text(value: str)
+
+def same(left: Value, right: Value) -> bool:
+    match left:
+        case Value.Int(a):
+            match right:
+                case Value.Int(b):
+                    return a == b
+                case Value.Text(_):
+                    return false
+        case Value.Text(a):
+            match right:
+                case Value.Text(b):
+                    return a == b
+                case Value.Int(_):
+                    return false
+
+def scaled(value: Value, factor: int64) -> int64:
+    match value:
+        case Value.Int(a):
+            return a * factor
+        case Value.Text(_):
+            return 0
+
+def count(values: list[Value], probe: Value, limit: int64) -> int64:
+    mut found = 0
+    for value in values:
+        if same(value, probe):
+            found += ADD
+    return found
+
+def main() -> None:
+    values = [Value.Int(1), Value.Text("a"), Value.Int(1), Value.Int(2)]
+    print(count(values, Value.Int(1), 3))
+    print(count(values, Value.Text("a"), 9223372036854775807))
+    print(count(values, Value.Int(2), 4611686018427387904))
+    print(count(values, Value.Int(1), 4611686018427387904))
+"#;
+    for (add, stdout, chain) in [
+        (
+            "limit",
+            "6\n9223372036854775807\n4611686018427387904\n",
+            "count at 27:1 -> main at 34:1",
+        ),
+        (
+            "scaled(value, limit)",
+            "6\n0\n",
+            "scaled at 20:1 -> count at 27:1 -> main at 34:1",
+        ),
+    ] {
+        let source = source.replace("ADD", add);
+        for backend in ["mir", "direct"] {
+            let result = run("frame-free-call-trap", &source, backend);
+            assert_eq!(result.code, Some(1), "{}", result.stderr);
+            assert_eq!(result.stdout, stdout, "{}", result.stderr);
+            assert!(result.stderr.contains("AU4002"), "{}", result.stderr);
+            assert!(result.stderr.contains(chain), "{}", result.stderr);
+            if backend == "direct" {
+                let (allocated, freed) = result.boxes.expect("direct runtime stats");
+                assert_eq!(allocated, freed, "{}", result.stderr);
+            }
+        }
+    }
+}
+
 #[test]
 fn a_decorated_module_function_owns_its_captures_until_shutdown() {
     let source = r#"

@@ -371,6 +371,214 @@ fn root(place: &str) -> &str {
     place.split('.').next().unwrap_or(place)
 }
 
+/// The parameters of `module`'s functions that a direct call may pass an
+/// element a list keeps in place as the element's bytes, with no box of
+/// its own, by function and position, each with the fields its function
+/// reads. Such a parameter is borrowed, its type is a class with no type
+/// parameters, and every mention of it reads one scalar field of it into
+/// a local, alone or as the operand of arithmetic, a comparison, or a
+/// cast: the call passes a stand-in for the element's box whose layout
+/// check holds (see `begin_native_element_loan`), so each read takes the
+/// way that reads the field where it lies, and nothing else in the body
+/// reaches the stand-in. A function that stores, returns, or passes its
+/// parameter on, or reads anything but a scalar field of it, has none.
+pub(super) fn block_params(
+    module: &MirModule,
+    classes: &HashMap<String, MirClass>,
+) -> HashMap<(String, usize), BlockParam> {
+    let mut params = HashMap::new();
+    for function in module.functions.iter().filter(|f| f.receiver.is_none()) {
+        for (index, param) in function.params.iter().enumerate() {
+            let class = match &param.ty {
+                Type::Named(name, args) if args.is_empty() => classes.get(name),
+                _ => None,
+            };
+            let Some(class) = class.filter(|class| class.type_params.is_empty()) else {
+                continue;
+            };
+            if param.passing != MirReceiverKind::Borrow {
+                continue;
+            }
+            if let Some(fields) = block_param_fields(function, &param.name, class, classes) {
+                let class = class.name.clone();
+                params.insert((function.name.clone(), index), BlockParam { class, fields });
+            }
+        }
+    }
+    params
+}
+
+/// A parameter of [`block_params`]: its class, and the fields its function
+/// reads.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct BlockParam {
+    pub(super) class: String,
+    pub(super) fields: Vec<String>,
+}
+
+/// The scalar fields of `class` that `function` reads of its parameter
+/// `param`, or `None` when it mentions the parameter any other way (see
+/// [`block_params`]).
+fn block_param_fields(
+    function: &MirFunction,
+    param: &str,
+    class: &MirClass,
+    classes: &HashMap<String, MirClass>,
+) -> Option<Vec<String>> {
+    let scalar_field = |place: &str| {
+        let (_, field) = place.split_once('.')?;
+        let scalar = !field.contains('.')
+            && class.fields.iter().any(|candidate| {
+                candidate.name == field
+                    && matches!(
+                        super::direct_type(&candidate.ty, classes),
+                        Some(DirectType::Scalar(_))
+                    )
+            });
+        scalar.then(|| field.to_string())
+    };
+    let mut fields = Vec::new();
+    for block in &function.blocks {
+        // A branch on a field, or its return, reads it as an assignment
+        // does.
+        let read = match &block.terminator {
+            Terminator::Branch {
+                condition: operand, ..
+            }
+            | Terminator::Return(operand) => match operand {
+                Operand::Place(place) | Operand::MovePlace(place) => Some(place.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        for place in terminator_place_mentions(&block.terminator) {
+            if root(place) == param {
+                fields.push(scalar_field(place).filter(|_| read == Some(place))?);
+            }
+        }
+        for instruction in &block.instructions {
+            let mut mentions = Vec::new();
+            instruction_place_mentions(instruction, &mut mentions);
+            if let Instruction::Assign { target, .. } = instruction {
+                if root(target) == param {
+                    return None;
+                }
+            }
+            mentions.retain(|place| root(place) == param);
+            if mentions.is_empty() {
+                continue;
+            }
+            let reads = matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Use(_)
+                        | Rvalue::Binary { .. }
+                        | Rvalue::Unary { .. }
+                        | Rvalue::Cast { .. },
+                    ..
+                }
+            );
+            if !reads {
+                return None;
+            }
+            for place in mentions {
+                fields.push(scalar_field(place)?);
+            }
+        }
+    }
+    fields.sort();
+    fields.dedup();
+    Some(fields)
+}
+
+/// The followed element loans of `function` whose every use, besides its
+/// beginning and end, passes the loan whole to a parameter of
+/// [`block_params`] in a call by name, with the classes of those
+/// parameters and the fields they read. A loan passed to parameters of
+/// two classes names both.
+pub(super) fn block_passed_loans(
+    function: &MirFunction,
+    uses: &HashMap<String, LoanUse>,
+    params: &HashMap<(String, usize), BlockParam>,
+) -> HashMap<String, BlockParam> {
+    let mut fields = HashMap::<String, BlockParam>::new();
+    let mut refused = HashSet::<&str>::new();
+    let followed = |place: &str| uses.contains_key(root(place));
+    for block in &function.blocks {
+        for place in terminator_place_mentions(&block.terminator) {
+            if followed(place) {
+                refused.insert(root(place));
+            }
+        }
+        for instruction in &block.instructions {
+            if matches!(
+                instruction,
+                Instruction::BeginElementLoan { .. } | Instruction::EndLoan { .. }
+            ) {
+                continue;
+            }
+            if let Instruction::Assign {
+                target,
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        type_args,
+                    },
+            } = instruction
+            {
+                if followed(target) {
+                    refused.insert(root(target));
+                }
+                for (index, arg) in args.iter().enumerate() {
+                    let loan = match &arg.value {
+                        Operand::Place(place) | Operand::MovePlace(place) if followed(place) => {
+                            place.as_str()
+                        }
+                        _ => continue,
+                    };
+                    let read = params.get(&(name.clone(), index)).filter(|_| {
+                        type_args.is_empty()
+                            && arg.writeback_place.is_none()
+                            && matches!(&arg.value, Operand::Place(place) if place == loan)
+                    });
+                    match read {
+                        Some(read) => {
+                            let passed = fields.entry(loan.to_string()).or_default();
+                            if passed.fields.is_empty() && passed.class.is_empty() {
+                                passed.class = read.class.clone();
+                            } else if passed.class != read.class {
+                                refused.insert(root(loan));
+                            }
+                            passed.fields.extend(read.fields.iter().cloned());
+                        }
+                        None => {
+                            refused.insert(root(loan));
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut mentions = Vec::new();
+            instruction_place_mentions(instruction, &mut mentions);
+            if let Instruction::Assign { target, .. } = instruction {
+                mentions.push(target);
+            }
+            for place in mentions {
+                if followed(place) {
+                    refused.insert(root(place));
+                }
+            }
+        }
+    }
+    fields.retain(|loan, _| !refused.contains(loan.as_str()));
+    for read in fields.values_mut() {
+        read.fields.sort();
+        read.fields.dedup();
+    }
+    fields
+}
+
 /// The loan `instruction` passes whole to a parameter a function borrows,
 /// when the call names nothing else the loan's list lies in: the callee
 /// reaches the list only through what it is passed, so it cannot change
@@ -1046,6 +1254,21 @@ impl FunctionCompiler<'_> {
             }
             LoanTarget::Place(LoanPlace::Leaves(_)) | LoanTarget::Slot => {
                 use aura_runtime::native_runtime::DirectListAccess;
+                let stand_in = if selector.projection.is_empty() {
+                    self.block_loan_stand_in(loan, &usage, element)?
+                } else {
+                    None
+                };
+                if let Some(stand_in) = stand_in {
+                    self.emit_element_stand_in(
+                        loan,
+                        list_box,
+                        index,
+                        stand_in,
+                        address,
+                        (slow_block, join_block),
+                    );
+                }
                 let fast_block = self.builder.create_block();
                 self.emit_list_access_check(
                     list_box,
@@ -1676,6 +1899,116 @@ impl FunctionCompiler<'_> {
             (SlotKind::Handle, true) => Some((LoanTarget::Slot, Some(slot))),
             _ => None,
         })
+    }
+
+    /// The list access code and element bytes of a list that keeps
+    /// instances of `element` in place, and the class's own access code,
+    /// when `loan`, a read-only loan of a whole element of such a list, is
+    /// only passed to parameters that read scalar fields of it where the
+    /// class keeps them (see `block_passed_loans`).
+    fn block_loan_stand_in(
+        &mut self,
+        loan: &str,
+        usage: &LoanUse,
+        element: &Type,
+    ) -> std::result::Result<Option<(i64, i64, i64)>, String> {
+        let Some(BlockParam { class, fields }) = self.block_loans.get(loan).cloned() else {
+            return Ok(None);
+        };
+        let ty = DirectType::Opaque(element.clone());
+        if usage.mutable || element != &Type::named(&class) || !super::shapes::keeps_tag(element) {
+            return Ok(None);
+        }
+        let Some((list_access, stride)) = self.instance_list_slot(&ty)? else {
+            return Ok(None);
+        };
+        let class = self.classes[&class].clone();
+        for field in &fields {
+            let field_ty = class
+                .fields
+                .iter()
+                .find(|candidate| &candidate.name == field)
+                .and_then(|candidate| direct_type(&candidate.ty, &self.classes));
+            let Some(field_ty) = field_ty else {
+                return Ok(None);
+            };
+            let slot = self.class_slot(&ty, &[field.as_str()], &field_ty)?;
+            if !matches!(
+                slot,
+                Some((
+                    _,
+                    ClassSlot {
+                        kind: SlotKind::Leaves(_),
+                        ..
+                    }
+                ))
+            ) {
+                return Ok(None);
+            }
+        }
+        use aura_runtime::native_runtime::{FIRST_CLASS_ACCESS, FIRST_INSTANCE_LIST_ACCESS};
+        let class_access =
+            list_access - i64::from(FIRST_INSTANCE_LIST_ACCESS) + i64::from(FIRST_CLASS_ACCESS);
+        Ok(Some((list_access, stride, class_access)))
+    }
+
+    /// Lends the element at `index` of `list_box`, when the list keeps its
+    /// instances in place, as a stand-in box header on the stack: its
+    /// layout check names the element's class and its block address is the
+    /// element's bytes, which is all the reads of [`block_params`] look at
+    /// on their way to a field. The loan's address is that of a word
+    /// holding the stand-in, as for a slot of a list of boxes, and the
+    /// function goes on to the check for one when the list keeps another
+    /// form.
+    fn emit_element_stand_in(
+        &mut self,
+        loan: &str,
+        list_box: Val,
+        index: Val,
+        (list_access, stride, class_access): (i64, i64, i64),
+        address: Var,
+        (slow_block, join_block): (Blk, Blk),
+    ) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let element_block = self.builder.create_block();
+        let other_block = self.builder.create_block();
+        let actual = self.emit_list_access(list_box, &layout);
+        let kept = self.builder.icmp_imm(IntCC::Equal, actual, list_access);
+        self.builder
+            .brif(kept, element_block, &[], other_block, &[]);
+
+        self.builder.switch_to_block(element_block);
+        self.builder.seal_block(element_block);
+        // An index out of range takes the runtime probe, which reports it.
+        let position = self.emit_list_view_bounds_check(list_box, index, &layout, slow_block);
+        let elements = self.list_view_word(list_box, super::list_snapshots::ViewWord::Elements);
+        let offset = self.builder.imul_imm(position, stride);
+        let bytes = self.builder.iadd(elements, offset);
+        let header_size =
+            std::mem::size_of::<aura_runtime::native_runtime::OpaqueValue>().div_ceil(8) * 8;
+        let slot = self
+            .builder
+            .create_sized_stack_slot((8 + header_size) as u32, 3);
+        let header = self.builder.stack_addr(types::I64, slot, 8);
+        let zero = self.builder.iconst(types::I64, 0);
+        for word in 0..header_size / 8 {
+            self.builder.store(flags, zero, header, (word * 8) as i32);
+        }
+        let access = self.builder.iconst(types::I64, class_access);
+        let access = self.builder.ireduce(types::I32, access);
+        self.builder
+            .store(flags, access, header, layout.access_offset);
+        self.builder
+            .store(flags, bytes, header, layout.elements_offset);
+        let held = self.builder.stack_addr(types::I64, slot, 0);
+        self.builder.store(flags, header, held, 0);
+        self.stand_in_slots.insert(loan.to_string(), slot);
+        self.builder.def_var(address, held);
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(other_block);
+        self.builder.seal_block(other_block);
     }
 
     /// Checks the one selection of `loan`'s view in the runtime, as the
@@ -2715,6 +3048,22 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(lent_block);
         self.builder.seal_block(lent_block);
         let none = self.builder.iconst(types::I64, 0);
+        // A stand-in for an element kept in place takes no tag: the callee
+        // reads only scalar fields of it. A list's own box takes the tag
+        // the call would give it.
+        let stand_in = self.stand_in_slots.get(place).copied();
+        if let Some(slot) = stand_in {
+            let held = self.builder.stack_addr(types::I64, slot, 0);
+            let lent = self.builder.icmp(IntCC::Equal, address, held);
+            let tag_block = self.builder.create_block();
+            self.builder
+                .brif(lent, join_block, &[boxed, none], tag_block, &[]);
+            self.builder.switch_to_block(tag_block);
+            self.builder.seal_block(tag_block);
+            if let DirectType::Opaque(ty) = &loan_ty {
+                self.emit_runtime_type_tag(boxed, ty)?;
+            }
+        }
         self.builder.jump(join_block, &[boxed, none]);
 
         self.builder.switch_to_block(slow_block);
@@ -2746,6 +3095,10 @@ impl FunctionCompiler<'_> {
         };
         // The copy a missed loan made, or 0, released once the call is done.
         self.layout_scratch.opaque.insert(owned);
+        if stand_in.is_some() {
+            // Each way that lent a box tagged it (a copy as it was loaded).
+            self.shaped_boxes.insert(value);
+        }
         Ok(Some(ValueRef {
             values: vec![value],
             ty: loan_ty,
