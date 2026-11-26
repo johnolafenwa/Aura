@@ -516,3 +516,37 @@ fn overflowing_c_struct_layout_does_not_panic_in_passing() {
     assert_eq!(valid.checked_leaf_count(), Some(16));
     assert!(valid.validate_bounds().is_ok());
 }
+
+#[test]
+fn validate_bounds_counts_overlapping_union_leaves() {
+    // The members of a union overlap in bytes but each counts its scalars.
+    let half = MAX_C_STRUCT_LEAVES / 2;
+    let fits = of_kinds(
+        "Fits",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half),
+        ],
+    );
+    assert_eq!(fits.checked_size(), Some(half));
+    assert_eq!(fits.checked_leaf_count(), Some(MAX_C_STRUCT_LEAVES));
+    assert!(fits.validate_bounds().is_ok());
+
+    let too_many = of_kinds(
+        "TooMany",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half + 1),
+        ],
+    );
+    assert_eq!(too_many.checked_size(), Some(half + 1));
+    assert_eq!(
+        too_many.validate_bounds(),
+        Err(format!(
+            "C layout `TooMany` has {} scalar elements, which exceeds the maximum of {MAX_C_STRUCT_LEAVES}",
+            MAX_C_STRUCT_LEAVES + 1
+        ))
+    );
+}

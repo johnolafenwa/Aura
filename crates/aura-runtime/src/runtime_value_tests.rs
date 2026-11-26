@@ -21536,3 +21536,134 @@ fn mutable_direct_callable_clone_settles_and_detaches() {
     assert_eq!(captures.len(), 1);
     assert_eq!(captures[0].value, Value::Int(IntegerValue::from_i64(9)));
 }
+
+#[test]
+fn mutable_direct_callable_clone_without_environment_releases_the_words() {
+    use super::DirectCallable;
+    use std::sync::atomic::AtomicUsize;
+    static DROPS: AtomicUsize = AtomicUsize::new(0);
+    unsafe extern "C-unwind" fn counting_drop(_words: *mut i64) {
+        DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+    #[repr(C)]
+    struct Descriptor {
+        _invoke: usize,
+        drop_fn: unsafe extern "C-unwind" fn(*mut i64),
+    }
+    static DESCRIPTOR: Descriptor = Descriptor {
+        _invoke: 0,
+        drop_fn: counting_drop,
+    };
+    fn no_captures(_callable: &DirectCallable) -> Vec<ClosureCaptureValue> {
+        Vec::new()
+    }
+    DROPS.store(0, Ordering::SeqCst);
+
+    let callable = Arc::new(unsafe {
+        DirectCallable::new(
+            [(&raw const DESCRIPTOR) as i64, 0, 0, 0],
+            5,
+            true,
+            0,
+            no_captures,
+        )
+    });
+    assert!(callable.live_words().is_some());
+    let func = FunctionValue {
+        name: "bare_mut_cb".to_string(),
+        signature: Type::Unit,
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: None,
+        direct_callable: Some(Arc::clone(&callable)),
+    };
+    let cloned = func.clone();
+    assert!(cloned.direct_callable.is_none());
+    assert!(cloned.closure_environment.is_none());
+    assert!(
+        callable.live_words().is_none(),
+        "the clone released the words"
+    );
+    assert!(callable.words_for(5).is_none());
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+    drop(func);
+    drop(callable);
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1, "a release runs only once");
+}
+
+#[test]
+fn a_closure_environment_gives_up_its_captures_only_when_uniquely_owned() {
+    let capture = |value: i64| ClosureCaptureValue {
+        name: "x".to_string(),
+        ty: Type::named("int64"),
+        value: Value::Int(IntegerValue::from_i64(value)),
+        source_place: None,
+        mutable: false,
+    };
+    let env = Arc::new(ClosureEnvironment::new(vec![capture(1), capture(2)], false));
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(2))));
+    let shared = Arc::clone(&env);
+    assert!(shared.into_captured_values().is_empty());
+    assert_eq!(
+        env.into_captured_values(),
+        vec![
+            Value::Int(IntegerValue::from_i64(1)),
+            Value::Int(IntegerValue::from_i64(2))
+        ]
+    );
+    let taken = Arc::new(ClosureEnvironment::new(vec![capture(3)], true));
+    assert_eq!(
+        taken.take_captures().map(|captures| captures.len()),
+        Some(1)
+    );
+    assert!(taken.into_captured_values().is_empty());
+}
+
+#[test]
+fn a_pending_task_exit_from_a_trap_hands_the_trap_back() {
+    use super::PendingTaskExit;
+    let exit = PendingTaskExit::from_trap(Diagnostic::coded("AU4001", "cleanup failed"));
+    assert!(!exit.is_cancelled());
+    let trap = exit.into_trap().ok().expect("a trap exit yields its trap");
+    assert_eq!(trap.code, "AU4001");
+    assert_eq!(trap.message, "cleanup failed");
+
+    let cancelled = PendingTaskExit(TaskExecutionResult::Cancelled);
+    assert!(cancelled.is_cancelled());
+    let Err(unchanged) = cancelled.into_trap() else {
+        panic!("a cancellation is not a trap");
+    };
+    assert!(
+        unchanged.is_cancelled(),
+        "a non-trap exit comes back unchanged"
+    );
+}
+
+#[test]
+fn a_closure_environment_still_answers_after_a_holder_of_its_lock_panicked() {
+    let env = Arc::new(ClosureEnvironment::new(
+        vec![ClosureCaptureValue {
+            name: "x".to_string(),
+            ty: Type::named("int64"),
+            value: Value::Int(IntegerValue::from_i64(5)),
+            source_place: None,
+            mutable: false,
+        }],
+        false,
+    ));
+    let poisoner = Arc::clone(&env);
+    let joined = std::thread::spawn(move || {
+        let _held = poisoner.captures.lock().expect("an unpoisoned lock");
+        panic!("poison the capture lock");
+    })
+    .join();
+    assert!(joined.is_err());
+    assert!(env.captures.is_poisoned());
+    assert!(env.any_capture(|value| *value == Value::Int(IntegerValue::from_i64(5))));
+    assert_eq!(
+        env.into_captured_values(),
+        vec![Value::Int(IntegerValue::from_i64(5))]
+    );
+}
