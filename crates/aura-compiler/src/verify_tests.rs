@@ -2526,6 +2526,23 @@ def main():
 }
 
 #[test]
+fn float64_literals_in_a_dict_of_float32_round_to_the_value_type() {
+    // A dict literal once stored the `float64` term of `0.1` in an array
+    // of `float32` values, and the solver refused the query.
+    assert_proved(
+        r#"
+def single() -> float32:
+    ensures result == 2.5
+    singles: dict[int64, float32] = {7: 0.1, 8: 2.5}
+    return singles[8]
+
+def main():
+    print(single())
+"#,
+    );
+}
+
+#[test]
 fn float32_bounds_are_not_taken_from_float64_literals_that_round_away() {
     // `1e-300` is zero and `1e300` is infinite as a float32. Bounds computed
     // from them once made the first, weaker query contradict itself, which

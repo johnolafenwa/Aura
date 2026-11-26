@@ -1,0 +1,6 @@
+error[AU4003]: list index `-4` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/counted_pair_loop_starts_before_its_list.au:5:25
+  |
+5 |             total += xs[j]
+  |                         ^
+  = note: Aura call chain (innermost first): behind at 1:1 -> main at 8:1

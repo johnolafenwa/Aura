@@ -143,6 +143,86 @@ fn runtime_failure(work: impl FnOnce() + Send + 'static) -> String {
 }
 
 #[test]
+fn a_full_list_of_records_grows_from_what_generated_code_left() {
+    let name = "PlainTestGrowth";
+    let (cell, layout) = registered(name, FIRST_TEST_ACCESS + 900);
+    let stride = layout.stride_words();
+    let view = super::direct_list_layout();
+    let word = |list: *mut OpaqueValue, offset: i32| unsafe {
+        *(list as *const u8).add(offset as usize).cast::<usize>()
+    };
+    let room = |list: *mut OpaqueValue| unsafe {
+        *(list as *const u8)
+            .add(view.capacity_offset as usize)
+            .cast::<u32>() as usize
+    };
+    let push = |list: *mut OpaqueValue, id: i64| {
+        let words = encoded(layout, &record(name, id, id as f64));
+        unsafe { aura_direct_vec_push_plain(list, words.as_ptr().cast(), cell) };
+    };
+    // The way generated code appends while the view has room.
+    let push_in_place = |list: *mut OpaqueValue, id: i64| {
+        let words = encoded(layout, &record(name, id, id as f64));
+        let len = word(list, view.len_offset);
+        assert!(len < room(list));
+        unsafe {
+            let elements = word(list, view.elements_offset) as *mut u64;
+            std::ptr::copy_nonoverlapping(words.as_ptr(), elements.add(len * stride), stride);
+            *(list as *mut u8)
+                .add(view.len_offset as usize)
+                .cast::<usize>() = len + 1;
+        }
+    };
+    let ids = |list: *mut OpaqueValue| {
+        let Value::Vec(vector) = (unsafe { value_ref(list) }) else {
+            panic!("a list stays a list");
+        };
+        vector.elements.to_vec()
+    };
+    let records = |ids: &[i64]| -> Vec<Value> {
+        ids.iter().map(|id| record(name, *id, *id as f64)).collect()
+    };
+
+    let list = aura_direct_vec_empty();
+    // The first record gives the list its form and room for four.
+    push(list, 0);
+    assert_eq!((word(list, view.len_offset), room(list)), (1, 4));
+    for id in 1..4 {
+        push_in_place(list, id);
+    }
+    // The list is full, so the call grows it, after taking in the three.
+    push(list, 4);
+    assert_eq!(word(list, view.len_offset), 5);
+    assert!(room(list) >= 8);
+    assert_eq!(list_form(list), FIRST_TEST_ACCESS + 900);
+    assert_eq!(ids(list), records(&[0, 1, 2, 3, 4]));
+    // A read took the room back, and the next call gives it back.
+    push(list, 5);
+    push_in_place(list, 6);
+    // Two records popped in place are dropped before the next is added.
+    unsafe {
+        *(list as *mut u8)
+            .add(view.len_offset as usize)
+            .cast::<usize>() = 5
+    };
+    push(list, 7);
+    assert_eq!(ids(list), records(&[0, 1, 2, 3, 4, 7]));
+    // A list that shares its storage takes the general path, which copies.
+    let copy = super::aura_direct_clone_value(list);
+    push(list, 8);
+    assert_eq!(ids(copy), records(&[0, 1, 2, 3, 4, 7]));
+    assert_eq!(ids(list), records(&[0, 1, 2, 3, 4, 7, 8]));
+    // So does a list another thread may read.
+    unsafe { super::share_direct_value(copy) };
+    push(copy, 9);
+    assert_eq!(ids(copy), records(&[0, 1, 2, 3, 4, 7, 9]));
+    unsafe {
+        super::aura_direct_release_value(list);
+        super::aura_direct_release_value(copy);
+    }
+}
+
+#[test]
 fn registered_records_live_in_lists_and_cross_with_one_call() {
     let name = "PlainTestReadWrite";
     let (cell, layout) = registered(name, FIRST_TEST_ACCESS);

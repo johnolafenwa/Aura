@@ -53,8 +53,19 @@ def iterates(ps: list[Point]) -> float64:
         i += 1
     return total
 
+def scalars(xs: list[int64], ys: mut list[float64], n: int64) -> int64:
+    mut total: int64 = 0
+    mut i = 0
+    while i < n:
+        total += xs[i * 2] + len(ys)
+        ys[i * 2] = 1.5
+        i += 1
+    return total
+
 def main():
     mut ps = [Point(x=1.0, y=2.0)]
+    mut ys = [0.5, 0.25, 0.125]
+    print(scalars([1, 2, 3], ys, 2))
     print(reads(ps))
     print(loans(3))
     print(grows(3))
@@ -120,6 +131,28 @@ fn a_for_loop_over_a_list_reads_its_view_once_too() {
     assert_eq!(
         list_snapshot_regions(&function, |_| false, |_| true),
         Vec::new()
+    );
+}
+
+#[test]
+fn a_loop_of_scalar_accesses_names_the_kind_its_copy_runs_for() {
+    use crate::runtime_ops::ScalarElement;
+    let scalars = function("scalars");
+    let found = regions("scalars", true);
+    let kind = |list: &str| {
+        let region = found
+            .iter()
+            .find(|region| region.list == list)
+            .unwrap_or_else(|| panic!("`{list}` should have a loop"));
+        super::region_scalar_element(&scalars, region)
+    };
+    assert_eq!(kind("xs"), Some(ScalarElement::Int64));
+    assert_eq!(kind("ys"), Some(ScalarElement::Float64));
+    // A loop that reads plain records names no scalar kind.
+    let reads = regions("reads", true);
+    assert_eq!(
+        super::region_scalar_element(&function("reads"), &reads[0]),
+        None
     );
 }
 
@@ -238,6 +271,155 @@ fn a_loop_with_two_ranks_or_another_member_keeps_reading_the_view() {
 #[test]
 fn array_loops_compile_with_their_copies() {
     let module = lower_source_to_mir(ARRAY_SOURCE).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}
+
+const FIELD_SOURCE: &str = r#"
+class Ball:
+    weight: float64
+    size: int64
+
+class Shelf:
+    weights: list[int64]
+    balls: list[Ball]
+    seen: int64
+    best: int64
+
+    def heavy(self, weight: float64) -> bool:
+        return weight > 1.0 and self.best >= 0
+
+    def total(mut self) -> int64:
+        mut sum = 0
+        for i in range(self.weights.len()):
+            sum += self.weights[i]
+            self.seen += 1
+        return sum
+
+    def count_heavy(mut self) -> int64:
+        mut n = 0
+        for i in range(self.balls.len()):
+            if self.heavy(self.balls[i].weight):
+                n += self.balls[i].size
+        return n
+
+    def grows(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            self.weights.append(i + 100)
+            sum += self.weights[i]
+        return sum
+
+    def add(mut self, w: int64):
+        self.weights.append(w)
+
+    def calls(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            self.add(i)
+            sum += self.weights[i]
+        return sum
+
+    def swaps(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.weights[0]
+            self.weights = [i + 1, i + 2]
+        return sum
+
+    def resizes(mut self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.balls[i].size
+        self.balls[0].size += sum
+        return sum
+
+    def peeks(self, n: int64) -> int64:
+        mut sum = 0
+        for i in range(n):
+            sum += self.weights[i]
+        return sum
+
+def owner(n: int64) -> int64:
+    mut s = Shelf(weights=[1, 2], balls=[Ball(weight=1.5, size=2)], seen=0, best=0)
+    mut sum = 0
+    for round in range(n):
+        for i in range(s.weights.len()):
+            sum += s.weights[i] * round
+        s.seen += 1
+    return sum + s.total() + s.count_heavy() + s.grows(1) + s.calls(1) + s.swaps(1) + s.resizes(1) + s.peeks(1)
+
+def main():
+    print(owner(2))
+"#;
+
+/// The loops of `name` in `FIELD_SOURCE` that read a field's list once,
+/// when `keeps` says whether a callee keeps an instance and `exclusive`
+/// whether the function holds an instance alone.
+fn field_regions(name: &str, keeps: bool, exclusive: bool) -> Vec<ListSnapshotRegion> {
+    let function = lower_source_to_mir(FIELD_SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist");
+    let lend_temps = super::super::classes::field_lend_temps(&function);
+    super::field_list_snapshot_regions(
+        &function,
+        |_| exclusive,
+        &super::FieldListRules {
+            lend_temps: &lend_temps,
+            candidate: &|_, _| true,
+            pure_index: &|_| true,
+            scalar_field: &|place| place.ends_with(".seen") || place.ends_with(".best"),
+            keeps_instances: &|_| keeps,
+        },
+    )
+}
+
+#[test]
+fn a_loop_that_only_reads_a_list_in_a_field_reads_its_view_once() {
+    let found = field_regions("Shelf.total", false, true);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].list, "self.weights");
+    assert!(!found[0].writes);
+    assert!(!found[0].temps.is_empty());
+    assert_eq!(found[0].entries.len(), 1, "{found:?}");
+    // An instance something else may reach keeps its checks.
+    assert_eq!(field_regions("Shelf.total", false, false), Vec::new());
+    // A local that holds the instance is read the same way: the outer
+    // loop, which also writes a scalar field, holds the inner one.
+    let found = field_regions("owner", false, true);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].list, "s.weights");
+    assert_eq!(found[0].temps.len(), 2, "{found:?}");
+}
+
+#[test]
+fn a_loop_may_pass_the_instance_to_a_function_that_keeps_it() {
+    let found = field_regions("Shelf.count_heavy", true, true);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].list, "self.balls");
+    assert_eq!(found[0].temps.len(), 2, "{found:?}");
+    assert_eq!(field_regions("Shelf.count_heavy", false, true), Vec::new());
+}
+
+#[test]
+fn a_loop_that_may_change_the_field_or_its_list_keeps_reading_them() {
+    // An append to the list, and a store of another list in the field.
+    for name in ["Shelf.grows", "Shelf.swaps"] {
+        assert_eq!(field_regions(name, true, true), Vec::new(), "{name}");
+    }
+    // A call of a method that may change the instance.
+    assert_eq!(field_regions("Shelf.calls", false, true), Vec::new());
+    // A loan of an element of the list anywhere in the function.
+    assert_eq!(field_regions("Shelf.resizes", true, true), Vec::new());
+}
+
+#[test]
+fn loops_over_field_lists_compile_with_their_copies() {
+    let module = lower_source_to_mir(FIELD_SOURCE).expect("the source should lower");
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
         .expect("the loops should compile");
     super::super::emit_host_object(&module).expect("the loops should compile optimized");

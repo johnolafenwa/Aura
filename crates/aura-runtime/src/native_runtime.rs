@@ -1531,9 +1531,10 @@ pub struct OpaqueValue {
     /// while `list_len` is below it stores the element past the end and
     /// raises `list_len`. The next access adopts that length and sets this
     /// back to 0, so runtime code always sees every element. A read of a
-    /// held box (see [`Self::held_value`]) sets it to 0 too, since a copy
-    /// it makes shares the storage. That read may run on several threads at
-    /// once under a shared holder's lock, so the word is atomic.
+    /// held box (see [`Self::held_value`]) adopts the length and sets it
+    /// to 0 too, since a copy it makes shares the storage. That read may
+    /// run on several threads at once under a shared holder's lock, so the
+    /// word is atomic.
     list_capacity: AtomicU32,
     /// The value's index in the list of the ledger that links it.
     slot: std::cell::Cell<u32>,
@@ -1682,20 +1683,62 @@ impl OpaqueValue {
 
     /// The value of a box its holder owns and reaches it through: a list
     /// element's box or an instance field's box. The holder's access covers
-    /// it, so it takes no access of its own, and generated code never runs
-    /// its list view ahead of it (see `native_class_layouts.rs`), so there
-    /// is nothing to take in. The caller may copy the value, and the copy
-    /// shares its storage, so the box gives up its room as an access
+    /// it, so it takes no access of its own. Generated code appends to a
+    /// list in such a box in place while the holder is confined, so the
+    /// elements it appended are taken in first (see
+    /// [`Self::settle_held_list`]). The caller may copy the value, and the
+    /// copy shares its storage, so the box gives up its room as an access
     /// would: generated code then calls the runtime to change the list,
     /// which copies the storage first, until the next write through the box
     /// or its holder finds the storage unshared again.
     fn held_value(&self) -> &Value {
-        if self.list_capacity.load(Ordering::Relaxed) != 0 {
-            self.list_capacity.store(0, Ordering::Relaxed);
+        if self.list_capacity.load(Ordering::Acquire) != 0 {
+            self.settle_held_list();
         }
         // SAFETY: the holder's access covers the box, and a write takes the
         // holder mutably, so no `&mut Value` exists while this borrow lives.
         unsafe { &*self.value.get() }
+    }
+
+    /// Takes in the elements generated code appended in place to the list
+    /// in a held box, and takes back its room. Every read or write of a
+    /// held box's value through its holder starts here, as every access to
+    /// any other box starts at [`Self::adopt_appended_elements`].
+    ///
+    /// Generated code appends only while the holder is confined, but the
+    /// holder may become shared with elements still to take in, and then
+    /// several readers may come here at once under its lock. One of them
+    /// takes the elements in under a lock of its own and only then clears
+    /// the room, so a reader that finds no room finds the whole list, and
+    /// one that finds room waits here.
+    #[cold]
+    #[inline(never)]
+    fn settle_held_list(&self) {
+        static SETTLING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SETTLING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.list_capacity.load(Ordering::Relaxed) == 0 {
+            return;
+        }
+        // SAFETY: room is only set by a write that has ended, and every
+        // reader of a held box comes here before it reads while there is
+        // room, so no reference into the value is live. The room also
+        // means the storage is unshared, and generated code wrote each
+        // element up to `list_len` before it raised the length.
+        if let Value::Vec(vector) = unsafe { &mut *self.value.get() } {
+            unsafe { vector.elements.adopt_appended(self.list_len.get()) };
+        }
+        self.list_capacity.store(0, Ordering::Release);
+    }
+
+    /// [`Self::settle_held_list`] for a caller that holds the box's holder
+    /// for writing, or owns the box, so no other reader can come.
+    #[inline]
+    fn settle_held_list_for_write(&self) {
+        if self.list_capacity.load(Ordering::Relaxed) != 0 {
+            self.adopt_appended_elements();
+        }
     }
 
     /// Takes in the elements generated code appended in place since the
@@ -3618,6 +3661,9 @@ impl DirectListLayout {
             // Then the 4-byte room count.
             0x0801_0204,
             4,
+            // The runtime takes in what generated code appended in place
+            // to a list in a field's or an element's box.
+            1,
         ];
         fields.iter().fold(0x41_75_72_61_i64, |hash, field| {
             hash.wrapping_mul(0x100_0000_01b3).wrapping_add(*field)
@@ -9690,6 +9736,10 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
         // SAFETY: generated code passes a live box it owns.
         if unsafe { holds_element_box_value(value) } {
             if let Some(element) = unsafe { adopt_only_box(value) } {
+                // SAFETY: generated code passes null or a live list.
+                let Some(element) = (unsafe { grow_box_list(vec, element) }) else {
+                    return;
+                };
                 with_vector_mut(vec, |vector| {
                     if is_unknown_runtime_type(&vector.element_type) {
                         let inferred = inferred_collection_type(element.value());
@@ -9713,6 +9763,52 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             vector.elements.push(value);
         });
     })
+}
+
+/// The whole of an append of `element` for a confined list that already
+/// keeps its elements in boxes, in storage no other list shares, and
+/// knows its element type: it appends the box and records where the boxes
+/// now lie, and nothing else. Any other list gets the box back and takes
+/// the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_box_list(vec: *mut OpaqueValue, element: ElementBox) -> Option<ElementBox> {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return Some(element);
+    };
+    // The view must be the one of the boxes, not a table beside them.
+    if !header.shared_lock.load(Ordering::Acquire).is_null()
+        || header.list_access.load(Ordering::Relaxed) != DirectListAccess::Boxes as u32
+    {
+        return Some(element);
+    }
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return Some(element);
+    };
+    if is_unknown_runtime_type(&vector.element_type) {
+        return Some(element);
+    }
+    let ListElements::Boxes(boxes) = &mut vector.elements else {
+        return Some(element);
+    };
+    let Some(boxes) = boxes.unshared_mut() else {
+        return Some(element);
+    };
+    boxes.push(element);
+    header.list_elements.set(boxes.as_ptr() as usize);
+    header.list_len.set(boxes.len());
+    header.list_capacity.store(
+        u32::try_from(boxes.capacity()).unwrap_or(u32::MAX),
+        Ordering::Relaxed,
+    );
+    None
 }
 
 /// Appends the text of `value` to the list `vec` when `value` is a `str`
@@ -9839,6 +9935,10 @@ fn narrow_for_scalar_write(vector: &mut VecValue, kind: i64) {
 /// [`DirectScalarKind`].
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits: i64, kind: i64) {
+    // SAFETY: generated code passes null or a live box.
+    if unsafe { grow_scalar_list(vec, bits, kind) } {
+        return;
+    }
     task_runtime_boundary(|| {
         let kind = DirectScalarKind::of_code(kind);
         // SAFETY: `with_vector_mut` checks the handle before anything else.
@@ -9872,6 +9972,92 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
             }
         }
     })
+}
+
+/// The whole of a scalar append for the list generated code's inline
+/// append found full: a confined list that keeps scalars of `kind` unboxed
+/// in storage no other list shares. It takes in what generated code
+/// appended or popped in place, appends `bits`, which grows the storage,
+/// and records where the elements now lie, and nothing else: the list
+/// keeps its form, its element type, and so its shape tag. `false`, with
+/// the list unchanged, for any other value, which takes the general path.
+///
+/// # Safety
+///
+/// `vec` is null or a live box, and a confined one is confined to the
+/// calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_scalar_list(vec: *mut OpaqueValue, bits: i64, kind: i64) -> bool {
+    use DirectScalarKind as K;
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { vec.as_ref() }) else {
+        return false;
+    };
+    // A shared or frozen value has a lock, and takes it on the general path.
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    let Some(kind) = K::from_code(kind) else {
+        return false;
+    };
+    // SAFETY: the value is confined to this thread and no access to it is
+    // in progress, so this is the only reference to it.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    // The length generated code left, when it appended or popped in place.
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    macro_rules! grow {
+        ($values:expr, $value:expr) => {{
+            let Some(values) = $values.unshared_mut() else {
+                return false;
+            };
+            if let Some(len) = left {
+                if len > values.len() && len <= values.capacity() {
+                    // SAFETY: generated code wrote each element up to
+                    // `len` before it raised the length.
+                    unsafe { values.set_len(len) };
+                } else {
+                    values.truncate(len);
+                }
+            }
+            let value = $value;
+            if values.capacity() == 0 {
+                // A list's first storage is one small block, made with no
+                // growth: room for four elements, or the sixteen bytes the
+                // smallest block has.
+                *values = Vec::with_capacity((16 / std::mem::size_of_val(&value)).max(4));
+            }
+            values.push(value);
+            header.list_elements.set(values.as_ptr() as usize);
+            header.list_len.set(values.len());
+            header.list_capacity.store(
+                u32::try_from(values.capacity()).unwrap_or(u32::MAX),
+                Ordering::Relaxed,
+            );
+        }};
+    }
+    // Generated code passes an integer already in its type's range, so
+    // the narrowing casts keep its value.
+    match (&mut vector.elements, kind) {
+        (ListElements::Int64(values), K::Int64) => grow!(values, bits),
+        (ListElements::Float64(values), K::Float64) => grow!(values, f64::from_bits(bits as u64)),
+        (ListElements::Bool(values), K::Bool) => {
+            grow!(values, crate::list_elements::BoolByte::from_bool(bits != 0))
+        }
+        (ListElements::Int8(values), K::Int8) => grow!(values, bits as i8),
+        (ListElements::Int16(values), K::Int16) => grow!(values, bits as i16),
+        (ListElements::Int32(values), K::Int32) => grow!(values, bits as i32),
+        (ListElements::Uint8(values), K::Uint8) => grow!(values, bits as u8),
+        (ListElements::Uint16(values), K::Uint16) => grow!(values, bits as u16),
+        (ListElements::Uint32(values), K::Uint32) => grow!(values, bits as u32),
+        (ListElements::Uint64(values), K::Uint64) => grow!(values, bits as u64),
+        (ListElements::Float32(values), K::Float32) => {
+            grow!(values, f64::from_bits(bits as u64) as f32)
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Appends `bits` to `elements` the way generated code's inline append
@@ -10918,6 +11104,10 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
     src: *const u8,
     cell: *const PlainLayoutCell,
 ) {
+    // SAFETY: the caller's contract.
+    if unsafe { grow_plain_list(list, src, cell) } {
+        return;
+    }
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
         let layout = unsafe { plain_layout_in(cell) };
@@ -10926,6 +11116,48 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_push_plain(
             vector.elements.push_plain(layout, src.cast())
         });
     })
+}
+
+/// [`grow_scalar_list`] for a list that keeps the plain records of `cell`
+/// in place.
+///
+/// # Safety
+///
+/// As for [`aura_direct_vec_push_plain`], and a confined `list` is confined
+/// to the calling thread with no access to it in progress.
+#[inline]
+unsafe fn grow_plain_list(
+    list: *mut OpaqueValue,
+    src: *const u8,
+    cell: *const PlainLayoutCell,
+) -> bool {
+    // SAFETY: the caller's contract.
+    let Some(header) = (unsafe { list.as_ref() }) else {
+        return false;
+    };
+    if !header.shared_lock.load(Ordering::Acquire).is_null() {
+        return false;
+    }
+    // SAFETY: as in `grow_scalar_list`.
+    let Value::Vec(vector) = (unsafe { &mut *header.value.get() }) else {
+        return false;
+    };
+    let left = (header.list_capacity.load(Ordering::Relaxed) != 0).then(|| header.list_len.get());
+    // SAFETY: the caller's contract.
+    let layout = unsafe { plain_layout_in(cell) };
+    // SAFETY: the caller's contract, and `left` is the length generated
+    // code left in the view.
+    let Some((elements, len, room)) =
+        (unsafe { vector.elements.grow_plain(layout, src.cast(), left) })
+    else {
+        return false;
+    };
+    header.list_elements.set(elements);
+    header.list_len.set(len);
+    header
+        .list_capacity
+        .store(u32::try_from(room).unwrap_or(u32::MAX), Ordering::Relaxed);
+    true
 }
 
 /// Replaces element `index` of `list` with the value whose bytes in the
@@ -13095,6 +13327,88 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_payload(
     task_runtime_boundary(|| with_map(map, |map| boxed_map_payload(map.entries.value_of_i64(key))))
 }
 
+/// Writes the `int64` a map lookup found to `out` and returns 1, or writes
+/// 0 and returns 0 when the key is missing. Generated code keeps a `Lookup`
+/// of an `int64` it only matches and unpacks as these two words, so the
+/// found value never goes in a box.
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+unsafe fn map_lookup_word(found: Option<&Value>, out: *mut i64) -> i64 {
+    // SAFETY: the caller's contract.
+    unsafe { out.write(found.map_or(0, unbox_int64_of)) };
+    i64::from(found.is_some())
+}
+
+/// `aura_direct_map_get_payload` for a dict of `int64` values, as the two
+/// words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_word(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| match tape_lookup_key(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract, and `key` is a live box.
+            None => unsafe {
+                with_value(key, |key| map_lookup_word(map.entries.value_of(key), out))
+            },
+        })
+    })
+}
+
+/// `aura_direct_map_get_str_payload` for a dict of `int64` values, as the
+/// two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_str_word(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let key = literal_str(key_ptr, key_len);
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            // SAFETY: the caller's contract.
+            Some(found) => unsafe { map_lookup_word(found.as_ref(), out) },
+            // SAFETY: the caller's contract.
+            None => unsafe { map_lookup_word(map.entries.value_of_str(key), out) },
+        })
+    })
+}
+
+/// `aura_direct_map_get_int64_payload` for a dict of `int64` values, as
+/// the two words of [`map_lookup_word`].
+///
+/// # Safety
+///
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_map_get_int64_word(
+    map: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        with_map(map, |map| unsafe {
+            map_lookup_word(map.entries.value_of_i64(key), out)
+        })
+    })
+}
+
 /// Turns an owned `Lookup` into the found value's own box, or null for
 /// `Lookup.Missing`. Generated code uses it when a lookup it keeps in that
 /// form came from a path that builds the `Lookup`.
@@ -13598,6 +13912,112 @@ pub extern "C-unwind" fn aura_direct_map_index(
             }
         };
         boxed_value(direct_array_result(value, line, column))
+    })
+}
+
+/// Reports that `map[key]` found no `key`, whose rendering is
+/// `rendered_key`, at `line:column`.
+fn missing_dict_key(rendered_key: &str, line: i64, column: i64) -> ! {
+    let message = format!("dict key `{rendered_key}` was not present");
+    match runtime_span(line, column) {
+        Some(span) => runtime_diagnostic_error(Diagnostic::coded_at("AU4003", span, message)),
+        None => runtime_diagnostic_error(Diagnostic::coded("AU4003", message)),
+    }
+}
+
+/// `map[key]` for a dict of scalar values: `read` gives the found value as
+/// the scalar generated code keeps, so the value never goes in a box. A
+/// missing key reports what `aura_direct_map_index` reports.
+fn map_index_scalar<T>(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    read: fn(&Value) -> T,
+) -> T {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| unsafe {
+            with_value(key, |key| {
+                map.entries
+                    .value_of(key)
+                    .map(read)
+                    .ok_or_else(|| key.render())
+            })
+        });
+        found.unwrap_or_else(|rendered_key| missing_dict_key(&rendered_key, line, column))
+    })
+}
+
+/// `map[key]` for a dict of `int64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_int64_of)
+}
+
+/// `map[key]` for a dict of integer values narrower than 64 bits.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_i64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_i64_of)
+}
+
+/// `map[key]` for a dict of `uint64` values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_u64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> u64 {
+    map_index_scalar(map, key, line, column, unbox_u64_of)
+}
+
+/// `map[key]` for a dict of float values.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_f64(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> f64 {
+    map_index_scalar(map, key, line, column, unbox_f64_of)
+}
+
+/// `map[key]` for a dict of `bool` values, as 0 or 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_bool(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> i64 {
+    map_index_scalar(map, key, line, column, unbox_bool_of)
+}
+
+/// `map[key]` for a dict from `int64` to `int64`: neither the key nor the
+/// found value goes in a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = with_map(map, |map| map.entries.value_of_i64(key).map(unbox_int64_of));
+        found.unwrap_or_else(|| {
+            let rendered_key = Value::Int(IntegerValue::from_i64(key)).render();
+            missing_dict_key(&rendered_key, line, column)
+        })
     })
 }
 
@@ -15094,21 +15514,22 @@ fn unbox_u64_of(value: &Value) -> u64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    task_runtime_boundary(|| {
-        let value = unsafe { value_ref(value) };
-        // A trait object holds a float beside its width.
-        let held = match &value {
-            Value::TraitObject(object) => &object.value,
-            other => other,
-        };
-        match held {
-            Value::Float(value) => *value,
-            _ => runtime_error(format!(
-                "direct backend expected `float64`, found `{}`",
-                value_type_name(&value)
-            )),
-        }
-    })
+    task_runtime_boundary(|| unbox_f64_of(&unsafe { value_ref(value) }))
+}
+
+fn unbox_f64_of(value: &Value) -> f64 {
+    // A trait object holds a float beside its width.
+    let held = match value {
+        Value::TraitObject(object) => &object.value,
+        other => other,
+    };
+    match held {
+        Value::Float(value) => *value,
+        _ => runtime_error(format!(
+            "direct backend expected `float64`, found `{}`",
+            value_type_name(value)
+        )),
+    }
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -16704,8 +17125,8 @@ unsafe fn adopt_only_box(boxed: *mut OpaqueValue) -> Option<ElementBox> {
     if header.ref_count.load(Ordering::Acquire) != 1 || header.shared_lock().is_some() {
         return None;
     }
-    // A held box never runs its list view ahead of the list, so the
-    // elements generated code appended are taken in now.
+    // The elements generated code appended are taken in now, so the
+    // holder's first read of the box has nothing to take in.
     if header.list_capacity.load(Ordering::Relaxed) != 0 {
         header.adopt_appended_elements();
     }

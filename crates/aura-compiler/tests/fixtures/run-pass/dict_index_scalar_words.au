@@ -1,0 +1,45 @@
+# `d[key]` on a dict of scalar values reads the scalar itself: no box is
+# made for it.
+def total(env: dict[str, int64], names: list[str]) -> int64:
+    mut sum = 0
+    for name in names:
+        sum += env[name]
+    return sum
+
+def squares(limit: int64) -> dict[int64, int64]:
+    mut table: dict[int64, int64] = {}
+    for i in range(limit):
+        table[i - 2] = i * i
+    return table
+
+def main():
+    env = {"a": 1, "b": -9223372036854775807, "c": 9223372036854775806}
+    print(total(env, ["a", "b", "c", "a"]))
+    print(env["c"])
+    table = squares(6)
+    print(table[-2] + table[0] + table[3])
+    small: dict[str, int8] = {"low": -128, "high": 127}
+    print(small["low"] + small["high"])
+    short: dict[int64, int16] = {1: -32768, 2: 32767}
+    print(short[1] + short[2])
+    medium: dict[str, int32] = {"low": -2147483648, "high": 2147483647}
+    print(medium["low"] + medium["high"])
+    bytes: dict[str, uint8] = {"top": 255}
+    print(bytes["top"])
+    words: dict[str, uint16] = {"top": 65535}
+    print(words["top"])
+    wide: dict[str, uint32] = {"top": 4294967295}
+    print(wide["top"])
+    huge: dict[str, uint64] = {"top": 18446744073709551615}
+    print(huge["top"])
+    halves: dict[str, float64] = {"half": 0.5, "third": 1.0 / 3.0}
+    print(halves["half"] + halves["third"])
+    singles: dict[int64, float32] = {7: 0.1}
+    print(singles[7])
+    flags: dict[str, bool] = {"yes": true, "no": false}
+    print(flags["yes"])
+    print(flags["no"])
+    if flags["yes"] and not flags["no"]:
+        print("both")
+    nothing: dict[str, None] = {"unit": None}
+    print(nothing["unit"])

@@ -7,6 +7,22 @@ in this file.
 
 ## Unreleased
 
+- Speed: a `Result` that a function returns and its caller matches or
+  unwraps with `try` no longer allocates. `bank_ledger` runs half the
+  instructions it did in 0.17.0.
+- Speed: `swap` on a list of a copy class, and an append to a list held
+  in a field or in a list of lists, are compiled in place. `graph_paths`
+  runs half the instructions it did in 0.17.0, and `order_book` two
+  thirds.
+- Speed: a loop written `for j in range(i + 1, n)` reads and writes list
+  elements without bounds checks when the outer loop proves the range, and
+  a function that only calls small leaves keeps no frame record. `nbody`
+  runs 40% fewer instructions than in 0.17.0, and `image_filters` and
+  `bytecode_vm` about a quarter fewer.
+- Speed: `d[key]` on a dictionary of numbers or `bool` returns the value
+  without a box (`interpreter` runs a third fewer instructions), a `for`
+  over a short literal of numbers builds no list, and lists cost less to
+  create and grow.
 - Pure module constants are evaluated during compilation. Write `const` to require a build-time result. Freestanding code can read computed constant tables.
 - The `build` module exposes target properties and features. Conditional suites select imports, foreign declarations, class members and functions. Pass `--cfg` on the command line or set defaults in `[build.cfg]`. `aura check --all-targets` checks the supported targets.
 - The editor dims inactive suites and provides navigation for identifiable declarations in them.
