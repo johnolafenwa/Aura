@@ -16765,3 +16765,79 @@ fn recovered_factories_keep_the_callable_contract_in_ok() {
         include_str!("../tests/fixtures/run-pass/recover_returned_callable.stdout")
     );
 }
+
+#[test]
+fn a_loop_over_a_short_literal_of_scalars_builds_no_list() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def scale(value: int64) -> int64:
+    return value * 3
+
+def from_locals(a: int64, b: int64) -> int64:
+    mut total = 0
+    for value in [scale(a), scale(b), a + b]:
+        total += value
+    return total
+
+def one(a: float64) -> float64:
+    mut total = 0.0
+    for value in ([a]):
+        total += value
+    return total
+
+def built(a: int64) -> int64:
+    mut total = 0
+    for value in [a, 1, 2, 3, 4, 5, 6, 7, 8]:
+        total += value
+    for text in ["a", "b"]:
+        total += text.len()
+    for value in [a, a]:
+        invariant total >= 0
+        total += value
+    for value in own [a, a]:
+        total += value
+    for value in [a, total]:
+        total += value
+    return total
+
+def gathered(a: int64) -> list[int64]:
+    return [value + 1 for value in [a, a]]
+"#,
+    )
+    .expect("loops over list literals should lower");
+    let literals = |name: &str| {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function should lower");
+        let built = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::VecLiteral { .. },
+                        ..
+                    }
+                )
+            })
+            .count();
+        let takes = function
+            .blocks
+            .iter()
+            .filter(|block| block.label.contains("for_literal_take"))
+            .count();
+        (built, takes)
+    };
+    // Every element but the last is chosen by a comparison.
+    assert_eq!(literals("from_locals"), (0, 2));
+    assert_eq!(literals("one"), (0, 0));
+    // A long literal, one of text, a loop with an invariant and one that
+    // takes its elements build their lists; the last loop reads two locals.
+    assert_eq!(literals("built"), (4, 1));
+    // So does a comprehension's clause.
+    assert_eq!(literals("gathered").1, 0);
+}

@@ -2,6 +2,16 @@
 
 Last updated: 2026-11-24
 
+## Rust speed (in progress)
+
+- Target: John's 2026-11-24 goal that Aura programs run as fast as their
+  Rust versions in `benchmarks/cross_language/`. Round 1 is in
+  `2026-11-24-rust-speed-round-1.md`.
+- Done: `Result` values travel as words, list swaps of copy classes and
+  appends to held lists happen in place. `bank_ledger` runs 2.1 times
+  Rust's instructions (was 4.2) and `graph_paths` 2.6 (was 5.5).
+- Follow-up: scalar dictionary index results, other enums, list creation
+  and growth, and generated code in numeric loops.
 ## Compile-Time Evaluation And Conditional Compilation
 
 Module constants can evaluate through MIR at build time. Conditional suites select imports, declarations and statements by target, build profile and package features. The 0.18 integration work includes the command line, editor and a freestanding kernel example. [Work note](2026-11-24-compile-time.md)

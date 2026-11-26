@@ -109,6 +109,93 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
+    /// The found value's own box, or null for a missing key, of a lookup
+    /// that compiled to `compiled`: `compiled` itself when it is in the
+    /// payload form, and otherwise what is in the `Lookup` it is.
+    pub(super) fn lookup_payload_box(
+        &mut self,
+        compiled: ValueRef,
+        payload_form: bool,
+        ty: Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let compiled = self.ensure_opaque(compiled)?;
+        if payload_form {
+            return Ok(compiled);
+        }
+        let lookup = self.transfer_owned_opaque_value(&compiled);
+        let inst = self
+            .builder
+            .call(self.runtime[RuntimeFn::LookupPayload], &[lookup]);
+        Ok(self.owned_opaque_result(inst.results, ty))
+    }
+
+    /// A `dict` `get` for a slot that keeps a found int64 as a word: the
+    /// lookup writes the int64 to the slot and says whether it found one.
+    /// `None` when no such slot asks, and the `get` compiles as usual.
+    pub(super) fn dict_lookup_words(
+        &mut self,
+        lookup: RuntimeFn,
+        words: &[Val],
+    ) -> Option<ValueRef> {
+        let address = self.lookup_word.take()?;
+        let mut words = words.to_vec();
+        words.push(address);
+        let found = self.builder.call(self.runtime[lookup], &words).results[0];
+        self.lookup_word_found = Some(found);
+        // The slot's own word holds nothing.
+        Some(ValueRef {
+            values: vec![self.builder.iconst(types::I64, 0)],
+            ty: DirectType::Opaque(Type::named("Unknown")),
+        })
+    }
+
+    /// Assigns a `dict` `get` to `target`, a slot that keeps a found int64
+    /// at `address` and whether it was found beside it. A `get` that
+    /// compiled to a path that makes the found value's box, or the
+    /// `Lookup`, reads the int64 out of it.
+    pub(super) fn compile_dict_word_lookup(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+        address: Val,
+    ) -> std::result::Result<(), String> {
+        let target_ty = self.type_of_place(target)?;
+        self.lookup_payload = Some(false);
+        self.lookup_word = Some(address);
+        let compiled = self.compile_rvalue_for_target(value, &target_ty);
+        self.lookup_word = None;
+        let payload_form = self.lookup_payload.take() == Some(true);
+        let found = self.lookup_word_found.take();
+        let compiled = compiled?;
+        if let Some(found) = found {
+            self.builder.store(MemFlags::new(), found, address, 8);
+            return Ok(());
+        }
+        let payload = self.lookup_payload_box(compiled, payload_form, Type::named("Unknown"))?;
+        let payload = self.transfer_opaque_arg(&payload);
+        // The branch that follows leaves nothing for only one of its sides
+        // to release.
+        self.release_all_temporary_owned();
+        let found = self.builder.icmp_imm(IntCC::NotEqual, payload, 0);
+        let found = self.builder.uextend(types::I64, found);
+        self.builder.store(MemFlags::new(), found, address, 8);
+        let found_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder
+            .brif(payload, found_block, &[], done_block, &[]);
+        self.builder.switch_to_block(found_block);
+        self.builder.seal_block(found_block);
+        let boxed = self.owned_opaque_result(vec![payload], Type::named("Unknown"));
+        let word = self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Int64))?;
+        self.builder
+            .store(MemFlags::new(), word.values[0], address, 0);
+        self.release_all_temporary_owned();
+        self.builder.jump(done_block, &[]);
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        Ok(())
+    }
+
     /// A new instance of a class that wraps a `sync` handle: the handle's
     /// box. An initializer starts from an instance with no fields, which
     /// takes the ordinary path until the initializer stores the handle.
