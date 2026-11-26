@@ -3204,6 +3204,8 @@ impl<'a> NativeCodegen<'a> {
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             pending_try_read: None,
+            pending_try_event: None,
+            word_tuples: HashMap::new(),
             pending_try_write: None,
             fused_entry_slots: HashMap::new(),
             deferred_entry_keys: HashMap::new(),
@@ -4875,6 +4877,11 @@ struct FunctionCompiler<'a> {
     /// The result temporary, line word, and failure word address of a
     /// `try file.read_line()` whose read is emitted and whose `try` is next.
     pending_try_read: Option<(String, Val, Val)>,
+    /// The result temporary, words address, and failure word address of
+    /// a fused event read whose `try` is next (see `event_reads`).
+    pending_try_event: Option<(String, Val, Val)>,
+    /// The tuples of fused event reads, held as words (see `event_reads`).
+    word_tuples: HashMap<String, event_reads::WordTuple>,
     /// The result temporary of a `try` write (see
     /// `Self::opens_with_try_write`) and the word its helper returned.
     pending_try_write: Option<(String, Val)>,
@@ -5994,6 +6001,12 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_try_write(write, instruction)?;
                 continue;
             }
+            if let Some((result, stream)) =
+                self.opens_with_try_event(&block.instructions[instruction_index..])
+            {
+                self.compile_try_event(result, stream)?;
+                continue;
+            }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
                 if let Instruction::Assign {
                     target,
@@ -6728,6 +6741,12 @@ impl<'a> FunctionCompiler<'a> {
             }
             // The tuple of a walk by entry is never made.
             Instruction::Release { place } if self.entry_loop_tuples.contains_key(place) => {}
+            // A fused event read's tuple is words (see `event_reads`).
+            Instruction::Release { place } if self.release_word_tuple(place) => {}
+            Instruction::Assign {
+                target,
+                value: Rvalue::Use(Operand::MovePlace(source)),
+            } if self.move_word_tuple(target, source) => {}
             Instruction::Assign {
                 target,
                 value: Rvalue::VecLiteral { elements, .. },
@@ -16572,6 +16591,10 @@ impl<'a> FunctionCompiler<'a> {
             if let Some(list) = self.entry_loop_tuples.get(place).cloned() {
                 return self.load_walked_entry(&list, index == 0, element_type);
             }
+            if let Some(element) = self.take_word_tuple_element(place, index) {
+                let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+                return self.coerce_value(element, &direct_type);
+            }
         }
         let tuple = self.load_operand(tuple)?;
         let tuple = self.ensure_opaque(tuple)?;
@@ -16597,6 +16620,10 @@ impl<'a> FunctionCompiler<'a> {
         element_type: &Type,
     ) -> std::result::Result<ValueRef, String> {
         validate_tuple_take_place(place)?;
+        if let Some(element) = self.take_word_tuple_element(place, index) {
+            let direct_type = ensure_direct_type(element_type, &self.classes, "tuple element")?;
+            return self.coerce_value(element, &direct_type);
+        }
         let tuple = self.load_place(place)?;
         let tuple = self.ensure_opaque(tuple)?;
         let index = self.builder.iconst(types::I64, index as i64);
@@ -17107,6 +17134,16 @@ impl<'a> FunctionCompiler<'a> {
                 "a `try` after a fused write takes that write"
             );
             return self.compile_try_of_write(target, &source, failure, releases_on_error, from);
+        }
+        if let Some((source, words, failure)) = self.pending_try_event.take() {
+            return self.compile_try_of_event(
+                target,
+                &source,
+                words,
+                failure,
+                releases_on_error,
+                from,
+            );
         }
         if let Some((source, line, failure)) = self.pending_try_read.take() {
             debug_assert!(
@@ -24770,6 +24807,8 @@ mod elements;
 mod entry_loops;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_event_reads.rs"]
+mod event_reads;
 #[path = "native_codegen_foreign.rs"]
 mod foreign;
 #[path = "native_codegen_foreign_reads.rs"]

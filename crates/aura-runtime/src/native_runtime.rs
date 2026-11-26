@@ -22247,6 +22247,49 @@ pub extern "C-unwind" fn aura_direct_tcp_stream_read_line(
     })
 }
 
+/// `try http.__aura_read_event(stream)` in one call: the five fields of
+/// the tuple the builtin returns go into `words` (found, event, data, id,
+/// retry_ms), each `str` as a box the caller owns, and no `Result` or tuple
+/// is made. A failed read leaves `words` alone and writes the `Result.Err`
+/// the `try` returns to `failure`, which the caller set to null.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_http_read_event_try(
+    stream: *mut OpaqueValue,
+    words: *mut i64,
+    failure: *mut *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let read = match unsafe { value_ref(stream) } {
+            Value::HttpResponse(stream) => {
+                crate::runtime_value::http_client::read_stream_event(&stream)
+            }
+            other => runtime_error(format!(
+                "expected `http.Stream`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match read {
+            Ok(event) => {
+                let found = event.is_some();
+                let event = event.unwrap_or_default();
+                let fields = [
+                    i64::from(found),
+                    boxed_value(Value::string(event.event)) as i64,
+                    boxed_value(Value::string(event.data)) as i64,
+                    boxed_value(Value::string(event.id)) as i64,
+                    if found { event.retry_ms } else { -1 },
+                ];
+                for (index, word) in fields.into_iter().enumerate() {
+                    // SAFETY: the caller passes five writable words.
+                    unsafe { words.add(index).write(word) };
+                }
+            }
+            // SAFETY: the caller passes one writable word.
+            Err(error) => unsafe { failure.write(boxed_value(result_err(io_error(error)))) },
+        }
+    })
+}
+
 /// `try stream.read_line()` in one call, as
 /// [`aura_direct_file_read_line_try`] reads a file's line: the line's
 /// `str`, or null at the end of the stream while `failure` stays null, or

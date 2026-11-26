@@ -33218,3 +33218,72 @@ fn padded_int64_parts_match_the_general_formatter() {
     super::aura_direct_format_push_i64_formatted(builder, 255, "x".as_ptr(), 1);
     assert_eq!(expect_string(builder), "[-007ff");
 }
+
+#[test]
+fn native_runtime_reads_a_server_sent_event_into_words() {
+    use crate::runtime_value::http_client::{http_send, HttpRequestOptions, HttpResponseValue};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a test server binds");
+    let address = listener.local_addr().expect("a local address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("a connection");
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).expect("a request byte");
+            request.push(byte[0]);
+        }
+        let body = "event: tick\nid: 7\ndata: ab\nretry: 30\n\ndata: cd\n\n";
+        let reply = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(reply.as_bytes()).expect("a reply");
+    });
+    let options = HttpRequestOptions {
+        timeout: Some(StdDuration::from_secs(5)),
+        read_timeout: Some(StdDuration::from_secs(5)),
+        ..Default::default()
+    };
+    let body = http_send(
+        "GET",
+        &format!("http://{address}/"),
+        Vec::new(),
+        b"",
+        &options,
+        None,
+    )
+    .expect("a response");
+    let stream = HttpResponseValue::new(body);
+    let stream_ptr = boxed_value(Value::HttpResponse(stream.clone()));
+    let read = |words: &mut [i64; 5], failure: &mut *mut OpaqueValue| {
+        super::aura_direct_http_read_event_try(stream_ptr, words.as_mut_ptr(), failure)
+    };
+    let mut failure = std::ptr::null_mut();
+    let mut words = [0i64; 5];
+    read(&mut words, &mut failure);
+    assert!(failure.is_null());
+    assert_eq!(words[0], 1);
+    assert_eq!(expect_string(words[1] as *mut OpaqueValue), "tick");
+    assert_eq!(expect_string(words[2] as *mut OpaqueValue), "ab");
+    assert_eq!(expect_string(words[3] as *mut OpaqueValue), "7");
+    assert_eq!(words[4], 30);
+    read(&mut words, &mut failure);
+    assert_eq!((words[0], words[4]), (1, -1));
+    assert_eq!(expect_string(words[1] as *mut OpaqueValue), "message");
+    assert_eq!(expect_string(words[2] as *mut OpaqueValue), "cd");
+    assert_eq!(expect_string(words[3] as *mut OpaqueValue), "7");
+    // The end of the body is an event that was not found, with empty text.
+    read(&mut words, &mut failure);
+    assert!(failure.is_null());
+    assert_eq!((words[0], words[4]), (0, -1));
+    for word in &words[1..4] {
+        assert_eq!(expect_string(*word as *mut OpaqueValue), "");
+    }
+    // A closed stream fails, and the failure word holds the `Result.Err`.
+    stream.close();
+    let mut words = [9i64; 5];
+    read(&mut words, &mut failure);
+    assert_eq!(words, [9i64; 5]);
+    expect_result_err_payload(failure);
+    server.join().expect("the server");
+}
