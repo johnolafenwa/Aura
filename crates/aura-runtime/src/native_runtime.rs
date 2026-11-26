@@ -11374,6 +11374,52 @@ pub extern "C-unwind" fn aura_direct_string_words(
     value: *mut OpaqueValue,
     len: *mut i64,
 ) -> *const u8 {
+    // A `str` box confined to this thread, or frozen, is read where it
+    // lies: it is no list, so it has no appended elements to take in, and
+    // no other thread can be writing it.
+    // SAFETY: generated code passes a live box and a slot for one word.
+    if let Some(text) = unsafe { unlocked_str(value) } {
+        unsafe { len.write(text.len() as i64) };
+        return text.as_ptr();
+    }
+    string_words_locked(value, len)
+}
+
+/// The text of `value` when it is a `str` box that needs no lock to read:
+/// confined to this thread or frozen. `None` for any other value, which
+/// the caller reads through [`with_value`].
+///
+/// # Safety
+///
+/// `value` is null or a live box, and the caller reads the text before
+/// anything can change the box.
+#[inline(always)]
+unsafe fn unlocked_str<'a>(value: *mut OpaqueValue) -> Option<&'a str> {
+    // SAFETY: the caller's contract.
+    let header = unsafe { value.as_ref() }?;
+    let lock = header.shared_lock.load(Ordering::Acquire);
+    if !(lock.is_null() || std::ptr::eq(lock, &FROZEN_VALUE_LOCK)) {
+        return None;
+    }
+    #[cfg(all(debug_assertions, not(test)))]
+    if lock.is_null() {
+        assert!(
+            header.owner_thread == LIST_ELEMENT_THREAD
+                || header.owner_thread == direct_value_thread_identity(),
+            "direct runtime value reached another thread without being shared"
+        );
+    }
+    // SAFETY: confined or frozen, so no `&mut Value` exists meanwhile.
+    match unsafe { &*header.value.get() } {
+        Value::String(text) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+/// [`aura_direct_string_words`] for a box another thread may share, or a
+/// value that is no `str`, which reports the type error.
+#[inline(never)]
+fn string_words_locked(value: *mut OpaqueValue, len: *mut i64) -> *const u8 {
     task_runtime_boundary(|| unsafe {
         let (ptr, bytes) = with_value(value, |value| match value {
             Value::String(text) => (text.as_str().as_ptr(), text.as_str().len()),

@@ -8494,6 +8494,23 @@ fn direct_runtime_string_and_numeric_helpers_cover_builtin_surface() {
     let words = super::aura_direct_string_words(text, &mut len);
     assert_eq!(words, super::aura_direct_string_bytes(text));
     assert_eq!(len, 9);
+    // A shared box is read under its lock, a frozen one where it lies.
+    let long = "a text too long to keep in the value itself".repeat(2);
+    for freeze in [false, true] {
+        let held = string_value(&long);
+        unsafe {
+            if freeze {
+                super::freeze_direct_value(held);
+            } else {
+                super::share_direct_value(held);
+            }
+        }
+        let mut held_len = 0_i64;
+        let held_words = super::aura_direct_string_words(held, &mut held_len);
+        // SAFETY: the box is live and unchanged.
+        let held_bytes = unsafe { std::slice::from_raw_parts(held_words, held_len as usize) };
+        assert_eq!(held_bytes, long.as_bytes());
+    }
     let copy = super::aura_direct_string_clone(text);
     assert_ne!(copy, text);
     assert_eq!(
