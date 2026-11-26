@@ -1479,3 +1479,38 @@ fn a_copy_temporary_only_appended_hands_its_box_to_the_list() {
     });
     assert!(!super::appended_temps(&named, |_| true).contains(temp.as_str()));
 }
+
+const FIELD_READS: &str = r#"
+class Book:
+    qty: list[int64]
+    total: int64
+
+    def fill(mut self, at: int64, amount: int64) -> int64:
+        taken = min(amount, self.qty[at])
+        self.qty[at] -= taken
+        self.total += self.qty.len()
+        return taken
+
+def main():
+    mut book = Book(qty=[5, 6], total=0)
+    print(book.fill(1, 2))
+"#;
+
+#[test]
+fn a_field_lent_only_to_be_read_comes_back_as_it_went() {
+    let mir = lower_source_to_mir(FIELD_READS).expect("the source should lower");
+    let module =
+        crate::native_codegen::validated_for_emission(&mir).expect("the source should validate");
+    let fill = module
+        .functions
+        .iter()
+        .find(|function| function.name == "Book.fill")
+        .expect("the module has `Book.fill`");
+    let temps = crate::native_codegen::classes::field_lend_temps(fill, |_| false);
+    let read_only = crate::native_codegen::classes::read_only_field_lends(fill, &temps);
+    // The element read, its read again for `-=`, and the length read only
+    // read the list; the element write changes it.
+    assert_eq!(temps.len(), 4, "{temps:?}");
+    assert_eq!(read_only.len(), 3, "{read_only:?}");
+    assert!(read_only.is_subset(&temps));
+}

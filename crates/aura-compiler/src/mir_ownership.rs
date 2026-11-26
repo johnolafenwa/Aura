@@ -1820,6 +1820,7 @@ fn insert_ownership_within(module: &mut MirModule, state_cells: usize) {
     cancel_retain_release_pairs(module);
     for function in module.functions.iter_mut().chain(module.top_level.as_mut()) {
         crate::mir_copies::sink_unread_empty_lists(function);
+        crate::mir_copies::sink_list_releases_past_element_reads(function);
     }
 }
 

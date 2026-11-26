@@ -2206,6 +2206,10 @@ pub struct StrView {
 /// The auxiliary views a list keeps once the native runtime builds them.
 /// Their entries describe the current elements only while the box's access
 /// code selects them. A copy of the list starts without cached entries.
+///
+/// Until a view is made, the word may count misses instead (see
+/// [`Self::note_miss`]): an odd word holds the count shifted left by one,
+/// which no view's address is.
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 

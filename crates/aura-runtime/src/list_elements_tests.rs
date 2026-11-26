@@ -1200,3 +1200,23 @@ fn str_view_misses_are_counted_without_a_view() {
     assert!(!counted.is_empty());
     drop(counted);
 }
+
+#[test]
+fn a_str_view_cache_counts_early_misses_without_a_view() {
+    let cache = StrViewCache::default();
+    // SAFETY: the cache is this test's alone.
+    unsafe {
+        for misses in 1..=3 {
+            assert_eq!(cache.note_miss(), misses);
+        }
+        assert!(cache.view().is_null());
+        assert_eq!(cache.get_or_create().misses, 3);
+        assert_eq!(cache.note_miss(), 4);
+    }
+    let counted = StrViewCache::default();
+    // SAFETY: as above.
+    unsafe {
+        assert_eq!(counted.note_miss(), 1);
+        assert_eq!(counted.get_or_create().misses, 1);
+    }
+}
