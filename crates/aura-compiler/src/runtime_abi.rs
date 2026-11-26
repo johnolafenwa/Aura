@@ -268,6 +268,7 @@ runtime_functions! {
     VecSortByKeysInPlace => ("aura_direct_vec_sort_by_keys_in_place", [I64, I64, I64], Some(I64)),
     VecPermuteInPlace => ("aura_direct_vec_permute_in_place", [I64, I64], Some(I64)),
     VecSetIndexInPlace => ("aura_direct_vec_set_index_in_place", [I64, I64, I64, I64, I64], Some(I64)),
+    VecSetIndexDiscarded => ("aura_direct_vec_set_index_discarded", [I64, I64, I64, I64, I64], None),
     VecSetIndexScalar => ("aura_direct_vec_set_index_scalar", [I64, I64, I64, I64, I64, I64], None),
     ElementPathLoad => ("aura_direct_element_path_load", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ElementPathStore => ("aura_direct_element_path_store", [I64, I64, I64, I64, I64, I64, I64, I64], None),

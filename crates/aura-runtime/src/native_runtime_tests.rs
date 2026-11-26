@@ -26765,6 +26765,11 @@ fn list_element_reads_borrow_the_element_in_place() {
         1
     );
     assert_eq!(super::aura_direct_vec_element_len(names, 0, 0, 0), 6);
+    // A `str` counts its characters, not its bytes.
+    let texts = string_vec(&["h\u{e9}llo", ""]);
+    assert_eq!(super::aura_direct_vec_element_len(texts, 0, 0, 0), 5);
+    assert_eq!(super::aura_direct_vec_element_len(texts, -1, 0, 0), 0);
+    unsafe { release_value(texts) };
 
     let groups = super::aura_direct_vec_empty();
     super::aura_direct_vec_push_in_place(groups, int_vec(&[1, 2, 3]));
@@ -29615,6 +29620,23 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
         &named("list", vec![Type::named("float32")])
     ));
     assert!(changes(&list("int64"), &named("set", vec![int64()])));
+    // An element type that is the tag's own shared copy, or an equal type
+    // of its own, already has the shape.
+    let nested = named("list", vec![named("list", vec![int64()])]);
+    let nested_tag = tag(&nested);
+    let nested_list = |element_type: crate::runtime_value::SharedType| {
+        Value::Vec(VecValue {
+            element_type,
+            elements: ListElements::new(),
+            str_view: Default::default(),
+        })
+    };
+    let shared = nested_tag.collection_args[0].clone();
+    assert!(!super::retag_changes(&nested_list(shared), &nested_tag));
+    let own = crate::runtime_value::SharedType::from(named("list", vec![int64()]));
+    assert!(!super::retag_changes(&nested_list(own), &nested_tag));
+    let other = crate::runtime_value::SharedType::from(named("list", vec![Type::named("str")]));
+    assert!(super::retag_changes(&nested_list(other), &nested_tag));
     let set = Value::Set(SetValue {
         element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: SetElements::new(),
@@ -29846,6 +29868,17 @@ fn str_lists_switch_to_the_str_view_after_enough_misses() {
     assert_eq!(list_view_access(empty), DirectListAccess::Str as u32);
     assert_eq!(super::aura_direct_vec_len(empty), 0);
     unsafe { release_value(empty) };
+}
+
+#[test]
+fn a_discarded_element_store_replaces_the_element() {
+    let list = string_vec(&["alpha", "b", "c"]);
+    super::aura_direct_vec_set_index_discarded(list, 1, string_value("beta"), 0, 0);
+    super::aura_direct_vec_set_index_discarded(list, -1, string_value("gamma"), 0, 0);
+    assert_eq!(unsafe { super::value_ref(list) }, unsafe {
+        take_value(string_vec(&["alpha", "beta", "gamma"]))
+    });
+    unsafe { release_value(list) };
 }
 
 #[test]

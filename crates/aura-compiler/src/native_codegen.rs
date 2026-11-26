@@ -12530,6 +12530,94 @@ impl<'a> FunctionCompiler<'a> {
         Ok((list.values[0], index))
     }
 
+    /// `len()` of a lent `str` element of a `list[str]` field, such as
+    /// `self.groups[i].len()`, read where the list keeps it when the
+    /// instance is kept in place, instead of from a copy of the element.
+    /// Any other instance, or a moved-out field, takes the runtime walk.
+    /// Returns `None` for any other call.
+    fn compile_field_str_element_len(
+        &mut self,
+        object: &Operand,
+        callee: MemberCallee<'_>,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        if callee.op() != Some(RuntimeOp::Str(StrOp::Len)) || !args.is_empty() {
+            return Ok(None);
+        }
+        let Operand::Place(place) = object else {
+            return Ok(None);
+        };
+        let Some(resolved) = self.view_places.get(place) else {
+            return Ok(None);
+        };
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return Ok(None);
+        };
+        let [selector] = alternative.elements.as_slice() else {
+            return Ok(None);
+        };
+        if !alternative.conditions.is_empty()
+            || !alternative.union_payloads.is_empty()
+            || selector.kind != DirectElementKind::List
+            || !selector.projection.is_empty()
+            || selector.element_type != Type::named("str")
+        {
+            return Ok(None);
+        }
+        let alternative = alternative.clone();
+        let selector = selector.clone();
+        let Some((root, slot, _)) = self.class_place(&alternative.place)? else {
+            return Ok(None);
+        };
+        if !matches!(slot.kind, classes::SlotKind::Handle) {
+            return Ok(None);
+        }
+        let object = self.load_root(&root)?.values[0];
+        let index = self.builder.use_var(selector.variable);
+        let (line, column) = self.span_operands(selector.span);
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let field_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.emit_class_check(object, slot.access, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(object);
+        let field = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, slot.offset);
+        self.builder.brif(field, field_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(field_block);
+        self.builder.seal_block(field_block);
+        let len = self.builder.call(
+            self.runtime[RuntimeFn::VecElementLen],
+            &[field, index, line, column],
+        );
+        let len = len.results[0];
+        self.builder.jump(join_block, &[len]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let (collection, projection) = self.load_element_path_root(&alternative.place)?;
+        let copy = self.element_path_load(collection.values[0], &projection, &alternative)?;
+        let len = self
+            .builder
+            .call(self.runtime[RuntimeFn::StringLen], &[copy])
+            .results[0];
+        self.release_opaque_handle(copy);
+        self.builder.jump(join_block, &[len]);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(Some(ValueRef {
+            values: vec![self.builder.block_params(join_block)[0]],
+            ty: DirectType::Scalar(ScalarKind::Int64),
+        }))
+    }
+
     /// `len()` or `get(key)` on a lent list element, read where it lies (see
     /// `borrowed_list_element`): a peephole on the resolved `len` of a
     /// `str`, `list`, `dict`, or `set` and the resolved `get` of a `dict`.
@@ -12541,7 +12629,7 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<Option<ValueRef>, String> {
         let Some(selection) = self.borrowed_list_element(object) else {
-            return Ok(None);
+            return self.compile_field_str_element_len(object, callee, args);
         };
         let op = callee.op();
         let key = match (op, args) {
@@ -19621,9 +19709,11 @@ impl<'a> FunctionCompiler<'a> {
                 let column = self.load_word(args[3], int32, false)?;
                 let index = self.emit_vec_index_failure_guard(list, index, line, column)?;
                 let value = self.transfer_owned_opaque_value(&value);
-                let results =
-                    self.runtime_call_results(function, &[list, index, value, line, column]);
-                self.release_opaque_handle(results[0]);
+                // The store's `None` result is not read, so it gets no box.
+                self.builder.call(
+                    self.runtime[RuntimeFn::VecSetIndexDiscarded],
+                    &[list, index, value, line, column],
+                );
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

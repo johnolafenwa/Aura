@@ -1,0 +1,45 @@
+# The length of a `str` element of a list field read where the list keeps
+# it, and a store into such a field whose result nothing reads.
+class Groups:
+    texts: list[str]
+    count: int64
+
+    def len_at(self, index: int64) -> int64:
+        return self.texts[index].len()
+
+    def get(self, index: int64) -> str | None:
+        if index < 0 or index >= self.count:
+            return None
+        if self.texts[self.count + index].len() == 0:
+            return None
+        return self.texts[index].clone()
+
+    def rename(mut self, index: int64, text: str):
+        self.texts[index] = text.clone()
+
+
+def show(found: own str | None) -> str:
+    match own found:
+        case str as text:
+            return text
+        case None:
+            return "-"
+
+
+def main():
+    mut groups = Groups(texts=["héllo", "", "abc", "y", "", "y"], count=3)
+    print(groups.len_at(0))
+    print(groups.len_at(1))
+    print(groups.len_at(-1))
+    print(show(groups.get(0)))
+    print(show(groups.get(1)))
+    print(show(groups.get(2)))
+    print(show(groups.get(3)))
+    groups.rename(1, "naïve")
+    groups.rename(-2, "y")
+    print(groups.len_at(1))
+    print(show(groups.get(1)))
+    mut total = 0
+    for i in range(6):
+        total += groups.len_at(i)
+    print(total)

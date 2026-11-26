@@ -2209,14 +2209,31 @@ pub struct StrView {
 #[derive(Default)]
 pub struct StrViewCache(std::sync::atomic::AtomicPtr<StrView>);
 
+/// The low bit of a [`StrViewCache`] word that holds a count of view misses
+/// instead of the address of a view: a list read a few times never makes a
+/// view, so counting its misses allocates nothing.
+const MISS_COUNT_TAG: usize = 1;
+
 impl StrViewCache {
-    /// Whether no view was ever made.
+    /// Whether no view was ever made and no miss counted.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.load(std::sync::atomic::Ordering::Relaxed).is_null()
     }
 
-    /// The view, made empty on first use.
+    /// The address of the view, or null when there is none yet.
+    #[inline]
+    fn view(&self) -> *mut StrView {
+        let word = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        if word as usize & MISS_COUNT_TAG != 0 {
+            std::ptr::null_mut()
+        } else {
+            word
+        }
+    }
+
+    /// The view, made empty on first use, with the misses counted before
+    /// it was made.
     ///
     /// # Safety
     ///
@@ -2225,14 +2242,51 @@ impl StrViewCache {
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_or_create(&self) -> &mut StrView {
         use std::sync::atomic::Ordering;
-        let mut view = self.0.load(Ordering::Relaxed);
+        let mut view = self.view();
         if view.is_null() {
-            view = Box::into_raw(Box::default());
+            let word = self.0.load(Ordering::Relaxed) as usize;
+            view = Box::into_raw(Box::new(StrView {
+                misses: word >> 1,
+                ..StrView::default()
+            }));
             self.0.store(view, Ordering::Relaxed);
         }
         // SAFETY: the box is this cache's, and the caller holds the only
         // reference.
         unsafe { &mut *view }
+    }
+
+    /// Counts one more miss of the `str` view and returns the count, in
+    /// the view when there is one and otherwise in the cache's own word.
+    ///
+    /// # Safety
+    ///
+    /// As for [`Self::get_or_create`].
+    pub unsafe fn note_miss(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        let view = self.view();
+        if !view.is_null() {
+            // SAFETY: the caller's contract.
+            let view = unsafe { &mut *view };
+            view.misses += 1;
+            return view.misses;
+        }
+        let misses = (self.0.load(Ordering::Relaxed) as usize >> 1).saturating_add(1);
+        match misses.checked_mul(2) {
+            Some(word) => {
+                self.0.store(
+                    std::ptr::without_provenance_mut(word | MISS_COUNT_TAG),
+                    Ordering::Relaxed,
+                );
+                misses
+            }
+            None => {
+                // SAFETY: the caller's contract.
+                let view = unsafe { self.get_or_create() };
+                view.misses = view.misses.saturating_add(1);
+                view.misses
+            }
+        }
     }
 }
 
@@ -2244,7 +2298,7 @@ impl Clone for StrViewCache {
 
 impl Drop for StrViewCache {
     fn drop(&mut self) {
-        let view = *self.0.get_mut();
+        let view = self.view();
         if !view.is_null() {
             // SAFETY: `get_or_create` leaked this box for the cache.
             drop(unsafe { Box::from_raw(view) });
