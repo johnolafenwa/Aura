@@ -7975,6 +7975,59 @@ pub extern "C-unwind" fn aura_direct_format_append_str(
     })
 }
 
+/// `text = text + other` on a `str` local, where the caller owns `text`'s
+/// box and passes the words of `other`, which is not `text`: the only
+/// reference to a confined box comes back with `other` appended in place,
+/// as `text += other` does, and any other box goes for a copy. A result
+/// over the string limit stops the program at `line` and `column`, as the
+/// `+` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_str_append_words(
+    text: *mut OpaqueValue,
+    ptr: *const u8,
+    len: usize,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let other = literal_str(ptr, len);
+        // SAFETY: the caller owns a reference to the live box `text`.
+        let (current, inside) = unsafe {
+            with_value(text, |value| match value {
+                Value::String(current) => {
+                    let bytes = current.as_str().as_bytes().as_ptr_range();
+                    (current.len(), bytes.contains(&ptr) && len != 0)
+                }
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            })
+        };
+        if current.saturating_add(len) > crate::runtime_value::MAX_STRING_BYTES {
+            // SAFETY: as above.
+            let error = unsafe {
+                with_value(text, |value| match value {
+                    Value::String(current) => concat_text_checked(current.clone(), other)
+                        .expect_err("a text over the limit does not concatenate"),
+                    _ => unreachable!("checked above"),
+                })
+            };
+            runtime_diagnostic_error_at(error, runtime_span(line, column));
+        }
+        // SAFETY: the caller's contract.
+        let builder = unsafe { format_append_builder(text) };
+        if inside {
+            // Bytes of the text itself move when it grows: copy them first.
+            let other = other.to_owned();
+            push_format_text(builder, &other);
+        } else {
+            push_format_text(builder, other);
+        }
+        builder
+    })
+}
+
 /// The text of a literal part, with whether it is ASCII, from one scan
 /// for an ASCII part.
 #[inline]

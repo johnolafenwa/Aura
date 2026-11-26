@@ -1,0 +1,55 @@
+# `x = x + y` on a `str` local appends `y` to `x`'s box in place when
+# nothing else shares it: a literal, another local, a loaned element, a
+# parameter, non-ASCII text and empty text. A copy of an element leaves
+# the element as it was, and `x = x + x` or a field on the right join as
+# before.
+
+class Label:
+    name: str
+
+def grow(start: str, extra: str, times: int64) -> str:
+    mut text = start.clone()
+    for _ in range(times):
+        text = text + extra
+    return text
+
+def main():
+    mut word = "go".to_upper()
+    for index in range(5):
+        if index % 2 == 0:
+            word = word + "\n"
+        else:
+            word = word + " "
+    print(word.replace("\n", "|").replace(" ", "_"))
+    other = "-end".to_upper()
+    word = word + other
+    print(word.byte_len())
+    words = ["alpha", "beta", "gamma"]
+    mut joined = ""
+    for index in range(words.len()):
+        view item = words[index]
+        joined = joined + item
+        joined = joined + ","
+    print(joined)
+    print(grow("x", "yz", 4))
+    print(grow("", "", 3).byte_len())
+    mut accent = "é"
+    accent = accent + "ü"
+    accent = accent + ""
+    print(f"{accent} {accent.byte_len()} {accent.len()}")
+    pool = ["shared".to_lower()]
+    mut first = pool[0].clone()
+    first = first + "!"
+    print(first)
+    print(pool)
+    mut twice = "ab".to_upper()
+    twice = twice + twice
+    print(twice)
+    label = Label(name="tag")
+    mut named = "<".to_lower()
+    named = named + label.name
+    print(named)
+    mut long = "0123456789".repeat(3)
+    for _ in range(3):
+        long = long + long.to_lower()
+    print(long.byte_len())

@@ -15556,6 +15556,58 @@ fn str_append_root_needs_the_ownership_pass_form() {
 }
 
 #[test]
+fn str_append_root_takes_a_plus_on_the_root() {
+    let plus = |left: Operand, right: Operand| {
+        vec![
+            Instruction::Assign {
+                target: "%t1".to_string(),
+                value: Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left,
+                    right,
+                    span: Span::new(1, 1),
+                    trap: crate::mir::ArithmeticTrap::Runtime,
+                },
+            },
+            Instruction::Release {
+                place: "text".to_string(),
+            },
+            Instruction::Assign {
+                target: "text".to_string(),
+                value: Rvalue::Use(Operand::MovePlace("%t1".to_string())),
+            },
+        ]
+    };
+    let place = |name: &str| Operand::Place(name.to_string());
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), Operand::String("!".to_string()))),
+        Some("text")
+    );
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), place("other"))),
+        Some("text")
+    );
+    // `text + text` reads the root, and `other + text` adds to another.
+    assert_eq!(
+        super::str_append_root(&plus(place("text"), place("text"))),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&plus(place("other"), place("text"))),
+        None
+    );
+    let mut minus = plus(place("text"), place("other"));
+    if let Instruction::Assign {
+        value: Rvalue::Binary { op, .. },
+        ..
+    } = &mut minus[0]
+    {
+        *op = BinaryOp::Sub;
+    }
+    assert_eq!(super::str_append_root(&minus), None);
+}
+
+#[test]
 fn owned_replace_receiver_needs_a_released_temporary_and_literals() {
     let source = "def swap(text: str) -> str:\n    return text.replace(\"a\", \"b\").replace(\"c\", \"d\")\n\n\ndef main():\n    print(swap(\"ac\"))\n";
     let mir = lower_source_to_mir(source).expect("the replace chain should lower");

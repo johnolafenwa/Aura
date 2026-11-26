@@ -11155,10 +11155,8 @@ impl<'a> FunctionCompiler<'a> {
         let Some(root) = self.str_append_root.clone() else {
             return Ok(None);
         };
-        let Rvalue::FormatString { parts } = value else {
-            return Ok(None);
-        };
-        if !self.tracked_roots.contains(&root)
+        if !matches!(value, Rvalue::FormatString { .. } | Rvalue::Binary { .. })
+            || !self.tracked_roots.contains(&root)
             || self.loan_locals.contains(&root)
             || self.lent_places.contains(&root)
             || self.lent_elements.contains_key(&root)
@@ -11169,6 +11167,13 @@ impl<'a> FunctionCompiler<'a> {
         {
             return Ok(None);
         }
+        let parts = match value {
+            Rvalue::FormatString { parts } => parts,
+            Rvalue::Binary { right, span, .. } if self.is_str_part(right) => {
+                return self.compile_str_plus_append(&root, right, *span).map(Some);
+            }
+            _ => return Ok(None),
+        };
         let text = self.take_place(&root)?;
         let text = self.transfer_owned_opaque_value(&text);
         // A leading literal part, as in `text += "..."`, appends in the call
@@ -11191,6 +11196,37 @@ impl<'a> FunctionCompiler<'a> {
         let builder = self.owned_opaque_result(call.results, Type::named("str"));
         self.push_format_parts(builder.values[0], rest)?;
         Ok(Some(builder))
+    }
+
+    /// `root = root + right` on a `str` local the function owns outright:
+    /// `right`'s words append to `root`'s box in place when nothing else
+    /// shares it. A result over the limit stops the program at `span`, as
+    /// the `+` does.
+    fn compile_str_plus_append(
+        &mut self,
+        root: &str,
+        right: &Operand,
+        span: Span,
+    ) -> std::result::Result<ValueRef, String> {
+        let (ptr, len) = match right {
+            Operand::String(text) => self.string_constant(text.as_bytes())?,
+            _ => match self.str_slot_words(right) {
+                Some(words) => words,
+                None => {
+                    let value = self.load_operand(right)?;
+                    let value = self.ensure_opaque(value)?;
+                    self.str_box_words(value.values[0])
+                }
+            },
+        };
+        let text = self.take_place(root)?;
+        let text = self.transfer_owned_opaque_value(&text);
+        let (line, column) = self.span_values(Some(span));
+        let results = self.runtime_call_results(
+            self.runtime[RuntimeFn::StrAppendWords],
+            &[text, ptr, len, line, column],
+        );
+        Ok(self.owned_opaque_result(results, Type::named("str")))
     }
 
     /// Appends each of `parts` to the f-string builder `handle`.
@@ -23443,11 +23479,12 @@ fn validate_rvalue(
 
 /// The root `x` of `instructions` that start `t = f"{x}..."; Release(x);
 /// x = move t`, the form the ownership pass gives `x += ...` on a `str`
-/// local, when no later part of the f-string reads `x`.
+/// local, or `t = x + y; Release(x); x = move t`, the form of
+/// `x = x + y`, when no later part of the f-string, or `y`, reads `x`.
 fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
     let [Instruction::Assign {
         target: temporary,
-        value: Rvalue::FormatString { parts },
+        value,
     }, Instruction::Release { place: released }, Instruction::Assign {
         target: root,
         value: Rvalue::Use(Operand::MovePlace(moved)),
@@ -23455,8 +23492,23 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
     else {
         return None;
     };
-    let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
-        return None;
+    let (first, rest): (&String, Vec<&Operand>) = match value {
+        Rvalue::FormatString { parts } => {
+            let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
+                return None;
+            };
+            (
+                first,
+                rest.iter().filter_map(MirFormatPart::operand).collect(),
+            )
+        }
+        Rvalue::Binary {
+            op: BinaryOp::Add,
+            left: Operand::Place(first),
+            right,
+            ..
+        } => (first, vec![right]),
+        _ => return None,
     };
     let reads_root = |operand: &Operand| {
         matches!(operand, Operand::Place(place) | Operand::MovePlace(place)
@@ -23466,10 +23518,7 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
         && released == root
         && moved == temporary
         && !root.contains('.')
-        && !rest
-            .iter()
-            .filter_map(MirFormatPart::operand)
-            .any(reads_root))
+        && !rest.into_iter().any(reads_root))
     .then_some(root.as_str())
 }
 
