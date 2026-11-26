@@ -1038,3 +1038,46 @@ fn freestanding_dependency_trap_path_omits_host_filesystem_prefix() {
         "freestanding .rodata should contain package-relative dependency path `helper_dep/src/lib.au`"
     );
 }
+
+#[test]
+fn a_trap_names_a_package_file_relative_to_its_package_root() {
+    let workspace =
+        std::env::temp_dir().join(format!("aura-freestanding-pkg-{}", std::process::id()));
+    let app = workspace.join("app");
+    let dependency = workspace.join("deps").join("uartpkg");
+    for directory in [app.join("src"), app.join("support"), dependency.join("src")] {
+        std::fs::create_dir_all(&directory).expect("the directory should be made");
+    }
+    std::fs::write(app.join("Aura.toml"), "").expect("the manifest should be written");
+    std::fs::write(dependency.join("Aura.toml"), "").expect("the manifest should be written");
+    let program = app.join("src").join("main.au");
+    let sibling = app.join("support").join("io.au");
+    let library = dependency.join("src").join("lib.au");
+    for file in [&program, &sibling, &library] {
+        std::fs::write(file, "").expect("the file should be written");
+    }
+    let program = program.to_string_lossy().into_owned();
+    let library = library.to_string_lossy().into_owned();
+
+    // A file of the program's own package, outside the program's directory,
+    // is named relative to the package root.
+    assert_eq!(
+        freestanding::trap_path(&sibling.to_string_lossy(), &program, Some("support.io")),
+        "support/io.au"
+    );
+    // A dependency is named by its package, from the module name when there
+    // is one and from its root directory otherwise.
+    assert_eq!(
+        freestanding::trap_path(&library, &program, Some("uart.lib")),
+        "uart/src/lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&library, &program, None),
+        "uartpkg/src/lib.au"
+    );
+    assert_eq!(
+        freestanding::trap_path(&library, &program, Some("<prelude>")),
+        "uartpkg/src/lib.au"
+    );
+    std::fs::remove_dir_all(&workspace).expect("the directory should be removed");
+}

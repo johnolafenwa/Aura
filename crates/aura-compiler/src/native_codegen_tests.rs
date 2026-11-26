@@ -18814,3 +18814,34 @@ def main() -> None:
         }
     }
 }
+
+#[test]
+fn direct_ffi_codegen_reinterprets_a_large_struct_through_a_zeroed_slot() {
+    // Both layouts are wider than the slot size the stores are unrolled
+    // for, so the slot is zeroed by a loop.
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Big:
+    data: array[uint64, 40]
+
+extern "C" class Other:
+    words: array[uint32, 82]
+
+extern "C" def widen(big: Big) -> Other symbol "aura.reinterpret"
+extern "C" def narrow(other: Other) -> Big symbol "aura.reinterpret"
+
+def run(big: Big) -> uint64:
+    other = widen(big)
+    print(other.words[81])
+    return narrow(other).data[39]
+
+def main() -> int32:
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a large reinterpret should emit");
+    let referenced = object_referenced_symbols(&object);
+    assert!(!referenced
+        .iter()
+        .any(|name| name.trim_start_matches('_') == crate::ffi::REINTERPRET_SYMBOL));
+}
