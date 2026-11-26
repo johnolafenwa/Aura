@@ -328,3 +328,49 @@ fn a_finished_generator_returns_its_stack_to_the_task_stack_pool() {
     super::without_generator_drop_close(|| drop(generator));
     assert_eq!(pooled(), 1);
 }
+
+#[test]
+fn a_weak_handle_upgrades_only_while_a_strong_handle_remains() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let generator = counting(3, log.clone());
+    let weak = generator.downgrade();
+    let upgraded = weak.clone().upgrade().expect("the generator is alive");
+    assert_eq!(upgraded, generator);
+    assert!(upgraded
+        .resume()
+        .expect("resume through the upgraded handle"));
+    assert_eq!(generator.take_item().expect("shared state"), int(0));
+    drop(upgraded);
+    drop(generator);
+    assert!(
+        weak.upgrade().is_none(),
+        "a weak handle keeps nothing alive"
+    );
+    assert_eq!(*log.borrow(), ["start", "closed"]);
+}
+
+#[test]
+fn dropping_a_suspended_generator_whose_close_fails_does_not_unwind() {
+    let closes = Rc::new(RefCell::new(0));
+    let seen = closes.clone();
+    let generator = GeneratorValue::new(
+        move || {
+            while !generator_yield(int(1))? {
+                *seen.borrow_mut() += 1;
+            }
+            Ok(())
+        },
+        DIRECT_GENERATOR_STACK_BYTES,
+        true,
+        None,
+    );
+    assert!(generator.resume().expect("resume"));
+    // Outside any runtime boundary the close failure has nowhere to go and
+    // is dropped instead of escaping `Drop`.
+    drop(generator);
+    assert_eq!(
+        *closes.borrow(),
+        1,
+        "the drop ran the body's close path once"
+    );
+}

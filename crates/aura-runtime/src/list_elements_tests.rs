@@ -1153,3 +1153,15 @@ fn scalar_forms_lend_their_elements_as_a_c_array() {
     );
     assert_eq!(text.len(), 1, "a list that cannot move keeps its elements");
 }
+
+#[test]
+fn a_bool_byte_keeps_its_raw_byte_until_sanitized() {
+    assert_eq!(BoolByte::from_bool(true).raw(), 1);
+    assert_eq!(BoolByte::from_bool(false).raw(), 0);
+    let mut foreign = BoolByte(7);
+    assert_eq!(foreign.raw(), 7, "a C write can leave any byte");
+    assert!(foreign.as_bool());
+    assert_eq!(foreign.sanitize(), Some(7));
+    assert_eq!(foreign.raw(), 1);
+    assert_eq!(foreign.sanitize(), None);
+}
