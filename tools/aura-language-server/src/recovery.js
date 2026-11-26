@@ -72,6 +72,8 @@ function indentation(line) {
   return prefix.replace(/\t/g, "    ").length;
 }
 
+const MAX_SYMBOL_DEPTH = 64;
+
 function declarationForLine(line, lineNumber) {
   const declarationPatterns = [
     // At column zero, mut introduces script storage or a freestanding module cell.
@@ -111,14 +113,16 @@ function declarationForLine(line, lineNumber) {
       const [, declarationPrefix, name] = match;
       const startCharacter = declarationPrefix.length;
       return {
-        name,
-        kind,
-        detail,
-        line: lineNumber,
-        startCharacter,
-        endCharacter: startCharacter + name.length,
         indent: indentation(line),
-        children: []
+        symbol: {
+          name,
+          kind,
+          detail,
+          line: lineNumber,
+          startCharacter,
+          endCharacter: startCharacter + name.length,
+          children: []
+        }
       };
     }
   }
@@ -133,14 +137,16 @@ function declarationForLine(line, lineNumber) {
   const startCharacter = match[0].length - name.length;
   const kind = ({ def: "function", const: "constant" })[declaration] || declaration;
   return {
-    name,
-    kind,
-    detail: kind,
-    line: lineNumber,
-    startCharacter,
-    endCharacter: startCharacter + name.length,
     indent: indentation(line),
-    children: []
+    symbol: {
+      name,
+      kind,
+      detail: kind,
+      line: lineNumber,
+      startCharacter,
+      endCharacter: startCharacter + name.length,
+      children: []
+    }
   };
 }
 
@@ -150,13 +156,19 @@ function recoverSymbols(text) {
   const roots = [];
   const containers = [];
   for (const [lineNumber, line] of maskAssemblyTemplates(text).split(/\r?\n/).entries()) {
-    const symbol = declarationForLine(line, lineNumber);
-    if (!symbol || (symbol.kind === "variable" && !moduleStorage && !line.startsWith("public"))) {
+    const entry = declarationForLine(line, lineNumber);
+    if (
+      !entry ||
+      (entry.symbol.kind === "variable" && !moduleStorage && !line.startsWith("public"))
+    ) {
       continue;
     }
+    const { indent, symbol } = entry;
+    // Navigation reads the indent; the published symbol leaves it out.
+    Object.defineProperty(symbol, "indent", { value: indent, enumerable: false });
     while (
       containers.length > 0 &&
-      symbol.indent <= containers[containers.length - 1].indent
+      indent <= containers[containers.length - 1].indent
     ) {
       containers.pop();
     }
@@ -165,31 +177,22 @@ function recoverSymbols(text) {
       if (symbol.kind === "function") {
         symbol.kind = "method";
       }
-      parent.children.push(symbol);
+      parent.symbol.children.push(symbol);
     } else {
       roots.push(symbol);
     }
-    if (["class", "enum", "trait"].includes(symbol.kind)) {
-      containers.push(symbol);
+    if (
+      ["class", "enum", "trait"].includes(symbol.kind) &&
+      containers.length < MAX_SYMBOL_DEPTH
+    ) {
+      containers.push({ indent, symbol });
     }
   }
   return roots;
 }
 
-function publicSymbol(symbol) {
-  return {
-    name: symbol.name,
-    kind: symbol.kind,
-    detail: symbol.detail,
-    line: symbol.line,
-    startCharacter: symbol.startCharacter,
-    endCharacter: symbol.endCharacter,
-    children: symbol.children.map(publicSymbol)
-  };
-}
-
 function documentSymbols(text) {
-  return recoverSymbols(text).map(publicSymbol);
+  return recoverSymbols(text);
 }
 
 function analyzeDocument(text) {
@@ -205,8 +208,16 @@ function diagnosticsForDocument(_text) {
 
 function flattenSymbols(symbols) {
   const flattened = [];
-  for (const symbol of symbols) {
-    flattened.push(symbol, ...flattenSymbols(symbol.children));
+  const stack = [];
+  for (let index = symbols.length - 1; index >= 0; index -= 1) {
+    stack.push(symbols[index]);
+  }
+  while (stack.length > 0) {
+    const symbol = stack.pop();
+    flattened.push(symbol);
+    for (let index = symbol.children.length - 1; index >= 0; index -= 1) {
+      stack.push(symbol.children[index]);
+    }
   }
   return flattened;
 }

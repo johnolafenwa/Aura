@@ -31,8 +31,12 @@ pub enum UnionAlignment {
     Lift(usize),
 }
 
+fn is_erased_trait_object(ty: &Type) -> bool {
+    matches!(ty, Type::TypeParam(name) if name.starts_with("dyn "))
+}
+
 fn is_type_param(ty: &Type) -> bool {
-    matches!(ty, Type::TypeParam(_))
+    matches!(ty, Type::TypeParam(name) if !name.starts_with("dyn "))
 }
 
 /// Backend-independent runtime type of a value, used to identify payloads
@@ -176,7 +180,7 @@ pub fn active_member_type(union: &UnionValue) -> Option<&Type> {
 pub fn member_identity(value: &Value) -> Option<Type> {
     match value {
         Value::Union(union) => match active_member_type(union)? {
-            Type::TypeParam(_) => runtime_member_type(&union.payload),
+            member if is_type_param(member) => runtime_member_type(&union.payload),
             member => Some(member.clone()),
         },
         other => runtime_member_type(other),
@@ -242,9 +246,36 @@ pub fn plan_union_alignment(
             "{operation} cannot identify the active union member"
         ));
     };
-    let index = concrete_member_index(target, &active)
-        .or_else(|| target.members.iter().position(is_type_param))
-        .ok_or_else(|| format!("{operation} type identity mismatch"))?;
+    let payload_is_trait_object = match value {
+        Value::TraitObject(_) => true,
+        Value::Union(union) => matches!(union.payload, Value::TraitObject(_)),
+        _ => false,
+    };
+    let index = if payload_is_trait_object && !is_erased_trait_object(&active) {
+        // An untagged trait-object payload behind a type parameter must never
+        // downcast to a concrete member; it aligns only to a wildcard type
+        // parameter or a single unambiguous erased trait-object member.
+        target
+            .members
+            .iter()
+            .position(is_type_param)
+            .or_else(|| {
+                let mut traits = target
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, member)| is_erased_trait_object(member).then_some(i));
+                match (traits.next(), traits.next()) {
+                    (Some(single), None) => Some(single),
+                    _ => None,
+                }
+            })
+            .ok_or_else(|| format!("{operation} type identity mismatch"))?
+    } else {
+        concrete_member_index(target, &active)
+            .or_else(|| target.members.iter().position(is_type_param))
+            .ok_or_else(|| format!("{operation} type identity mismatch"))?
+    };
     Ok(match value {
         Value::Union(_) => UnionAlignment::Retag(index),
         _ => UnionAlignment::Lift(index),
@@ -395,7 +426,7 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
             if matches!(&value, Value::Union(union) if *union.union_type == *expected) {
                 return value;
             }
-            let admissible = matches!(&value, Value::Union(_))
+            let admissible = matches!(&value, Value::Union(_) | Value::TraitObject(_))
                 || member_identity(&value)
                     .is_some_and(|active| concrete_member_index(target, &active).is_some());
             if admissible && align_union_value(&mut value, target, "union boundary").is_ok() {
@@ -403,7 +434,7 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
             }
             value
         }
-        Type::TypeParam(_) => value,
+        ty if is_type_param(ty) => value,
         Type::Named(name, _) if name == "Unknown" => value,
         other => match value {
             Value::Union(union) => {
@@ -416,8 +447,16 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
                     {
                         concrete_member_index(own, other) == Some(union.member_index)
                     }
-                    _ => member_identity(&Value::Union(union.clone()))
-                        .is_some_and(|active| member_matches(&active, other)),
+                    _ => {
+                        if matches!(union.payload, Value::TraitObject(_))
+                            && !is_erased_trait_object(other)
+                        {
+                            false
+                        } else {
+                            member_identity(&Value::Union(union.clone()))
+                                .is_some_and(|active| member_matches(&active, other))
+                        }
+                    }
                 };
                 if unwrap {
                     union.payload

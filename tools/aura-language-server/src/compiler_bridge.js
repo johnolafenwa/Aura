@@ -179,10 +179,13 @@ class CompilerService {
       });
       return;
     }
-    this.child = spawn(command.cmd, [...command.args, "lsp"], {
+    this.child = spawn(command.cmd, [...command.args, "lsp", "--offline"], {
       cwd: command.cwd,
-      env: { AURA_OFFLINE: "1", ...process.env },
+      env: { ...process.env, AURA_OFFLINE: "1" },
       stdio: ["pipe", "pipe", "pipe"]
+    });
+    this.child.stdin.on("error", (error) => {
+      this.fail(error, true);
     });
     this.child.stdout.setEncoding("utf8");
     this.child.stderr.setEncoding("utf8");
@@ -261,6 +264,10 @@ class CompilerService {
           response = JSON.parse(line);
         } catch (error) {
           this.fail(new Error(`invalid Aura compiler response: ${error.message}`), true);
+          return;
+        }
+        if (!response || typeof response !== "object" || Array.isArray(response)) {
+          this.fail(new Error("invalid Aura compiler response: expected JSON object"), true);
           return;
         }
         if (
@@ -642,33 +649,45 @@ function isRunnableCompilerCommand(command) {
 
 function resolveCompilerCommand() {
   const envPath = process.env.AURA_LSP_AURA_PATH && expandHome(process.env.AURA_LSP_AURA_PATH);
-  if (envPath && fs.existsSync(envPath)) {
+  if (envPath && isFile(envPath)) {
     return { cmd: envPath, args: [], cwd: undefined };
   }
 
   // A workspace is untrusted input: running its `target/` binaries or
   // `cargo run` would execute code from any folder the editor opens. Only
-  // contributors who ask for it get the checkout's own compiler.
-  if (process.env.AURA_LSP_USE_WORKSPACE_COMPILER !== "1") {
+  // contributors who ask for it get the checkout's own compiler, optionally
+  // restricted to a single checkout path.
+  const workspaceCompilerSetting = process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+  let candidateRoots = [];
+  if (workspaceCompilerSetting === "1") {
+    candidateRoots = workspaceRoots;
+  } else if (workspaceCompilerSetting) {
+    const expandedRoot = expandHome(workspaceCompilerSetting);
+    if (path.isAbsolute(expandedRoot)) {
+      const allowedRoot = path.resolve(expandedRoot);
+      candidateRoots = workspaceRoots.filter((root) => path.resolve(root) === allowedRoot);
+    }
+  }
+  if (candidateRoots.length === 0) {
     return defaultCompilerCommand();
   }
 
-  for (const root of workspaceRoots) {
+  for (const root of candidateRoots) {
     const debugBinary = path.join(root, "target", "debug", binaryName());
-    if (fs.existsSync(debugBinary)) {
+    if (isFile(debugBinary)) {
       return { cmd: debugBinary, args: [], cwd: root };
     }
 
     const releaseBinary = path.join(root, "target", "release", binaryName());
-    if (fs.existsSync(releaseBinary)) {
+    if (isFile(releaseBinary)) {
       return { cmd: releaseBinary, args: [], cwd: root };
     }
   }
 
-  for (const root of workspaceRoots) {
+  for (const root of candidateRoots) {
     if (
-      fs.existsSync(path.join(root, "Cargo.toml")) &&
-      fs.existsSync(path.join(root, "crates", "aura", "Cargo.toml"))
+      isFile(path.join(root, "Cargo.toml")) &&
+      isFile(path.join(root, "crates", "aura", "Cargo.toml"))
     ) {
       return { cmd: "cargo", args: ["run", "-q", "-p", "aura", "--"], cwd: root };
     }

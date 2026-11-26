@@ -348,6 +348,29 @@ fn a_struct_array_crosses_element_by_element() {
 }
 
 #[test]
+fn pack_elements_rejects_overflowing_layout() {
+    let overflowing = layout(
+        "Huge",
+        false,
+        vec![("data", array(scalar(U64), usize::MAX / 4))],
+    );
+    let value = list("Huge", vec![instance("Huge", vec![])]);
+    let error = pack_elements(&value, &overflowing).expect_err("overflowing layout must fail");
+    assert_eq!(error.code(), "AU4005");
+    assert!(error.to_string().contains("overflows"), "{error}");
+
+    // Each element fits, but the whole array would pass `isize::MAX` bytes.
+    let large = layout("Large", false, vec![("data", array(scalar(U8), 1 << 60))]);
+    let value = list("Large", (0..8).map(|_| instance("Large", vec![])).collect());
+    let error = pack_elements(&value, &large).expect_err("an oversized array must fail");
+    assert_eq!(error.code(), "AU4005");
+    assert_eq!(
+        error.to_string(),
+        "C layout `Large` byte size overflows addressable memory"
+    );
+}
+
+#[test]
 fn bit_field_pack_checks_width_and_keeps_the_other_bits() {
     let mut record = layout(
         "Tiny",

@@ -688,7 +688,7 @@ impl Exec<'_> {
         self.captured.contains(root)
             || loan_roots(&self.function.blocks)
                 .values()
-                .any(|viewed| viewed == root)
+                .any(|viewed| viewed.contains(root))
     }
 
     /// How many times a path from the loop's header runs what `weight`

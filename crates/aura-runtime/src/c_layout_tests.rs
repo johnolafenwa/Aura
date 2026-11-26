@@ -484,6 +484,80 @@ fn arrays_and_unions_are_classified_by_every_scalar_that_overlaps() {
 }
 
 #[test]
+fn overflowing_c_struct_layout_does_not_panic_in_passing() {
+    let overflowing = of_kinds(
+        "Overflowing",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U64), usize::MAX / 4)],
+    );
+    assert_eq!(overflowing.checked_size(), None);
+    assert!(overflowing.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(overflowing.passing(abi), CPassing::Memory);
+    }
+
+    // Large nested arrays must classify as CPassing::Memory in O(1) space
+    // without expanding leaves().
+    let four_gib = of_kinds(
+        "FourGiB",
+        false,
+        vec![array(
+            array(CFieldKind::Scalar(FfiScalar::U8), 65536),
+            65536,
+        )],
+    );
+    assert_eq!(four_gib.checked_size(), Some(4 * 1024 * 1024 * 1024));
+    assert_eq!(four_gib.checked_leaf_count(), Some(4 * 1024 * 1024 * 1024));
+    assert!(four_gib.validate_bounds().is_err());
+    for abi in [CAbi::SysV64, CAbi::Aapcs64, CAbi::Win64] {
+        assert_eq!(four_gib.passing(abi), CPassing::Memory);
+    }
+
+    let valid = of_kinds(
+        "Small",
+        false,
+        vec![array(CFieldKind::Scalar(FfiScalar::U32), 16)],
+    );
+    assert_eq!(valid.checked_size(), Some(64));
+    assert_eq!(valid.checked_leaf_count(), Some(16));
+    assert!(valid.validate_bounds().is_ok());
+}
+
+#[test]
+fn validate_bounds_counts_overlapping_union_leaves() {
+    // The members of a union overlap in bytes but each counts its scalars.
+    let half = MAX_C_STRUCT_LEAVES / 2;
+    let fits = of_kinds(
+        "Fits",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half),
+        ],
+    );
+    assert_eq!(fits.checked_size(), Some(half));
+    assert_eq!(fits.checked_leaf_count(), Some(MAX_C_STRUCT_LEAVES));
+    assert!(fits.validate_bounds().is_ok());
+
+    let too_many = of_kinds(
+        "TooMany",
+        true,
+        vec![
+            array(CFieldKind::Scalar(U8), half),
+            array(CFieldKind::Scalar(U8), half + 1),
+        ],
+    );
+    assert_eq!(too_many.checked_size(), Some(half + 1));
+    assert_eq!(
+        too_many.validate_bounds(),
+        Err(format!(
+            "C layout `TooMany` has {} scalar elements, which exceeds the maximum of {MAX_C_STRUCT_LEAVES}",
+            MAX_C_STRUCT_LEAVES + 1
+        ))
+    );
+}
+
+#[test]
 fn bit_field_storage_and_calling_classes_follow_the_record_abi() {
     let mut s = scalars("Bits", &[U8, U16, U32, U8]);
     s.layout_controls

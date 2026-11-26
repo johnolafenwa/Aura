@@ -487,7 +487,7 @@ fn float16_lanes_and_long_reductions_add_in_float32() {
             let waiting = made();
             assert!(!node(&waiting).is_ready(), "{name} waits");
             let (plan, storage) = Plan::collect(node(&waiting));
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             assert!(program.source.contains("struct aura_h"), "{name}");
             if let Some(generated) = generated_kernels::run(&plan, &storage, 5200 + tag) {
                 close_halves(name, &generated, &eager);
@@ -499,7 +499,10 @@ fn float16_lanes_and_long_reductions_add_in_float32() {
     deferred(|| {
         let l = leaves(cpu);
         let (plan, _) = Plan::collect(node(&binary(&l.a, &l.b, 0).unwrap()));
-        assert!(!tensor_codegen::generate(&plan).source.contains("aura_h"));
+        assert!(!tensor_codegen::generate(&plan)
+            .unwrap()
+            .source
+            .contains("aura_h"));
     });
 }
 
@@ -599,7 +602,7 @@ fn products_read_the_heads_of_an_attention_in_place() {
         deferred(|| {
             let result = attention(cpu, narrow);
             let (plan, storage) = Plan::collect_all(&[node(&result)]);
-            let program = tensor_codegen::generate(&plan);
+            let program = tensor_codegen::generate(&plan).unwrap();
             // The kernels are the three that add a bias and the one of
             // the scores, and for `float16` the three that convert the
             // leaves. None writes the heads apart.
@@ -674,6 +677,7 @@ fn products_read_the_heads_of_an_attention_in_place() {
             let nodes: Vec<&TensorValue> = roots.iter().map(|root| node(root)).collect();
             let (plan, _) = Plan::collect_all(&nodes);
             tensor_codegen::generate(&plan)
+                .unwrap()
                 .actions
                 .iter()
                 .find_map(|action| match action {
@@ -698,7 +702,7 @@ fn products_read_the_heads_of_an_attention_in_place() {
         let leaf = permute(&reshape(&rows, &[2, 8, 3, 4]).unwrap(), &[0, 2, 1, 3]).unwrap();
         let product = matmul(&leaf, &permute(&leaf, &[0, 1, 3, 2]).unwrap()).unwrap();
         let (plan, storage) = Plan::collect(node(&product));
-        let program = tensor_codegen::generate(&plan);
+        let program = tensor_codegen::generate(&plan).unwrap();
         assert!(
             !program
                 .actions
@@ -744,7 +748,7 @@ fn an_early_start_writes_the_rows_a_product_reads_heads_from() {
         assert!(!node(&scores).is_ready());
         let (plan, _) = Plan::collect(node(&scores));
         assert!(matches!(
-            tensor_codegen::generate(&plan).actions[..],
+            tensor_codegen::generate(&plan).unwrap().actions[..],
             [tensor_codegen::Action::Matmul {
                 wide: (Some(12), Some(12)),
                 ..

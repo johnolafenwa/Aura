@@ -24,6 +24,7 @@ pub(super) fn lower_export(
         })
         .collect();
     let call = MirExternCall {
+        module_name: lowerer.module_name.to_string(),
         name: function.name.clone(),
         symbol: attrs.link_name.as_ref().unwrap_or(&function.name).clone(),
         abi: "C".into(),

@@ -249,6 +249,48 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("AURA_STRESS_RUNS=10 scripts/stress-scheduler.sh", workflow)
         self.assertNotIn("AURA_STRESS_RUNS=50 scripts/stress-scheduler.sh", workflow)
 
+    def test_all_lockfiles_are_audited_and_ci_builds_stay_locked(self) -> None:
+        package_manifest = json.loads((ROOT / "package.json").read_text())
+        check_audit = package_manifest["scripts"]["check:audit"]
+        for lockfile in (
+            "Cargo.lock",
+            "fuzz/Cargo.lock",
+            "benchmarks/rust_baselines/Cargo.lock",
+            "benchmarks/numbers/Cargo.lock",
+            "benchmarks/image_codec/rust/Cargo.lock",
+        ):
+            self.assertIn(f"-f {lockfile}", check_audit)
+
+        fuzz_lock = (ROOT / "fuzz/Cargo.lock").read_text()
+        self.assertNotIn('name = "url"\nversion = "2.5.8"', fuzz_lock)
+
+        docs_workflow = (ROOT / ".github/workflows/docs.yml").read_text()
+        self.assertIn("cargo build --locked -p aura", docs_workflow)
+        safety_workflow = (ROOT / ".github/workflows/safety.yml").read_text()
+        self.assertIn("cargo bench --locked -p aura-compiler", safety_workflow)
+
+    def test_npm_overrides_use_canonical_packages(self) -> None:
+        package_manifest = json.loads((ROOT / "package.json").read_text())
+        for name, spec in package_manifest.get("overrides", {}).items():
+            self.assertFalse(
+                str(spec).startswith("npm:"),
+                f"override for {name} uses non-canonical alias {spec!r}",
+            )
+        lockfile = json.loads((ROOT / "package-lock.json").read_text())
+        picomatch = lockfile["packages"].get("node_modules/picomatch", {})
+        self.assertNotIn("name", picomatch)
+
+    def test_install_docs_enforce_https_tls12(self) -> None:
+        for path in sorted((ROOT / "docs/install").glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                if "curl " in line and "https://" in line:
+                    self.assertIn(
+                        "--proto '=https' --tlsv1.2",
+                        line,
+                        f"{path.relative_to(ROOT)} missing TLS 1.2 flags: {line}",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

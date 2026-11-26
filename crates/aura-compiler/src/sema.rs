@@ -667,7 +667,8 @@ pub(crate) fn ffi_struct_elements_layout(
 }
 
 /// Checks that every field of the `extern "C" class` `class` has a type C
-/// can lay out: a fixed-width scalar or another `extern "C" class`.
+/// can lay out: a fixed-width scalar or another `extern "C" class`, and that
+/// the total byte size and leaf count stay within Aura's C layout bounds.
 pub(crate) fn validate_ffi_struct_fields(
     class: &ClassInfo,
     classes: &BTreeMap<String, ClassInfo>,
@@ -713,7 +714,137 @@ pub(crate) fn validate_ffi_struct_fields(
             "a C struct or union holds fixed-width scalars, `extern \"C\"` classes and unions, and `array[T, N]` fields of those; keep a pointer to anything else in a `uint64` or an opaque handle",
         ));
     }
+    if let Err(reason) = checked_ffi_class_metrics(class, classes, &mut BTreeSet::new()) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            class.decl.span,
+            format!("`extern \"C\"` {what} `{owner}` {reason}"),
+        )
+        .with_help(format!(
+            "a C struct or union layout may use at most {} bytes and {} scalar elements",
+            aura_runtime::c_layout::MAX_C_STRUCT_BYTES,
+            aura_runtime::c_layout::MAX_C_STRUCT_LEAVES
+        )));
+    }
     Ok(())
+}
+
+/// Computes `(size, align, leaf_count)` for an `extern "C"` class or union
+/// using checked arithmetic and cycle detection.
+fn checked_ffi_class_metrics(
+    class: &ClassInfo,
+    classes: &BTreeMap<String, ClassInfo>,
+    visiting: &mut BTreeSet<(String, String)>,
+) -> std::result::Result<(usize, usize, usize), String> {
+    use aura_runtime::c_layout::{MAX_C_STRUCT_BYTES, MAX_C_STRUCT_LEAVES};
+
+    let (holder, is_union) = match &class.decl.c_union {
+        Some(members) => {
+            let Some(holder) = classes.values().find(|other| {
+                other.decl.name == *members && other.module_name == class.module_name
+            }) else {
+                return Err("references missing union members".to_string());
+            };
+            (holder, true)
+        }
+        None => (
+            class,
+            crate::ast::c_union_of_members_class(&class.decl.name).is_some(),
+        ),
+    };
+    let key = (holder.module_name.clone(), holder.decl.name.clone());
+    if !visiting.insert(key.clone()) {
+        return Err("has a recursive C layout".to_string());
+    }
+
+    let mut end = 0usize;
+    let mut align = 1usize;
+    let mut leaves = 0usize;
+
+    let result = (|| -> std::result::Result<(usize, usize, usize), String> {
+        for field in &holder.decl.fields {
+            let info = &holder.fields[&field.name];
+            let lengths = holder
+                .decl
+                .c_arrays
+                .get(&field.name)
+                .map_or(&[][..], Vec::as_slice);
+            let mut element = &info.ty;
+            for _ in lengths {
+                if let Type::Named(_, args) = element {
+                    element = args.first().unwrap_or(element);
+                }
+            }
+            // An inline `fixed[T, N]` field holds its elements in place.
+            let mut lengths = lengths.to_vec();
+            while let Some((inner, length)) = element.as_fixed_array() {
+                lengths.push(length);
+                element = inner;
+            }
+            let (mut field_size, field_align, mut field_leaves) =
+                if let Some(scalar) = ffi_scalar(element) {
+                    (scalar.size(), scalar.size(), 1usize)
+                } else if let Some(inner) = ffi_struct(element, classes) {
+                    checked_ffi_class_metrics(inner, classes, visiting)?
+                } else {
+                    return Err(format!("field `{}` has no C layout", field.name));
+                };
+            for &length in &lengths {
+                field_size = field_size
+                    .checked_mul(length)
+                    .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                    .ok_or_else(|| {
+                        format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                    })?;
+                field_leaves = field_leaves
+                    .checked_mul(length)
+                    .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                    .ok_or_else(|| {
+                        format!(
+                            "exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}"
+                        )
+                    })?;
+            }
+            align = align.max(field_align);
+            leaves = leaves
+                .checked_add(field_leaves)
+                .filter(|count| *count <= MAX_C_STRUCT_LEAVES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout scalar count of {MAX_C_STRUCT_LEAVES}")
+                })?;
+            let offset = if is_union {
+                0
+            } else {
+                end.checked_next_multiple_of(field_align).ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?
+            };
+            let field_end = offset
+                .checked_add(field_size)
+                .filter(|size| *size <= MAX_C_STRUCT_BYTES)
+                .ok_or_else(|| {
+                    format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+                })?;
+            end = end.max(field_end);
+        }
+        // An `align(N)` record is at least that aligned.
+        align = align.max(holder.decl.layout_controls.alignment.unwrap_or(1));
+        let total_size = end
+            .checked_next_multiple_of(align)
+            .filter(|size| {
+                *size <= MAX_C_STRUCT_BYTES
+                    && size
+                        .checked_next_multiple_of(8)
+                        .is_some_and(|slot| i32::try_from(slot).is_ok())
+            })
+            .ok_or_else(|| {
+                format!("exceeds the maximum C layout size of {MAX_C_STRUCT_BYTES} bytes")
+            })?;
+        Ok((total_size, align, leaves))
+    })();
+
+    visiting.remove(&key);
+    result
 }
 
 /// The C symbol of the `drop` function an opaque class declares. The
@@ -745,6 +876,18 @@ pub(crate) fn ffi_drop_symbol(
         [param] if param.mode == ParamMode::Own
             && matches!(&param.ty.kind, crate::ast::TypeRefKind::Named { name, args } if *name == class.name && args.is_empty())
     );
+    if let crate::ast::TypeRefKind::Named { name: ret, args } = &function.return_type.kind {
+        if args.is_empty() && matches!(ret.as_str(), "float32" | "float64") {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                *span,
+                format!(
+                    "`drop` function `{name}` of opaque class `{}` cannot return a floating-point type `{ret}`; it must return an integer scalar, `bool`, or `None`",
+                    class.name
+                ),
+            ));
+        }
+    }
     let result_is_plain = matches!(
         &function.return_type.kind,
         crate::ast::TypeRefKind::Named { name, args }
@@ -756,6 +899,16 @@ pub(crate) fn ffi_drop_symbol(
             *span,
             format!(
                 "`drop` function `{name}` of opaque class `{0}` must take one `own {0}` parameter and return a scalar or nothing",
+                class.name
+            ),
+        ));
+    }
+    if !function.contracts.is_empty() {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            *span,
+            format!(
+                "`drop` function `{name}` of opaque class `{}` cannot declare `requires` or `ensures` contracts",
                 class.name
             ),
         ));
@@ -7128,6 +7281,16 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        )
+                        .with_help(
+                            "keep the loan closure in its matching inferred local and call it directly",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7140,6 +7303,13 @@ impl<'a> FunctionChecker<'a> {
                 for element in elements {
                     let actual =
                         self.type_expr_consuming_result(element, locals, element_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            element.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     element_ty.get_or_insert(actual);
                 }
                 Ok(Type::Named(
@@ -7164,9 +7334,23 @@ impl<'a> FunctionChecker<'a> {
                 for entry in entries {
                     let actual_key =
                         self.type_expr_consuming_result(&entry.key, locals, key_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_key) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.key.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     key_ty.get_or_insert(actual_key);
                     let actual_value =
                         self.type_expr_consuming_result(&entry.value, locals, value_ty.as_ref())?;
+                    if type_contains_loan_closure(&actual_value) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3010",
+                            entry.value.span,
+                            "a closure containing a live view cannot be stored in a collection",
+                        ));
+                    }
                     value_ty.get_or_insert(actual_value);
                 }
                 Ok(Type::Named(
@@ -8901,6 +9085,16 @@ impl<'a> FunctionChecker<'a> {
                             locals,
                             expected_elements.and_then(|types| types.get(index)),
                         )?;
+                        if type_contains_loan_closure(&ty) {
+                            return Err(Diagnostic::coded_at(
+                                "AU3010",
+                                element.span,
+                                "a closure containing a live view cannot be stored in an aggregate",
+                            )
+                            .with_help(
+                                "keep the loan closure in its matching inferred local and call it directly",
+                            ));
+                        }
                         self.consume_aggregate_literal_element(element, locals)?;
                         Ok(ty)
                     })
@@ -13727,7 +13921,14 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 if let Type::Module(module_path) = &receiver_ty {
-                    let namespace = self.module_namespace(module_path).ok_or_else(|| {
+                    let namespace = match &grouped_expr(object).kind {
+                        ExprKind::Name(binding) if binding.contains('#') => self
+                            .imported_modules
+                            .get(binding)
+                            .or_else(|| self.module_namespace(module_path)),
+                        _ => self.module_namespace(module_path),
+                    }
+                    .ok_or_else(|| {
                         Diagnostic::at(span, format!("unknown module namespace `{}`", module_path))
                     })?;
                     if namespace.path == "mem" && field == "address_of" {
@@ -17474,13 +17675,26 @@ impl<'a> FunctionChecker<'a> {
                             "function values have a concrete signature and do not take explicit type arguments",
                         ));
                     }
-                    return self.type_check_function_value_args(
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Function {
+                                params: params.clone(),
+                                return_type: return_type.clone(),
+                            },
+                            ReceiverKind::Borrow,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &params,
                         &return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
                 }
                 if let Ok(Type::Callable(callable)) =
@@ -17508,16 +17722,32 @@ impl<'a> FunctionChecker<'a> {
                                     "hold the owner in a `mut` local, or take it as a `mut` parameter",
                                 ));
                             }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
                         ClosureCallKind::Repeatable => {}
                     }
-                    return self.type_check_function_value_args(
+                    let passing = match callable.call_kind {
+                        ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                        ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                        ClosureCallKind::Consuming => ReceiverKind::Value,
+                    };
+                    let receiver = self
+                        .retained_call_place_access(
+                            base_callee,
+                            &Type::Callable(callable.clone()),
+                            passing,
+                            "callable field",
+                        )
+                        .into_iter()
+                        .collect();
+                    return self.type_check_function_value_args_with_receiver(
                         &callable.params,
                         &callable.return_type,
                         args,
                         span,
                         locals,
                         expected,
+                        receiver,
                     );
                 }
                 if is_integer_type(&receiver_ty) {
@@ -17675,6 +17905,7 @@ impl<'a> FunctionChecker<'a> {
                                     )
                                     .with_help("hold the collection in a `mut` local"));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
@@ -17708,14 +17939,29 @@ impl<'a> FunctionChecker<'a> {
                     Type::Function {
                         params,
                         return_type,
-                    } => self.type_check_function_value_args(
-                        &params,
-                        &return_type,
-                        args,
-                        span,
-                        locals,
-                        expected,
-                    ),
+                    } => {
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Function {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                },
+                                ReceiverKind::Borrow,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
+                            &params,
+                            &return_type,
+                            args,
+                            span,
+                            locals,
+                            expected,
+                            receiver,
+                        )
+                    }
                     Type::Callable(callable) => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17739,25 +17985,41 @@ impl<'a> FunctionChecker<'a> {
                                         "store the callable in a `mut` local, or take it as a `mut` parameter",
                                     ));
                                 }
+                                self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                             }
                             ClosureCallKind::Repeatable => {}
                         }
+                        let passing = match callable.call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Callable(callable.clone()),
+                                passing,
+                                "callable value",
+                            )
+                            .into_iter()
+                            .collect();
                         let params = callable.params.clone();
                         let return_type = callable.return_type.clone();
-                        self.type_check_function_value_args(
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
                     Type::Closure {
                         params,
                         return_type,
+                        captures,
                         call_kind,
-                        ..
                     } => {
                         if explicit_type_args.is_some() {
                             return Err(Diagnostic::coded_at(
@@ -17768,29 +18030,51 @@ impl<'a> FunctionChecker<'a> {
                         }
                         if call_kind == ClosureCallKind::Consuming {
                             self.consume_value_expr(base_callee, locals)?;
-                        } else if call_kind == ClosureCallKind::MutableRepeatable
-                            && !grouped_name(base_callee)
+                        } else if call_kind == ClosureCallKind::MutableRepeatable {
+                            if !grouped_name(base_callee)
                                 .and_then(|name| locals.get(name))
                                 .is_some_and(|binding| {
                                     binding.local_function
                                         == Some(LocalFunctionBinding::Declaration)
                                 })
-                            && !self.is_mutable_place(base_callee, locals)?
-                        {
-                            return Err(Diagnostic::coded_at(
-                                "AU3003",
-                                base_callee.span,
-                                "a mutable-repeatable closure must be called through a mutable closure place",
-                            )
-                            .with_help("store the closure in a `mut` local before calling it"));
+                                && !self.is_mutable_place(base_callee, locals)?
+                            {
+                                return Err(Diagnostic::coded_at(
+                                    "AU3003",
+                                    base_callee.span,
+                                    "a mutable-repeatable closure must be called through a mutable closure place",
+                                )
+                                .with_help("store the closure in a `mut` local before calling it"));
+                            }
+                            self.ensure_mutable_callable_place_unlocked(base_callee, locals)?;
                         }
-                        self.type_check_function_value_args(
+                        let passing = match call_kind {
+                            ClosureCallKind::MutableRepeatable => ReceiverKind::BorrowMut,
+                            ClosureCallKind::Repeatable => ReceiverKind::Borrow,
+                            ClosureCallKind::Consuming => ReceiverKind::Value,
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Closure {
+                                    params: params.clone(),
+                                    return_type: return_type.clone(),
+                                    captures,
+                                    call_kind,
+                                },
+                                passing,
+                                "closure value",
+                            )
+                            .into_iter()
+                            .collect();
+                        self.type_check_function_value_args_with_receiver(
                             &params,
                             &return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         )
                     }
                     _ if matches!(&base_callee.kind, ExprKind::Name(name) if locals.contains_key(name)) => {
@@ -17800,6 +18084,22 @@ impl<'a> FunctionChecker<'a> {
                 }
             }
         }
+    }
+
+    fn ensure_mutable_callable_place_unlocked(
+        &self,
+        callee: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        if let Some(place) = self.borrow_call_place(callee) {
+            self.ensure_place_mutation_allowed(&place, callee.span, locals)?;
+            let through_view = locals
+                .get(&place.root)
+                .and_then(|binding| binding.view.as_ref())
+                .map(|_| place.root.as_str());
+            self.ensure_place_not_locked_by_view(&place, through_view, callee.span, locals)?;
+        }
+        Ok(())
     }
 
     /// Types the callee of `factory(...)(args)`. When the factory is generic

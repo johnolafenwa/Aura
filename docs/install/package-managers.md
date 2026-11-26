@@ -45,8 +45,9 @@ Add Aura's signing key and repository once:
 ```bash
 sudo apt-get update
 sudo apt-get install -y curl ca-certificates
-curl -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
   sudo tee /usr/share/keyrings/aura-archive-keyring.gpg >/dev/null
+gpg --show-keys /usr/share/keyrings/aura-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/aura-archive-keyring.gpg] https://johnolafenwa.github.io/Aura/apt stable main" |
   sudo tee /etc/apt/sources.list.d/aura.list >/dev/null
 ```

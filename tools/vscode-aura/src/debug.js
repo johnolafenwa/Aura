@@ -6,6 +6,7 @@
 // teaches lldb to show Aura values as the program prints them.
 
 const childProcess = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
@@ -29,21 +30,33 @@ function isExecutable(file) {
   }
 }
 
+function isRegularFile(file) {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 // The `lldb-dap` to start: the configured one, Xcode's on macOS, then the
 // first adapter name found on PATH.
 function findLldbDap({
   configured = "",
   platform = process.platform,
   pathValue = process.env.PATH || "",
+  home = os.homedir(),
   executable = isExecutable,
   runFile = childProcess.execFileSync
 } = {}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const delimiter = platform === "win32" ? ";" : ":";
   if (configured) {
-    return configured;
+    const expanded = expandHome(configured, home, platform);
+    return isAbsoluteForPlatform(expanded, platform) ? expanded : null;
   }
   if (platform === "darwin") {
     try {
-      const found = String(runFile("xcrun", ["-f", "lldb-dap"], { encoding: "utf8" })).trim();
+      const found = String(runFile("/usr/bin/xcrun", ["-f", "lldb-dap"], { encoding: "utf8" })).trim();
       if (found) {
         return found;
       }
@@ -51,10 +64,12 @@ function findLldbDap({
       // No Xcode tools; PATH may still have one.
     }
   }
-  const directories = pathValue.split(path.delimiter).filter(Boolean);
+  const directories = pathValue
+    .split(delimiter)
+    .filter((entry) => entry && isAbsoluteForPlatform(entry, platform));
   for (const name of ADAPTER_NAMES) {
     for (const directory of directories) {
-      const candidate = path.join(directory, platform === "win32" ? `${name}.exe` : name);
+      const candidate = pathApi.join(directory, platform === "win32" ? `${name}.exe` : name);
       if (executable(candidate)) {
         return candidate;
       }
@@ -66,14 +81,23 @@ function findLldbDap({
 // Where a debug build of `program` goes: the extension's own storage
 // directory, so the workspace stays clean.
 function debugBinaryPath(program, directory, platform = process.platform) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  let canonical;
+  try {
+    canonical = fs.realpathSync(program);
+  } catch {
+    canonical = pathApi.resolve(program);
+  }
+  const digest = crypto.createHash("sha256").update(canonical).digest("hex").slice(0, 16);
   const parsed = path.parse(program);
-  const name = platform === "win32" ? `${parsed.name}.exe` : parsed.name;
+  const stem = parsed.name.replace(/[^A-Za-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "program";
+  const name = platform === "win32" ? `${stem}-${digest}.exe` : `${stem}-${digest}`;
   return path.join(directory, "debug-builds", name);
 }
 
 // The `aura build` arguments of a debug build.
 function debugBuildArguments(program, output) {
-  return ["build", "--debug", "-o", output, program];
+  return ["build", "--debug", "-o", output, "--", program];
 }
 
 // lldb-dap reads `env` as `NAME=value` strings in every version.
@@ -84,28 +108,38 @@ function environmentList(env) {
   return Object.entries(env || {}).map(([name, value]) => `${name}=${value}`);
 }
 
+const DEBUG_BUILD_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+const DEBUG_BUILD_TIMEOUT_MS = 120_000;
+
 function escapeLldbPath(value) {
-  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const text = String(value);
+  if (/[\r\n\0]/.test(text)) {
+    throw new Error("Aura: LLDB script path contains invalid control characters.");
+  }
+  return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/`/g, "\\`");
 }
 
 // The launch request lldb-dap receives for an Aura configuration whose
-// program was built at `binary`.
+// program was built at `binary`. Only documented Aura fields are forwarded.
 function adapterConfiguration(configuration, binary, formatterPath) {
   const adapter = {
-    ...configuration,
+    type: DEBUG_TYPE,
+    request: "launch",
     program: binary,
-    args: (configuration.args || []).map(String),
+    args: Array.isArray(configuration.args) ? configuration.args.map(String) : [],
+    cwd:
+      typeof configuration.cwd === "string" && configuration.cwd
+        ? configuration.cwd
+        : path.dirname(configuration.program),
     env: environmentList(configuration.env),
-    initCommands: [
-      `command script import "${escapeLldbPath(formatterPath)}"`,
-      ...(configuration.initCommands || [])
-    ],
+    initCommands: [`command script import "${escapeLldbPath(formatterPath)}"`],
     auraProgram: configuration.program
   };
-  if (configuration.cwd) {
-    adapter.cwd = configuration.cwd;
-  } else {
-    adapter.cwd = path.dirname(configuration.program);
+  if (typeof configuration.name === "string" && configuration.name) {
+    adapter.name = configuration.name;
+  }
+  if (typeof configuration.stopOnEntry === "boolean") {
+    adapter.stopOnEntry = configuration.stopOnEntry;
   }
   return adapter;
 }
@@ -123,12 +157,17 @@ function defaultConfiguration(document) {
   };
 }
 
-function expandHome(value, home = os.homedir()) {
+function isAbsoluteForPlatform(value, platform = process.platform) {
+  return (platform === "win32" ? path.win32 : path.posix).isAbsolute(value);
+}
+
+function expandHome(value, home = os.homedir(), platform = process.platform) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
   if (value === "~") {
     return home;
   }
   if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(home, value.slice(2));
+    return pathApi.join(home, value.slice(2));
   }
   return value;
 }
@@ -141,14 +180,23 @@ function findDebugCompiler({
   systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"],
   executable = isExecutable
 } = {}) {
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const delimiter = platform === "win32" ? ";" : ":";
   if (configured) {
-    return expandHome(configured, home);
+    const expanded = expandHome(configured, home, platform);
+    return isAbsoluteForPlatform(expanded, platform) ? expanded : null;
   }
   const name = platform === "win32" ? "aura.exe" : "aura";
-  const pathDirs = pathValue.split(path.delimiter).filter((entry) => entry && path.isAbsolute(entry));
-  const installDirs = [path.join(home, ".local", "bin"), path.join(home, ".cargo", "bin"), ...systemDirs];
+  const pathDirs = pathValue
+    .split(delimiter)
+    .filter((entry) => entry && isAbsoluteForPlatform(entry, platform));
+  const installDirs = [
+    pathApi.join(home, ".local", "bin"),
+    pathApi.join(home, ".cargo", "bin"),
+    ...(platform === "win32" ? [] : systemDirs)
+  ];
   for (const directory of [...pathDirs, ...installDirs]) {
-    const candidate = path.join(directory, name);
+    const candidate = pathApi.join(directory, name);
     if (executable(candidate)) {
       return candidate;
     }
@@ -164,7 +212,8 @@ function registerDebugger(
     platform = process.platform,
     pathValue = process.env.PATH || "",
     home = os.homedir(),
-    systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"]
+    systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"],
+    isExistingFile = isRegularFile
   } = {}
 ) {
   const formatterPath = context.asAbsolutePath(path.join("debug", "aura_lldb.py"));
@@ -187,7 +236,11 @@ function registerDebugger(
       );
     }
     const command = resolvedCompiler || "aura";
-    const options = resolvedCompiler ? { cwd: path.dirname(program) } : {};
+    const options = {
+      ...(resolvedCompiler ? { cwd: path.dirname(program) } : {}),
+      maxBuffer: DEBUG_BUILD_MAX_BUFFER_BYTES,
+      timeout: DEBUG_BUILD_TIMEOUT_MS
+    };
     return new Promise((resolve) => {
       runFile(
         command,
@@ -216,6 +269,15 @@ function registerDebugger(
     async resolveDebugConfigurationWithSubstitutedVariables(_folder, configuration) {
       if (!configuration.program) {
         vscode.window.showErrorMessage("Aura: the debug configuration needs a `program` .au file.");
+        return undefined;
+      }
+      if (
+        typeof configuration.program !== "string" ||
+        configuration.program.startsWith("-") ||
+        !configuration.program.endsWith(".au") ||
+        !isExistingFile(configuration.program)
+      ) {
+        vscode.window.showErrorMessage("Aura: the debug `program` must be an existing .au file.");
         return undefined;
       }
       const document = vscode.workspace.textDocuments.find(
@@ -281,6 +343,8 @@ module.exports = {
   debugBuildArguments,
   defaultConfiguration,
   environmentList,
+  expandHome,
+  findDebugCompiler,
   findLldbDap,
   registerDebugger
 };

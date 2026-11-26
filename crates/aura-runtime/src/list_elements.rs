@@ -26,13 +26,52 @@ use crate::native_runtime::{plain_layout_for_value, ElementBox, ElementMut, Plai
 use crate::randomness::DeterministicRng;
 use crate::runtime_value::Value;
 
+/// A single byte holding an Aura `bool` (`0` = `false`, `1` = `true`).
+/// Backing `list[bool]` with raw bytes prevents undefined behavior if foreign
+/// C code writes a non-canonical byte before post-call validation sanitizes it.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BoolByte(u8);
+
+impl BoolByte {
+    pub const FALSE: Self = Self(0);
+    pub const TRUE: Self = Self(1);
+
+    #[inline]
+    pub const fn from_bool(flag: bool) -> Self {
+        Self(flag as u8)
+    }
+
+    #[inline]
+    pub const fn as_bool(self) -> bool {
+        self.0 != 0
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+
+    /// Normalizes a byte outside `0..=1` to `1` and returns the offending byte.
+    #[inline]
+    pub fn sanitize(&mut self) -> Option<u8> {
+        if self.0 > 1 {
+            let bad = self.0;
+            self.0 = 1;
+            Some(bad)
+        } else {
+            None
+        }
+    }
+}
+
 /// The elements of a `list`, in one of the forms the module docs describe.
 #[derive(Clone)]
 pub enum ListElements {
     Values(SharedVec<Value>),
     Int64(SharedVec<i64>),
     Float64(SharedVec<f64>),
-    Bool(SharedVec<bool>),
+    Bool(SharedVec<BoolByte>),
     Int8(SharedVec<i8>),
     Int16(SharedVec<i16>),
     Int32(SharedVec<i32>),
@@ -340,14 +379,14 @@ impl Element for f32 {
     }
 }
 
-impl Element for bool {
+impl Element for BoolByte {
     fn value(self) -> Value {
-        Value::Bool(self)
+        Value::Bool(self.as_bool())
     }
 
     fn of(value: &Value) -> Option<Self> {
         match value {
-            Value::Bool(flag) => Some(*flag),
+            Value::Bool(flag) => Some(Self::from_bool(*flag)),
             _ => None,
         }
     }
@@ -546,7 +585,7 @@ fn keeps(form: ListForm, value: &Value) -> bool {
         ListForm::Values => true,
         ListForm::Int64 => i64::of(value).is_some(),
         ListForm::Float64 => f64::of(value).is_some(),
-        ListForm::Bool => bool::of(value).is_some(),
+        ListForm::Bool => BoolByte::of(value).is_some(),
         ListForm::Int8 => i8::of(value).is_some(),
         ListForm::Int16 => i16::of(value).is_some(),
         ListForm::Int32 => i32::of(value).is_some(),
@@ -656,6 +695,24 @@ impl ListElements {
             values => Some(values[..].as_mut_ptr().cast()),
             _ => None,
         )
+    }
+
+    /// Sanitizes any non-canonical byte (`> 1`) in a `ListElements::Bool`
+    /// storage buffer in place to `1` (`true`), returning the first offending
+    /// byte if any was found.
+    pub fn sanitize_bool_bytes(&mut self) -> Option<u8> {
+        let Self::Bool(values) = self else {
+            return None;
+        };
+        let mut first_bad = None;
+        for flag in values.iter_mut() {
+            if let Some(bad) = flag.sanitize() {
+                if first_bad.is_none() {
+                    first_bad = Some(bad);
+                }
+            }
+        }
+        first_bad
     }
 
     /// `values` in `form`, when the form keeps every one exactly.
@@ -1554,7 +1611,7 @@ pub enum Iter<'a> {
     Values(std::slice::Iter<'a, Value>),
     Int64(std::slice::Iter<'a, i64>),
     Float64(std::slice::Iter<'a, f64>),
-    Bool(std::slice::Iter<'a, bool>),
+    Bool(std::slice::Iter<'a, BoolByte>),
     Int8(std::slice::Iter<'a, i8>),
     Int16(std::slice::Iter<'a, i16>),
     Int32(std::slice::Iter<'a, i32>),

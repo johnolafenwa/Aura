@@ -42,6 +42,7 @@ fn evaluate_on_stack(
         None,
         CancellationContext::default(),
         Default::default(),
+        false,
     );
     runtime.safepoints_enabled = false;
     runtime.raw_memory_allowed = false;

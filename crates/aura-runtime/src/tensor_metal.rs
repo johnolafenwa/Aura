@@ -179,25 +179,19 @@ fn pool() -> std::sync::MutexGuard<'static, Pool> {
 impl Drop for Buffer {
     fn drop(&mut self) {
         let mut pool = pool();
-        if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
-            pool.bytes += self.bytes;
-            pool.free
-                .entry(self.bytes)
-                .or_default()
-                .push(self.handle as usize);
-            return;
+        if let Some(total) = pool.bytes.checked_add(self.bytes) {
+            if total <= MAX_POOLED_BYTES {
+                pool.bytes = total;
+                pool.free
+                    .entry(self.bytes)
+                    .or_default()
+                    .push(self.handle as usize);
+                return;
+            }
         }
         drop(pool);
         // SAFETY: `handle` is the one reference this value owns.
         unsafe { aura_metal_buffer_release(self.handle) }
-    }
-}
-
-fn element_bytes(dtype: ArrayDType) -> usize {
-    match dtype {
-        ArrayDType::Bool => 1,
-        ArrayDType::Int32 | ArrayDType::Float32 => 4,
-        ArrayDType::Int64 | ArrayDType::Float64 => 8,
     }
 }
 
@@ -228,9 +222,10 @@ impl Buffer {
         Ok(Self { handle, bytes })
     }
 
-    fn contents(&self) -> *mut u8 {
+    fn contents(&self) -> Result<*mut u8> {
         // SAFETY: `handle` is a live shared-storage buffer.
-        unsafe { aura_metal_buffer_contents(self.handle) }
+        let ptr = unsafe { aura_metal_buffer_contents(self.handle) };
+        super::checked_non_null_buffer_ptr(ptr, "metal")
     }
 
     /// A buffer holding the elements of a non-empty Array in row-major
@@ -252,41 +247,57 @@ impl Buffer {
             ArrayStorage::Bool(values) => bytes_of::<bool>(values),
         };
         let buffer = Self::new(bytes.len())?;
-        // SAFETY: the buffer holds `bytes.len()` bytes and nothing else
-        // refers to it yet.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.contents(), bytes.len()) };
+        let dst = buffer.contents()?;
+        // SAFETY: `dst` is non-null, the buffer holds `bytes.len()` bytes, and
+        // nothing else refers to it yet.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
         Ok(buffer)
     }
 
     /// An Array holding a copy of the buffer's elements.
     pub(crate) fn to_array(&self, dtype: ArrayDType, shape: &[usize]) -> Result<ArrayValue> {
-        let len: usize = shape.iter().product();
-        assert_eq!(
-            len * element_bytes(dtype),
-            self.bytes,
-            "a tensor's buffer holds its shape"
-        );
-        fn read<T: Copy + Default>(buffer: &Buffer, len: usize) -> Box<[T]> {
-            let mut values = vec![T::default(); len];
-            // SAFETY: the buffer holds `len` elements of `T`, and `values`
-            // is a separate allocation of the same size.
+        let (len, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+        if expected_bytes != self.bytes {
+            return Err(metal_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
+        fn read<T: Copy + Default>(
+            buffer: &Buffer,
+            len: usize,
+            expected_bytes: usize,
+        ) -> Result<Box<[T]>> {
+            let mut values = try_array_buffer(len, "Metal tensor read")?;
+            values.resize(len, T::default());
+            let src = buffer.contents()?;
+            // SAFETY: `src` is non-null, the buffer holds `expected_bytes`
+            // bytes for `len` elements of `T`, and `values` is a separate
+            // allocation of the same size.
             unsafe {
                 std::ptr::copy_nonoverlapping(
-                    buffer.contents(),
+                    src,
                     values.as_mut_ptr().cast::<u8>(),
-                    len * std::mem::size_of::<T>(),
+                    expected_bytes,
                 );
             }
-            values.into()
+            Ok(values.into_boxed_slice())
         }
         let storage = match dtype {
-            ArrayDType::Int32 => ArrayStorage::Int32(read::<i32>(self, len).into()),
-            ArrayDType::Int64 => ArrayStorage::Int64(read::<i64>(self, len).into()),
-            ArrayDType::Float32 => ArrayStorage::Float32(read::<f32>(self, len).into()),
-            ArrayDType::Float64 => ArrayStorage::Float64(read::<f64>(self, len).into()),
+            ArrayDType::Int32 => {
+                ArrayStorage::Int32(read::<i32>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Int64 => {
+                ArrayStorage::Int64(read::<i64>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float32 => {
+                ArrayStorage::Float32(read::<f32>(self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float64 => {
+                ArrayStorage::Float64(read::<f64>(self, len, expected_bytes)?.into())
+            }
             ArrayDType::Bool => {
                 // A byte the GPU wrote may be any non-zero value for true.
-                let flags: Box<[bool]> = read::<u8>(self, len)
+                let flags: Box<[bool]> = read::<u8>(self, len, expected_bytes)?
                     .iter()
                     .map(|&byte| byte != 0)
                     .collect();
@@ -341,6 +352,12 @@ impl Graph {
         };
         let mut tensors: Vec<i32> = Vec::with_capacity(plan.slots.len());
         for slot in &plan.slots {
+            let (slot_dtype, slot_shape) = match slot {
+                Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
+            };
+            let slot_dtype = ArrayDType::from_code(slot_dtype)
+                .ok_or_else(|| metal_error("received an unknown dtype"))?;
+            super::checked_tensor_byte_len(slot_shape, slot_dtype)?;
             let tensor = match slot {
                 Slot::Leaf { dtype, shape } => {
                     let shape = shape_numbers(shape);
@@ -473,25 +490,56 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     // A leaf in host memory is copied to a buffer for this run.
     let mut uploaded: Vec<Arc<Buffer>> = Vec::new();
     let mut buffers: Vec<*mut c_void> = Vec::with_capacity(leaves.len());
-    for leaf in leaves {
+    let mut leaf_iter = leaves.iter();
+    for slot in &plan.slots {
+        let Slot::Leaf {
+            dtype: leaf_dtype,
+            shape: leaf_shape,
+        } = slot
+        else {
+            continue;
+        };
+        let leaf_dtype = ArrayDType::from_code(*leaf_dtype)
+            .ok_or_else(|| metal_error("received an unknown leaf dtype"))?;
+        let (_, expected_bytes) = super::checked_tensor_byte_len(leaf_shape, leaf_dtype)?;
+        let leaf = leaf_iter
+            .next()
+            .ok_or_else(|| metal_error("received fewer leaves than the plan expects"))?;
         match leaf {
-            Storage::Metal(buffer) => buffers.push(buffer.handle),
+            Storage::Metal(buffer) => {
+                if buffer.bytes != expected_bytes {
+                    return Err(metal_error(&format!(
+                        "received a leaf buffer of {} bytes for a shape requiring {expected_bytes} bytes",
+                        buffer.bytes
+                    )));
+                }
+                buffers.push(buffer.handle);
+            }
             Storage::Host(elements) => {
                 let buffer = Arc::new(Buffer::from_array(elements)?);
+                if buffer.bytes != expected_bytes {
+                    return Err(metal_error(&format!(
+                        "received a host leaf of {} bytes for a shape requiring {expected_bytes} bytes",
+                        buffer.bytes
+                    )));
+                }
                 buffers.push(buffer.handle);
                 uploaded.push(buffer);
             }
         }
+    }
+    if leaf_iter.next().is_some() {
+        return Err(metal_error("received more leaves than the plan expects"));
     }
     let mut outputs: Vec<Buffer> = Vec::with_capacity(plan.outputs.len());
     for &output in &plan.outputs {
         let (dtype, shape) = match &plan.slots[output] {
             Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
         };
-        let dtype = ArrayDType::from_code(dtype).expect("a plan holds known dtypes");
-        outputs.push(Buffer::new(
-            shape.iter().product::<usize>() * element_bytes(dtype),
-        )?);
+        let dtype = ArrayDType::from_code(dtype)
+            .ok_or_else(|| metal_error("received an unknown output dtype"))?;
+        let (_, output_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+        outputs.push(Buffer::new(output_bytes)?);
     }
     let handles: Vec<*mut c_void> = outputs.iter().map(|output| output.handle).collect();
     let mut compiled = COMPILED

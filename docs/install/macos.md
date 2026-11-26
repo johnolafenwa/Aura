@@ -21,7 +21,7 @@ Both are supported. No other macOS architecture has a release archive.
 The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The script downloads the matching `v0.17.0-preview` archive. It checks the

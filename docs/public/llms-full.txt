@@ -700,7 +700,7 @@ Every guide follows the same three steps.
    `%LOCALAPPDATA%\Programs\Aura` on Windows.
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 On Windows, in PowerShell:
@@ -740,7 +740,7 @@ To install under a different prefix, set `AURA_INSTALL_PREFIX`:
 
 ```bash
 AURA_INSTALL_PREFIX="$HOME/tools/aura" \
-  sh -c "$(curl -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
+  sh -c "$(curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh)"
 ```
 
 Then add that prefix's `bin` directory to `PATH`.
@@ -818,7 +818,7 @@ downloaded archive.
 ## 3. Install Aura
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
@@ -829,7 +829,7 @@ To build programs for another Linux target with `aura build --target`,
 name the target and the installer adds its target pack:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
 ```
 
 ## 4. Add Aura To Bash
@@ -999,7 +999,7 @@ Both are supported. No other macOS architecture has a release archive.
 The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 The script downloads the matching `v0.17.0-preview` archive. It checks the
@@ -1188,8 +1188,9 @@ Add Aura's signing key and repository once:
 ```bash
 sudo apt-get update
 sudo apt-get install -y curl ca-certificates
-curl -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
   sudo tee /usr/share/keyrings/aura-archive-keyring.gpg >/dev/null
+gpg --show-keys /usr/share/keyrings/aura-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/aura-archive-keyring.gpg] https://johnolafenwa.github.io/Aura/apt stable main" |
   sudo tee /etc/apt/sources.list.d/aura.list >/dev/null
 ```
@@ -1468,7 +1469,7 @@ enables direct native execution and `aura build`.
 Run the installer:
 
 ```bash
-curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
+curl --proto '=https' --tlsv1.2 -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
 Add Aura to the Ubuntu login environment:
@@ -4037,8 +4038,9 @@ contributor convenience.
 Use the same target for source checks and object generation, for example
 `aura check --freestanding --target x86_64-unknown-none --kernel kernel.au`
 and `aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kernel.au`.
-The optional x86-64 kernel profile disables the red zone, uses the kernel
-code model and passes floating-point values in integer registers.
+The optional x86-64 kernel profile uses the kernel code model and passes
+floating-point values in integer registers. No freestanding x86-64 build
+uses the red zone.
 Set `aura.freestandingTarget` in VS Code to check a board for its target.
 The formatter preserves the contents of assembly strings. Verification
 reports AU4035 when it encounters assembly.
@@ -14952,7 +14954,7 @@ aura build --freestanding --target x86_64-unknown-none --kernel -o kernel.o kern
 | --- | --- | --- |
 | Code placement | Position independent, default code model | Static relocations, kernel code model for addresses in the high 2 GiB |
 | Floating point | SSE2, System V float ABI | Software floating point, integer-register float ABI |
-| Stack | A leaf can use the 128 bytes below the stack pointer, the red zone | Each function reserves the stack space it needs |
+| Stack | Each function reserves the stack space it needs; no code uses the red zone below the stack pointer | The same |
 
 Kernel mode disables MMX, SSE, SSE2 and x87 in compiler-generated code.
 Use the same register and stack conventions for foreign code and assembly.

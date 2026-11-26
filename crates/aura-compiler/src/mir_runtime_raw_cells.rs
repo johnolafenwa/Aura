@@ -282,13 +282,13 @@ mod tests {
                 format!("def main() -> None:\n    p = {addr} as ptr[int32]\n    {operation}\n");
             assert_eq!(
                 crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
-                "AU4032"
+                "AU4001"
             );
         }
         let source = format!("extern \"C\" class Item:\n    value: int32\n\ndef main() -> None:\n    p = {addr} as ptr[Item]\n    p.read()\n");
         assert_eq!(
             crate::mir_runtime::run(&lower(&source)).unwrap_err().code,
-            "AU4032"
+            "AU4001"
         );
         assert_eq!(cell, 1);
     }

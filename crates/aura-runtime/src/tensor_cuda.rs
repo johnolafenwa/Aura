@@ -34,6 +34,7 @@ struct Api {
     cuMemsetD8_v2: unsafe extern "C" fn(DevicePointer, u8, usize) -> Status,
     cuMemcpyDtoH_v2: unsafe extern "C" fn(*mut c_void, DevicePointer, usize) -> Status,
     cuModuleLoadData: unsafe extern "C" fn(*mut *mut c_void, *const c_void) -> Status,
+    cuModuleUnload: unsafe extern "C" fn(*mut c_void) -> Status,
     cuModuleGetFunction:
         unsafe extern "C" fn(*mut *mut c_void, *mut c_void, *const c_char) -> Status,
     #[allow(clippy::type_complexity)]
@@ -181,6 +182,21 @@ struct Api {
         i64,
         c_int,
     ) -> Status,
+    _libraries: [Library; 3],
+}
+
+/// An opened shared library closed automatically if loading fails partway.
+struct Library(*mut c_void);
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: `self.0` is an owned handle returned by `dlopen`.
+            unsafe {
+                libc::dlclose(self.0);
+            }
+        }
+    }
 }
 
 /// cuBLAS's matrix products of `float16` elements. These are the calls
@@ -270,27 +286,27 @@ const ADD_IN_SINGLE: c_int = 68;
 /// `CUBLAS_GEMM_DEFAULT`.
 const DEFAULT_ALGORITHM: c_int = -1;
 
-/// Opens the first of `names` the loader finds.
-fn open(names: &[&str]) -> Option<*mut c_void> {
+/// Opens the first of `names` the loader finds using `RTLD_LOCAL`.
+fn open(names: &[&str]) -> Option<Library> {
     names.iter().find_map(|name| {
         let name = CString::new(*name).ok()?;
         // SAFETY: `name` is a NUL-terminated path or library name.
-        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
-        (!handle.is_null()).then_some(handle)
+        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+        (!handle.is_null()).then_some(Library(handle))
     })
 }
 
 /// The address of `name` in `library`.
-fn symbol(library: *mut c_void, name: &str) -> Option<*mut c_void> {
+fn symbol(library: &Library, name: &str) -> Option<*mut c_void> {
     let name = CString::new(name).ok()?;
     // SAFETY: `library` is an open library and `name` is NUL-terminated.
-    let address = unsafe { libc::dlsym(library, name.as_ptr()) };
+    let address = unsafe { libc::dlsym(library.0, name.as_ptr()) };
     (!address.is_null()).then_some(address)
 }
 
 macro_rules! load {
     ($library:expr, $name:ident) => {{
-        let address = symbol($library, stringify!($name))?;
+        let address = symbol(&$library, stringify!($name))?;
         // SAFETY: the symbol is the CUDA function of this name, whose C
         // signature is the field's type.
         #[allow(clippy::missing_transmute_annotations)]
@@ -300,8 +316,95 @@ macro_rules! load {
     }};
 }
 
+const CUDA_LIBRARY_VERSIONS: &[&str] = &["", ".13", ".12", ".11.2", ".11"];
+
+fn is_at_secure() -> bool {
+    // SAFETY: `getauxval` with `AT_SECURE` has no preconditions on Linux.
+    unsafe { libc::getauxval(libc::AT_SECURE) != 0 }
+}
+
+fn is_trusted_owned_dir(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    let Ok(link_meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if link_meta.file_type().is_symlink() {
+        let uid = link_meta.uid();
+        if uid != 0 && uid != euid {
+            return false;
+        }
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    let uid = meta.uid();
+    meta.is_dir() && (uid == 0 || uid == euid) && (meta.mode() & 0o022) == 0
+}
+
+/// Validates a CUDA toolkit root and returns its canonical `lib64` directory
+/// when it is an absolute, traversal-free, non-group/world-writable directory
+/// owned by root or the current user.
+fn validated_cuda_lib_dir(root: &str) -> Option<std::path::PathBuf> {
+    use std::path::{Component, Path};
+
+    if root.is_empty() || root.contains('\0') {
+        return None;
+    }
+    let path = Path::new(root);
+    if !path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::ParentDir))
+    {
+        return None;
+    }
+    if !is_trusted_owned_dir(path) {
+        return None;
+    }
+    let lib64 = path.join("lib64");
+    if !is_trusted_owned_dir(&lib64) {
+        return None;
+    }
+    let canonical = std::fs::canonicalize(&lib64).ok()?;
+    if !is_trusted_owned_dir(&canonical) {
+        return None;
+    }
+    Some(canonical)
+}
+
+fn cuda_library_candidates(
+    stem: &str,
+    env_roots: &[Option<String>],
+    at_secure: bool,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for version in CUDA_LIBRARY_VERSIONS {
+        names.push(format!("{stem}.so{version}"));
+    }
+    let env_iter = if at_secure {
+        [].iter()
+    } else {
+        env_roots.iter()
+    };
+    for root in env_iter
+        .flatten()
+        .map(String::as_str)
+        .chain(std::iter::once("/usr/local/cuda"))
+    {
+        if let Some(lib_dir) = validated_cuda_lib_dir(root) {
+            for version in CUDA_LIBRARY_VERSIONS {
+                names.push(format!("{}/{stem}.so{version}", lib_dir.display()));
+            }
+        }
+    }
+    names
+}
+
 impl HalfApi {
-    fn load(cublas: *mut c_void) -> Option<Self> {
+    fn load(cublas: &Library) -> Option<Self> {
         Some(Self {
             cublasGemmEx: load!(cublas, cublasGemmEx),
             cublasGemmBatchedEx: load!(cublas, cublasGemmBatchedEx),
@@ -321,28 +424,17 @@ impl Api {
             "libcuda.so.1",
             "libcuda.so",
         ])?;
-        let versions = ["", ".13", ".12", ".11.2", ".11"];
-        let candidates = |stem: &str| -> Vec<String> {
-            let mut names = Vec::new();
-            for version in versions {
-                names.push(format!("{stem}.so{version}"));
-            }
-            for root in [
+        let at_secure = is_at_secure();
+        let env_roots = if at_secure {
+            [None, None]
+        } else {
+            [
                 std::env::var("CUDA_HOME").ok(),
                 std::env::var("CUDA_PATH").ok(),
-                Some("/usr/local/cuda".to_string()),
             ]
-            .into_iter()
-            .flatten()
-            {
-                for version in versions {
-                    names.push(format!("{root}/lib64/{stem}.so{version}"));
-                }
-            }
-            names
         };
         let open_library = |stem: &str| {
-            let names = candidates(stem);
+            let names = cuda_library_candidates(stem, &env_roots, at_secure);
             open(&names.iter().map(String::as_str).collect::<Vec<_>>())
         };
         let nvrtc = open_library("libnvrtc")?;
@@ -361,6 +453,7 @@ impl Api {
             cuMemsetD8_v2: load!(driver, cuMemsetD8_v2),
             cuMemcpyDtoH_v2: load!(driver, cuMemcpyDtoH_v2),
             cuModuleLoadData: load!(driver, cuModuleLoadData),
+            cuModuleUnload: load!(driver, cuModuleUnload),
             cuModuleGetFunction: load!(driver, cuModuleGetFunction),
             cuLaunchKernel: load!(driver, cuLaunchKernel),
             nvrtcCreateProgram: load!(nvrtc, nvrtcCreateProgram),
@@ -378,7 +471,8 @@ impl Api {
             cublasDgemmBatched: load!(cublas, cublasDgemmBatched),
             cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
             cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
-            half: HalfApi::load(cublas),
+            half: HalfApi::load(&cublas),
+            _libraries: [driver, nvrtc, cublas],
         })
     }
 }
@@ -434,8 +528,71 @@ fn pooled_bytes(total: usize) -> usize {
     (total / 4).max(MIN_POOLED_BYTES)
 }
 
+/// An owned CUDA driver module unloaded automatically on drop or eviction.
+struct Module {
+    handle: *mut c_void,
+    unload: unsafe extern "C" fn(*mut c_void) -> Status,
+}
+
+// SAFETY: `CUmodule` handles are managed under the `compiled` mutex and
+// unloaded only after synchronizing the CUDA context.
+unsafe impl Send for Module {}
+
+impl Drop for Module {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            // SAFETY: `self.handle` is an owned module handle.
+            unsafe {
+                (self.unload)(self.handle);
+            }
+        }
+    }
+}
+
+/// RAII guard for `Pool::running` so panics do not permanently disable trimming.
+struct RunGuard<'a> {
+    pool: &'a Mutex<Pool>,
+    active: bool,
+}
+
+impl<'a> RunGuard<'a> {
+    fn enter(pool: &'a Mutex<Pool>) -> Self {
+        pool.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .running += 1;
+        Self { pool, active: true }
+    }
+
+    fn finish(mut self, waits: bool, pooled: usize) -> Vec<DevicePointer> {
+        self.active = false;
+        let mut pool = self
+            .pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        pool.running = pool.running.saturating_sub(1);
+        if pool.running == 0 && waits {
+            pool.trim(pooled)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let mut pool = self
+                .pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pool.running = pool.running.saturating_sub(1);
+        }
+    }
+}
+
 /// A compiled plan: the kernels by name and the actions that run them.
 struct Compiled {
+    _module: Module,
     program: Program,
     functions: HashMap<String, usize>,
     /// For each action, the buffers no later action reads and the run
@@ -502,7 +659,9 @@ impl Runtime {
         }
         let mut compiler = (0, 0);
         // SAFETY: both pointers are to live integers.
-        unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) };
+        if unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) } != 0 {
+            return None;
+        }
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: both pointers are to live integers, and the context is
         // current. A failed call leaves the total at zero.
@@ -787,7 +946,7 @@ impl Drop for Buffer {
         // wait for the kernels launched so far, in the middle of the
         // program. The run the program next waits for trims the pool.
         let mut pool = runtime.pool();
-        pool.bytes += self.bytes;
+        pool.bytes = pool.bytes.saturating_add(self.bytes);
         pool.free.entry(self.bytes).or_default().push(self.pointer);
     }
 }
@@ -850,8 +1009,12 @@ impl Buffer {
     /// A `float32` Array holding the buffer's half-precision elements.
     pub(crate) fn to_half_array(&self, shape: &[usize]) -> Result<ArrayValue> {
         let runtime = started()?;
-        let len: usize = shape.iter().product();
-        assert_eq!(len * 2, self.bytes, "a tensor's buffer holds its shape");
+        let len = checked_array_element_count(shape)?;
+        if len.checked_mul(2) != Some(self.bytes) {
+            return Err(cuda_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
         runtime.enter()?;
         let mut bytes = vec![0_u8; self.bytes];
         // SAFETY: `bytes` has room for the buffer's bytes.
@@ -887,38 +1050,48 @@ impl Buffer {
     /// An Array holding a copy of the buffer's elements.
     pub(crate) fn to_array(&self, dtype: ArrayDType, shape: &[usize]) -> Result<ArrayValue> {
         let runtime = started()?;
-        let len: usize = shape.iter().product();
-        assert_eq!(
-            len * tensor_codegen::element_bytes(dtype),
-            self.bytes,
-            "a tensor's buffer holds its shape"
-        );
+        let (len, expected_bytes) = super::checked_tensor_byte_len(shape, dtype)?;
+        if expected_bytes != self.bytes {
+            return Err(cuda_error(
+                "received a buffer whose size does not match its shape",
+            ));
+        }
         runtime.enter()?;
         fn read<T: Copy + Default>(
             runtime: &Runtime,
             buffer: &Buffer,
             len: usize,
+            expected_bytes: usize,
         ) -> Result<Box<[T]>> {
-            let mut values = vec![T::default(); len];
-            // SAFETY: the buffer holds `len` elements of `T`, and `values`
-            // has room for them.
+            let mut values = try_array_buffer(len, "CUDA tensor read")?;
+            values.resize(len, T::default());
+            // SAFETY: the buffer holds `expected_bytes` bytes for `len` elements
+            // of `T`, and `values` has room for them.
             let status = unsafe {
                 (runtime.api.cuMemcpyDtoH_v2)(
                     values.as_mut_ptr().cast(),
                     buffer.pointer,
-                    len * std::mem::size_of::<T>(),
+                    expected_bytes,
                 )
             };
             check(status, "copy elements from the device")?;
-            Ok(values.into())
+            Ok(values.into_boxed_slice())
         }
         let storage = match dtype {
-            ArrayDType::Int32 => ArrayStorage::Int32(read::<i32>(runtime, self, len)?.into()),
-            ArrayDType::Int64 => ArrayStorage::Int64(read::<i64>(runtime, self, len)?.into()),
-            ArrayDType::Float32 => ArrayStorage::Float32(read::<f32>(runtime, self, len)?.into()),
-            ArrayDType::Float64 => ArrayStorage::Float64(read::<f64>(runtime, self, len)?.into()),
+            ArrayDType::Int32 => {
+                ArrayStorage::Int32(read::<i32>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Int64 => {
+                ArrayStorage::Int64(read::<i64>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float32 => {
+                ArrayStorage::Float32(read::<f32>(runtime, self, len, expected_bytes)?.into())
+            }
+            ArrayDType::Float64 => {
+                ArrayStorage::Float64(read::<f64>(runtime, self, len, expected_bytes)?.into())
+            }
             ArrayDType::Bool => {
-                let flags: Box<[bool]> = read::<u8>(runtime, self, len)?
+                let flags: Box<[bool]> = read::<u8>(runtime, self, len, expected_bytes)?
                     .iter()
                     .map(|&byte| byte != 0)
                     .collect();
@@ -957,19 +1130,266 @@ fn kernel_cache_file(source: &str, compiler: (c_int, c_int)) -> Option<std::path
     Some(root.join("cuda-kernels").join(format!("{name}.ptx")))
 }
 
+/// Maximum size of a cached PTX text image loaded into CUDA.
+const MAX_KERNEL_IMAGE_BYTES: usize = 64 << 20;
+
+/// Checks that `image` is a size-bounded, printable-ASCII PTX text buffer
+/// ending in a single NUL byte and beginning with a `.version` directive
+/// (after optional whitespace and PTX comments).
+fn is_valid_ptx_image(image: &[u8]) -> bool {
+    if image.len() < 2 || image.len() > MAX_KERNEL_IMAGE_BYTES || image.last() != Some(&0) {
+        return false;
+    }
+    let body = &image[..image.len() - 1];
+    if !body
+        .iter()
+        .all(|&byte| matches!(byte, b'\t' | b'\n' | b'\r' | 0x20..=0x7E))
+    {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let mut rest = text;
+    loop {
+        rest = rest.trim_start_matches([' ', '\t', '\r', '\n']);
+        if let Some(after) = rest.strip_prefix("//") {
+            match after.find('\n') {
+                Some(end) => rest = &after[end + 1..],
+                None => return false,
+            }
+        } else if let Some(after) = rest.strip_prefix("/*") {
+            match after.find("*/") {
+                Some(end) => rest = &after[end + 2..],
+                None => return false,
+            }
+        } else {
+            break;
+        }
+    }
+    rest.strip_prefix(".version")
+        .is_some_and(|after| after.starts_with([' ', '\t']))
+}
+
+/// Opens `directory` without following symlinks and verifies that it is a
+/// private (`0700`) directory owned by the current effective user.
+fn open_verified_cache_dir(directory: &std::path::Path) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = CString::new(directory.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `path` is NUL-terminated; flags require a real directory and do
+    // not follow symlinks.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `dir` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(dir.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o077) != 0
+    {
+        return None;
+    }
+    Some(dir)
+}
+
+/// Ensures `directory` exists with `0700` permissions and is owned by the
+/// current effective user without following symlinks.
+fn ensure_private_cache_dir(directory: &std::path::Path) -> Option<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true).mode(0o700);
+    builder.create(directory).ok()?;
+    let path = CString::new(directory.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `path` is NUL-terminated; flags require a real directory and do
+    // not follow symlinks.
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `dir` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(dir.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o022) != 0
+    {
+        return None;
+    }
+    if (stat.st_mode & 0o077) != 0 {
+        // SAFETY: `dir` is an owned, non-group/world-writable directory fd.
+        if unsafe { libc::fchmod(dir.as_raw_fd(), 0o700) } != 0 {
+            return None;
+        }
+    }
+    Some(dir)
+}
+
+/// Reads a cached PTX file only if its parent directory and file pass
+/// ownership, permission, symlink, size, and PTX-text checks.
+fn read_cached_kernel_image(file: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let directory = file.parent()?;
+    let file_name = file.file_name()?;
+    let dir = open_verified_cache_dir(directory)?;
+    let name = CString::new(file_name.as_bytes()).ok()?;
+    // SAFETY: `dir` is an open directory fd and `name` is a NUL-terminated
+    // filename; `O_NOFOLLOW | O_NONBLOCK` avoids symlink and FIFO hazards.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    // SAFETY: `fd` is a newly opened owned descriptor.
+    let file = unsafe { std::fs::File::from_raw_fd(fd) };
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    // SAFETY: `file` is open and `stat` is valid writable storage.
+    if unsafe { libc::fstat(file.as_raw_fd(), &mut stat) } != 0 {
+        return None;
+    }
+    // SAFETY: `geteuid` has no preconditions.
+    let euid = unsafe { libc::geteuid() };
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFREG
+        || stat.st_uid != euid
+        || (stat.st_mode & 0o022) != 0
+        || stat.st_size < 2
+        || stat.st_size as u64 > MAX_KERNEL_IMAGE_BYTES as u64
+    {
+        return None;
+    }
+    let expected = stat.st_size as usize;
+    let mut image = Vec::new();
+    image.try_reserve_exact(expected).ok()?;
+    let limit = (MAX_KERNEL_IMAGE_BYTES as u64) + 1;
+    file.take(limit).read_to_end(&mut image).ok()?;
+    if image.len() > MAX_KERNEL_IMAGE_BYTES || !is_valid_ptx_image(&image) {
+        return None;
+    }
+    Some(image)
+}
+
+fn random_hex_suffix() -> Option<String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::getrandom(&mut bytes).ok()?;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(out, "{byte:02x}");
+    }
+    Some(out)
+}
+
 /// Keeps `image` in `file`. The cache only saves time, so a failure to
-/// write it is not an error. The image is written beside the file and
-/// renamed, so another process never reads half of it.
+/// write it is not an error. The image is written to a private temporary
+/// file in the verified cache directory and renamed atomically.
 fn keep_kernel_image(file: &std::path::Path, image: &[u8]) {
-    let Some(directory) = file.parent() else {
+    use std::io::Write;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let (Some(directory), Some(file_name)) = (file.parent(), file.file_name()) else {
         return;
     };
-    if std::fs::create_dir_all(directory).is_err() {
+    let Some(dir) = ensure_private_cache_dir(directory) else {
+        return;
+    };
+    let Ok(target_name) = CString::new(file_name.as_bytes()) else {
+        return;
+    };
+    let mut created = None;
+    for _ in 0..16 {
+        let Some(suffix) = random_hex_suffix() else {
+            return;
+        };
+        let Ok(temp_name) = CString::new(format!(".{suffix}.partial")) else {
+            return;
+        };
+        // SAFETY: `dir` is a verified directory fd and `temp_name` is a single
+        // NUL-terminated filename; `O_CREAT | O_EXCL | O_NOFOLLOW` guarantees a
+        // fresh regular file with mode 0600.
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                temp_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd >= 0 {
+            // SAFETY: `fd` is a newly created owned descriptor.
+            let handle = unsafe { std::fs::File::from_raw_fd(fd) };
+            created = Some((temp_name, handle));
+            break;
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
+            return;
+        }
+    }
+    let Some((temp_name, mut handle)) = created else {
+        return;
+    };
+    let write_ok = handle
+        .write_all(image)
+        .and_then(|()| handle.flush())
+        .is_ok();
+    drop(handle);
+    if !write_ok {
+        // SAFETY: `dir` is open and `temp_name` is NUL-terminated.
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), temp_name.as_ptr(), 0);
+        }
         return;
     }
-    let partial = file.with_extension(format!("{}.partial", std::process::id()));
-    if std::fs::write(&partial, image).is_err() || std::fs::rename(&partial, file).is_err() {
-        let _ = std::fs::remove_file(&partial);
+    // SAFETY: `dir` is open and both names are NUL-terminated entries in `dir`.
+    let renamed = unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            temp_name.as_ptr(),
+            dir.as_raw_fd(),
+            target_name.as_ptr(),
+        )
+    };
+    if renamed != 0 {
+        // SAFETY: `dir` is open and `temp_name` is NUL-terminated.
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), temp_name.as_ptr(), 0);
+        }
     }
 }
 
@@ -1017,56 +1437,45 @@ impl Compiled {
         // holds `count` NUL-terminated strings at least.
         let status = unsafe { (api.nvrtcCompileProgram)(handle, count, options.as_ptr()) };
         let image = if status == 0 {
-            let mut size = 0;
-            // SAFETY: `image` has the size NVRTC reports.
-            unsafe {
-                (api.nvrtcGetPTXSize)(handle, &mut size);
-                let mut image = vec![0_u8; size.max(1)];
-                (api.nvrtcGetPTX)(handle, image.as_mut_ptr().cast());
-                Ok(image)
-            }
+            read_nvrtc_ptx(handle, api.nvrtcGetPTXSize, api.nvrtcGetPTX)
         } else {
-            let mut size = 0;
-            // SAFETY: `log` has the size NVRTC reports.
-            let log = unsafe {
-                (api.nvrtcGetProgramLogSize)(handle, &mut size);
-                let mut log = vec![0_u8; size.max(1)];
-                (api.nvrtcGetProgramLog)(handle, log.as_mut_ptr().cast());
-                CStr::from_bytes_until_nul(&log)
-                    .map(|log| log.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            };
+            let log = read_nvrtc_log(handle, api.nvrtcGetProgramLogSize, api.nvrtcGetProgramLog);
             Err(cuda_error(format!(
                 "could not compile a kernel (status {status}): {log}"
             )))
         };
         // SAFETY: `handle` is a live program.
-        unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
-        image
+        let destroy_status = unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
+        let image = image?;
+        check(destroy_status, "finish a kernel compile")?;
+        Ok(image)
     }
 
     /// The loaded module of a PTX `image`, or `None` when the driver does
     /// not take it.
-    fn load(runtime: &Runtime, image: &[u8]) -> Option<*mut c_void> {
-        // The driver reads the image as a NUL-terminated string.
-        if image.last() != Some(&0) {
+    fn load(runtime: &Runtime, image: &[u8]) -> Option<Module> {
+        if !is_valid_ptx_image(image) {
             return None;
         }
         let mut module = std::ptr::null_mut();
-        // SAFETY: `image` is NUL-terminated.
+        // SAFETY: `image` is verified printable ASCII PTX ending in a single
+        // NUL byte.
         let status = unsafe { (runtime.api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
-        (status == 0).then_some(module)
+        (status == 0 && !module.is_null()).then_some(Module {
+            handle: module,
+            unload: runtime.api.cuModuleUnload,
+        })
     }
 
     fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
-        let program = tensor_codegen::generate(plan);
+        let program = tensor_codegen::generate(plan)?;
         let api = &runtime.api;
         // A kernel compiled by an earlier run of any program is read from
         // the cache. A file the driver does not take is compiled again.
         let file = kernel_cache_file(&program.source, runtime.compiler);
         let kept = file
             .as_deref()
-            .and_then(|file| std::fs::read(file).ok())
+            .and_then(read_cached_kernel_image)
             .and_then(|image| Self::load(runtime, &image));
         let module = match kept {
             Some(module) => module,
@@ -1092,15 +1501,17 @@ impl Compiled {
             if let Some(name) = name {
                 let symbol = CString::new(name).expect("a kernel name has no NUL byte");
                 let mut function = std::ptr::null_mut();
-                // SAFETY: `module` is loaded and `symbol` is NUL-terminated.
-                let status =
-                    unsafe { (api.cuModuleGetFunction)(&mut function, module, symbol.as_ptr()) };
+                // SAFETY: `module.handle` is loaded and `symbol` is NUL-terminated.
+                let status = unsafe {
+                    (api.cuModuleGetFunction)(&mut function, module.handle, symbol.as_ptr())
+                };
                 check(status, "find a compiled kernel")?;
                 functions.insert(name.to_string(), function as usize);
             }
         }
         let finished = tensor_codegen::finished_buffers(&program, plan);
         Ok(Self {
+            _module: module,
             program,
             functions,
             finished,
@@ -1202,6 +1613,12 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let known = compiled.contains_key(plan);
     if !known {
         if compiled.len() >= MAX_COMPILED_PLANS {
+            // Ensure no in-flight kernels still reference modules being evicted.
+            // SAFETY: the context is current on this thread.
+            check(
+                unsafe { (api.cuCtxSynchronize)() },
+                "synchronize before unloading compiled kernels",
+            )?;
             compiled.clear();
         }
         compiled.insert(plan.clone(), Compiled::new(runtime, plan)?);
@@ -1220,8 +1637,14 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let mut parts: Vec<(usize, usize, usize)> = Vec::new();
     for (index, (slot, buffer)) in plan.slots.iter().zip(buffers.iter_mut()).enumerate() {
         if matches!(slot, Slot::Leaf { .. }) {
-            match leaves.next().expect("a plan has memory for each leaf") {
-                Storage::Cuda(held) => *buffer = Some(Arc::clone(held)),
+            let leaf = leaves
+                .next()
+                .ok_or_else(|| cuda_error("received fewer leaves than the plan expects"))?;
+            match leaf {
+                Storage::Cuda(held) => {
+                    validate_leaf_byte_len(slot, held.bytes)?;
+                    *buffer = Some(Arc::clone(held));
+                }
                 // A leaf in host memory is copied to the device for this
                 // run.
                 Storage::Host(elements) => {
@@ -1236,6 +1659,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         _ => None,
                     };
                     let bytes = halves.as_deref().unwrap_or_else(|| storage_bytes(&storage));
+                    validate_leaf_byte_len(slot, bytes.len())?;
                     if bytes.len() <= MAX_STAGED_LEAF_BYTES {
                         staged.resize(staged.len().next_multiple_of(8), 0);
                         parts.push((index, staged.len(), bytes.len()));
@@ -1246,6 +1670,9 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 }
             }
         }
+    }
+    if leaves.next().is_some() {
+        return Err(cuda_error("received more leaves than the plan expects"));
     }
     if !parts.is_empty() {
         // The numbers of an expression are the same on every pass of a
@@ -1267,7 +1694,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     // The address tables of batched products, kept until the last
     // action is launched.
     let mut tables: Vec<Arc<Buffer>> = Vec::new();
-    runtime.pool().running += 1;
+    let run_guard = RunGuard::enter(&runtime.pool);
     for (index, action) in compiled.program.actions.iter().enumerate() {
         let action_began = std::time::Instant::now();
         outcome = match action {
@@ -1296,7 +1723,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     .iter_mut()
                     .map(|argument| std::ptr::from_mut(argument).cast())
                     .collect();
-                let blocks = threads.div_ceil(BLOCK_THREADS).max(1) as c_uint;
+                let blocks = checked_grid_blocks(*threads)?;
                 buffers[*output] = Some(Arc::new(made));
                 // SAFETY: the kernel takes one pointer for each entry of
                 // `addresses`, and every buffer is alive and large enough
@@ -1341,37 +1768,29 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 };
                 let element = kind.bytes();
                 let tabled = action.is_tabled();
-                let (rows, inner, columns) = (*rows as c_int, *inner as c_int, *columns as c_int);
+                let params =
+                    plan_cublas_matmul(*rows, *inner, *columns, element, pairs, *swapped, spread)?;
+                let (rows, inner, columns) = (params.rows_i, params.inner_i, params.columns_i);
                 // cuBLAS matrices are column-major. A row-major product
                 // A B is the column-major product of B and A as stored,
-                // which is the transpose of the same result. cuBLAS reads
-                // a matrix stored with its rows and columns swapped when
-                // told so: the operation and how far apart its columns
-                // are, for the right and the left operand. A matrix that
+                // which is the transpose of the same result. A matrix that
                 // is part of wider rows has its columns that far apart.
-                let (right_op, right_step): (c_int, c_int) =
-                    if swapped.1 { (1, inner) } else { (0, columns) };
-                let (left_op, left_step): (c_int, c_int) =
-                    if swapped.0 { (1, rows) } else { (0, inner) };
-                let right_step = wide.1.map_or(right_step, |step| step as c_int);
-                let left_step = wide.0.map_or(left_step, |step| step as c_int);
+                let (right_op, left_op) = (params.right_op, params.left_op);
+                let right_step = match wide.1 {
+                    Some(step) => checked_cublas_dim(step, "right row stride")?,
+                    None => params.right_step,
+                };
+                let left_step = match wide.0 {
+                    Some(step) => checked_cublas_dim(step, "left row stride")?,
+                    None => params.left_step,
+                };
                 let shape = Product {
                     kind,
                     ops: (right_op, left_op),
                     sizes: (columns, rows, inner),
                 };
-                let product = (rows as usize) * (columns as usize) * element;
+                let product = params.product_bytes;
                 let count = pairs.len();
-                let stepped = |side: fn(&(usize, usize)) -> usize, step: usize| {
-                    pairs
-                        .iter()
-                        .enumerate()
-                        .all(|(index, pair)| side(pair) == index * step)
-                };
-                let left_stacked = stepped(|pair| pair.0, (rows * inner) as usize);
-                let right_shared = pairs.iter().all(|pair| pair.1 == 0);
-                let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
-                let tall = rows as usize * count;
                 let status = if tabled {
                     // The matrices are not one after another: the
                     // products go beside each other in wider rows, or an
@@ -1379,23 +1798,44 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     // the address of every matrix. The offsets are the
                     // same on every run and their copy on the device is
                     // kept; a kernel adds the buffers of this run.
-                    let mut offsets = Vec::with_capacity(count * 24);
-                    let place = |offset: usize| ((offset * element) as u64).to_ne_bytes();
+                    let table_params = match &params.spread {
+                        Some(spread_params) => spread_params.table,
+                        None => plan_address_table(count)?,
+                    };
+                    let result_step = match &params.spread {
+                        Some(spread_params) => spread_params.step_i,
+                        None => columns,
+                    };
+                    let count_i = checked_cublas_dim(count, "batch count")?;
+                    let mut offsets = Vec::new();
+                    offsets
+                        .try_reserve_exact(table_params.table_bytes)
+                        .map_err(|_| cuda_error("could not allocate matmul address offsets"))?;
+                    let place = |offset: usize| -> Result<[u8; 8]> {
+                        let byte_offset = offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul byte offset overflows 64 bits"))?;
+                        Ok(byte_offset.to_ne_bytes())
+                    };
                     for pair in pairs {
-                        offsets.extend(place(pair.1));
+                        offsets.extend(place(pair.1)?);
                     }
                     for pair in pairs {
-                        offsets.extend(place(pair.0));
+                        offsets.extend(place(pair.0)?);
                     }
+                    let out_matrix = product / element;
                     for index in 0..count {
-                        offsets.extend(place(match spread {
+                        let start = match spread {
                             Some((_, starts)) => starts[index],
-                            None => index * (rows * columns) as usize,
-                        }));
+                            None => index
+                                .checked_mul(out_matrix)
+                                .ok_or_else(|| cuda_error("matmul output offset overflows"))?,
+                        };
+                        offsets.extend(place(start)?);
                     }
-                    let result_step = spread.as_ref().map_or(columns, |(step, _)| *step as c_int);
                     let table = kept_constant(runtime, &offsets).and_then(|offsets| {
-                        let table = Buffer::new(count * 24)?;
+                        let table = Buffer::new(table_params.table_bytes)?;
                         let mut arguments: [u64; 6] = [
                             table.pointer,
                             offsets.pointer,
@@ -1414,7 +1854,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         let status = unsafe {
                             (api.cuLaunchKernel)(
                                 compiled.functions[tensor_codegen::ADDRESSES_KERNEL] as *mut c_void,
-                                (3 * count).div_ceil(BLOCK_THREADS).max(1) as c_uint,
+                                table_params.address_blocks,
                                 1,
                                 1,
                                 BLOCK_THREADS as c_uint,
@@ -1431,7 +1871,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         Ok(Arc::new(table))
                     });
                     table.and_then(|table| {
-                        let each = (count * 8) as DevicePointer;
+                        let each = table_params.each_bytes;
                         // SAFETY: each address is a whole matrix inside
                         // its buffer, with rows the given steps apart.
                         let status = unsafe {
@@ -1440,22 +1880,19 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                 (table.pointer, right_step),
                                 (table.pointer + each, left_step),
                                 (table.pointer + 2 * each, result_step),
-                                count as c_int,
+                                count_i,
                             )
                         };
                         tables.push(table);
                         status
                     })
-                } else if count > 1
-                    && left_stacked
-                    && right_shared
-                    && !swapped.0
-                    && tall <= c_int::MAX as usize
-                {
+                } else if let Some(tall) = params.tall.filter(|_| {
+                    count > 1 && params.left_stacked && params.right_shared && !swapped.0
+                }) {
                     // A stack of matrices times one shared matrix is one
                     // product with the stack read as a single tall matrix.
                     let shape = Product {
-                        sizes: (columns, tall as c_int, inner),
+                        sizes: (columns, tall, inner),
                         ..shape
                     };
                     // SAFETY: the left buffer holds `count` matrices in a
@@ -1468,14 +1905,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             (made.pointer, columns),
                         )
                     }
-                } else if count > 1 && left_stacked && right_stacked && count <= c_int::MAX as usize
+                } else if let Some((a_step, b_step, c_step, batch_count)) = params
+                    .strided_batch
+                    .filter(|_| count > 1 && params.left_stacked && params.right_stacked)
                 {
                     // Matching stacks on both sides are one batched call.
-                    let (a_step, b_step, c_step) = (
-                        i64::from(inner) * i64::from(columns),
-                        i64::from(rows) * i64::from(inner),
-                        i64::from(rows) * i64::from(columns),
-                    );
                     // SAFETY: every buffer holds `count` whole matrices
                     // spaced by its step.
                     unsafe {
@@ -1484,15 +1918,27 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             (right, right_step, a_step),
                             (left, left_step, b_step),
                             (made.pointer, columns, c_step),
-                            count as c_int,
+                            batch_count,
                         )
                     }
                 } else {
                     let mut status = Ok(0);
                     for (index, (left_offset, right_offset)) in pairs.iter().enumerate() {
-                        let a = right + (right_offset * element) as u64;
-                        let b = left + (left_offset * element) as u64;
-                        let c = made.pointer + (index * product) as u64;
+                        let a_bytes = right_offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul right offset overflows 64 bits"))?;
+                        let b_bytes = left_offset
+                            .checked_mul(element)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul left offset overflows 64 bits"))?;
+                        let c_bytes = index
+                            .checked_mul(product)
+                            .and_then(|bytes| u64::try_from(bytes).ok())
+                            .ok_or_else(|| cuda_error("matmul output offset overflows 64 bits"))?;
+                        let a = right + a_bytes;
+                        let b = left + b_bytes;
+                        let c = made.pointer + c_bytes;
                         // SAFETY: each pointer addresses a whole matrix of the
                         // given size inside its buffer.
                         status = unsafe {
@@ -1558,15 +2004,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     } else {
         Ok(())
     };
-    let freed = {
-        let mut pool = runtime.pool();
-        pool.running -= 1;
-        if pool.running == 0 && waits {
-            pool.trim(runtime.pooled)
-        } else {
-            Vec::new()
-        }
-    };
+    let freed = run_guard.finish(waits, runtime.pooled);
     for pointer in freed {
         // SAFETY: the pool owned the allocation and no kernel is running.
         unsafe { (api.cuMemFree_v2)(pointer) };
@@ -1635,4 +2073,654 @@ mod tests {
         );
         std::fs::remove_dir_all(&directory).unwrap();
     }
+
+    #[test]
+    fn kernel_cache_directory_uses_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("aura-kernels-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let cache_dir = directory.join("cuda-kernels");
+        let file = cache_dir.join("sample.ptx");
+        keep_kernel_image(&file, b".version 8.0\n\0");
+        let mode = std::fs::metadata(&cache_dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+
+        // A group- or world-writable cache directory is not written to.
+        let writable = directory.join("writable-kernels");
+        std::fs::create_dir_all(&writable).unwrap();
+        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o777)).unwrap();
+        let skipped = writable.join("skipped.ptx");
+        keep_kernel_image(&skipped, b".version 8.0\n\0");
+        assert!(!skipped.exists());
+
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn cached_kernel_loading_validates_files_and_ptx_contents() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let sample_ptx = b"// header\n/* block */\n.version 8.0\n.target sm_80\n\0";
+        assert!(is_valid_ptx_image(sample_ptx));
+        assert!(!is_valid_ptx_image(b""));
+        assert!(!is_valid_ptx_image(b"\0"));
+        assert!(!is_valid_ptx_image(b".version 8.0\n"));
+        assert!(!is_valid_ptx_image(b".version 8.0\0extra\0"));
+        assert!(!is_valid_ptx_image(b"\x7fELF\x02\x01\x01\0"));
+        assert!(!is_valid_ptx_image(b"\x50\xed\x55\xba\x01\0"));
+        assert!(!is_valid_ptx_image(b"\xba\x55\xed\x50\x01\0"));
+        assert!(!is_valid_ptx_image(b"plain text without directive\0"));
+        assert!(!is_valid_ptx_image(b"// comment only\0"));
+        assert!(!is_valid_ptx_image(b"/* unclosed\0"));
+
+        let root =
+            std::env::temp_dir().join(format!("aura-kernels-validate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache_dir = root.join("cuda-kernels");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        // Valid private PTX loads cleanly.
+        let good = cache_dir.join("good.ptx");
+        std::fs::write(&good, sample_ptx).unwrap();
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_cached_kernel_image(&good).as_deref(),
+            Some(&sample_ptx[..])
+        );
+
+        // Symlinked file is skipped.
+        let link = cache_dir.join("link.ptx");
+        symlink(&good, &link).unwrap();
+        assert!(read_cached_kernel_image(&link).is_none());
+
+        // Symlinked cache directory is skipped.
+        let dir_link = root.join("dir-link");
+        symlink(&cache_dir, &dir_link).unwrap();
+        assert!(read_cached_kernel_image(&dir_link.join("good.ptx")).is_none());
+
+        // Group-writable and world-writable files are skipped.
+        let group_writable = cache_dir.join("group.ptx");
+        std::fs::write(&group_writable, sample_ptx).unwrap();
+        std::fs::set_permissions(&group_writable, std::fs::Permissions::from_mode(0o620)).unwrap();
+        assert!(read_cached_kernel_image(&group_writable).is_none());
+
+        let world_writable = cache_dir.join("world.ptx");
+        std::fs::write(&world_writable, sample_ptx).unwrap();
+        std::fs::set_permissions(&world_writable, std::fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(read_cached_kernel_image(&world_writable).is_none());
+
+        // Non-regular file (FIFO) is skipped without blocking.
+        let fifo = cache_dir.join("fifo.ptx");
+        let fifo_c = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(fifo_c.as_ptr(), 0o600) }, 0);
+        assert!(read_cached_kernel_image(&fifo).is_none());
+
+        // Oversized file is skipped.
+        let huge = cache_dir.join("huge.ptx");
+        let huge_file = std::fs::File::create(&huge).unwrap();
+        huge_file
+            .set_len(MAX_KERNEL_IMAGE_BYTES as u64 + 1)
+            .unwrap();
+        std::fs::set_permissions(&huge, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&huge).is_none());
+
+        // Binary ELF and interior NUL cached files are skipped.
+        let elf = cache_dir.join("elf.ptx");
+        std::fs::write(&elf, b"\x7fELF\x02\x01\x01\0").unwrap();
+        std::fs::set_permissions(&elf, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&elf).is_none());
+
+        let nul = cache_dir.join("nul.ptx");
+        std::fs::write(&nul, b".version 8.0\n\0.target sm_80\0").unwrap();
+        std::fs::set_permissions(&nul, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(read_cached_kernel_image(&nul).is_none());
+
+        // Non-0700 parent directories are skipped.
+        for bad_mode in [0o755, 0o770, 0o777] {
+            std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(bad_mode))
+                .unwrap();
+            assert!(
+                read_cached_kernel_image(&good).is_none(),
+                "mode {bad_mode:o} should be skipped"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn leaf_byte_length_validation_rejects_mismatched_sizes() {
+        let slot = Slot::Leaf {
+            dtype: ArrayDType::Float32 as i64,
+            shape: vec![2, 3],
+        };
+        assert_eq!(validate_leaf_byte_len(&slot, 24).unwrap(), 24);
+        assert_eq!(validate_leaf_byte_len(&slot, 0).unwrap_err().code, "AU4007");
+        assert_eq!(
+            validate_leaf_byte_len(&slot, 20).unwrap_err().code,
+            "AU4007"
+        );
+        let bad_dtype = Slot::Leaf {
+            dtype: 99,
+            shape: vec![1],
+        };
+        assert_eq!(
+            validate_leaf_byte_len(&bad_dtype, 4).unwrap_err().code,
+            "AU4007"
+        );
+    }
+
+    #[test]
+    fn cuda_root_validation_rejects_untrusted_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let base = std::env::temp_dir().join(format!("aura-cuda-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let valid_root = base.join("valid");
+        let valid_lib64 = valid_root.join("lib64");
+        std::fs::create_dir_all(&valid_lib64).unwrap();
+        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(&valid_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&valid_lib64, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let group_writable_root = base.join("group-writable");
+        std::fs::create_dir_all(group_writable_root.join("lib64")).unwrap();
+        std::fs::set_permissions(&group_writable_root, std::fs::Permissions::from_mode(0o775))
+            .unwrap();
+
+        let world_writable_lib = base.join("world-writable-lib");
+        let world_lib64 = world_writable_lib.join("lib64");
+        std::fs::create_dir_all(&world_lib64).unwrap();
+        std::fs::set_permissions(&world_writable_lib, std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::set_permissions(&world_lib64, std::fs::Permissions::from_mode(0o777)).unwrap();
+
+        let traversal = format!("{}/../valid", valid_root.display());
+        let env_roots = vec![
+            Some(".".to_string()),
+            Some("relative/cuda".to_string()),
+            Some(traversal),
+            Some(group_writable_root.to_string_lossy().into_owned()),
+            Some(world_writable_lib.to_string_lossy().into_owned()),
+            Some(valid_root.to_string_lossy().into_owned()),
+        ];
+
+        let candidates = cuda_library_candidates("libnvrtc", &env_roots, false);
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.starts_with("./") || c.starts_with("relative/")),
+            "relative paths must be rejected: {candidates:?}"
+        );
+        assert!(
+            !candidates.iter().any(|c| c.contains("..")),
+            "parent traversal paths must be rejected: {candidates:?}"
+        );
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.contains("group-writable") || c.contains("world-writable-lib")),
+            "group/world-writable directories must be rejected: {candidates:?}"
+        );
+        let canonical_lib = std::fs::canonicalize(&valid_lib64).unwrap();
+        let expected_valid = format!("{}/libnvrtc.so", canonical_lib.display());
+        assert!(
+            candidates.contains(&expected_valid),
+            "valid owned directory should be accepted: {candidates:?}"
+        );
+
+        let secure_candidates = cuda_library_candidates(
+            "libnvrtc",
+            &[Some(valid_root.to_string_lossy().into_owned())],
+            true,
+        );
+        assert!(
+            !secure_candidates.contains(&expected_valid),
+            "AT_SECURE must ignore CUDA_HOME/CUDA_PATH: {secure_candidates:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cuda_grid_and_cublas_limits_reject_truncation_and_overflow() {
+        // Grid block count exceeding i32::MAX must fail instead of truncating.
+        let overflow_threads = (i32::MAX as usize + 1) * BLOCK_THREADS;
+        assert_eq!(
+            checked_grid_blocks(overflow_threads).unwrap_err().code,
+            "AU4007"
+        );
+        assert_eq!(checked_grid_blocks(BLOCK_THREADS).unwrap(), 1);
+
+        // Large 46341 x 46341 matrices fit in c_int, while rows * inner > i32::MAX.
+        let side = 46_341_usize;
+        let stride = side * side;
+        let pairs = vec![(0, 0), (stride, side)];
+        let params = plan_cublas_matmul(side, side, 1, 4, &pairs, (false, false), &None).unwrap();
+        assert!(params.left_stacked);
+        assert!(params.right_stacked);
+
+        // cuBLAS dimensions above i32::MAX must fail with AU4007.
+        let too_large = i32::MAX as usize + 1;
+        assert_eq!(
+            plan_cublas_matmul(too_large, 1, 1, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(1, too_large, 1, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(1, 1, too_large, 4, &[(0, 0)], (false, false), &None)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            plan_cublas_matmul(
+                1,
+                1,
+                1,
+                4,
+                &[(0, 0)],
+                (false, false),
+                &Some((too_large, vec![0])),
+            )
+            .unwrap_err()
+            .code,
+            "AU4007"
+        );
+    }
+
+    #[test]
+    fn keep_kernel_image_does_not_clobber_predictable_partial_symlink() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        let root =
+            std::env::temp_dir().join(format!("aura-kernels-partial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cache_dir = root.join("cuda-kernels");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::set_permissions(&cache_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let sentinel = root.join("sentinel.txt");
+        std::fs::write(&sentinel, b"original-sentinel").unwrap();
+
+        let file = cache_dir.join("abcd.ptx");
+        let predictable = file.with_extension(format!("{}.partial", std::process::id()));
+        symlink(&sentinel, &predictable).unwrap();
+
+        keep_kernel_image(&file, b".version 8.0\n\0");
+
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original-sentinel");
+        assert_eq!(std::fs::read(&file).unwrap(), b".version 8.0\n\0");
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cuda_nvrtc_status_module_unload_and_run_guard() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        unsafe extern "C" fn fail_size(_: *mut c_void, _: *mut usize) -> Status {
+            6
+        }
+        unsafe extern "C" fn zero_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = 0;
+            0
+        }
+        unsafe extern "C" fn huge_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = MAX_KERNEL_IMAGE_BYTES + 1;
+            0
+        }
+        unsafe extern "C" fn ok_size(_: *mut c_void, size: *mut usize) -> Status {
+            *size = 4;
+            0
+        }
+        unsafe extern "C" fn fail_read(_: *mut c_void, _: *mut c_char) -> Status {
+            7
+        }
+        unsafe extern "C" fn write_bytes(_: *mut c_void, out: *mut c_char) -> Status {
+            std::ptr::copy_nonoverlapping(c"ok!".as_ptr(), out, 4);
+            0
+        }
+
+        // NVRTC PTX status and bounds checks.
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), fail_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), zero_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), huge_size, write_bytes)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), ok_size, fail_read)
+                .unwrap_err()
+                .code,
+            "AU4007"
+        );
+        assert_eq!(
+            read_nvrtc_ptx(std::ptr::null_mut(), ok_size, write_bytes).unwrap(),
+            b"ok!\0"
+        );
+
+        // NVRTC log status checks degrade cleanly to empty string on error.
+        assert_eq!(
+            read_nvrtc_log(std::ptr::null_mut(), fail_size, write_bytes),
+            ""
+        );
+        assert_eq!(read_nvrtc_log(std::ptr::null_mut(), ok_size, fail_read), "");
+        assert_eq!(
+            read_nvrtc_log(std::ptr::null_mut(), ok_size, write_bytes),
+            "ok!"
+        );
+
+        // Module RAII unloads handles on drop and cache clear.
+        static UNLOADED: AtomicUsize = AtomicUsize::new(0);
+        unsafe extern "C" fn count_unload(handle: *mut c_void) -> Status {
+            if !handle.is_null() {
+                UNLOADED.fetch_add(1, Ordering::SeqCst);
+            }
+            0
+        }
+        let before = UNLOADED.load(Ordering::SeqCst);
+        let mut cache: HashMap<usize, Module> = HashMap::new();
+        cache.insert(
+            0,
+            Module {
+                handle: std::ptr::dangling_mut::<c_void>(),
+                unload: count_unload,
+            },
+        );
+        cache.insert(
+            1,
+            Module {
+                handle: std::ptr::dangling_mut::<c_void>(),
+                unload: count_unload,
+            },
+        );
+        cache.clear();
+        assert_eq!(UNLOADED.load(Ordering::SeqCst) - before, 2);
+
+        // RunGuard restores `pool.running` after panic so pool trimming still works.
+        let pool = Mutex::new(Pool::default());
+        {
+            let mut guard = pool.lock().unwrap();
+            guard.bytes = 64;
+            guard.free.insert(64, vec![1]);
+        }
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _running = RunGuard::enter(&pool);
+            assert_eq!(pool.lock().unwrap().running, 1);
+            panic!("simulated run unwind");
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(pool.lock().unwrap().running, 0);
+
+        let running = RunGuard::enter(&pool);
+        assert_eq!(pool.lock().unwrap().running, 1);
+        let freed = running.finish(true, 0);
+        assert_eq!(freed, vec![1]);
+        assert_eq!(pool.lock().unwrap().running, 0);
+    }
+}
+
+fn read_nvrtc_ptx(
+    handle: *mut c_void,
+    get_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    get_ptx: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+) -> Result<Vec<u8>> {
+    let mut size = 0;
+    // SAFETY: `handle` is a compiled NVRTC program and `size` is writable.
+    let size_status = unsafe { get_size(handle, &mut size) };
+    check(size_status, "measure a compiled kernel")?;
+    if size == 0 || size > MAX_KERNEL_IMAGE_BYTES {
+        return Err(cuda_error(format!(
+            "compiled kernel reported invalid PTX size {size}"
+        )));
+    }
+    let mut image = Vec::new();
+    image
+        .try_reserve_exact(size)
+        .map_err(|_| cuda_error("could not allocate memory for a compiled kernel"))?;
+    image.resize(size, 0);
+    // SAFETY: `image` has `size` writable bytes reported by NVRTC.
+    let ptx_status = unsafe { get_ptx(handle, image.as_mut_ptr().cast()) };
+    check(ptx_status, "read a compiled kernel")?;
+    Ok(image)
+}
+
+fn read_nvrtc_log(
+    handle: *mut c_void,
+    get_size: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    get_log: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+) -> String {
+    let mut size = 0;
+    // SAFETY: `handle` is a compiled NVRTC program and `size` is writable.
+    if unsafe { get_size(handle, &mut size) } != 0 || size == 0 || size > MAX_KERNEL_IMAGE_BYTES {
+        return String::new();
+    }
+    let mut log = Vec::new();
+    if log.try_reserve_exact(size).is_err() {
+        return String::new();
+    }
+    log.resize(size, 0);
+    // SAFETY: `log` has `size` writable bytes reported by NVRTC.
+    if unsafe { get_log(handle, log.as_mut_ptr().cast()) } != 0 {
+        return String::new();
+    }
+    CStr::from_bytes_until_nul(&log)
+        .map(|log| log.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// The table of matrix addresses a batched product reads: its size, where
+/// its second and third parts start, and the blocks of the kernel that
+/// fills it.
+#[derive(Clone, Copy, Debug)]
+struct TableParams {
+    table_bytes: usize,
+    each_bytes: DevicePointer,
+    address_blocks: c_uint,
+}
+
+#[derive(Debug)]
+struct SpreadParams {
+    step_i: c_int,
+    table: TableParams,
+}
+
+fn plan_address_table(count: usize) -> Result<TableParams> {
+    let table_bytes = count
+        .checked_mul(24)
+        .filter(|&bytes| bytes <= isize::MAX as usize)
+        .ok_or_else(|| cuda_error("matmul address table size overflows"))?;
+    let each_bytes = count
+        .checked_mul(8)
+        .and_then(|bytes| DevicePointer::try_from(bytes).ok())
+        .ok_or_else(|| cuda_error("matmul address table offset overflows"))?;
+    let address_threads = count
+        .checked_mul(3)
+        .ok_or_else(|| cuda_error("matmul address thread count overflows"))?;
+    let address_blocks = checked_grid_blocks(address_threads)?;
+    Ok(TableParams {
+        table_bytes,
+        each_bytes,
+        address_blocks,
+    })
+}
+
+#[derive(Debug)]
+struct CublasParams {
+    rows_i: c_int,
+    inner_i: c_int,
+    columns_i: c_int,
+    right_op: c_int,
+    right_step: c_int,
+    left_op: c_int,
+    left_step: c_int,
+    product_bytes: usize,
+    left_stacked: bool,
+    right_shared: bool,
+    right_stacked: bool,
+    tall: Option<c_int>,
+    strided_batch: Option<(i64, i64, i64, c_int)>,
+    spread: Option<SpreadParams>,
+}
+
+fn checked_grid_blocks(threads: usize) -> Result<c_uint> {
+    let blocks = threads.div_ceil(BLOCK_THREADS).max(1);
+    if blocks > i32::MAX as usize {
+        return Err(cuda_error(format!(
+            "kernel launch requires {blocks} blocks, which exceeds the CUDA 1D grid limit"
+        )));
+    }
+    Ok(blocks as c_uint)
+}
+
+fn checked_cublas_dim(value: usize, label: &str) -> Result<c_int> {
+    c_int::try_from(value).map_err(|_| {
+        cuda_error(format!(
+            "matmul {label} {value} exceeds the cuBLAS 32-bit dimension limit"
+        ))
+    })
+}
+
+fn pairs_stepped(
+    pairs: &[(usize, usize)],
+    side: fn(&(usize, usize)) -> usize,
+    step: Option<usize>,
+) -> bool {
+    let Some(step) = step else {
+        return false;
+    };
+    pairs
+        .iter()
+        .enumerate()
+        .all(|(index, pair)| index.checked_mul(step) == Some(side(pair)))
+}
+
+fn plan_cublas_matmul(
+    rows: usize,
+    inner: usize,
+    columns: usize,
+    element: usize,
+    pairs: &[(usize, usize)],
+    swapped: (bool, bool),
+    spread: &Option<(usize, Vec<usize>)>,
+) -> Result<CublasParams> {
+    let rows_i = checked_cublas_dim(rows, "rows")?;
+    let inner_i = checked_cublas_dim(inner, "inner")?;
+    let columns_i = checked_cublas_dim(columns, "columns")?;
+    // cuBLAS reads a matrix stored with its rows and columns swapped when told
+    // so: the operation and how far apart its columns are, for the right and
+    // the left operand.
+    let (right_op, right_step): (c_int, c_int) = if swapped.1 {
+        (1, inner_i)
+    } else {
+        (0, columns_i)
+    };
+    let (left_op, left_step): (c_int, c_int) = if swapped.0 { (1, rows_i) } else { (0, inner_i) };
+    let out_matrix = rows
+        .checked_mul(columns)
+        .ok_or_else(|| cuda_error("matmul output matrix size overflows"))?;
+    let product_bytes = out_matrix
+        .checked_mul(element)
+        .ok_or_else(|| cuda_error("matmul output byte size overflows"))?;
+    let left_matrix = rows.checked_mul(inner);
+    let right_matrix = inner.checked_mul(columns);
+    let count = pairs.len();
+    let left_stacked = pairs_stepped(pairs, |pair| pair.0, left_matrix);
+    let right_shared = pairs.iter().all(|pair| pair.1 == 0);
+    let right_stacked = pairs_stepped(pairs, |pair| pair.1, right_matrix);
+    let tall = rows
+        .checked_mul(count)
+        .and_then(|total| c_int::try_from(total).ok());
+    let strided_batch = match (
+        right_matrix.and_then(|v| i64::try_from(v).ok()),
+        left_matrix.and_then(|v| i64::try_from(v).ok()),
+        i64::try_from(out_matrix).ok(),
+        c_int::try_from(count).ok(),
+    ) {
+        (Some(a_step), Some(b_step), Some(c_step), Some(batch_count)) => {
+            Some((a_step, b_step, c_step, batch_count))
+        }
+        _ => None,
+    };
+    let spread = match spread {
+        Some((step, starts)) => {
+            if starts.len() != count {
+                return Err(cuda_error(
+                    "matmul spread start count does not match batch count",
+                ));
+            }
+            let step_i = checked_cublas_dim(*step, "spread stride")?;
+            checked_cublas_dim(count, "batch count")?;
+            Some(SpreadParams {
+                step_i,
+                table: plan_address_table(count)?,
+            })
+        }
+        None => None,
+    };
+    Ok(CublasParams {
+        rows_i,
+        inner_i,
+        columns_i,
+        right_op,
+        right_step,
+        left_op,
+        left_step,
+        product_bytes,
+        left_stacked,
+        right_shared,
+        right_stacked,
+        tall,
+        strided_batch,
+        spread,
+    })
+}
+
+/// Validates that a leaf buffer has the exact byte length required by `slot`.
+fn validate_leaf_byte_len(slot: &Slot, actual_bytes: usize) -> Result<usize> {
+    let Slot::Leaf { dtype, shape } = slot else {
+        return Err(cuda_error("expected a leaf slot"));
+    };
+    let expected_bytes = if *dtype == super::HALF_DTYPE {
+        checked_array_element_count(shape)?
+            .checked_mul(2)
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+            .ok_or_else(|| cuda_error("float16 leaf byte size overflows"))?
+    } else {
+        let dtype = ArrayDType::from_code(*dtype)
+            .ok_or_else(|| cuda_error("received an unknown leaf dtype"))?;
+        super::checked_tensor_byte_len(shape, dtype)?.1
+    };
+    if actual_bytes != expected_bytes {
+        return Err(cuda_error(format!(
+            "received a leaf buffer of {actual_bytes} bytes for a shape requiring {expected_bytes} bytes"
+        )));
+    }
+    Ok(expected_bytes)
 }

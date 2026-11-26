@@ -111,24 +111,68 @@ pub(super) fn emitter_diagnostic(error: String) -> Diagnostic {
 
 /// The path the trap hook gets for the source file `path` of the program
 /// at `program_path`: relative to the program file's directory when the
-/// file lies under it, so the object's bytes do not depend on where the
-/// package was checked out.
-pub(super) fn trap_path(path: &str, program_path: &str) -> String {
-    let directory =
-        std::path::Path::new(program_path)
-            .parent()
-            .and_then(|directory| match directory.as_os_str().is_empty() {
-                true => std::env::current_dir().ok(),
-                false => std::fs::canonicalize(directory).ok(),
-            });
-    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
-    match directory
+/// file lies under it, relative to its package root (`<pkg>/...`) for an
+/// external dependency, and never an absolute host filesystem path, so the
+/// object's bytes do not depend on where packages were checked out.
+pub(super) fn trap_path(path: &str, program_path: &str, module_name: Option<&str>) -> String {
+    let program_dir = std::path::Path::new(program_path)
+        .parent()
+        .and_then(|directory| match directory.as_os_str().is_empty() {
+            true => std::env::current_dir()
+                .ok()
+                .and_then(|dir| aura_core::host_path::canonicalize(&dir).ok().or(Some(dir))),
+            false => aura_core::host_path::canonicalize(directory).ok(),
+        });
+    let resolved = aura_core::host_path::canonicalize(std::path::Path::new(path))
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+    if let Some(relative) = program_dir
         .as_ref()
         .and_then(|directory| resolved.strip_prefix(directory).ok())
     {
-        Some(relative) => relative.to_string_lossy().replace('\\', "/"),
-        None => path.to_string(),
+        return relative.to_string_lossy().replace('\\', "/");
     }
+    let synthetic_module = |name: &str| name.is_empty() || name.starts_with('<');
+    if let Some(pkg_root) = find_manifest_root(&resolved) {
+        if let Ok(relative) = resolved.strip_prefix(&pkg_root) {
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            let program_pkg_root = program_dir.as_deref().and_then(find_manifest_root_from_dir);
+            if program_pkg_root.as_deref() == Some(pkg_root.as_path()) {
+                return relative;
+            }
+            let pkg_name = module_name
+                .filter(|name| !synthetic_module(name))
+                .and_then(|name| name.split('.').next())
+                .map(str::to_string)
+                .or_else(|| {
+                    pkg_root
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "dependency".to_string());
+            return format!("{pkg_name}/{relative}");
+        }
+    }
+    // `has_root` also covers `/x` on Windows, which has no drive and so is
+    // not absolute there but still names a host directory.
+    if resolved.has_root() || std::path::Path::new(path).has_root() {
+        if let Some(name) = module_name.filter(|name| !synthetic_module(name)) {
+            return format!("{}.au", name.replace('.', "/"));
+        }
+        if let Some(file_name) = resolved.file_name() {
+            return file_name.to_string_lossy().into_owned();
+        }
+    }
+    path.replace('\\', "/")
+}
+
+fn find_manifest_root(file_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    file_path.parent().and_then(find_manifest_root_from_dir)
+}
+
+fn find_manifest_root_from_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    dir.ancestors()
+        .find(|ancestor| ancestor.join("Aura.toml").is_file())
+        .map(std::path::Path::to_path_buf)
 }
 
 impl NativeCodegen<'_> {
@@ -281,6 +325,14 @@ fn declared_symbols(module: &MirModule) -> HashSet<&str> {
         .flat_map(|block| &block.instructions)
     {
         if let Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee: CallTarget::Extern(call),
+                    ..
+                },
+            ..
+        }
+        | Instruction::WriteLoan {
             value:
                 Rvalue::Call {
                     callee: CallTarget::Extern(call),
@@ -1141,6 +1193,19 @@ fn check_call(
         CallTarget::Value(_) => Some(("calls a function value".to_string(), "")),
         CallTarget::Extern(call) => {
             for (param, argument) in call.params.iter().zip(args) {
+                if param.c_string {
+                    if let Operand::String(text) = &argument.value {
+                        if text.contains('\0') {
+                            return Some((
+                                format!(
+                                    "passes a literal with an interior NUL byte for `{}` of the foreign function `{}`",
+                                    param.name, call.symbol
+                                ),
+                                "C strings end at the first NUL byte and cannot hold one inside",
+                            ));
+                        }
+                    }
+                }
                 let text = matches!(argument.value, Operand::String(_));
                 let callback = matches!(argument.value, Operand::Function { .. })
                     && crate::mir_runtime::callback_signature(&param.ty).is_some();

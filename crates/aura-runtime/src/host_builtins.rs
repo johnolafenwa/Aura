@@ -14,6 +14,9 @@ use super::*;
 /// from the process.
 pub type HostBuiltinFn = fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
 
+/// A host builtin whose contract requires caller-vouched memory safety.
+pub type UnsafeHostBuiltinFn = unsafe fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
+
 /// A `math` function of one `float64`, named for its diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MathFunction {
@@ -903,9 +906,16 @@ pub fn host_trace_event(args: Vec<Value>, _program_args: Option<&[String]>) -> R
     host_log_record("trace::event", args)
 }
 
-/// One `mem` operation at a raw address. The caller vouches for the
-/// address, as C code does for a pointer: a bad one has undefined behavior.
-fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
+/// One `mem` operation at a raw address.
+///
+/// # Safety
+///
+/// For any operation that takes an address, the caller must vouch that the
+/// address passed in `args[0]` points to valid memory for the requested width
+/// and access kind. Null and misaligned addresses are rejected with `AU4001`
+/// before dereference.
+unsafe fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
+    check_mem_address(name, &args)?;
     if let Some(value) = typed_memory::access(name, &args) {
         return value;
     }
@@ -943,8 +953,10 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
     };
     host_expect_arity(name, &args, arity)?;
     let address = word(0)? as usize;
-    // SAFETY: the program states that `address` is valid for this access;
-    // the `mem` module is available only to a package with `allow_ffi`.
+    // SAFETY: `check_mem_address` rejected null and misaligned addresses,
+    // and the caller vouches that `address` points to valid memory for this
+    // access; the `mem` module is available only to a package with
+    // `allow_ffi`.
     unsafe {
         match (operation, kind) {
             ("read", IntegerKind::Uint8) => {
@@ -1002,6 +1014,84 @@ fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
             _ => unreachable!("registered plain memory operation"),
         }
     }
+}
+
+/// The alignment the address of a `mem` access must have, or `None` for an
+/// operation that takes no address to dereference.
+fn mem_access_alignment(name: &str) -> Option<usize> {
+    use aura_core::atomic_order::AtomicOperation;
+    use std::mem::align_of;
+    use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8};
+    let operation = name.strip_prefix("mem::")?;
+    if let Some(op) = AtomicOperation::of(operation) {
+        if op == AtomicOperation::Fence {
+            return None;
+        }
+        return Some(
+            match operation.rsplit_once("_uint").map(|(_, width)| width) {
+                Some("8") => align_of::<AtomicU8>(),
+                Some("16") => align_of::<AtomicU16>(),
+                Some("32") => align_of::<AtomicU32>(),
+                _ => align_of::<AtomicU64>(),
+            },
+        );
+    }
+    let (access, kind) = operation.rsplit_once('_')?;
+    let volatile = match access {
+        "read" | "write" => false,
+        "volatile_read" | "volatile_write" => true,
+        _ => return None,
+    };
+    let natural = match kind {
+        "bool" | "int8" | "uint8" => align_of::<u8>(),
+        "int16" | "uint16" => align_of::<u16>(),
+        "int32" | "uint32" => align_of::<u32>(),
+        "float32" => align_of::<f32>(),
+        "int64" | "uint64" => align_of::<u64>(),
+        "float64" => align_of::<f64>(),
+        _ => return None,
+    };
+    Some(if volatile { natural } else { 1 })
+}
+
+/// Rejects a null or misaligned address before a `mem` access dereferences
+/// it. Arguments of the wrong kind are left for the operation to report.
+fn check_mem_address(name: &str, args: &[Value]) -> Result<()> {
+    let Some(required_alignment) = mem_access_alignment(name) else {
+        return Ok(());
+    };
+    let Some(Value::Int(raw_address)) = args.first() else {
+        return Ok(());
+    };
+    let Some(raw_address) = raw_address
+        .as_i128()
+        .and_then(|value| u64::try_from(value).ok())
+    else {
+        return Ok(());
+    };
+    let address = usize::try_from(raw_address).map_err(|_| {
+        Diagnostic::coded(
+            "AU4001",
+            format!("`{}` address is out of range", name.replace("::", ".")),
+        )
+    })?;
+    if address == 0 {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{}` cannot access a null address", name.replace("::", ".")),
+        ));
+    }
+    if !address.is_multiple_of(required_alignment) {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{}` requires an address aligned to {} bytes",
+                name.replace("::", "."),
+                required_alignment
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// One allocation function of `mem` in a hosted program (ADR-0128): the
@@ -1092,8 +1182,15 @@ fn mem_argument_error(name: &str) -> Diagnostic {
 macro_rules! host_mem_functions {
     ($($function:ident => $name:literal;)*) => {
         $(
-            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-                host_mem($name, args)
+            /// # Safety
+            ///
+            /// Any address passed in `args` must be valid for the requested
+            /// raw memory operation.
+            pub unsafe fn $function(
+                args: Vec<Value>,
+                _program_args: Option<&[String]>,
+            ) -> Result<Value> {
+                unsafe { host_mem($name, args) }
             }
         )*
     };
@@ -1171,7 +1268,14 @@ host_mem_functions! {
 macro_rules! host_mem_heap_functions {
     ($($function:ident => $name:literal;)*) => {
         $(
-            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+            /// # Safety
+            ///
+            /// An address passed back to the allocator must be one it returned
+            /// for the same size and alignment, not freed since.
+            pub unsafe fn $function(
+                args: Vec<Value>,
+                _program_args: Option<&[String]>,
+            ) -> Result<Value> {
                 host_mem_heap($name, args)
             }
         )*
@@ -1186,29 +1290,10 @@ host_mem_heap_functions! {
     host_mem_heap_free_bytes => "mem::heap_free_bytes";
 }
 
-/// The owned-argument function for a host builtin, or `None` for a name the
-/// table does not hold.
-pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
-    let function: HostBuiltinFn = match name {
-        "collections::__aura_new" => ordered_collections::new,
-        "collections::__aura_len" => ordered_collections::len,
-        "collections::__aura_supported" => ordered_collections::supported,
-        "collections::__aura_deque_push" => ordered_collections::deque_push,
-        "collections::__aura_deque_pop" => ordered_collections::deque_pop,
-        "collections::__aura_deque_get" => ordered_collections::deque_get,
-        "collections::__aura_heap_from" => ordered_collections::heap_from,
-        "collections::__aura_heap_push" => ordered_collections::heap_push,
-        "collections::__aura_heap_take" => ordered_collections::heap_take,
-        "collections::__aura_heap_peek" => ordered_collections::heap_peek,
-        "collections::__aura_map_put" => ordered_collections::map_put,
-        "collections::__aura_map_get" => ordered_collections::map_get,
-        "collections::__aura_map_has" => ordered_collections::map_has,
-        "collections::__aura_map_take" => ordered_collections::map_take,
-        "collections::__aura_map_edge" => ordered_collections::map_edge,
-        "collections::__aura_map_bound" => ordered_collections::map_bound,
-        "collections::__aura_map_range" => ordered_collections::map_range,
-        "collections::__aura_map_drain" => ordered_collections::map_drain,
-        "math::floor" => host_math_floor,
+/// The unsafe raw-memory function for a `mem::*` host builtin, or `None` for
+/// any other name.
+pub fn unsafe_mem_builtin_function(name: &str) -> Option<UnsafeHostBuiltinFn> {
+    let function: UnsafeHostBuiltinFn = match name {
         "mem::read_bool" => host_mem_read_bool,
         "mem::write_bool" => host_mem_write_bool,
         "mem::volatile_read_bool" => host_mem_volatile_read_bool,
@@ -1280,6 +1365,34 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "mem::realloc" => host_mem_realloc,
         "mem::heap_add_region" => host_mem_heap_add_region,
         "mem::heap_free_bytes" => host_mem_heap_free_bytes,
+        _ => return None,
+    };
+    Some(function)
+}
+
+/// The owned-argument function for a safe host builtin, or `None` for a name
+/// the safe table does not hold.
+pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
+    let function: HostBuiltinFn = match name {
+        "collections::__aura_new" => ordered_collections::new,
+        "collections::__aura_len" => ordered_collections::len,
+        "collections::__aura_supported" => ordered_collections::supported,
+        "collections::__aura_deque_push" => ordered_collections::deque_push,
+        "collections::__aura_deque_pop" => ordered_collections::deque_pop,
+        "collections::__aura_deque_get" => ordered_collections::deque_get,
+        "collections::__aura_heap_from" => ordered_collections::heap_from,
+        "collections::__aura_heap_push" => ordered_collections::heap_push,
+        "collections::__aura_heap_take" => ordered_collections::heap_take,
+        "collections::__aura_heap_peek" => ordered_collections::heap_peek,
+        "collections::__aura_map_put" => ordered_collections::map_put,
+        "collections::__aura_map_get" => ordered_collections::map_get,
+        "collections::__aura_map_has" => ordered_collections::map_has,
+        "collections::__aura_map_take" => ordered_collections::map_take,
+        "collections::__aura_map_edge" => ordered_collections::map_edge,
+        "collections::__aura_map_bound" => ordered_collections::map_bound,
+        "collections::__aura_map_range" => ordered_collections::map_range,
+        "collections::__aura_map_drain" => ordered_collections::map_drain,
+        "math::floor" => host_math_floor,
         "math::ceil" => host_math_ceil,
         "math::trunc" => host_math_trunc,
         "math::pow" => host_math_pow,

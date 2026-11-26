@@ -564,6 +564,29 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
       args: [],
       cwd: workspace
     });
+
+    // An explicit absolute path scopes workspace compiler opt-in to that checkout only.
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = path.join(tempRoot, "other-checkout");
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = workspace;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: path.join(workspace, "target", "debug", binaryName()),
+      args: [],
+      cwd: workspace
+    });
+
+    // A directory path in AURA_LSP_AURA_PATH is ignored rather than treated as a binary.
+    delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+    process.env.AURA_LSP_AURA_PATH = tempRoot;
+    assert.deepEqual(resolveCompilerCommand(), {
+      cmd: binaryName(),
+      args: [],
+      cwd: undefined
+    });
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) {
@@ -662,10 +685,8 @@ test("compiler bridge uri and command helpers handle direct utility cases", asyn
   const encodedPath = path.join(repoRoot, "examples/modules/simple_import.au").replace(/ /g, "%20");
   assert.equal(uriToPath(`file://${encodedPath}`), path.join(repoRoot, "examples/modules/simple_import.au"));
   assert.equal(uriToPath("file:///C:/aura/examples/main.au", "win32"), "C:\\aura\\examples\\main.au");
-  assert.equal(
-    uriToPath("file://server/share/project/main.au", "win32"),
-    "\\\\server\\share\\project\\main.au"
-  );
+  // A URI with a host names a remote share, which the server never opens.
+  assert.equal(uriToPath("file://server/share/project/main.au", "win32"), null);
   assert.equal(uriToPath("not-a-file-uri"), null);
   assert.equal(binaryName("win32"), "aura.exe");
   assert.equal(binaryName("linux"), "aura");
@@ -1032,6 +1053,32 @@ test("persistent compiler service reports spawn and empty-stderr exit failures",
   });
   await assert.rejects(exited.request("analyze", {}), /status 7/);
   exited.dispose();
+});
+
+test("persistent compiler service handles stdin EPIPE and non-object JSON responses", async () => {
+  const stdinFailure = new CompilerService({
+    cmd: process.execPath,
+    args: ["-e", "process.stdin.resume()"],
+    cwd: repoRoot
+  });
+  const pendingStdin = stdinFailure.request("analyze", {});
+  stdinFailure.child.stdin.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+  await assert.rejects(pendingStdin, /EPIPE/);
+  assert.equal(stdinFailure.closed, true);
+  stdinFailure.dispose();
+
+  for (const payload of ["null\n", "42\n", "[]\n"]) {
+    const badShape = new CompilerService({
+      cmd: process.execPath,
+      args: ["-e", "process.stdin.resume()"],
+      cwd: repoRoot
+    });
+    const pending = badShape.request("analyze", {});
+    badShape.handleStdout(payload);
+    await assert.rejects(pending, /expected JSON object/);
+    assert.equal(badShape.closed, true);
+    badShape.dispose();
+  }
 });
 
 test("compiler bridge accepts non-file URIs when using the compiler subprocess helpers", async () => {
@@ -7232,7 +7279,7 @@ test("without aura on PATH the server uses an installed compiler or reports it m
   }
 });
 
-test("persistent compiler service sets AURA_OFFLINE=1 by default without overriding explicit env", async () => {
+test("persistent compiler service enforces AURA_OFFLINE=1 and passes --offline even when process.env.AURA_OFFLINE is 0", async () => {
   const script = [
     "const readline = require('node:readline');",
     "const lines = readline.createInterface({ input: process.stdin });",
@@ -7240,7 +7287,7 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     "  const request = JSON.parse(line);",
     `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
       SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
-    )}, result: { offline: process.env.AURA_OFFLINE } }) + '\\n');`,
+    )}, result: { offline: process.env.AURA_OFFLINE, argv: process.argv.slice(1) } }) + '\\n');`,
     "});"
   ].join("\n");
   const savedOffline = process.env.AURA_OFFLINE;
@@ -7253,7 +7300,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await defaultService.request("analyze", {}), { offline: "1" });
+    assert.deepEqual(await defaultService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     defaultService.dispose();
 
     process.env.AURA_OFFLINE = "0";
@@ -7262,7 +7312,10 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
       args: ["-e", script],
       cwd: repoRoot
     });
-    assert.deepEqual(await overrideService.request("analyze", {}), { offline: "0" });
+    assert.deepEqual(await overrideService.request("analyze", {}), {
+      offline: "1",
+      argv: ["lsp", "--offline"]
+    });
     overrideService.dispose();
   } finally {
     if (defaultService) {

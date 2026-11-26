@@ -222,16 +222,87 @@ pub(super) fn save(
     // The format asks for elements that begin on an eight-byte boundary.
     header.resize(header.len().next_multiple_of(8), b' ');
     let failed = |error: std::io::Error| format!("cannot write `{path}`: {error}");
-    let partial = format!("{path}.partial");
-    let mut file = std::fs::File::create(&partial).map_err(failed)?;
-    file.write_all(&(header.len() as u64).to_le_bytes())
+    let (partial, mut file) = create_unique_partial_file(path).map_err(failed)?;
+    let write_outcome = file
+        .write_all(&(header.len() as u64).to_le_bytes())
         .and_then(|()| file.write_all(&header))
         .and_then(|()| file.write_all(&data))
-        .and_then(|()| file.sync_all())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    write_outcome
         .and_then(|()| std::fs::rename(&partial, path))
         .map_err(|error| {
             let _ = std::fs::remove_file(&partial);
             failed(error)
         })?;
     Ok(8 + header.len() as u64 + data.len() as u64)
+}
+
+fn create_unique_partial_file(path: &str) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+
+    for _ in 0..16 {
+        let mut random = [0_u8; 16];
+        getrandom::getrandom(&mut random).map_err(std::io::Error::other)?;
+        let mut suffix = String::with_capacity(random.len() * 2);
+        for byte in random {
+            use std::fmt::Write as _;
+            let _ = write!(suffix, "{byte:02x}");
+        }
+        let partial = std::path::PathBuf::from(format!("{path}.{suffix}.partial"));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        match options.open(&partial) {
+            Ok(file) => return Ok((partial, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary file name",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safetensors_save_does_not_clobber_partial_symlink() {
+        let root =
+            std::env::temp_dir().join(format!("aura-weights-partial-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let sentinel = root.join("sentinel.txt");
+        std::fs::write(&sentinel, b"original-sentinel").unwrap();
+
+        let target = root.join("weights.safetensors");
+        let predictable = format!("{}.partial", target.display());
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&sentinel, &predictable).unwrap();
+        #[cfg(not(unix))]
+        std::fs::write(&predictable, b"existing").unwrap();
+
+        let sample = ArrayValue::new(
+            Box::new([2]),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice().into()),
+        )
+        .unwrap();
+        let written = save(
+            target.to_str().unwrap(),
+            &[("w".to_string(), sample, false)],
+        )
+        .unwrap();
+        assert!(written > 0);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"original-sentinel");
+        let loaded = load(target.to_str().unwrap(), "w", ArrayDType::Float32).unwrap();
+        assert_eq!(loaded.shape.as_ref(), &[2]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

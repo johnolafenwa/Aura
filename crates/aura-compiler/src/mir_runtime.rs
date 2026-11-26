@@ -22,9 +22,10 @@ use crate::integer::{
 use crate::json_codec;
 use crate::list_sort;
 use crate::mir::{
-    CallTarget, CleanupAction, Instruction, ManagerExitResult, MirArg, MirClass, MirExternCall,
-    MirExternParam, MirFormatPart, MirFunction, MirMethod, MirModule, MirParam, MirReceiverKind,
-    MirTraitImpl, Operand, Rvalue, Terminator, MIR_LOOP_SAFEPOINT_INTERVAL,
+    CallTarget, CleanupAction, CleanupCallee, Instruction, ManagerExitResult, MethodDispatch,
+    MirArg, MirClass, MirExternCall, MirExternParam, MirFormatPart, MirFunction, MirMethod,
+    MirModule, MirParam, MirReceiverKind, MirTraitImpl, Operand, Rvalue, Terminator,
+    MIR_LOOP_SAFEPOINT_INTERVAL,
 };
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
@@ -38,15 +39,16 @@ use crate::runtime_value::{
     decode_process_restart_policy, decode_process_stdio, divmod_numeric_values,
     duration_to_host_timer, duration_to_milliseconds, duration_to_seconds,
     evaluate_bytes_host_builtin_ref, evaluate_host_builtin_with_program_args,
-    evaluate_string_to_bytes_host_ref, float_floor_divmod, float_power, flush_buffered_files,
-    format_runtime_value_with, generator_yield, host_process_args, io_error, io_read_line,
-    json_array_metadata_is_exact, json_dump_error_to_diagnostic, json_int_metadata_is_exact,
-    json_object_metadata_is_exact, json_parse_owned_to_runtime, lookup_found, lookup_missing,
-    manager_exit_failure_note, nominal_runtime_base_name, optional_absent, optional_bytes_value,
-    optional_present, optional_str_value, optional_value, poll_cancellation, poll_ready,
-    poll_unavailable, prepare_json_codec_source, process_error_cancelled, process_error_io,
-    process_error_no_command, process_error_spawn, process_error_timed_out, process_exit_status,
-    process_stdio_inherit, process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
+    evaluate_string_to_bytes_host_ref, evaluate_unsafe_host_builtin_with_program_args,
+    float_floor_divmod, float_power, flush_buffered_files, format_runtime_value_with,
+    generator_yield, host_process_args, io_error, io_read_line, json_array_metadata_is_exact,
+    json_dump_error_to_diagnostic, json_int_metadata_is_exact, json_object_metadata_is_exact,
+    json_parse_owned_to_runtime, lookup_found, lookup_missing, manager_exit_failure_note,
+    nominal_runtime_base_name, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, optional_value, poll_cancellation, poll_ready, poll_unavailable,
+    prepare_json_codec_source, process_error_cancelled, process_error_io, process_error_no_command,
+    process_error_spawn, process_error_timed_out, process_exit_status, process_stdio_inherit,
+    process_stdio_null, process_stdio_pipe, process_supervisor_event_failed,
     process_supervisor_wait_cancelled, process_supervisor_wait_event,
     process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_exited,
     process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
@@ -147,9 +149,13 @@ pub fn run_entry_with_stdout_sink_and_program_args(
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
 ) -> Result<RunOutput> {
-    reject_untrusted_extern_calls(module)?;
+    reject_untrusted_extern_calls(module, entry)?;
     let mut module = module.clone();
+    // Hand-built MIR may still spell resolved operations as named or member
+    // calls. Resolve them as the native emitter does, so both boundaries
+    // validate and run the same form.
     crate::mir::resolve_runtime_ops(&mut module);
+    reject_untrusted_extern_calls(&module, entry)?;
     run_resolved_entry(module, entry, stdout_sink, program_args, false)
 }
 
@@ -183,7 +189,7 @@ fn run_resolved_entry(
     entry: Option<&str>,
     stdout_sink: Option<StdoutSink>,
     program_args: Vec<String>,
-    raw_memory_allowed: bool,
+    trusted_ffi: bool,
 ) -> Result<RunOutput> {
     crate::mir::validate_for_interpreter(&module).map_err(|error| match error {
         crate::mir::BoundaryError::LoanFlow(error) => {
@@ -220,8 +226,9 @@ fn run_resolved_entry(
                             task_stdout_sink,
                             CancellationContext::default(),
                             program_args,
+                            trusted_ffi,
                         );
-                        runtime.raw_memory_allowed = raw_memory_allowed;
+                        runtime.raw_memory_allowed = trusted_ffi;
                         runtime.run_entry(task_entry.as_deref())
                     })
                 } else {
@@ -231,8 +238,9 @@ fn run_resolved_entry(
                         task_stdout_sink,
                         CancellationContext::default(),
                         program_args,
+                        trusted_ffi,
                     );
-                    runtime.raw_memory_allowed = raw_memory_allowed;
+                    runtime.raw_memory_allowed = trusted_ffi;
                     catch_lightweight_task_failure(|| runtime.run_entry(entry.as_deref()))
                 };
                 let rendered_stdout = lock_stdout(&stdout).clone();
@@ -274,7 +282,183 @@ fn load_foreign_libraries(plan: &crate::package::ForeignLinkPlan) -> Result<()> 
         .map_err(|error| Diagnostic::coded("AU4005", format!("cannot start the program: {error}")))
 }
 
-fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
+fn is_mem_symbol(name: &str) -> bool {
+    name.starts_with("mem::")
+}
+
+fn untrusted_mem_runtime_op(op: RuntimeOp) -> Option<&'static str> {
+    match op {
+        RuntimeOp::Host(builtin) if is_mem_symbol(builtin.name()) => Some(builtin.name()),
+        _ => None,
+    }
+}
+
+fn untrusted_ffi_in_operand(operand: &Operand) -> Option<&str> {
+    match operand {
+        Operand::Function { name, .. } if is_mem_symbol(name) => Some(name.as_str()),
+        Operand::Place(_)
+        | Operand::MovePlace(_)
+        | Operand::Function { .. }
+        | Operand::Int(_)
+        | Operand::Duration(_)
+        | Operand::Float(_)
+        | Operand::Bool(_)
+        | Operand::String(_)
+        | Operand::Unit
+        | Operand::Default(_) => None,
+    }
+}
+
+fn untrusted_ffi_in_method_dispatch(dispatch: &MethodDispatch) -> Option<&str> {
+    match dispatch {
+        MethodDispatch::Static { function } if is_mem_symbol(function) => Some(function.as_str()),
+        MethodDispatch::Runtime(op) => untrusted_mem_runtime_op(*op),
+        MethodDispatch::Union(arms) => arms.iter().find_map(untrusted_ffi_in_method_dispatch),
+        MethodDispatch::Candidates { candidates, .. } => candidates.iter().find_map(|candidate| {
+            is_mem_symbol(&candidate.function).then_some(candidate.function.as_str())
+        }),
+        MethodDispatch::Static { .. } | MethodDispatch::Nothing | MethodDispatch::UnionClone => {
+            None
+        }
+    }
+}
+
+fn untrusted_ffi_in_rvalue(value: &Rvalue) -> Option<&str> {
+    match value {
+        Rvalue::Use(operand)
+        | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
+        | Rvalue::UnionInject { value: operand, .. }
+        | Rvalue::NoneTest { value: operand }
+        | Rvalue::Unary { value: operand, .. }
+        | Rvalue::Cast { value: operand, .. }
+        | Rvalue::TupleElement { tuple: operand, .. }
+        | Rvalue::VariantPayload {
+            scrutinee: operand, ..
+        }
+        | Rvalue::Member {
+            object: operand, ..
+        } => untrusted_ffi_in_operand(operand),
+        Rvalue::Try { value, from, .. } => untrusted_ffi_in_operand(value)
+            .or_else(|| from.as_deref().filter(|name| is_mem_symbol(name))),
+        Rvalue::ModuleConstant { initializer, .. } => {
+            is_mem_symbol(initializer).then_some(initializer.as_str())
+        }
+        Rvalue::Closure {
+            function, captures, ..
+        } => is_mem_symbol(function)
+            .then_some(function.as_str())
+            .or_else(|| {
+                captures
+                    .iter()
+                    .find_map(|capture| untrusted_ffi_in_operand(&capture.value))
+            }),
+        Rvalue::FormatString { parts } => parts
+            .iter()
+            .filter_map(MirFormatPart::operand)
+            .find_map(untrusted_ffi_in_operand),
+        Rvalue::StartTask {
+            stack_size,
+            task_group,
+            function,
+            args,
+            ..
+        } => stack_size
+            .as_ref()
+            .and_then(untrusted_ffi_in_operand)
+            .or_else(|| untrusted_ffi_in_operand(task_group))
+            .or_else(|| untrusted_ffi_in_operand(function))
+            .or_else(|| {
+                args.iter()
+                    .find_map(|arg| untrusted_ffi_in_operand(&arg.value))
+            }),
+        Rvalue::Binary { left, right, .. } => {
+            untrusted_ffi_in_operand(left).or_else(|| untrusted_ffi_in_operand(right))
+        }
+        Rvalue::Call { callee, args, .. } => {
+            let target = match callee {
+                CallTarget::Extern(call) => Some(call.symbol.as_str()),
+                CallTarget::Name(name) if is_mem_symbol(name) => Some(name.as_str()),
+                CallTarget::Name(_) => None,
+                CallTarget::Value(operand) => untrusted_ffi_in_operand(operand),
+                CallTarget::Member {
+                    object, dispatch, ..
+                }
+                | CallTarget::TraitMember {
+                    object, dispatch, ..
+                } => untrusted_ffi_in_operand(object)
+                    .or_else(|| dispatch.as_ref().and_then(untrusted_ffi_in_method_dispatch)),
+                CallTarget::Runtime { op, receiver, .. } => untrusted_mem_runtime_op(*op)
+                    .or_else(|| receiver.as_ref().and_then(untrusted_ffi_in_operand)),
+            };
+            target.or_else(|| {
+                args.iter()
+                    .find_map(|arg| untrusted_ffi_in_operand(&arg.value))
+            })
+        }
+        Rvalue::VecLiteral { elements, .. }
+        | Rvalue::TupleLiteral { elements, .. }
+        | Rvalue::SetLiteral { elements, .. }
+        | Rvalue::EnumVariant {
+            payloads: elements, ..
+        } => elements.iter().find_map(untrusted_ffi_in_operand),
+        Rvalue::MapLiteral { entries, .. } => entries.iter().find_map(|entry| {
+            untrusted_ffi_in_operand(&entry.key).or_else(|| untrusted_ffi_in_operand(&entry.value))
+        }),
+        Rvalue::Construct { fields, .. } => fields
+            .iter()
+            .find_map(|field| untrusted_ffi_in_operand(&field.value)),
+        // Raw pointer reads, writes and field addresses are raw memory.
+        Rvalue::CPointerAccess { .. } => Some("mem::pointer_access"),
+        Rvalue::CFieldAddress { .. } => Some("mem::field_address"),
+        Rvalue::ModuleStore { value, .. } => untrusted_ffi_in_operand(value),
+        Rvalue::ModuleLoad { .. }
+        | Rvalue::ModuleAddress { .. }
+        | Rvalue::UnionTagTest { .. }
+        | Rvalue::UnionTakePayload { .. }
+        | Rvalue::TupleTakeElement { .. } => None,
+    }
+}
+
+fn untrusted_ffi_in_terminator(terminator: &Terminator) -> Option<&str> {
+    match terminator {
+        Terminator::Return(operand)
+        | Terminator::Branch {
+            condition: operand, ..
+        }
+        | Terminator::ForRange {
+            iterable: operand, ..
+        }
+        | Terminator::Match {
+            scrutinee: operand, ..
+        } => untrusted_ffi_in_operand(operand),
+        Terminator::AssertFail {
+            message, captures, ..
+        } => message
+            .as_ref()
+            .and_then(untrusted_ffi_in_operand)
+            .or_else(|| {
+                captures
+                    .iter()
+                    .find_map(|capture| untrusted_ffi_in_operand(&capture.value))
+            }),
+        Terminator::Goto(_) | Terminator::Unreachable => None,
+    }
+}
+
+fn untrusted_ffi_diagnostic(symbol: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        format!(
+            "public MIR execution rejects the untrusted FFI or raw memory reference `{symbol}`; FFI and `mem` must be authorized by a manifest-rooted package with `[package] allow_ffi = true` and executed through a path-based API"
+        ),
+    )
+    .into_runtime_trap()
+}
+
+fn reject_untrusted_extern_calls(module: &MirModule, entry: Option<&str>) -> Result<()> {
     if module.foreign_link.asm_arch.is_some() {
         return Err(Diagnostic::coded(
             "AU2090",
@@ -289,53 +473,96 @@ fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
             "MIR that names native libraries can run only through a package-checked path API",
         ));
     }
+    if let Some(entry_name) = entry.filter(|name| is_mem_symbol(name)) {
+        return Err(untrusted_ffi_diagnostic(entry_name));
+    }
+    for constant in &module.constants {
+        if is_mem_symbol(&constant.initializer) {
+            return Err(untrusted_ffi_diagnostic(&constant.initializer));
+        }
+    }
+    for class in &module.classes {
+        for method in &class.methods {
+            if is_mem_symbol(&method.function_name) {
+                return Err(untrusted_ffi_diagnostic(&method.function_name));
+            }
+        }
+    }
+    for trait_impl in &module.trait_impls {
+        for method in &trait_impl.methods {
+            if is_mem_symbol(&method.function_name) {
+                return Err(untrusted_ffi_diagnostic(&method.function_name));
+            }
+        }
+    }
     let symbol = module
         .functions
         .iter()
         .chain(module.top_level.iter())
-        .flat_map(|function| &function.blocks)
-        .flat_map(|block| &block.instructions)
-        .find_map(|instruction| match instruction {
-            Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. } => match value
+        .find_map(|function| {
+            if is_mem_symbol(&function.name) {
+                return Some(function.name.as_str());
+            }
+            if let Some(default_fn) = function
+                .params
+                .iter()
+                .filter_map(|param| param.default_function.as_deref())
+                .find(|name| is_mem_symbol(name))
             {
-                Rvalue::Call {
-                    callee: CallTarget::Extern(call),
-                    ..
-                } => Some(call.symbol.as_str()),
-                _ => None,
-            },
-            Instruction::InlineAsm { .. } => Some("asm"),
-            Instruction::Safepoint
-            | Instruction::SourceLocation { .. }
-            | Instruction::ArmDrop { .. }
-            | Instruction::EndOwner { .. }
-            | Instruction::SourceName { .. }
-            | Instruction::Retain { .. }
-            | Instruction::Release { .. }
-            | Instruction::Lend { .. }
-            | Instruction::EndLend { .. }
-            | Instruction::IndexInRange { .. }
-            | Instruction::BeginLoan { .. }
-            | Instruction::BeginElementLoan { .. }
-            | Instruction::BeginReturnedLoan { .. }
-            | Instruction::Reborrow { .. }
-            | Instruction::ReborrowElement { .. }
-            | Instruction::ReadLoan { .. }
-            | Instruction::EndLoan { .. }
-            | Instruction::ReturnLoan { .. }
-            | Instruction::Eval { .. }
-            | Instruction::PushCleanup { .. }
-            | Instruction::PopCleanup { .. } => None,
+                return Some(default_fn);
+            }
+            function.blocks.iter().find_map(|block| {
+                block
+                    .instructions
+                    .iter()
+                    .find_map(|instruction| match instruction {
+                        Instruction::Assign { value, .. }
+                        | Instruction::WriteLoan { value, .. } => untrusted_ffi_in_rvalue(value),
+                        Instruction::Eval { value }
+                        | Instruction::BeginElementLoan {
+                            selector: value, ..
+                        }
+                        | Instruction::ReborrowElement {
+                            selector: value, ..
+                        } => untrusted_ffi_in_operand(value),
+                        Instruction::PushCleanup {
+                            callee: Some(callee),
+                            ..
+                        } => match callee {
+                            CleanupCallee::Method { function } if is_mem_symbol(function) => {
+                                Some(function.as_str())
+                            }
+                            CleanupCallee::Runtime(op) => untrusted_mem_runtime_op(*op),
+                            CleanupCallee::Method { .. }
+                            | CleanupCallee::CloseTaskGroup
+                            | CleanupCallee::Nothing => None,
+                        },
+                        Instruction::InlineAsm { .. } => Some("asm"),
+                        Instruction::Safepoint
+                        | Instruction::SourceLocation { .. }
+                        | Instruction::ArmDrop { .. }
+                        | Instruction::EndOwner { .. }
+                        | Instruction::SourceName { .. }
+                        | Instruction::Retain { .. }
+                        | Instruction::Release { .. }
+                        | Instruction::Lend { .. }
+                        | Instruction::EndLend { .. }
+                        | Instruction::IndexInRange { .. }
+                        | Instruction::BeginLoan { .. }
+                        | Instruction::BeginReturnedLoan { .. }
+                        | Instruction::Reborrow { .. }
+                        | Instruction::ReadLoan { .. }
+                        | Instruction::EndLoan { .. }
+                        | Instruction::ReturnLoan { .. }
+                        | Instruction::PushCleanup { callee: None, .. }
+                        | Instruction::PopCleanup { .. } => None,
+                    })
+                    .or_else(|| untrusted_ffi_in_terminator(&block.terminator))
+            })
         });
 
     match symbol {
-        Some(symbol) => Err(Diagnostic::coded(
-            "AU4001",
-            format!(
-                "public MIR execution rejects the untrusted extern call `{symbol}`; FFI must be authorized by a manifest-rooted package with `[package] allow_ffi = true` and executed through a path-based API"
-            ),
-        )
-        .into_runtime_trap()),
+        Some(symbol) => Err(untrusted_ffi_diagnostic(symbol)),
         None => Ok(()),
     }
 }
@@ -882,6 +1109,13 @@ struct MirRuntime {
     /// Whether this runtime runs a generator body, whose traps also name
     /// the calls that resumed it.
     generator_body: bool,
+    /// Runtime-scoped libffi callback trampolines shared across tasks in this
+    /// execution and released when the runtime drops.
+    callback_closures:
+        Arc<Mutex<HashMap<(String, crate::ffi::CCallback), crate::ffi::ScopedCallback>>>,
+    /// Whether this runtime executes package-checked MIR authorized for FFI
+    /// and raw memory builtins.
+    trusted_ffi: bool,
 }
 
 thread_local! {
@@ -1516,6 +1750,11 @@ impl Env {
     }
 
     fn write_place(&mut self, place: &str, value: Value) -> Result<()> {
+        let _ = self.write_place_replacing(place, value)?;
+        Ok(())
+    }
+
+    fn write_place_replacing(&mut self, place: &str, value: Value) -> Result<Option<Value>> {
         self.ensure_place_mutation_allowed(place)?;
         let resolved_place = self.resolve_loan_place(place)?;
         let place = resolved_place.as_str();
@@ -1529,8 +1768,9 @@ impl Env {
         }
         if rest.is_empty() {
             self.shared_values.remove(root);
-            self.values.insert((*root).to_string(), value);
-            return self.update_addressed_members(root);
+            let replaced = self.values.insert((*root).to_string(), value);
+            self.update_addressed_members(root)?;
+            return Ok(replaced);
         }
 
         let root_value = self
@@ -1541,8 +1781,9 @@ impl Env {
             .iter()
             .map(|segment| segment.as_str())
             .collect::<Vec<_>>();
-        write_nested_place(root_value, &rest_refs, value, place)?;
-        self.update_addressed_members(root)
+        let replaced = write_nested_place_replacing(root_value, &rest_refs, value, place)?;
+        self.update_addressed_members(root)?;
+        Ok(replaced)
     }
 
     fn ensure_place_mutation_allowed(&self, place: &str) -> Result<()> {
@@ -1593,15 +1834,25 @@ impl Env {
         Ok(())
     }
 
+    #[cfg(test)]
     fn write_shared_place(&mut self, place: &str, value: Arc<Value>) -> Result<()> {
+        let _ = self.write_shared_place_replacing(place, value)?;
+        Ok(())
+    }
+
+    fn write_shared_place_replacing(
+        &mut self,
+        place: &str,
+        value: Arc<Value>,
+    ) -> Result<Option<Value>> {
         if place.contains('.') {
             return Err(Diagnostic::new(format!(
                 "module constant reference cannot be assigned to nested MIR place `{place}`"
             )));
         }
-        self.values.remove(place);
+        let replaced = self.values.remove(place);
         self.shared_values.insert(place.to_string(), value);
-        Ok(())
+        Ok(replaced)
     }
 
     fn place_type(&self, place: &str) -> Option<&Type> {
@@ -1948,6 +2199,16 @@ fn write_nested_place(
     value: Value,
     full_place: &str,
 ) -> Result<()> {
+    let _ = write_nested_place_replacing(current, segments, value, full_place)?;
+    Ok(())
+}
+
+fn write_nested_place_replacing(
+    current: &mut Value,
+    segments: &[&str],
+    value: Value,
+    full_place: &str,
+) -> Result<Option<Value>> {
     let Some((segment, rest)) = segments.split_first() else {
         return Err(Diagnostic::new(format!(
             "cannot assign empty nested MIR place `{full_place}`"
@@ -1957,28 +2218,25 @@ fn write_nested_place(
         Value::EnumVariant(variant) => {
             let index = enum_projection_index(variant, segment)?;
             if rest.is_empty() {
-                variant.payloads[index] = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut variant.payloads[index], value)))
             } else {
-                write_nested_place(&mut variant.payloads[index], rest, value, full_place)
+                write_nested_place_replacing(&mut variant.payloads[index], rest, value, full_place)
             }
         }
         Value::Union(union) => {
             check_union_projection(union, segment)?;
             if rest.is_empty() {
-                union.payload = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut union.payload, value)))
             } else {
-                write_nested_place(&mut union.payload, rest, value, full_place)
+                write_nested_place_replacing(&mut union.payload, rest, value, full_place)
             }
         }
         Value::Instance(instance) => {
             if rest.is_empty() {
-                instance
+                return Ok(instance
                     .fields
                     .map_mut()
-                    .insert((*segment).to_string(), value);
-                return Ok(());
+                    .insert((*segment).to_string(), value));
             }
             let child = instance.fields.map_mut().get_mut(*segment).ok_or_else(|| {
                 Diagnostic::new(format!(
@@ -1986,7 +2244,7 @@ fn write_nested_place(
                     instance.class_name, segment, full_place
                 ))
             })?;
-            write_nested_place(child, rest, value, full_place)
+            write_nested_place_replacing(child, rest, value, full_place)
         }
         Value::Vec(vector) if segment.starts_with('[') => {
             let index = parse_element_index_segment(segment, full_place)?;
@@ -1996,10 +2254,9 @@ fn write_nested_place(
                 ))
             })?;
             if rest.is_empty() {
-                *slot = value;
-                Ok(())
+                Ok(Some(std::mem::replace(&mut *slot, value)))
             } else {
-                write_nested_place(&mut slot, rest, value, full_place)
+                write_nested_place_replacing(&mut slot, rest, value, full_place)
             }
         }
         Value::Map(map) if segment.starts_with('[') => {
@@ -2012,10 +2269,9 @@ fn write_nested_place(
                     ))
                 })?;
             if rest.is_empty() {
-                *slot = value;
-                Ok(())
+                Ok(Some(std::mem::replace(slot, value)))
             } else {
-                write_nested_place(slot, rest, value, full_place)
+                write_nested_place_replacing(slot, rest, value, full_place)
             }
         }
         Value::Tuple(tuple) => {
@@ -2030,10 +2286,9 @@ fn write_nested_place(
                 ))
             })?;
             if rest.is_empty() {
-                *child = value;
-                Ok(())
+                Ok(Some(std::mem::replace(child, value)))
             } else {
-                write_nested_place(child, rest, value, full_place)
+                write_nested_place_replacing(child, rest, value, full_place)
             }
         }
         _ => Err(Diagnostic::new(format!(
@@ -2695,6 +2950,7 @@ impl MirRuntime {
             stdout_sink,
             cancellation,
             Arc::new(Vec::new()),
+            true,
         )
     }
 
@@ -2704,6 +2960,7 @@ impl MirRuntime {
         stdout_sink: Option<StdoutSink>,
         cancellation: CancellationContext,
         program_args: Arc<Vec<String>>,
+        trusted_ffi: bool,
     ) -> Self {
         let safepoints_enabled = module_uses_lightweight_tasks(&module);
         let mut functions = HashMap::new();
@@ -2770,6 +3027,44 @@ impl MirRuntime {
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
             generator_body: false,
+            callback_closures: Arc::new(Mutex::new(HashMap::new())),
+            trusted_ffi,
+        }
+    }
+
+    /// Lightweight placeholder swapped into `self` while ownership of the live
+    /// interpreter is temporarily transferred to `CALLBACK_RUNTIME` during an
+    /// `extern "C"` call.
+    fn placeholder_from(other: &Self) -> Self {
+        Self {
+            module: Arc::clone(&other.module),
+            union_layouts: Arc::clone(&other.union_layouts),
+            safepoints_enabled: other.safepoints_enabled,
+            recursive_functions: other.recursive_functions.clone(),
+            functions: Arc::clone(&other.functions),
+            display_functions: Arc::clone(&other.display_functions),
+            float32_slots: Arc::clone(&other.float32_slots),
+            classes: Arc::clone(&other.classes),
+            trait_impls: Arc::clone(&other.trait_impls),
+            stdout: Arc::clone(&other.stdout),
+            stdout_sink: None,
+            cancellation: other.cancellation.clone(),
+            program_args: Arc::clone(&other.program_args),
+            call_depth: 0,
+            call_stack: Vec::new(),
+            task_ancestry: Vec::new(),
+            return_type_stack: Vec::new(),
+            constant_states: Arc::clone(&other.constant_states),
+            pending_returned_view_projection: None,
+            outgoing_returned_view_projection: None,
+            generator_body: false,
+            callback_closures: Arc::clone(&other.callback_closures),
+            trusted_ffi: other.trusted_ffi,
+            raw_memory_allowed: other.raw_memory_allowed,
+            borrowed_raw_cells: Default::default(),
+            raw_parameters: Arc::clone(&other.raw_parameters),
+            has_owner_hooks: other.has_owner_hooks,
+            eval_budget: None,
         }
     }
 
@@ -4289,7 +4584,11 @@ impl MirRuntime {
                 } else {
                     evaluated
                 };
-                env.write_place(loan, evaluated)?;
+                if let Some(replaced) = env.write_place_replacing(loan, evaluated)? {
+                    if owns_generator(&replaced) {
+                        self.close_released_generators(replaced)?;
+                    }
+                }
                 Ok(None)
             }
             Instruction::EndLoan { loan } => {
@@ -4319,20 +4618,26 @@ impl MirRuntime {
                             Rvalue::Unary { span, .. } | Rvalue::Binary { span, .. } => Some(*span),
                             _ => None,
                         };
-                        if let Some(target_ty) = target_ty {
-                            let evaluated =
-                                self.coerce_value_to_type(evaluated, &target_ty, span)?;
+                        let evaluated = if let Some(target_ty) = target_ty {
+                            let coerced = self.coerce_value_to_type(evaluated, &target_ty, span)?;
                             if !target.contains('.') {
                                 env.set_place_type(target, target_ty);
                             }
-                            env.write_place(target, evaluated)?;
-                            return Ok(None);
-                        } else if !target.contains('.') {
-                            if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated) {
-                                env.set_place_type(target, inferred_ty);
+                            coerced
+                        } else {
+                            if !target.contains('.') {
+                                if let Some(inferred_ty) = self.infer_runtime_value_type(&evaluated)
+                                {
+                                    env.set_place_type(target, inferred_ty);
+                                }
+                            }
+                            evaluated
+                        };
+                        if let Some(replaced) = env.write_place_replacing(target, evaluated)? {
+                            if owns_generator(&replaced) {
+                                self.close_released_generators(replaced)?;
                             }
                         }
-                        env.write_place(target, evaluated)?;
                         Ok(None)
                     }
                     RvalueOutcome::SharedModuleConstant(evaluated) => {
@@ -4341,7 +4646,13 @@ impl MirRuntime {
                                 env.set_place_type(target, target_ty);
                             }
                         }
-                        env.write_shared_place(target, evaluated)?;
+                        if let Some(replaced) =
+                            env.write_shared_place_replacing(target, evaluated)?
+                        {
+                            if owns_generator(&replaced) {
+                                self.close_released_generators(replaced)?;
+                            }
+                        }
                         Ok(None)
                     }
                     RvalueOutcome::Return(value) => Ok(Some(value)),
@@ -6033,10 +6344,15 @@ impl MirRuntime {
             return result;
         }
 
-        if !self.raw_memory_allowed && name.starts_with("mem::") {
-            return Err(raw_cells::permission_error());
+        if is_mem_symbol(name) && !self.trusted_ffi {
+            return Err(untrusted_ffi_diagnostic(name));
         }
+
         if let Some(metadata) = host_builtin_metadata(name) {
+            let is_mem = is_mem_symbol(&metadata.qualified_name);
+            if is_mem && !self.trusted_ffi {
+                return Err(untrusted_ffi_diagnostic(&metadata.qualified_name));
+            }
             // Checked MIR materializes builtin defaults before runtime dispatch, so
             // optional metadata parameters are present in this argument list too.
             let arg_names = metadata
@@ -6051,9 +6367,22 @@ impl MirRuntime {
                     return budget.path_builtin(name, &bound);
                 }
             }
+            let evaluated_args: Vec<_> = bound.into_iter().map(|argument| argument.value).collect();
+            if is_mem {
+                // SAFETY: `self.trusted_ffi` confirmed the package opted into
+                // `allow_ffi = true` and executed through a path-checked API;
+                // `host_mem` checks null and alignment before dereferencing.
+                return unsafe {
+                    evaluate_unsafe_host_builtin_with_program_args(
+                        &metadata.qualified_name,
+                        evaluated_args,
+                        self.program_args.as_slice(),
+                    )
+                };
+            }
             return evaluate_host_builtin_with_program_args(
                 &metadata.qualified_name,
-                bound.into_iter().map(|argument| argument.value).collect(),
+                evaluated_args,
                 self.program_args.as_slice(),
             );
         }
@@ -6869,6 +7198,9 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
+        if !self.trusted_ffi {
+            return Err(untrusted_ffi_diagnostic(&call.symbol));
+        }
         // A member of a union read or stored, which calls no C function.
         if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
             let mut named = call.clone();
@@ -6935,7 +7267,7 @@ impl MirRuntime {
             .zip(&call.params)
             .map(|(argument, param)| match (&param.c_struct, param.pointer) {
                 _ if matches!(param.ty, Type::Function { .. }) => {
-                    ffi_callback_from_runtime(&argument.value, &param.ty)
+                    ffi_callback_from_runtime(&self.callback_closures, &argument.value, &param.ty)
                 }
                 (Some(layout), true) => ffi_struct_elements_from_runtime(&argument.value, layout),
                 (Some(layout), false) => ffi_struct_from_runtime(&argument.value, layout),
@@ -6950,48 +7282,121 @@ impl MirRuntime {
             if let (MirReceiverKind::Value, Value::FfiHandle(handle)) =
                 (param.passing, &argument.value)
             {
-                handle.give_up();
+                if handle.take_ptr().is_null() {
+                    return Err(Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: opaque handle `{}` has already been released",
+                            call.symbol,
+                            handle.type_name()
+                        ),
+                    ));
+                }
             }
         }
 
         // A callback the foreign function calls re-enters this interpreter.
-        let outer = CALLBACK_RUNTIME.replace(self);
-        let result = dispatch(&call.symbol, &signature, &mut arguments);
-        CALLBACK_RUNTIME.set(outer);
+        // Move ownership of `self` into the thread-local slot for the duration
+        // of `dispatch` with an RAII guard so nested callbacks never alias
+        // `&mut MirRuntime` and panics always restore the interpreter.
+        let result = {
+            let _callback_scope = CallbackRuntimeScope::enter(self);
+            dispatch(&call.symbol, &signature, &mut arguments)
+        };
         let callback_failure = CALLBACK_FAILURE.take();
 
-        // A `mut` parameter is copy-in/out: fixed-length bytes, one
-        // scalar, or one nullable handle. Apply what the engine read back
-        // to the original Aura place before interpreting the foreign
-        // return, so both backends share the same post-call state even
-        // when return validation traps.
-        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(arguments) {
+        // Commit opaque handle ownership updates and wrap any returned owned
+        // handle before running potentially-trapping out-parameter validations
+        // (such as bool or struct checks), so mid-writeback traps neither
+        // double-free a replaced handle nor leak a newly returned one.
+        let mut result = result;
+        let mut owned_handle_result = if matches!(result, Ok(FfiValue::OpaqueHandle(_))) {
+            let Ok(value) = std::mem::replace(&mut result, Ok(FfiValue::Unit)) else {
+                unreachable!("matched Ok(OpaqueHandle) above");
+            };
+            Some(
+                runtime_value_from_ffi_with(value, &call.return_type, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                )?,
+            )
+        } else {
+            None
+        };
+        let mut deferred_writebacks = Vec::new();
+        for (((index, param), argument), ffi_value) in
+            call.params.iter().enumerate().zip(&ordered).zip(arguments)
+        {
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
+            if signature.parameters()[index] == FfiType::OpaqueHandleOut {
+                let written = match stored_handle(&argument.value, &ffi_value) {
+                    Some(kept) => kept,
+                    None => runtime_value_from_ffi_with(ffi_value, &param.ty, &call.handle_drops)
+                        .map_err(|error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    })?,
+                };
+                let place = argument.writeback_place.as_deref().ok_or_else(|| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!(
+                            "FFI call to `{}` failed: mutable parameter `{}` requires a writeback place",
+                            call.symbol, param.name
+                        ),
+                    )
+                })?;
+                env.write_place(place, written)?;
+            } else {
+                deferred_writebacks.push((param, argument, ffi_value));
+            }
+        }
+
+        // A `mut` parameter is copy-in/out: fixed-length bytes, one
+        // scalar, or one struct/array. Apply what the engine read back
+        // to the original Aura place before interpreting the foreign
+        // return, so both backends share the same post-call state even
+        // when return validation traps.
+        let mut writeback_error: Option<Diagnostic> = None;
+        for (param, argument, ffi_value) in deferred_writebacks {
             let written = match ffi_value {
-                FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                FfiValue::Bytes(bytes) => Ok(bytes_runtime_value(&bytes)),
                 FfiValue::Elements(scalar, words) => match &argument.value {
-                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
-                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
+                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed),
+                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol),
                 },
                 FfiValue::Struct(layout, bytes) if param.pointer => {
                     aura_runtime::c_values::unpack_elements(layout, &bytes)
-                        .map_err(|error| c_value_diagnostic(&call.symbol, error))?
+                        .map_err(|error| c_value_diagnostic(&call.symbol, error))
                 }
                 FfiValue::Struct(layout, bytes) => {
-                    struct_runtime_value(layout, &bytes, &call.symbol)?
+                    struct_runtime_value(layout, &bytes, &call.symbol)
                 }
-                other => match stored_handle(&argument.value, &other) {
-                    Some(kept) => kept,
-                    None => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops)
-                        .map_err(|error| {
-                            Diagnostic::coded(
-                                "AU4005",
-                                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-                            )
-                        })?,
-                },
+                other => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops).map_err(
+                    |error| {
+                        Diagnostic::coded(
+                            "AU4005",
+                            format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                        )
+                    },
+                ),
+            };
+            let written = match written {
+                Ok(value) => value,
+                Err(error) => {
+                    if writeback_error.is_none() {
+                        writeback_error = Some(error);
+                    }
+                    continue;
+                }
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -7004,9 +7409,15 @@ impl MirRuntime {
             })?;
             env.write_place(place, written)?;
         }
+        if let Some(error) = writeback_error {
+            return Err(error);
+        }
 
         if let Some(failure) = callback_failure {
             return Err(failure);
+        }
+        if let Some(value) = owned_handle_result.take() {
+            return Ok(value);
         }
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
         if let FfiValue::Struct(layout, bytes) = &result {
@@ -7212,6 +7623,8 @@ impl MirRuntime {
             pending_returned_view_projection: None,
             outgoing_returned_view_projection: None,
             generator_body: false,
+            callback_closures: Arc::clone(&self.callback_closures),
+            trusted_ffi: self.trusted_ffi,
         }
     }
 
@@ -11870,13 +12283,63 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
 
 thread_local! {
     /// The interpreter whose foreign call is running on this thread: the
-    /// one a callback from C re-enters. Null outside a foreign call.
-    static CALLBACK_RUNTIME: std::cell::Cell<*mut MirRuntime> =
-        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// one a callback from C re-enters. `None` outside a foreign call or
+    /// while an active callback owns the runtime.
+    static CALLBACK_RUNTIME: std::cell::RefCell<Option<MirRuntime>> =
+        const { std::cell::RefCell::new(None) };
     /// The failure of a callback that ran during the current foreign
     /// call. It is raised when the foreign function returns.
     static CALLBACK_FAILURE: std::cell::RefCell<Option<Diagnostic>> =
         const { std::cell::RefCell::new(None) };
+}
+
+/// Transfers ownership of `MirRuntime` into `CALLBACK_RUNTIME` for the duration
+/// of a foreign call and unconditionally restores it on drop.
+struct CallbackRuntimeScope<'a> {
+    slot: &'a mut MirRuntime,
+    previous: Option<MirRuntime>,
+}
+
+impl<'a> CallbackRuntimeScope<'a> {
+    fn enter(runtime: &'a mut MirRuntime) -> Self {
+        let placeholder = MirRuntime::placeholder_from(runtime);
+        let owned = std::mem::replace(runtime, placeholder);
+        let previous = CALLBACK_RUNTIME.with(|cell| cell.borrow_mut().replace(owned));
+        Self {
+            slot: runtime,
+            previous,
+        }
+    }
+}
+
+impl Drop for CallbackRuntimeScope<'_> {
+    fn drop(&mut self) {
+        let returned = CALLBACK_RUNTIME.with(|cell| {
+            let mut slot = cell.borrow_mut();
+            let returned = slot.take();
+            *slot = self.previous.take();
+            returned
+        });
+        if let Some(returned) = returned {
+            *self.slot = returned;
+        }
+    }
+}
+
+/// Holds exclusive ownership of `MirRuntime` during a single C callback
+/// invocation and restores it to `CALLBACK_RUNTIME` on exit or unwind.
+struct ActiveCallbackRuntime {
+    runtime: Option<MirRuntime>,
+}
+
+impl Drop for ActiveCallbackRuntime {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            CALLBACK_RUNTIME.with(|cell| {
+                *cell.borrow_mut() = Some(runtime);
+            });
+        }
+    }
 }
 
 /// The C signature of a callback parameter of type `ty`, a function type
@@ -11945,11 +12408,13 @@ pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
 }
 
 /// The address of C code that calls the named function `value` holds, for
-/// a callback parameter of type `ty`. One piece of code serves every call
-/// that passes the same function with the same signature.
-fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
-    type Codes = HashMap<(String, crate::ffi::CCallback), usize>;
-    static CODES: std::sync::Mutex<Option<Codes>> = std::sync::Mutex::new(None);
+/// a callback parameter of type `ty`. One trampoline serves every call
+/// that passes the same function with the same signature within `closures`.
+fn ffi_callback_from_runtime(
+    closures: &Mutex<HashMap<(String, crate::ffi::CCallback), crate::ffi::ScopedCallback>>,
+    value: &Value,
+    ty: &Type,
+) -> Result<FfiValue> {
     let mismatch = || {
         Diagnostic::coded(
             "AU4005",
@@ -11966,34 +12431,47 @@ fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         return Err(mismatch());
     }
     let name = function.name.clone();
-    let mut codes = CODES.lock().unwrap_or_else(|poison| poison.into_inner());
-    let code = *codes
-        .get_or_insert_with(HashMap::new)
+    let mut codes = closures.lock().unwrap_or_else(|poison| poison.into_inner());
+    let code = codes
         .entry((name.clone(), signature.clone()))
         .or_insert_with(|| {
             let shape = signature.clone();
-            crate::ffi::callback_code(
+            crate::ffi::callback_code_scoped(
                 signature,
                 Box::new(move |frame| run_callback(&name, &shape, frame)),
             )
-        });
+        })
+        .code();
     Ok(FfiValue::Callback(code))
 }
 
 /// Runs the Aura function `name` for one call from C. The frame holds the
 /// arguments and takes the results, as `callback_code` describes.
 fn run_callback(name: &str, signature: &crate::ffi::CCallback, frame: &mut [u64]) {
-    let runtime = CALLBACK_RUNTIME.get();
     // After one callback fails, C gets zeros until its function returns.
-    if runtime.is_null() || CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
         return;
     }
-    // SAFETY: the pointer is the interpreter that is waiting in the
-    // foreign call this callback runs under, on this thread. It does
-    // nothing else until that call returns.
-    let runtime = unsafe { &mut *runtime };
-    if let Err(diagnostic) = runtime.call_from_c(name, signature, frame) {
-        CALLBACK_FAILURE.set(Some(diagnostic));
+    let Some(runtime) = CALLBACK_RUNTIME.with(|cell| cell.borrow_mut().take()) else {
+        return;
+    };
+    let mut active = ActiveCallbackRuntime {
+        runtime: Some(runtime),
+    };
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        active
+            .runtime
+            .as_mut()
+            .expect("active callback runtime is present")
+            .call_from_c(name, signature, frame)
+    }));
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(diagnostic)) => CALLBACK_FAILURE.set(Some(diagnostic)),
+        Err(_) => CALLBACK_FAILURE.set(Some(Diagnostic::coded(
+            "AU4001",
+            format!("FFI callback `{name}` panicked during execution"),
+        ))),
     }
 }
 
@@ -12494,6 +12972,11 @@ fn owns_generator(value: &Value) -> bool {
         Value::Union(union) => owns_generator(&union.payload),
         Value::Map(map) => map.entries.iter().any(|(_, v)| owns_generator(v)),
         Value::TraitObject(object) => owns_generator(&object.value),
+        Value::Function(function) => function
+            .closure_environment
+            .as_ref()
+            .is_some_and(|env| env.any_capture(owns_generator)),
+        Value::CollectionStore(store) => store.any_value(owns_generator),
         _ => false,
     }
 }
@@ -12518,15 +13001,9 @@ impl MirRuntime {
                     // list of text. Mutation first converts it to an ordinary map.
                     crate::runtime_value::InstanceFields::Hooked(_)
                     | crate::runtime_value::InstanceFields::Recovered(_) => {}
-                    crate::runtime_value::InstanceFields::Typed(_) => {
-                        for (_, field) in instance.fields.iter() {
-                            if let Value::Generator(generator) = field.as_ref() {
-                                if matches!(field, Cow::Borrowed(_))
-                                    && generator.should_close_on_release()
-                                {
-                                    self.with_generator_resumer(|| generator.close())?;
-                                }
-                            }
+                    crate::runtime_value::InstanceFields::Typed(typed) => {
+                        for (_, field) in typed.into_map() {
+                            self.close_released_generators(field)?;
                         }
                     }
                 }
@@ -12546,6 +13023,14 @@ impl MirRuntime {
                 }
                 Ok(())
             }
+            Value::Map(map) => {
+                if !map.entries.is_shared() {
+                    for (_, entry) in map.entries.into_vec() {
+                        self.close_released_generators(entry)?;
+                    }
+                }
+                Ok(())
+            }
             Value::EnumVariant(variant) => {
                 for payload in variant.payloads.into_vec() {
                     self.close_released_generators(payload)?;
@@ -12553,6 +13038,23 @@ impl MirRuntime {
                 Ok(())
             }
             Value::Union(union) => self.close_released_generators(union.payload),
+            Value::TraitObject(object) => self.close_released_generators(object.value),
+            Value::Function(function) => {
+                if let Ok(function) = Arc::try_unwrap(function) {
+                    if let Some(env) = function.closure_environment {
+                        for captured in env.into_captured_values() {
+                            self.close_released_generators(captured)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Value::CollectionStore(store) => {
+                for element in store.into_owned_values() {
+                    self.close_released_generators(element)?;
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

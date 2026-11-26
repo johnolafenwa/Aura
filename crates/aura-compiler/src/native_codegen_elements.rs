@@ -54,6 +54,37 @@ pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, Strin
             *mentions.entry(root(place)).or_default() += 1;
         }
     }
+    let mut loan_sources = HashMap::<&str, &str>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                Instruction::BeginLoan { loan, source, .. }
+                | Instruction::BeginElementLoan { loan, source, .. } => {
+                    loan_sources.insert(loan.as_str(), root(source));
+                }
+                Instruction::Reborrow { loan, parent, .. }
+                | Instruction::ReborrowElement { loan, parent, .. } => {
+                    loan_sources.insert(loan.as_str(), root(parent));
+                }
+                _ => {}
+            }
+        }
+    }
+    fn resolve_loan_root<'a>(
+        loan_sources: &HashMap<&'a str, &'a str>,
+        mut current: &'a str,
+    ) -> &'a str {
+        for _ in 0..loan_sources.len() {
+            let Some(next) = loan_sources.get(current).copied() else {
+                break;
+            };
+            if next == current {
+                break;
+            }
+            current = next;
+        }
+        current
+    }
     let mut reads = HashMap::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
@@ -63,12 +94,13 @@ pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, Strin
             if target.contains('.') || loan.contains('.') {
                 continue;
             }
+            let loan_root = resolve_loan_root(&loan_sources, loan.as_str());
             let mut rest = block.instructions[index + 1..].iter();
             let independent = |operand: &Operand| {
                 !matches!(
                     operand,
                     Operand::Place(place) | Operand::MovePlace(place)
-                        if root(place) == target || root(place) == loan
+                        if root(place) == target || root(place) == loan || root(place) == loan_root
                 )
             };
             let call = rest.find(|later| {
@@ -114,10 +146,21 @@ pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, Strin
                     },
                     ..
                 }) if callee == target
-                    && args.iter().all(|arg| !matches!(
-                        &arg.value,
-                        Operand::Place(place) | Operand::MovePlace(place) if root(place) == target
-                    ))
+                    && args.iter().all(|arg| {
+                        let aliases_arg = matches!(
+                            &arg.value,
+                            Operand::Place(place) | Operand::MovePlace(place)
+                                if root(place) == target
+                                    || root(place) == loan
+                                    || root(place) == loan_root
+                        );
+                        let aliases_wb = arg.writeback_place.as_deref().is_some_and(|place| {
+                            root(place) == target
+                                || root(place) == loan
+                                || root(place) == loan_root
+                        });
+                        !aliases_arg && !aliases_wb
+                    })
             );
             let released = matches!(
                 rest.next(),

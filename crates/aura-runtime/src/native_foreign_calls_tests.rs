@@ -409,6 +409,52 @@ fn a_c_string_argument_is_a_terminated_copy_and_none_is_null() {
 }
 
 #[test]
+fn temporary_c_string_and_bytes_view_copies_are_tracked_and_freed_on_trap() {
+    let symbol = "open_two";
+    with_direct_task_runtime_scope(|| unsafe {
+        let text = string_value("hello");
+        let boxed = boxed_bytes(&[1, 2, 3]);
+        let before = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        let cstr = aura_direct_ffi_c_string(text, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        assert!(!cstr.is_null());
+        assert!(!bytes.is_null());
+        let during = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(
+            during,
+            before + 2,
+            "temporary CString and boxed BytesView copies must be tracked in the task ledger"
+        );
+        aura_direct_ffi_release_c_string(cstr);
+        aura_direct_ffi_release_bytes(bytes, view.length);
+        let after = super::super::with_direct_task_runtime_state(|state| {
+            state.owned_values().entries().len()
+        });
+        assert_eq!(after, before);
+        aura_direct_release_value(text);
+        aura_direct_release_value(boxed);
+    });
+
+    // Mid-call trap after arg 1 allocates CString and BytesView copies must not
+    // leak either allocation when the task scope unwinds.
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let first = string_value("arg1");
+        let boxed = boxed_bytes(&[9, 8, 7]);
+        let _cstr = aura_direct_ffi_c_string(first, 0, symbol.as_ptr(), symbol.len());
+        let mut view = empty_view();
+        let _bytes = aura_direct_ffi_bytes_view(boxed, &mut view);
+        let bad = string_value("bad\0arg2");
+        let _ = aura_direct_ffi_c_string(bad, 1, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+}
+
+#[test]
 fn a_c_string_result_is_copied_into_a_new_str() {
     let symbol = "name";
     unsafe {
@@ -670,6 +716,35 @@ fn a_flag_list_with_a_byte_that_is_not_a_bool_ends_the_task() {
 }
 
 #[test]
+fn sanitize_flags_normalizes_all_non_canonical_bytes_before_reporting() {
+    use super::aura_direct_ffi_sanitize_flags;
+    unsafe {
+        let first = list_value(scalar_flags(&[false, false]));
+        let second = list_value(scalar_flags(&[false, false]));
+        let mut first_view = empty_view();
+        let mut second_view = empty_view();
+        aura_direct_ffi_elements_mut(first, BOOL, &mut first_view);
+        aura_direct_ffi_elements_mut(second, BOOL, &mut second_view);
+        first_view.pointer.cast_mut().add(0).write(2);
+        second_view.pointer.cast_mut().add(1).write(255);
+
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 2);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 255);
+        // Subsequent checks see canonical 0/1 bytes in both lists.
+        assert_eq!(aura_direct_ffi_sanitize_flags(first), 0);
+        assert_eq!(aura_direct_ffi_sanitize_flags(second), 0);
+        assert_eq!(with_value(first, |v| v.render()), "[true, false]");
+        assert_eq!(with_value(second, |v| v.render()), "[false, true]");
+
+        let text = string_value("x");
+        assert_eq!(aura_direct_ffi_sanitize_flags(text), 0);
+        aura_direct_release_value(text);
+        aura_direct_release_value(first);
+        aura_direct_release_value(second);
+    }
+}
+
+#[test]
 fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
     unsafe extern "C-unwind" fn doubles(frame: *mut u64) {
@@ -732,6 +807,49 @@ fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task(
     });
     assert!(returned.load(Ordering::Relaxed));
     assert_eq!(diagnostic.message, "callback trapped");
+}
+
+#[test]
+fn foreign_thread_callback_enables_stack_guard_and_releases_owned_handles() {
+    use super::aura_direct_ffi_callback_guard;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static OBSERVED_STACK_LIMIT: AtomicUsize = AtomicUsize::new(0);
+    static TARGET_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C-unwind" fn callback_on_foreign_thread(_frame: *mut u64) {
+        let limit =
+            super::super::with_direct_task_runtime_state(|state| state.frames().stack_limit());
+        OBSERVED_STACK_LIMIT.store(limit, Ordering::SeqCst);
+        let name = "ForeignHandle";
+        let ptr = TARGET_ADDR.load(Ordering::SeqCst) as *mut c_void;
+        let _leaked_into_ledger =
+            unsafe { aura_direct_ffi_handle(ptr, name.as_ptr(), name.len(), Some(note_release)) };
+        // Simulate a trap mid-callback on the foreign thread.
+        super::task_runtime_boundary(|| super::runtime_error("foreign callback trapped"));
+    }
+
+    let target = 0u8;
+    let target_ptr = &target as *const u8 as *mut c_void;
+    OBSERVED_STACK_LIMIT.store(0, Ordering::SeqCst);
+    TARGET_ADDR.store(target_ptr as usize, Ordering::SeqCst);
+
+    let thread = std::thread::spawn(|| {
+        let mut frame = 0u64;
+        unsafe { aura_direct_ffi_callback_guard(callback_on_foreign_thread, &mut frame) };
+    });
+    thread.join().expect("foreign thread should finish cleanly");
+
+    assert_ne!(
+        OBSERVED_STACK_LIMIT.load(Ordering::SeqCst),
+        0,
+        "foreign-thread callback must install a non-zero stack guard limit"
+    );
+    assert_eq!(
+        releases_of(target_ptr),
+        1,
+        "owned handle created in a foreign-thread callback must be released on thread exit"
+    );
 }
 
 #[test]
@@ -999,10 +1117,27 @@ fn a_handle_with_a_drop_function_releases_its_object_once() {
         aura_direct_release_value(dropped);
         assert_eq!(releases_of(address(0)), 1);
 
-        // A handle a foreign function took is not the program's to release.
+        // A handle a foreign function took is not the program's to release,
+        // and reading its address or giving it up a second time traps.
         let taken = open(1);
+        let taken_addr = taken as usize;
         aura_direct_ffi_give_up_handle(taken);
-        assert!(aura_direct_ffi_handle_address(taken).is_null());
+        let diagnostic = capture_diagnostic(move || {
+            let _ = aura_direct_ffi_handle_address(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            diagnostic.message.contains("already been released"),
+            "{}",
+            diagnostic.message
+        );
+        let second = capture_diagnostic(move || {
+            aura_direct_ffi_give_up_handle(taken_addr as *mut OpaqueValue);
+        });
+        assert!(
+            second.message.contains("already been released"),
+            "{}",
+            second.message
+        );
         aura_direct_release_value(taken);
         assert_eq!(releases_of(address(1)), 0);
         let text = string_value("x");
@@ -1561,4 +1696,108 @@ fn a_list_of_structs_crosses_as_a_c_array_the_runtime_owns() {
         "{}",
         diagnostic.message
     );
+}
+
+/// The descriptor generated code passes for a `fixed[uint8, 3]` value: a
+/// layout whose one field is the array.
+fn fixed_bytes_layout() -> String {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::ffi::FfiScalar;
+    let layout = CStruct {
+        name: "fixed".to_string(),
+        fields: vec![CField {
+            name: "elements".to_string(),
+            kind: CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), 3),
+        }],
+        layout_controls: Default::default(),
+        union: false,
+    };
+    serde_json::to_string(&layout).expect("a layout serializes")
+}
+
+#[test]
+fn a_fixed_array_boxes_from_its_bytes_and_unboxes_back_into_a_slot() {
+    use super::{aura_direct_fixed_box, aura_direct_fixed_unbox};
+
+    let descriptor = fixed_bytes_layout();
+    let bytes = [4_u8, 5, 6];
+    unsafe {
+        let value = aura_direct_fixed_box(descriptor.as_ptr(), descriptor.len(), bytes.as_ptr());
+        assert_eq!(rendered(value), "[4, 5, 6]");
+        let mut slot = [0_u8; 3];
+        aura_direct_fixed_unbox(
+            value,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+        assert_eq!(slot, bytes);
+        aura_direct_release_value(value);
+    }
+
+    // A value that is not a list of the element ends the task.
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let descriptor = fixed_bytes_layout();
+        let text = string_value("abc");
+        let mut slot = [0_u8; 3];
+        aura_direct_fixed_unbox(
+            text,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            slot.as_mut_ptr(),
+        );
+    });
+    assert_eq!(diagnostic.code, "AU4005", "{}", diagnostic.message);
+}
+
+#[test]
+fn a_fixed_array_index_out_of_bounds_ends_the_task_at_its_span() {
+    let diagnostic = capture_diagnostic(|| super::aura_direct_fixed_bounds(7, 3, 12, 5));
+    assert_eq!(diagnostic.code, "AU4031");
+    assert_eq!(
+        diagnostic.message,
+        "fixed array index `7` is out of bounds for length `3`"
+    );
+    let span = diagnostic.span.expect("the trap names its span");
+    assert_eq!((span.line, span.column), (12, 5));
+}
+
+#[test]
+fn wide_pointer_reads_and_writes_move_all_128_bits() {
+    use super::{aura_direct_pointer_wide_read, aura_direct_pointer_wide_write};
+
+    let mut cell = 0_u128;
+    let address = &mut cell as *mut u128;
+    unsafe {
+        let value = boxed_value(Value::Int(
+            IntegerValue::from_typed_signed(-2, IntegerKind::Int128).expect("an int128"),
+        ));
+        aura_direct_pointer_wide_write(address, value, 0);
+        aura_direct_release_value(value);
+        assert_eq!(cell, u128::MAX - 1);
+
+        let signed = aura_direct_pointer_wide_read(address, 1, 0);
+        assert_eq!(rendered(signed), "-2");
+        aura_direct_release_value(signed);
+        let unsigned = aura_direct_pointer_wide_read(address, 0, 1);
+        assert_eq!(rendered(unsigned), (u128::MAX - 1).to_string());
+        aura_direct_release_value(unsigned);
+
+        let value = boxed_value(Value::Int(
+            IntegerValue::from_typed_unsigned(u128::MAX, IntegerKind::Uint128).expect("a uint128"),
+        ));
+        aura_direct_pointer_wide_write(address, value, 1);
+        aura_direct_release_value(value);
+        assert_eq!(cell, u128::MAX);
+    }
+
+    // Only an integer can be written.
+    let target = Box::into_raw(Box::new(0_u128)) as usize;
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let flag = boxed_value(Value::Bool(true));
+        aura_direct_pointer_wide_write(target as *mut u128, flag, 0);
+    });
+    assert_eq!(diagnostic.code, "AU4032");
+    assert_eq!(diagnostic.message, "wide memory write needs an integer");
+    drop(unsafe { Box::from_raw(target as *mut u128) });
 }
