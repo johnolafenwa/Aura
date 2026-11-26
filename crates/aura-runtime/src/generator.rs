@@ -186,35 +186,17 @@ thread_local! {
     /// generators are then discarded without running their bodies, whose
     /// values the same release covers.
     static DROP_CLOSE_SUSPENDED: Cell<usize> = const { Cell::new(0) };
-    /// Nonzero while an enclosing runtime boundary will inspect and propagate
-    /// failures recorded during [`GeneratorValue::drop`].
-    static GENERATOR_DROP_TRAP_CAPTURE_DEPTH: Cell<usize> = const { Cell::new(0) };
-    /// First trap or cancellation recorded while closing dropped generators
-    /// inside an active [`GeneratorDropTrapScope`].
-    static PENDING_GENERATOR_DROP_EXIT: RefCell<Option<PendingGeneratorDropExit>> =
-        const { RefCell::new(None) };
 }
 
-pub(crate) struct GeneratorDropTrapScope;
-
-impl GeneratorDropTrapScope {
-    pub(crate) fn enter() -> Self {
-        GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|depth| depth.set(depth.get() + 1));
-        Self
-    }
-}
-
-impl Drop for GeneratorDropTrapScope {
-    fn drop(&mut self) {
-        GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
+/// Hands an exit to the enclosing runtime boundary of the running task,
+/// which propagates it once the boundary's work returns. Outside any
+/// boundary the exit is dropped, as before boundaries tracked it.
 fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
-    if GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(Cell::get) == 0 {
+    if INTERPRETER_DROP_TRAP_DEPTH.with(Cell::get) == 0 {
+        crate::native_runtime::record_generator_drop_exit(exit);
         return;
     }
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| {
+    INTERPRETER_DROP_TRAP_EXIT.with(|slot| {
         let mut slot = slot.borrow_mut();
         if slot.is_none() {
             *slot = Some(exit);
@@ -222,42 +204,35 @@ fn record_generator_drop_exit(exit: PendingGeneratorDropExit) {
     });
 }
 
+thread_local! {
+    /// Nonzero while [`capture_generator_drop_trap`] runs an interpreted
+    /// instruction. Native tasks keep their scope in their frame stack.
+    static INTERPRETER_DROP_TRAP_DEPTH: Cell<usize> = const { Cell::new(0) };
+    /// First exit recorded inside the innermost interpreter capture.
+    static INTERPRETER_DROP_TRAP_EXIT: RefCell<Option<PendingGeneratorDropExit>> =
+        const { RefCell::new(None) };
+}
+
 /// Runs `f` and returns the first trap a generator raised while `f` dropped
 /// and closed it. The interpreter calls this around each instruction, so a
 /// failing `with` exit of a dropped generator traps the caller as it does on
 /// the native backend.
 pub fn capture_generator_drop_trap<T>(f: impl FnOnce() -> T) -> (T, Option<Diagnostic>) {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            INTERPRETER_DROP_TRAP_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+        }
+    }
+    INTERPRETER_DROP_TRAP_DEPTH.with(|depth| depth.set(depth.get() + 1));
     let value = {
-        let _scope = GeneratorDropTrapScope::enter();
+        let _scope = Scope;
         f()
     };
-    match take_pending_generator_drop_exit() {
+    match INTERPRETER_DROP_TRAP_EXIT.with(|slot| slot.borrow_mut().take()) {
         Some(PendingGeneratorDropExit::Trap(diagnostic)) => (value, Some(diagnostic)),
         Some(PendingGeneratorDropExit::Cancelled) | None => (value, None),
     }
-}
-
-pub(crate) fn take_pending_generator_drop_exit() -> Option<PendingGeneratorDropExit> {
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| slot.borrow_mut().take())
-}
-
-pub(crate) fn clear_pending_generator_drop_exit() {
-    PENDING_GENERATOR_DROP_EXIT.with(|slot| {
-        *slot.borrow_mut() = None;
-    });
-}
-
-pub(crate) fn swap_generator_drop_trap_state(
-    depth: &mut usize,
-    pending: &mut Option<PendingGeneratorDropExit>,
-) {
-    GENERATOR_DROP_TRAP_CAPTURE_DEPTH.with(|cell| {
-        let previous = cell.replace(*depth);
-        *depth = previous;
-    });
-    PENDING_GENERATOR_DROP_EXIT.with(|cell| {
-        std::mem::swap(&mut *cell.borrow_mut(), pending);
-    });
 }
 
 /// Runs `work` with dropped generators discarded instead of closed.
