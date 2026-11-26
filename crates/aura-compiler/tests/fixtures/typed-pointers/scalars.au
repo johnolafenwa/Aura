@@ -1,0 +1,24 @@
+import mem
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def step(p: ptr[int16], count: int64) -> ptr[int16]:
+    return p.offset(count)
+
+export "C" def exercise(block: uint64) -> bool:
+    p = block as ptr[int16]
+    second = step(p, 1)
+    second.volatile_write(-17)
+    if second.volatile_read() != -17 or mem.read_int16(block + 2) != -17:
+        return false
+    if step(second, -1) != p or p == (0 as ptr[int16]):
+        return false
+    floating = p as ptr[float32]
+    floating.write(-1.5)
+    return floating.read() == -1.5 and mem.volatile_read_float32(floating as uint64) == -1.5
+
+def main() -> None:
+    block = malloc(8)
+    assert exercise(block)
+    free(block)

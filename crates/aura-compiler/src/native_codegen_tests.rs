@@ -660,6 +660,8 @@ def main() -> int32:
         unions: Vec::new(),
         enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
+            frozen: None,
+            state: None,
             key: "<test>::answer".to_string(),
             initializer: initializer.name.clone(),
             ty: Type::named("int64"),
@@ -10392,6 +10394,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(stray_pop_cleanup_error.contains("does not know cleanup registration for `ghost`"));
 
     let pair_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Pair".to_string(),
         type_params: Vec::new(),
         fields: vec![
@@ -10991,6 +10994,7 @@ fn native_codegen_thunk_helpers_cover_roundtrip_paths() {
         assert!(opaque_missing.contains("task-start thunk expected an opaque value"));
 
         let pair_ty = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11027,6 +11031,7 @@ fn native_codegen_release_helpers_cover_cleanup_error_paths() {
         let raw_bool = builder.iconst(types::I64, 1);
         let opaque_string = DirectType::Opaque(Type::named("str"));
         let plain_pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -11359,6 +11364,7 @@ fn infer_operand_types_track_plain_classes() {
     variable_types.insert(
         "point".to_string(),
         DirectType::PlainClass(super::PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![
                 super::PlainClassField {
@@ -11376,6 +11382,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Point".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Point".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11390,6 +11397,7 @@ fn infer_operand_types_track_plain_classes() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: Vec::new(),
@@ -11570,6 +11578,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     classes.insert(
         "Point".to_string(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "Point".to_string(),
             type_params: Vec::new(),
             fields: vec![
@@ -11624,6 +11633,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
     assert!(ScalarKind::Float64.is_float());
 
     let point_ty = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Point".to_string(),
         fields: vec![
             PlainClassField {
@@ -11653,6 +11663,7 @@ fn signature_helpers_flatten_plain_class_abi_types() {
 #[test]
 fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
     let resource_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Resource".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11663,6 +11674,7 @@ fn cleanup_place_type_resolves_receivers_params_locals_and_temporaries() {
         copy: false,
     };
     let holder_class = crate::mir::MirClass {
+        c_layout: None,
         name: "Holder".to_string(),
         type_params: Vec::new(),
         fields: vec![crate::mir::MirClassField {
@@ -11758,6 +11770,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Entry".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Entry".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -11771,6 +11784,7 @@ fn direct_field_and_try_helpers_cover_remaining_direct_inference_paths() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12063,6 +12077,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     );
     assert_eq!(
         direct_type_to_type(&DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Point".to_string(),
             fields: vec![PlainClassField {
                 name: "x".to_string(),
@@ -12106,6 +12121,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
         vec![types::I64]
     );
     let flat_class = DirectType::PlainClass(PlainClassType {
+        c_layout: None,
         class_name: "Pair".to_string(),
         fields: vec![
             PlainClassField {
@@ -12202,6 +12218,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Node".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Node".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12215,6 +12232,7 @@ fn native_codegen_direct_types_keep_recursive_and_generic_classes_opaque() {
         (
             "Box".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Box".to_string(),
                 type_params: vec!["T".to_string()],
                 fields: vec![crate::mir::MirClassField {
@@ -12251,6 +12269,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Pair".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Pair".to_string(),
                 type_params: Vec::new(),
                 fields: vec![
@@ -12270,6 +12289,7 @@ fn native_codegen_type_helpers_cover_nested_type_params_and_opaque_fallbacks() {
         (
             "Wrapper".to_string(),
             crate::mir::MirClass {
+                c_layout: None,
                 name: "Wrapper".to_string(),
                 type_params: Vec::new(),
                 fields: vec![crate::mir::MirClassField {
@@ -12700,6 +12720,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
         constants: Vec::new(),
         functions: vec![main, close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int64"))],
@@ -12769,6 +12790,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
         constants: Vec::new(),
         functions: vec![plain_function.clone()],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Plain".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("value", Type::named("int32"))],
@@ -12811,6 +12833,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![plain_close_function.clone(), resource_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Resource".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("closed", Type::named("bool"))],
@@ -12856,6 +12879,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
         constants: Vec::new(),
         functions: vec![opaque_close_function.clone(), managed_close],
         classes: vec![crate::mir::MirClass {
+            c_layout: None,
             name: "Managed".to_string(),
             type_params: Vec::new(),
             fields: vec![class_field("handle", Type::named("str"))],
@@ -13392,6 +13416,7 @@ fn native_codegen_retain_and_release_helpers_cover_every_callable_bearing_shape(
         )));
         let text = DirectType::Opaque(Type::named("str"));
         let pair = DirectType::PlainClass(PlainClassType {
+            c_layout: None,
             class_name: "Pair".to_string(),
             fields: vec![
                 PlainClassField {
@@ -16514,7 +16539,12 @@ def main():
 #[test]
 fn native_module_constant_reads_find_their_frozen_value_untagged() {
     let source = r#"
+def configured_names() -> list[str]:
+    print("loading names")
+    return ["alpha", "beta"]
+
 NAMES: list[str] = ["alpha", "beta"]
+DYNAMIC_NAMES = configured_names()
 LIMITS: dict[str, int64] = {"alpha": 1}
 
 def count() -> int64:
@@ -18623,6 +18653,7 @@ fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
     let classes = HashMap::from([(
         "numbers.BigInt".into(),
         crate::mir::MirClass {
+            c_layout: None,
             name: "numbers.BigInt".into(),
             type_params: vec![],
             fields: vec![class_field("storage", storage)],
@@ -18816,6 +18847,154 @@ def main() -> None:
 }
 
 #[test]
+fn compiled_constant_data_has_no_initializer_call_at_entry() {
+    let source = "def make() -> list[int64]:\n    return [11, 19]\nconst values = make()\ndef main():\n    print(values[0])\n";
+    let mir = lower_source_to_mir(source).expect("constant should lower");
+    let bytes = emit_host_object(&mir).expect("constant should emit");
+    let initializer = mir
+        .constants
+        .iter()
+        .find(|value| value.key.ends_with("::values"))
+        .unwrap();
+    let symbol = mangle_symbol(&initializer.initializer);
+    let object = object::File::parse(&*bytes).unwrap();
+    assert!(object
+        .symbols()
+        .all(|entry| !entry.name().unwrap_or("").ends_with(&symbol)));
+    assert!(!object_referenced_symbols(&bytes)
+        .iter()
+        .any(|symbol| symbol.ends_with("aura_direct_module_constant")));
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_emits_a_typed_function() {
+    let mir = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/conditional_trait_dependency.au"
+    ))
+    .expect("the exhaustive match should lower");
+    let select = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "select_layout")
+        .expect("select_layout should be present");
+    assert!(select
+        .blocks
+        .iter()
+        .all(|block| !matches!(block.terminator, Terminator::Return(Operand::Unit))));
+    emit_host_object(&mir).expect("the record-returning function should emit");
+}
+
+#[test]
+fn exhaustive_match_returning_a_record_with_postconditions_emits() {
+    let source = r#"
+class Pair:
+    value: int64
+
+enum Side:
+    Left
+    Right
+
+def choose(side: Side) -> Pair:
+    ensures result.value > 0
+    match side:
+        case Side.Left:
+            return Pair(value=11)
+        case Side.Right:
+            return Pair(value=22)
+
+def main():
+    print(choose(Side.Left).value)
+"#;
+    let mir = lower_source_to_mir(source).expect("the contracted function should lower");
+    emit_host_object(&mir).expect("the contracted record return should emit");
+}
+
+#[test]
+fn fixed_array_native_storage_covers_nested_and_wide_lanes() {
+    for source in [
+        include_str!("../tests/fixtures/run-pass/fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/nested_fixed_arrays.au"),
+        include_str!("../tests/fixtures/run-pass/wide_fixed_arrays.au"),
+    ] {
+        let module = lower_source_to_mir(source).unwrap();
+        let object = emit_unoptimized_object(&module).unwrap();
+        assert!(!object.is_empty());
+    }
+}
+
+#[test]
+fn hosted_bit_methods_lower_at_every_word_width_and_on_wide_values() {
+    let source = r#"
+def word_bits(a: int8, b: uint16, c: int32, d: uint64, n: int64) -> int64:
+    x = a.swap_bytes().rotate_left(n).leading_zeros()
+    y = b.rotate_right(n).swap_bytes().trailing_zeros()
+    return x + y + c.rotate_right(n).count_ones() + d.swap_bytes().count_ones()
+
+def wide_bits(a: int128, b: uint128, n: int64) -> int64:
+    return a.rotate_right(n).count_ones() + b.rotate_left(n).leading_zeros()
+
+def main() -> None:
+    print(word_bits(-1, 1, 2, 3, 2))
+    print(wide_bits(-1, 1, 3))
+"#;
+    let module = lower_source_to_mir(source).expect("bit methods should lower to MIR");
+    let references = object_referenced_symbols(&emit_unoptimized_object(&module).unwrap());
+    assert!(references
+        .iter()
+        .any(|name| name.contains("aura_direct_integer_bits")));
+}
+
+#[test]
+fn mixed_width_mir_comparisons_only_box_the_full_unsigned_and_signed_pair() {
+    // A saved MIR comparison can have operands of different integer widths.
+    // The source checker normally gives both operands the same kind.
+    let comparisons = [
+        ("eq", "=="),
+        ("ne", "!="),
+        ("lt", "<"),
+        ("le", "<="),
+        ("gt", ">"),
+        ("ge", ">="),
+    ];
+    for (left_type, right_type, boxed) in [
+        ("int16", "uint8", false),
+        ("uint64", "uint16", false),
+        ("int64", "uint64", true),
+    ] {
+        let mut source = "def main() -> None:\n    pass\n".to_string();
+        for (name, op) in comparisons {
+            source.push_str(&format!(
+                "\ndef cmp_{name}(a: {left_type}, b: {left_type}) -> bool:\n    return a {op} b\n"
+            ));
+        }
+        let mut module = lower_source_to_mir(&source).unwrap();
+        for function in module
+            .functions
+            .iter_mut()
+            .filter(|f| f.name.starts_with("cmp_"))
+        {
+            function.params[1].ty = Type::named(right_type);
+            for local in &mut function.local_types {
+                if local.name == "b" {
+                    local.ty = Type::named(right_type);
+                }
+            }
+        }
+        let object = emit_unoptimized_object(&module).unwrap();
+        for (name, _) in comparisons {
+            let refs = object_function_referenced_symbols(&object, &format!("aura_fn_cmp_{name}"));
+            let calls_boxed_comparison = refs
+                .iter()
+                .any(|symbol| symbol.trim_start_matches('_') == "aura_direct_compare_values");
+            assert_eq!(
+                calls_boxed_comparison, boxed,
+                "{left_type} {name} {right_type}: {refs:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn direct_ffi_codegen_reinterprets_a_large_struct_through_a_zeroed_slot() {
     // Both layouts are wider than the slot size the stores are unrolled
     // for, so the slot is zeroed by a loop.
@@ -18844,4 +19023,48 @@ def main() -> int32:
     assert!(!referenced
         .iter()
         .any(|name| name.trim_start_matches('_') == crate::ffi::REINTERPRET_SYMBOL));
+}
+
+#[test]
+fn union_array_writeback_emits_dynamic_and_literal_reads_with_buffer_release() {
+    let module = lower_ffi_source_to_mir(include_str!(
+        "../../aura/tests/fixtures/systems_layout/layout.au"
+    ));
+    let object = emit_unoptimized_object(&module).expect("union array writeback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "fill_events",
+        "aura_direct_ffi_unpack_structs",
+        "aura_direct_ffi_release_structs",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "{symbol}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn class_drop_hook_leaves_unrelated_function_instructions_alone() {
+    let source = r#"
+class Resource:
+    value: int64
+    def __drop__(mut self):
+        print(self.value)
+
+def arithmetic(k: int64) -> int64:
+    return 2 * k + 1
+
+def main():
+    r = Resource(7)
+    print(arithmetic(3))
+"#;
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_unoptimized_object(&module).unwrap();
+    let refs = object_function_referenced_symbols(&object, &super::mangle_symbol("arithmetic"));
+    assert!(refs
+        .iter()
+        .all(|name| !name.contains("class_drop") && !name.contains("stamp_owner")));
 }

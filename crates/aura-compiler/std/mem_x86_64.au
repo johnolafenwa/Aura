@@ -1,0 +1,80 @@
+public def in_uint8(port: uint16) -> uint8:
+    mut value: uint8 = 0
+    asm("inb %dx, %al", output("al", value), input("dx", port), options("preserves_flags"))
+    return value
+
+public def out_uint8(port: uint16, value: uint8) -> None:
+    asm("outb %al, %dx", input("dx", port), input("al", value), options("preserves_flags"))
+
+public def in_uint16(port: uint16) -> uint16:
+    mut value: uint16 = 0
+    asm("inw %dx, %ax", output("ax", value), input("dx", port), options("preserves_flags"))
+    return value
+
+public def out_uint16(port: uint16, value: uint16) -> None:
+    asm("outw %ax, %dx", input("dx", port), input("ax", value), options("preserves_flags"))
+
+public def in_uint32(port: uint16) -> uint32:
+    mut value: uint32 = 0
+    asm("inl %dx, %eax", output("eax", value), input("dx", port), options("preserves_flags"))
+    return value
+
+public def out_uint32(port: uint16, value: uint32) -> None:
+    asm("outl %eax, %dx", input("dx", port), input("eax", value), options("preserves_flags"))
+
+public def read_cr0() -> uint64:
+    mut value: uint64 = 0
+    asm("movq %cr0, $0", output("reg", value))
+    return value
+
+public def write_cr0(value: uint64) -> None:
+    asm("movq $0, %cr0", input("reg", value))
+
+public def read_cr2() -> uint64:
+    mut value: uint64 = 0
+    asm("movq %cr2, $0", output("reg", value))
+    return value
+
+public def write_cr2(value: uint64) -> None:
+    asm("movq $0, %cr2", input("reg", value))
+
+public def read_cr3() -> uint64:
+    mut value: uint64 = 0
+    asm("movq %cr3, $0", output("reg", value))
+    return value
+
+public def write_cr3(value: uint64) -> None:
+    asm("movq $0, %cr3", input("reg", value))
+
+public def read_cr4() -> uint64:
+    mut value: uint64 = 0
+    asm("movq %cr4, $0", output("reg", value))
+    return value
+
+public def write_cr4(value: uint64) -> None:
+    asm("movq $0, %cr4", input("reg", value))
+
+public def read_cr8() -> uint64:
+    mut value: uint64 = 0
+    asm("movq %cr8, $0", output("reg", value))
+    return value
+
+public def write_cr8(value: uint64) -> None:
+    asm("movq $0, %cr8", input("reg", value))
+
+public def read_msr(index: uint32) -> uint64:
+    mut value: uint64 = 0
+    asm("rdmsr\nshlq $$32, %rdx\norq %rdx, %rax", output("rax", value), input("ecx", index), clobber("rdx"))
+    return value
+
+public def write_msr(index: uint32, value: uint64) -> None:
+    asm("movq %rax, %rdx\nshrq $$32, %rdx\nwrmsr", input("ecx", index), input("rax", value), clobber("rdx"))
+
+public def enable_interrupts() -> None:
+    asm("sti")
+
+public def disable_interrupts() -> None:
+    asm("cli")
+
+public def halt() -> None:
+    asm("hlt", options("preserves_flags"))

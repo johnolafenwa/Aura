@@ -1,0 +1,24 @@
+import control
+
+class Ticket:
+    name: str
+    def __drop__(mut self):
+        print("drop " + self.name)
+
+class Envelope:
+    field: Ticket
+    def __drop__(mut self):
+        inner = Ticket("hook local")
+        print("dropping envelope")
+        assert false, "hook failed"
+
+def work():
+    outer = Ticket("outer")
+    envelope = Envelope(Ticket("field"))
+
+def main():
+    match control.recover(work):
+        case Err(trap):
+            print("caught " + trap.message)
+        case _:
+            print("expected failure")

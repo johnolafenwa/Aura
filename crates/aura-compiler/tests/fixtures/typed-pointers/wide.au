@@ -1,0 +1,16 @@
+export "C" def wide(address: uint64) -> bool:
+    signed = address as ptr[int128]
+    signed.write(-170141183460469231731687303715884105728)
+    if signed.read() != -170141183460469231731687303715884105728:
+        return false
+    unsigned = signed as ptr[uint128]
+    unsigned.offset(1).volatile_write(340282366920938463463374607431768211455)
+    return unsigned.offset(1).volatile_read() == 340282366920938463463374607431768211455
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    address = malloc(32)
+    assert wide(address)
+    free(address)

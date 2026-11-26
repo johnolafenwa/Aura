@@ -1712,3 +1712,55 @@ fn typed_payloads_from_values_drops_only_initialized_slots_on_unwind() {
         "no uninitialized slot may be dropped when slot 0 unwinds"
     );
 }
+
+#[test]
+fn class_drop_explicit_copy_preserves_typed_variant_and_forks_payload_owner() {
+    use crate::runtime_value::class_drop::{released_instances, renew_owners, DropMethod};
+    use crate::runtime_value::InstanceValue;
+
+    let enum_type = Type::named("TicketHolder");
+    let env = LayoutEnv {
+        enums: [(
+            "TicketHolder".to_owned(),
+            EnumDefinition {
+                type_params: Vec::new(),
+                variants: vec![("Some".to_owned(), vec![Type::named("Ticket")])],
+            },
+        )]
+        .into(),
+        classes: Default::default(),
+    };
+    let mut builder = LayoutBuilder::new(&env);
+    let root = builder
+        .boxed_enum_layout(&enum_type, scalar)
+        .unwrap()
+        .unwrap();
+    let descriptor = Box::leak(encode_layouts(&builder.into_table(), root).into_boxed_str());
+    let layout = register_enum_layout(descriptor, FIRST_TEST_ACCESS + 71).unwrap();
+
+    let mut ticket = InstanceValue {
+        class_name: "Ticket".into(),
+        fields: Default::default(),
+    };
+    ticket.fields.insert("id", int64(17)).unwrap();
+    ticket.arm_drop(DropMethod::Interpreted("Ticket.__drop__".into()));
+    let original = Value::EnumVariant(EnumVariantValue {
+        enum_name: layout.enum_name().clone(),
+        variant_name: "Some".into(),
+        payloads: VariantPayloads::Typed(
+            TypedPayloads::from_values(layout, "Some", vec![Value::Instance(ticket)]).unwrap(),
+        ),
+    });
+    let mut copy = original.clone();
+    renew_owners(&mut copy);
+    assert!(std::ptr::eq(typed_payloads(&copy).layout(), layout));
+    assert!(released_instances().is_empty());
+    for owner in [original, copy] {
+        drop(owner);
+        let mut released = released_instances();
+        assert_eq!(released.len(), 1);
+        let (method, receiver) = released.pop().unwrap();
+        assert!(matches!(method, DropMethod::Interpreted(name) if name == "Ticket.__drop__"));
+        assert_eq!(receiver.fields.get("id").as_deref(), Some(&int64(17)));
+    }
+}

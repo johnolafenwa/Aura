@@ -4,12 +4,15 @@
 // recovery exists only to keep a few editor affordances alive when `aura lsp`
 // cannot be started at all.
 
+const { machineCompletions, machineHover, maskAssemblyTemplates } = require("./machine_syntax");
+
 const KEYWORDS = [
   "as",
   "assert",
   "break",
   "case",
   "class",
+  "const",
   "continue",
   "def",
   "dyn",
@@ -72,39 +75,45 @@ function indentation(line) {
 const MAX_SYMBOL_DEPTH = 64;
 
 function declarationForLine(line, lineNumber) {
-  const ffiPatterns = [
+  const declarationPatterns = [
+    // At column zero, mut introduces script storage or a freestanding module cell.
+    {
+      pattern: /^((?:public\s+)?mut\s+)([A-Za-z_][A-Za-z0-9_]*)(?=\s*[:=])/,
+      kind: "variable",
+      detail: "mut"
+    },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+opaque\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+opaque\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" opaque class'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+(?:(?:packed|align\s*\(\s*[0-9][\w]*\s*\))\s+){0,2}class\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" class'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+union\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+union\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "class",
       detail: 'extern "C" union'
     },
     {
       pattern:
-        /^(\s*)((?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+        /^(\s*(?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "function",
       detail: 'extern "C" function'
     }
   ];
-  for (const { pattern, kind, detail } of ffiPatterns) {
-    const ffiMatch = line.match(pattern);
-    if (ffiMatch) {
-      const [, leading, declarationPrefix, name] = ffiMatch;
-      const startCharacter = leading.length + declarationPrefix.length;
+  for (const { pattern, kind, detail } of declarationPatterns) {
+    const match = line.match(pattern);
+    if (match) {
+      const [, declarationPrefix, name] = match;
+      const startCharacter = declarationPrefix.length;
       return {
-        indent: leading.length,
+        indent: indentation(line),
         symbol: {
           name,
           kind,
@@ -119,14 +128,14 @@ function declarationForLine(line, lineNumber) {
   }
 
   const match = line.match(
-    /^(\s*)(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def)\s+([A-Za-z_][A-Za-z0-9_]*)/
+    /^\s*(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def|const)\s+([A-Za-z_][A-Za-z0-9_]*)/
   );
   if (!match) {
     return null;
   }
-  const [, prefix, declaration, name] = match;
-  const startCharacter = line.indexOf(name, prefix.length);
-  const kind = declaration === "def" ? "function" : declaration;
+  const [, declaration, name] = match;
+  const startCharacter = match[0].length - name.length;
+  const kind = ({ def: "function", const: "constant" })[declaration] || declaration;
   return {
     indent: indentation(line),
     symbol: {
@@ -142,14 +151,21 @@ function declarationForLine(line, lineNumber) {
 }
 
 function recoverSymbols(text) {
+  const moduleStorage = process.env.AURA_LSP_FREESTANDING === "1" ||
+    /^(?:public[ \t]+)?(?:export[ \t]+"C"[ \t]+def\b|def[ \t]+main\b)/m.test(text);
   const roots = [];
   const containers = [];
-  for (const [lineNumber, line] of text.split(/\r?\n/).entries()) {
+  for (const [lineNumber, line] of maskAssemblyTemplates(text).split(/\r?\n/).entries()) {
     const entry = declarationForLine(line, lineNumber);
-    if (!entry) {
+    if (
+      !entry ||
+      (entry.symbol.kind === "variable" && !moduleStorage && !line.startsWith("public"))
+    ) {
       continue;
     }
     const { indent, symbol } = entry;
+    // Navigation reads the indent; the published symbol leaves it out.
+    Object.defineProperty(symbol, "indent", { value: indent, enumerable: false });
     while (
       containers.length > 0 &&
       indent <= containers[containers.length - 1].indent
@@ -215,12 +231,15 @@ function linePrefix(text, line, character) {
 }
 
 function completionsForDocument(text, line, character, triggerCharacter) {
+  const machine = machineCompletions(text, line, character);
+  if (machine) return machine;
   if (triggerCharacter === "." || /\.\s*$/.test(linePrefix(text, line, character))) {
     return [];
   }
   const items = [
     ...KEYWORDS.map((name) => ({ name, kind: "keyword", detail: "keyword" })),
     ...BUILTINS.map((name) => ({ name, kind: "function", detail: "builtin" })),
+    ...["fixed", "ptr"].map((name) => ({ name, kind: "type", detail: "builtin type" })),
     ...flattenSymbols(documentSymbols(text)).map((symbol) => ({
       name: symbol.name,
       kind: symbol.kind,
@@ -240,7 +259,7 @@ function completionsForDocument(text, line, character, triggerCharacter) {
 }
 
 function wordAtPosition(text, line, character) {
-  const lines = text.split(/\r?\n/);
+  const lines = maskAssemblyTemplates(text).split(/\r?\n/);
   if (line < 0 || line >= lines.length) {
     return null;
   }
@@ -256,16 +275,24 @@ function wordAtPosition(text, line, character) {
   return null;
 }
 
-function recoveredDeclaration(text, name) {
-  return flattenSymbols(documentSymbols(text)).find((symbol) => symbol.name === name) || null;
+function recoveredDeclaration(text, name, inactiveSuite) {
+  const matches = flattenSymbols(recoverSymbols(text)).filter((symbol) => symbol.name === name);
+  if (!inactiveSuite) {
+    return matches[0] || null;
+  }
+  // Two targets can define the same function. Prefer the queried suite.
+  // Outside it, only an unindented declaration is unconditionally visible.
+  const local = matches.filter(({ line }) => inactiveSuite.start <= line && line < inactiveSuite.end);
+  const candidates = local.length ? local : matches.filter(({ indent }) => indent === 0);
+  return candidates.length === 1 ? candidates[0] : null;
 }
 
-function definitionForPosition(text, line, character) {
+function definitionForPosition(text, line, character, inactiveSuite) {
   const word = wordAtPosition(text, line, character);
   if (!word) {
     return null;
   }
-  const declaration = recoveredDeclaration(text, word.name);
+  const declaration = recoveredDeclaration(text, word.name, inactiveSuite);
   if (!declaration) {
     return null;
   }
@@ -276,12 +303,14 @@ function definitionForPosition(text, line, character) {
   };
 }
 
-function hoverForPosition(text, line, character) {
+function hoverForPosition(text, line, character, inactiveSuite) {
+  const machine = machineHover(text, line, character);
+  if (machine) return machine;
   const word = wordAtPosition(text, line, character);
   if (!word) {
     return null;
   }
-  const declaration = recoveredDeclaration(text, word.name);
+  const declaration = recoveredDeclaration(text, word.name, inactiveSuite);
   if (!declaration) {
     return null;
   }

@@ -1,0 +1,5 @@
+error[AU2088]: rotation count must be int64
+ --> crates/aura-compiler/tests/fixtures/check-fail/rotation_count_type.au:2:30
+  |
+2 |     return value.rotate_left(n)
+  |                              ^

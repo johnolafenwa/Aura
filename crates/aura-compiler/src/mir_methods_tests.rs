@@ -185,6 +185,7 @@ fn lowering_names_what_each_member_call_try_and_cleanup_runs() {
     assert!(*erased);
     assert_eq!(candidates.len(), 2);
     assert!(candidates.contains(&MethodCandidate {
+        owner_type: None,
         ty: Type::named("Dog"),
         function: dog_speak,
     }));
@@ -356,6 +357,8 @@ fn resolve_call(
     resolver.dispatch(
         receiver,
         &super::MemberCall {
+            owner: None,
+            trait_args: &[],
             field,
             trait_name,
             args: &[],
@@ -372,10 +375,12 @@ fn opaque_receivers_dispatch_on_every_type_that_declares_the_method() {
         Ok(MethodDispatch::Candidates {
             candidates: vec![
                 MethodCandidate {
+                    owner_type: None,
                     ty: Type::named("Dog"),
                     function: "Speak for Dog.speak".to_string(),
                 },
                 MethodCandidate {
+                    owner_type: None,
                     ty: Type::named("Cat"),
                     function: "Speak for Cat.speak".to_string(),
                 },

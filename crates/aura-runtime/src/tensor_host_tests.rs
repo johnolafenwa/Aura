@@ -889,7 +889,12 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
         let mut leaves = leaves.iter();
         for (slot, buffer) in plan.slots.iter().zip(buffers.iter_mut()) {
             if let Slot::Leaf { dtype, shape } = slot {
-                *buffer = to_bytes(&leaves.next().unwrap().to_host(*dtype, shape).unwrap());
+                let elements = leaves.next().unwrap().to_host(*dtype, shape).unwrap();
+                *buffer = if *dtype == HALF_DTYPE {
+                    tensor_kernels::half_bytes(&elements).unwrap()
+                } else {
+                    to_bytes(&elements)
+                };
             }
         }
         let finished = tensor_codegen::finished_buffers(&program, plan);
@@ -993,17 +998,30 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     output,
                     bytes,
                     double,
+                    half,
                     rows,
                     inner,
                     columns,
                     pairs,
                     swapped,
                     spread,
+                    wide,
                 } => {
-                    assert!(!double, "the test products are float32");
+                    assert!(!double, "the test products are float32 or float16");
+                    let width = if *half { 2 } else { 4 };
                     let read = |buffer: &[u8], index: usize| {
-                        f32::from_ne_bytes(buffer[index * 4..index * 4 + 4].try_into().unwrap())
+                        let bytes = &buffer[index * width..(index + 1) * width];
+                        if *half {
+                            tensor_kernels::half_to_single(u16::from_ne_bytes(
+                                bytes.try_into().unwrap(),
+                            ))
+                        } else {
+                            f32::from_ne_bytes(bytes.try_into().unwrap())
+                        }
                     };
+                    // How far apart the rows of each stored matrix are.
+                    let left_step = wide.0.unwrap_or(if swapped.0 { *rows } else { *inner });
+                    let right_step = wide.1.unwrap_or(if swapped.1 { *inner } else { *columns });
                     let mut made = vec![0_u8; *bytes];
                     for (product, (left_at, right_at)) in pairs.iter().enumerate() {
                         for row in 0..*rows {
@@ -1011,14 +1029,14 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                                 let mut sum = 0.0_f32;
                                 for k in 0..*inner {
                                     let left_place = if swapped.0 {
-                                        k * rows + row
+                                        k * left_step + row
                                     } else {
-                                        row * inner + k
+                                        row * left_step + k
                                     };
                                     let right_place = if swapped.1 {
-                                        column * inner + k
+                                        column * right_step + k
                                     } else {
-                                        k * columns + column
+                                        k * right_step + column
                                     };
                                     sum += read(&buffers[*left], left_at + left_place)
                                         * read(&buffers[*right], right_at + right_place);
@@ -1026,8 +1044,14 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                                 let at = match spread {
                                     Some((step, starts)) => starts[product] + row * step + column,
                                     None => product * rows * columns + row * columns + column,
-                                } * 4;
-                                made[at..at + 4].copy_from_slice(&sum.to_ne_bytes());
+                                } * width;
+                                if *half {
+                                    made[at..at + 2].copy_from_slice(
+                                        &tensor_kernels::single_to_half(sum).to_ne_bytes(),
+                                    );
+                                } else {
+                                    made[at..at + 4].copy_from_slice(&sum.to_ne_bytes());
+                                }
                             }
                         }
                     }
@@ -1050,6 +1074,9 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                             (*dtype, shape)
                         }
                     };
+                    if dtype == HALF_DTYPE {
+                        return tensor_kernels::from_half_bytes(shape, &buffers[output]).unwrap();
+                    }
                     from_bytes(
                         ArrayDType::from_code(dtype).unwrap(),
                         shape,

@@ -1,0 +1,757 @@
+//! Native fixed arrays occupy one contiguous, naturally aligned LLVM value.
+use super::*;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct FixedArrayLayout {
+    pub(super) ty: Type,
+    pub(super) bytes: u32,
+    pub(super) align: u8,
+    exact_align: u16,
+    element: Box<DirectType>,
+    count: u32,
+}
+
+impl FixedArrayLayout {
+    pub(super) fn storage(&self) -> ScalarType {
+        if self.exact_align > 16 {
+            return ScalarType::OverAligned {
+                bytes: self.bytes,
+                align: self.exact_align,
+            };
+        }
+        ScalarType::Inline {
+            bytes: self.bytes,
+            align: self.align,
+        }
+    }
+}
+
+pub(super) fn direct_layout(
+    ty: &Type,
+    classes: &HashMap<String, MirClass>,
+    visiting: &mut BTreeSet<String>,
+) -> Option<DirectType> {
+    let (element, count) = ty.as_fixed_array()?;
+    let element = direct_type_inner(element, classes, visiting)?;
+    let (stride, align) = storage(&element)?;
+    let (stride, exact_align) = physical_storage(&element, stride, align)?;
+    let count = u32::try_from(count).ok()?;
+    let bytes = stride.checked_mul(count)?;
+    if bytes == 0 || bytes > i32::MAX as u32 {
+        return None;
+    }
+    Some(DirectType::Fixed(FixedArrayLayout {
+        ty: ty.clone(),
+        bytes,
+        exact_align,
+        align,
+        element: Box::new(element),
+        count,
+    }))
+}
+
+/// Hosted wide numbers travel as runtime integers. Their fixed storage uses
+/// the same low and high words as the freestanding calling convention.
+fn hosted_wide(ty: &DirectType) -> Option<&str> {
+    match ty {
+        DirectType::Opaque(Type::Named(name, args))
+            if args.is_empty() && matches!(name.as_str(), "int128" | "uint128") =>
+        {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+fn storage(ty: &DirectType) -> Option<(u32, u8)> {
+    match ty {
+        _ if hosted_wide(ty).is_some() => Some((16, 8)),
+        DirectType::Scalar(k) => {
+            let size = match k {
+                ScalarKind::Int8 | ScalarKind::Uint8 | ScalarKind::Bool => 1,
+                ScalarKind::Int16 | ScalarKind::Uint16 => 2,
+                ScalarKind::Int32 | ScalarKind::Uint32 | ScalarKind::Float32 => 4,
+                ScalarKind::Int64 | ScalarKind::Uint64 | ScalarKind::Float64 => 8,
+                ScalarKind::Unit => return None,
+            };
+            Some((size, size as u8))
+        }
+        DirectType::Fixed(layout) => Some((layout.bytes, layout.align)),
+        DirectType::PlainClass(class) => {
+            if let Some(layout) = &class.c_layout {
+                return Some((layout.size().try_into().ok()?, layout.align().min(16) as u8));
+            }
+            let mut size: u32 = 0;
+            let mut align = 1;
+            for field in &class.fields {
+                let (bytes, field_align) = storage(&field.ty)?;
+                align = align.max(field_align);
+                size = size
+                    .checked_next_multiple_of(u32::from(field_align))?
+                    .checked_add(bytes)?;
+            }
+            Some((size.checked_next_multiple_of(u32::from(align))?, align))
+        }
+        _ => None,
+    }
+}
+
+impl FixedArrayLayout {
+    fn descriptor(&self) -> Result<Vec<u8>, String> {
+        Self::field_descriptor(&self.element, Some(self.count))
+    }
+
+    fn field_descriptor(element: &DirectType, count: Option<u32>) -> Result<Vec<u8>, String> {
+        use crate::c_layout::{CField, CFieldKind, CStruct};
+        use crate::ffi::FfiScalar;
+        fn kind(ty: &DirectType) -> CFieldKind {
+            if let Some(name) = hosted_wide(ty) {
+                return CFieldKind::Struct(CStruct {
+                    name: format!("#fixed.{name}"),
+                    layout_controls: Default::default(),
+                    union: false,
+                    fields: ["low", "high"]
+                        .map(|word| CField {
+                            name: word.to_owned(),
+                            kind: CFieldKind::Scalar(FfiScalar::U64),
+                        })
+                        .to_vec(),
+                });
+            }
+            match ty {
+                DirectType::PlainClass(class) if class.c_layout.is_some() => {
+                    CFieldKind::Struct(class.c_layout.as_deref().unwrap().clone())
+                }
+                DirectType::Fixed(layout) => {
+                    CFieldKind::Array(Box::new(kind(&layout.element)), layout.count as usize)
+                }
+                DirectType::PlainClass(class) => CFieldKind::Struct(CStruct {
+                    name: class.class_name.clone(),
+                    union: false,
+                    layout_controls: Default::default(),
+                    fields: class
+                        .fields
+                        .iter()
+                        .map(|field| CField {
+                            name: field.name.clone(),
+                            kind: kind(&field.ty),
+                        })
+                        .collect(),
+                }),
+                DirectType::Scalar(k) => CFieldKind::Scalar(match k {
+                    ScalarKind::Int8 => FfiScalar::I8,
+                    ScalarKind::Int16 => FfiScalar::I16,
+                    ScalarKind::Int32 => FfiScalar::I32,
+                    ScalarKind::Int64 => FfiScalar::I64,
+                    ScalarKind::Uint8 => FfiScalar::U8,
+                    ScalarKind::Uint16 => FfiScalar::U16,
+                    ScalarKind::Uint32 => FfiScalar::U32,
+                    ScalarKind::Uint64 => FfiScalar::U64,
+                    ScalarKind::Float32 => FfiScalar::F32,
+                    ScalarKind::Float64 => FfiScalar::F64,
+                    ScalarKind::Bool => FfiScalar::Bool,
+                    ScalarKind::Unit => unreachable!("unit has no array storage"),
+                }),
+                _ => unreachable!("array elements must have inline storage"),
+            }
+        }
+        let layout = CStruct {
+            name: "fixed".to_owned(),
+            union: false,
+            layout_controls: Default::default(),
+            fields: vec![CField {
+                name: "elements".to_owned(),
+                kind: match count {
+                    Some(n) => CFieldKind::Array(Box::new(kind(element)), n as usize),
+                    None => kind(element),
+                },
+            }],
+        };
+        serde_json::to_vec(&layout).map_err(|error| error.to_string())
+    }
+
+    fn slot(&self, builder: &mut dyn FunctionBackend) -> Val {
+        if self.exact_align > 16 {
+            let slot = builder
+                .create_sized_stack_slot(self.bytes, self.exact_align.trailing_zeros() as u8);
+            return builder.stack_addr(types::I64, slot, 0);
+        }
+        let slot = builder.create_sized_stack_slot(self.bytes, self.align.trailing_zeros() as u8);
+        builder.stack_addr(types::I64, slot, 0)
+    }
+
+    pub(super) fn convert(
+        &self,
+        builder: &mut dyn FunctionBackend,
+        function: FuncRef,
+        descriptor: (Val, Val),
+        value: Val,
+        boxing: bool,
+    ) -> Val {
+        let slot = self.slot(builder);
+        let (text, len) = descriptor;
+        if boxing {
+            builder.store(MemFlags::trusted(), value, slot, 0);
+            builder.call(function, &[text, len, slot]).results[0]
+        } else {
+            builder.call(function, &[value, text, len, slot]);
+            builder.load(self.storage(), MemFlags::trusted(), slot, 0)
+        }
+    }
+
+    pub(super) fn thunk_convert(
+        &self,
+        codegen: &mut NativeCodegen<'_>,
+        builder: &mut dyn FunctionBackend,
+        value: Val,
+        boxing: bool,
+    ) -> Result<Val, String> {
+        let desc = thunk_string_constant(codegen, builder, &self.descriptor()?)?;
+        let func = if boxing {
+            RuntimeFn::FixedBox
+        } else {
+            RuntimeFn::FixedUnbox
+        };
+        let func = builder.import_function(codegen.runtime[func]);
+        Ok(self.convert(builder, func, desc, value, boxing))
+    }
+}
+
+impl FunctionCompiler<'_> {
+    pub(super) fn fixed_argument_reference(
+        &mut self,
+        mut value: ValueRef,
+        arg: &MirArg,
+        passing: Option<&MirReceiverKind>,
+    ) -> ValueRef {
+        if matches!(value.ty, DirectType::Fixed(_))
+            && matches!(
+                passing,
+                Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut)
+            )
+        {
+            let place = arg.writeback_place.as_deref().or(match &arg.value {
+                Operand::Place(place) => Some(place.as_str()),
+                _ => None,
+            });
+            if let Some((address, _)) = place.and_then(|place| self.fixed_local_address(place)) {
+                value.values[0] = self.builder.borrow_array_argument(value.values[0], address);
+            }
+        }
+        value
+    }
+
+    pub(super) fn fixed_convert(
+        &mut self,
+        layout: &FixedArrayLayout,
+        value: Val,
+        boxing: bool,
+    ) -> Result<Val, String> {
+        let desc = self.string_constant(&layout.descriptor()?)?;
+        let func = if boxing {
+            RuntimeFn::FixedBox
+        } else {
+            RuntimeFn::FixedUnbox
+        };
+        Ok(layout.convert(self.builder, self.runtime[func], desc, value, boxing))
+    }
+
+    /// The address of a local array or a fixed field flattened into a local's variables.
+    /// The caller must resolve a view or module cell before using this local-only lookup.
+    pub(super) fn fixed_local_address(&mut self, place: &str) -> Option<(Val, FixedArrayLayout)> {
+        if let Some((layout, slot)) = self.raw_cells.get(place) {
+            if layout.name == "#fixed" {
+                let address = *slot;
+                if let DirectType::Fixed(fixed) = self.type_of_place(place).ok()? {
+                    return Some((address, fixed));
+                }
+            }
+        }
+        let mut path = place.split('.');
+        let root = path.next()?;
+        if self.view_places.contains_key(root) {
+            return None;
+        }
+        let mut ty = self.variable_types.get(root)?.clone();
+        let mut start = 0;
+        for field in path {
+            // A tagged union stores consecutive payload words as distinct
+            // native variables. Its narrowed value must first be unpacked.
+            if matches!(ty, DirectType::Union(_)) {
+                return None;
+            }
+            let (offset, _, member) = ty.field_slice(field)?;
+            start += offset;
+            ty = member;
+        }
+        let DirectType::Fixed(layout) = ty else {
+            return None;
+        };
+        let var = *self.variables.get(root)?.get(start)?;
+        Some((self.builder.var_addr(var), layout))
+    }
+
+    fn fixed_parts(
+        &mut self,
+        ty: &DirectType,
+        address: Val,
+        offset: u32,
+        dest: &mut Vec<Val>,
+        src: Option<&[Val]>,
+    ) -> Result<(), String> {
+        let flags = MemFlags::trusted();
+        if hosted_wide(ty).is_some() {
+            let descriptor = FixedArrayLayout::field_descriptor(ty, None)?;
+            let (text, len) = self.string_constant(&descriptor)?;
+            let at = self.builder.iadd_imm(address, i64::from(offset));
+            let word = if let Some(values) = src {
+                let word = values[dest.len()];
+                self.builder
+                    .call(self.runtime[RuntimeFn::FixedUnbox], &[word, text, len, at]);
+                word
+            } else {
+                let word = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FixedBox], &[text, len, at])
+                    .results[0];
+                self.mark_temporary_opaque_owned(&ValueRef {
+                    ty: ty.clone(),
+                    values: vec![word],
+                });
+                word
+            };
+            dest.push(word);
+            return Ok(());
+        }
+        if let DirectType::PlainClass(class) = ty {
+            if let Some(layout) = &class.c_layout {
+                let slot = self.builder.iadd_imm(address, i64::from(offset));
+                if let Some(src) = src {
+                    let words = &src[dest.len()..dest.len() + ty.value_count()];
+                    let value = ValueRef {
+                        ty: ty.clone(),
+                        values: words.to_vec(),
+                    };
+                    self.store_controlled_struct(layout, &value, slot);
+                    dest.extend_from_slice(words);
+                } else {
+                    let value =
+                        self.load_controlled_struct(layout, slot, ty.clone(), &class.class_name)?;
+                    dest.extend(value.values);
+                }
+                return Ok(());
+            }
+            let mut at = offset;
+            for field in &class.fields {
+                let (bytes, align) = storage(&field.ty).ok_or("field has no inline storage")?;
+                let (bytes, align) = physical_storage(&field.ty, bytes, align)
+                    .ok_or("field exceeds inline storage limits")?;
+                at = at.next_multiple_of(u32::from(align));
+                self.fixed_parts(&field.ty, address, at, dest, src)?;
+                at += bytes;
+            }
+            return Ok(());
+        }
+        let width = match ty {
+            DirectType::Fixed(layout) => layout.storage(),
+            DirectType::Scalar(k) => match k {
+                ScalarKind::Int8 | ScalarKind::Uint8 | ScalarKind::Bool => types::I8,
+                ScalarKind::Int16 | ScalarKind::Uint16 => types::I16,
+                ScalarKind::Int32 | ScalarKind::Uint32 => types::I32,
+                ScalarKind::Int64 | ScalarKind::Uint64 => types::I64,
+                ScalarKind::Float32 => types::F32,
+                ScalarKind::Float64 => types::F64,
+                ScalarKind::Unit => return Err("unit has no storage".to_owned()),
+            },
+            _ => return Err("array element has no inline storage".to_owned()),
+        };
+        let store = src.and_then(|values| values.get(dest.len())).copied();
+        let offset = i32::try_from(offset)
+            .map_err(|_| "fixed array field offset exceeds the target limit")?;
+        let word = if let Some(word) = store {
+            let packed = match width {
+                ScalarType::OverAligned { .. } => word,
+                ScalarType::Inline { .. } => word,
+                _ => foreign::callback_narrow(self.builder, width, word),
+            };
+            self.builder.store(flags, packed, address, offset);
+            word
+        } else {
+            let raw = self.builder.load(width, flags, address, offset);
+            match (ty, width) {
+                (_, ScalarType::OverAligned { .. }) => raw,
+                (_, ScalarType::Inline { .. } | ScalarType::I64 | ScalarType::F64) => raw,
+                (_, ScalarType::F32) => self.builder.fpromote(types::F64, raw),
+                (DirectType::Scalar(ScalarKind::Int8), _) => {
+                    self.builder.sload8(flags, address, offset)
+                }
+                (DirectType::Scalar(ScalarKind::Int16), _) => {
+                    self.builder.sload16(flags, address, offset)
+                }
+                (DirectType::Scalar(ScalarKind::Int32), _) => {
+                    self.builder.sload32(flags, address, offset)
+                }
+                _ => self.builder.uextend(types::I64, raw),
+            }
+        };
+        dest.push(word);
+        Ok(())
+    }
+
+    fn fixed_store_element(
+        &mut self,
+        layout: &FixedArrayLayout,
+        address: Val,
+        value: &ValueRef,
+    ) -> Result<(), String> {
+        let typed = self.coerce_value(value.clone(), &layout.element)?;
+        self.fixed_parts(
+            &layout.element,
+            address,
+            0,
+            &mut Vec::new(),
+            Some(&typed.values),
+        )
+    }
+
+    pub(super) fn fixed_element_address(
+        &mut self,
+        layout: &FixedArrayLayout,
+        base: Val,
+        index: Val,
+        line: Val,
+        column: Val,
+    ) -> Val {
+        let n = i64::from(layout.count);
+        if !self
+            .builder
+            .integer_constant(index)
+            .is_some_and(|i| (0..n).contains(&i))
+        {
+            let bad = self.builder.create_block();
+            let good = self.builder.create_block();
+            let valid = self.builder.icmp_imm(IntCC::UnsignedLessThan, index, n);
+            self.builder.brif(valid, good, &[], bad, &[]);
+            self.builder.switch_to_block(bad);
+            self.builder.seal_block(bad);
+            if self.freestanding.is_some() {
+                self.call_trap_hook(9, line, column);
+            } else {
+                let n = self.builder.iconst(types::I64, n);
+                self.builder.call(
+                    self.runtime[RuntimeFn::FixedBounds],
+                    &[index, n, line, column],
+                );
+            }
+            self.builder.trap(TrapCode::User(9));
+            self.builder.switch_to_block(good);
+            self.builder.seal_block(good);
+        }
+        self.fixed_offset(layout, base, index)
+    }
+
+    fn fixed_offset(&mut self, layout: &FixedArrayLayout, base: Val, index: Val) -> Val {
+        let stride = self
+            .builder
+            .iconst(types::I64, i64::from(layout.bytes / layout.count));
+        let offset = self.builder.imul(index, stride);
+        self.builder.iadd(base, offset)
+    }
+
+    /// A write back to its own addressable array changes only the selected
+    /// element. Mutable-parameter sinks and cleanup registrations still
+    /// observe this mutation exactly as they observe a whole-root store.
+    pub(super) fn store_fixed_element_in_place(
+        &mut self,
+        instruction: &Instruction,
+    ) -> Result<bool, String> {
+        use crate::mir::fixed_arrays::{WRITE, WRITE_PROVED};
+        let Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee: CallTarget::Name(op),
+                    args,
+                    type_args,
+                },
+        } = instruction
+        else {
+            return Ok(false);
+        };
+        if !matches!(op.as_str(), WRITE | WRITE_PROVED)
+            || args.len() != 5
+            || !matches!(&args[0].value, Operand::Place(source) if source == target)
+        {
+            return Ok(false);
+        }
+        let Some((base, layout)) = self.fixed_local_address(target) else {
+            return Ok(false);
+        };
+        if Some(&layout.ty) != type_args.get("array") {
+            return Err("MIR fixed array write has the wrong array type".to_owned());
+        }
+        let ix = self.load_operand(&args[1].value)?.values[0];
+        let address = if op == WRITE_PROVED {
+            self.fixed_offset(&layout, base, ix)
+        } else {
+            let line = self.load_operand(&args[2].value)?.values[0];
+            let column = self.load_operand(&args[3].value)?.values[0];
+            self.fixed_element_address(&layout, base, ix, line, column)
+        };
+        let value = self.load_operand_for_target(&args[4].value, &layout.element)?;
+        self.fixed_store_element(&layout, address, &value)?;
+        self.publish_mutable_root_write_through(target.split('.').next().unwrap())?;
+        self.refresh_cleanup_registrations_for_mutation(target)?;
+        Ok(true)
+    }
+
+    pub(super) fn compile_fixed(
+        &mut self,
+        op: &str,
+        args: &[MirArg],
+        types: &BTreeMap<String, Type>,
+    ) -> Result<ValueRef, String> {
+        use crate::mir::fixed_arrays::{LITERAL, READ, REPEAT, WRITE};
+        let proved = crate::mir::fixed_arrays::checked_form(op) != op;
+        let op = crate::mir::fixed_arrays::checked_form(op);
+        let ty = types.get("array").ok_or("missing fixed array type")?;
+        let Some(DirectType::Fixed(layout)) = direct_type(ty, &self.classes) else {
+            return Err(format!("cannot lay out `{ty}` inline"));
+        };
+        if op == crate::mir::fixed_arrays::ADDRESS && args.len() == 5 {
+            let address = self.load_operand(&args[0].value)?.values[0];
+            let index = self.load_operand(&args[1].value)?.values[0];
+            let line = self.load_operand(&args[2].value)?.values[0];
+            let column = self.load_operand(&args[3].value)?.values[0];
+            let at = self.fixed_element_address(&layout, address, index, line, column);
+            return Ok(ValueRef {
+                values: vec![at],
+                ty: DirectType::Scalar(ScalarKind::Uint64),
+            });
+        }
+        let base = layout.slot(self.builder);
+        let storage = layout.storage();
+        match op {
+            LITERAL if args.len() == layout.count as usize => {
+                for (index, arg) in args.iter().enumerate() {
+                    let value = self.load_operand_for_target(&arg.value, &layout.element)?;
+                    let ix = self.builder.iconst(types::I64, index as i64);
+                    let at = self.fixed_offset(&layout, base, ix);
+                    self.fixed_store_element(&layout, at, &value)?;
+                }
+            }
+            REPEAT if args.len() == 1 => {
+                let value = self.load_operand_for_target(&args[0].value, &layout.element)?;
+                let head = self.builder.create_block();
+                let done = self.builder.create_block();
+                self.builder.append_block_param(head, types::I64);
+                let zero = self.builder.iconst(types::I64, 0);
+                self.builder.jump(head, &[zero]);
+                self.builder.switch_to_block(head);
+                let ix = self.builder.block_params(head)[0];
+                let at = self.fixed_offset(&layout, base, ix);
+                self.fixed_store_element(&layout, at, &value)?;
+                let next = self.builder.iadd_imm(ix, 1);
+                let more =
+                    self.builder
+                        .icmp_imm(IntCC::UnsignedLessThan, next, i64::from(layout.count));
+                self.builder.brif(more, head, &[next], done, &[]);
+                self.builder.seal_block(head);
+                self.builder.switch_to_block(done);
+                self.builder.seal_block(done);
+            }
+            READ | WRITE if args.len() == if op == READ { 4 } else { 5 } => {
+                let original = if op == READ {
+                    match &args[0].value {
+                        Operand::Place(place) => self
+                            .fixed_local_address(place)
+                            .filter(|(_, actual)| actual == &layout)
+                            .map(|(base, _)| base),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let source = if let Some(original) = original {
+                    original
+                } else {
+                    let array = self.load_operand(&args[0].value)?;
+                    if array.ty != DirectType::Fixed(layout.clone()) {
+                        return Err(format!("array operand has the wrong type for {op}"));
+                    }
+                    self.builder
+                        .store(MemFlags::trusted(), array.values[0], base, 0);
+                    base
+                };
+                let ix = self.load_operand(&args[1].value)?.values[0];
+                let line = self.load_operand(&args[2].value)?.values[0];
+                let column = self.load_operand(&args[3].value)?.values[0];
+                let at = if proved {
+                    self.fixed_offset(&layout, source, ix)
+                } else {
+                    self.fixed_element_address(&layout, source, ix, line, column)
+                };
+                if op == READ {
+                    let mut values = Vec::new();
+                    self.fixed_parts(&layout.element, at, 0, &mut values, None)?;
+                    return Ok(ValueRef {
+                        values,
+                        ty: *layout.element,
+                    });
+                }
+                let value = self.load_operand_for_target(&args[4].value, &layout.element)?;
+                self.fixed_store_element(&layout, at, &value)?;
+            }
+            _ => return Err(format!("invalid arguments to {op}")),
+        }
+        Ok(ValueRef {
+            values: vec![self.builder.load(storage, MemFlags::trusted(), base, 0)],
+            ty: DirectType::Fixed(layout),
+        })
+    }
+}
+
+/// The tagged union calling convention uses 64-bit words. Inline leaves
+/// occupy as many consecutive words as their complete payload requires.
+pub(super) fn union_member_words(ty: &DirectType) -> Option<usize> {
+    let abi = ty.abi_types();
+    if abi
+        .iter()
+        .any(|s| matches!(s, ScalarType::OverAligned { .. }))
+    {
+        return Some(
+            abi.iter()
+                .map(|s| match s {
+                    ScalarType::Inline { bytes, .. } | ScalarType::OverAligned { bytes, .. } => {
+                        bytes.div_ceil(8) as usize
+                    }
+                    _ => 1,
+                })
+                .sum(),
+        );
+    }
+    abi.iter()
+        .any(|s| matches!(s, ScalarType::Inline { .. }))
+        .then(|| {
+            abi.iter()
+                .map(|s| match s {
+                    ScalarType::Inline { bytes, .. } => bytes.div_ceil(8) as usize,
+                    _ => 1,
+                })
+                .sum()
+        })
+}
+
+fn word_slot(builder: &mut dyn FunctionBackend, bytes: u32, align: u8) -> Val {
+    let slot = builder.create_sized_stack_slot(
+        bytes.next_multiple_of(8),
+        align.max(8).trailing_zeros() as u8,
+    );
+    builder.stack_addr(types::I64, slot, 0)
+}
+
+pub(super) fn pack_union_member(
+    builder: &mut dyn FunctionBackend,
+    union: &DirectUnionType,
+    index: usize,
+    member: &DirectType,
+    values: &[Val],
+) -> Option<Vec<Val>> {
+    union_member_words(member)?;
+    let mut words = vec![builder.iconst(types::I64, index as i64)];
+    let zero = builder.iconst(types::I64, 0);
+    for (&value, abi) in values.iter().zip(member.abi_types()) {
+        match abi {
+            ScalarType::OverAligned { bytes, align } => {
+                let slot = builder.create_sized_stack_slot(bytes, align.trailing_zeros() as u8);
+                let base = builder.stack_addr(types::I64, slot, 0);
+                builder.store(MemFlags::trusted(), value, base, 0);
+                for offset in (0..bytes).step_by(8) {
+                    words.push(builder.load(types::I64, MemFlags::trusted(), base, offset as i32));
+                }
+            }
+            ScalarType::Inline { bytes, align } => {
+                let base = word_slot(builder, bytes, align);
+                if !bytes.is_multiple_of(8) {
+                    builder.store(MemFlags::trusted(), zero, base, (bytes / 8 * 8) as i32);
+                }
+                builder.store(MemFlags::trusted(), value, base, 0);
+                for offset in (0..bytes).step_by(8) {
+                    words.push(builder.load(types::I64, MemFlags::trusted(), base, offset as i32));
+                }
+            }
+            ScalarType::F64 => words.push(builder.bitcast(types::I64, value)),
+            _ => words.push(value),
+        }
+    }
+    words.resize(union.payload_words + 1, zero);
+    Some(words)
+}
+
+pub(super) fn unpack_union_member(
+    builder: &mut dyn FunctionBackend,
+    member: &DirectType,
+    words: &[Val],
+) -> Option<Vec<Val>> {
+    union_member_words(member)?;
+    let mut words = words.iter().copied();
+    let mut values = Vec::new();
+    for abi in member.abi_types() {
+        let value = match abi {
+            ScalarType::OverAligned { bytes, align } => {
+                let slot = builder.create_sized_stack_slot(bytes, align.trailing_zeros() as u8);
+                let base = builder.stack_addr(types::I64, slot, 0);
+                for offset in (0..bytes).step_by(8) {
+                    builder.store(MemFlags::trusted(), words.next()?, base, offset as i32);
+                }
+                builder.load(abi, MemFlags::trusted(), base, 0)
+            }
+            ScalarType::Inline { bytes, align } => {
+                let base = word_slot(builder, bytes, align);
+                for offset in (0..bytes).step_by(8) {
+                    builder.store(MemFlags::trusted(), words.next()?, base, offset as i32);
+                }
+                builder.load(abi, MemFlags::trusted(), base, 0)
+            }
+            ScalarType::F64 => builder.bitcast(types::F64, words.next()?),
+            _ => words.next()?,
+        };
+        values.push(value);
+    }
+    Some(values)
+}
+
+/// Preserve the target C layout through fixed arrays and through plain Aura
+/// values containing them. Most Aura scalars use their ordinary alignment.
+fn physical_storage(ty: &DirectType, bytes: u32, align: u8) -> Option<(u32, u16)> {
+    match ty {
+        DirectType::Fixed(layout) => Some((layout.bytes, layout.exact_align)),
+        DirectType::PlainClass(class) => {
+            if let Some(layout) = &class.c_layout {
+                return Some((
+                    layout.size().try_into().ok()?,
+                    layout.align().try_into().ok()?,
+                ));
+            }
+            let mut end = 0u32;
+            let mut alignment = 1;
+            for field in &class.fields {
+                let (size, align) = storage(&field.ty)?;
+                let (size, align) = physical_storage(&field.ty, size, align)?;
+                alignment = alignment.max(align);
+                end = end
+                    .checked_next_multiple_of(u32::from(align))?
+                    .checked_add(size)?;
+            }
+            Some((
+                end.checked_next_multiple_of(u32::from(alignment))?,
+                alignment,
+            ))
+        }
+        _ => Some((bytes, u16::from(align))),
+    }
+}
+
+#[cfg(test)]
+#[path = "native_codegen_fixed_arrays_tests.rs"]
+mod tests;

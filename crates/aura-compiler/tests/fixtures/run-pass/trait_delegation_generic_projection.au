@@ -1,0 +1,22 @@
+trait Read:
+    type Output
+    def read(self) -> Self.Output
+
+class Reader:
+    n: int64
+
+impl Read for Reader:
+    type Output = int64
+
+    def read(self) -> int64:
+        return self.n
+
+class Holder[T]:
+    item: T
+
+impl[T: Read] Read for Holder[T] by item
+
+def read[R: Read](reader: R) -> R.Output:
+    return reader.read()
+
+print(read(Holder(item=Reader(n=42))))

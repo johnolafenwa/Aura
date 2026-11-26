@@ -1,0 +1,7 @@
+version = 1
+
+[[package]]
+name = "vector_package"
+version = "0.1.0"
+source = "path"
+path = "."

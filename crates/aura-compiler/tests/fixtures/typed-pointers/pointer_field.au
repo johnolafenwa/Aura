@@ -1,0 +1,23 @@
+import mem
+
+extern "C" class Link:
+    next: ptr[Link]
+    value: int32
+
+def main() -> None:
+    mut node = Link(next=0 as ptr[Link], value=17)
+    change(by=1, entry=node)
+    assert node.value == 18
+    slot = mem.address_of(node.next)
+    self_ptr = slot as ptr[Link]
+    slot.volatile_write(self_ptr)
+    assert slot.volatile_read().read().value == 18
+    node.value = 21
+    assert slot.read().read().value == 21
+    slot.write(0 as ptr[Link])
+    assert node.next == (0 as ptr[Link])
+
+def change(entry: mut Link, by: int32) -> None:
+    address = mem.address_of(entry.value)
+    entry.value = entry.value + by
+    assert address.read() == entry.value

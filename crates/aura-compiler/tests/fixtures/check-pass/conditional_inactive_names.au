@@ -1,0 +1,22 @@
+import build as target
+from build import freestanding as bare
+
+if not bare:
+    def value() -> int64:
+        return 7
+else:
+    import unavailable_target_module
+    extern "C" def foreign_only(x: AbsentType) -> MissingType
+
+class Header:
+    if target.hosted:
+        kind: int64
+    else:
+        kind: Unknown
+    def read(self) -> int64:
+        if bare:
+            return nonexistent()
+        return self.kind
+
+def main():
+    print(Header(value()).read())

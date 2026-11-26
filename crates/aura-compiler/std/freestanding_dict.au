@@ -1,0 +1,255 @@
+# The dictionaries of a freestanding program.
+#
+# A `dict` value is the address of a header block from the allocation
+# hooks, ten 8-byte words: a reference count, the number of entries the
+# dictionary holds, the number of entries written, the capacity in
+# entries, the address of the entries, the number of words in a key, the
+# number of words in a value, the kind of the key (0 for a one-word
+# integer, 1 for text), the address of the index, and the capacity of the
+# index. An entry is a hash word, the words of the key, and the words of
+# the value. Its hash word is odd while the entry is in the dictionary and
+# 0 after its key is removed. Entries keep the order they were added in.
+# The index is an open-addressing table of entry numbers plus 1, with 0
+# for an empty place. The compiler writes the store and the load of a key
+# or a value, at the address a slot function returns plus 8.
+# `aura build --freestanding` adds these functions to a program that uses
+# a dictionary.
+
+import mem
+
+
+# A new empty dictionary with one reference.
+def value_dict_new(key_words: uint64, value_words: uint64, kind: uint64) -> uint64:
+    address = mem.alloc(80, 8)
+    assert address != 0, "out of memory"
+    mem.write_uint64(address, 1)
+    mem.write_uint64(address + 8, 0)
+    mem.write_uint64(address + 16, 0)
+    mem.write_uint64(address + 24, 0)
+    mem.write_uint64(address + 32, 0)
+    mem.write_uint64(address + 40, key_words)
+    mem.write_uint64(address + 48, value_words)
+    mem.write_uint64(address + 56, kind)
+    mem.write_uint64(address + 64, 0)
+    mem.write_uint64(address + 72, 0)
+    return address
+
+
+# The size of one entry in bytes.
+def value_dict_entry_size(address: uint64) -> uint64:
+    return (1 + mem.read_uint64(address + 40) + mem.read_uint64(address + 48)) * 8
+
+
+# Gives back the entries, the index, and the header. The caller has
+# released what the keys and the values own.
+def value_dict_free(address: uint64) -> None:
+    capacity = mem.read_uint64(address + 24)
+    if capacity != 0:
+        mem.free(mem.read_uint64(address + 32), capacity * value_dict_entry_size(address), 8)
+    places = mem.read_uint64(address + 72)
+    if places != 0:
+        mem.free(mem.read_uint64(address + 64), places * 8, 8)
+    mem.free(address, 80, 8)
+
+
+# The number of entries.
+def value_dict_length(address: uint64) -> int64:
+    return mem.read_uint64(address + 8) as int64
+
+
+# The number of entries written, removed ones among them.
+def value_dict_used(address: uint64) -> int64:
+    return mem.read_uint64(address + 16) as int64
+
+
+# The bits of an integer key.
+def value_dict_word(key: int64) -> uint64:
+    if key >= 0:
+        return key as uint64
+    return ((key + 9223372036854775807 + 1) as uint64) + 9223372036854775808
+
+
+# The low 64 bits of `left` times `right`. A freestanding program has no
+# multiplication that wraps, so this one works on halves.
+def value_dict_times(left: uint64, right: uint64) -> uint64:
+    low: uint64 = 4294967295
+    whole = (left & low) * (right & low)
+    cross = ((((left >> 32) * (right & low)) & low) + (((left & low) * (right >> 32)) & low)) & low
+    return (whole & low) | ((((whole >> 32) + cross) & low) << 32)
+
+
+# The hash of a one-word key. The lowest bit is set, so no hash is 0.
+def value_dict_hash_word(key: uint64) -> uint64:
+    multiplier: uint64 = 11400714819323198485
+    mut hash = value_dict_times(key, multiplier)
+    hash = hash ^ (hash >> 32)
+    return hash | 1
+
+
+# The hash of a text key, FNV-1a. The lowest bit is set.
+def value_dict_hash_text(bytes: uint64, length: uint64) -> uint64:
+    mut hash: uint64 = 14695981039346656037
+    prime: uint64 = 1099511628211
+    mut at: uint64 = 0
+    while at < length:
+        hash = value_dict_times(hash ^ (mem.read_uint8(bytes + at) as uint64), prime)
+        at = at + 1
+    return hash | 1
+
+
+# Whether the key of the entry at `entry` is the key `key`: the same word,
+# or for text the same `length` bytes as at `key`.
+def value_dict_same_key(address: uint64, entry: uint64, key: uint64, length: uint64) -> bool:
+    held = mem.read_uint64(entry + 8)
+    if mem.read_uint64(address + 56) == 0:
+        return held == key
+    if mem.read_uint64(held + 8) != length:
+        return false
+    mut at: uint64 = 0
+    while at < length:
+        if mem.read_uint8(held + 16 + at) != mem.read_uint8(key + at):
+            return false
+        at = at + 1
+    return true
+
+
+# The slot of the key of the entry whose key is `key`, or 0 when the
+# dictionary holds none. `hash` is the hash of the key.
+def value_dict_find(address: uint64, hash: uint64, key: uint64, length: uint64) -> uint64:
+    places = mem.read_uint64(address + 72)
+    if places == 0:
+        return 0
+    index = mem.read_uint64(address + 64)
+    entries = mem.read_uint64(address + 32)
+    size = value_dict_entry_size(address)
+    mut place = hash & (places - 1)
+    while true:
+        number = mem.read_uint64(index + place * 8)
+        if number == 0:
+            return 0
+        entry = entries + (number - 1) * size
+        if mem.read_uint64(entry) == hash:
+            if value_dict_same_key(address, entry, key, length):
+                return entry
+        place = (place + 1) & (places - 1)
+    return 0
+
+
+# Writes the entry numbered `number`, with hash `hash`, into the index.
+def value_dict_index_entry(address: uint64, hash: uint64, number: uint64) -> None:
+    places = mem.read_uint64(address + 72)
+    index = mem.read_uint64(address + 64)
+    mut place = hash & (places - 1)
+    while mem.read_uint64(index + place * 8) != 0:
+        place = (place + 1) & (places - 1)
+    mem.write_uint64(index + place * 8, number + 1)
+
+
+# Makes room for one more entry: moves the entries the dictionary still
+# holds together, doubles the entries when they are full, and writes a
+# new index of at least twice the capacity.
+def value_dict_grow(address: uint64) -> None:
+    size = value_dict_entry_size(address)
+    used = mem.read_uint64(address + 16)
+    length = mem.read_uint64(address + 8)
+    capacity = mem.read_uint64(address + 24)
+    mut entries = mem.read_uint64(address + 32)
+    # Removed entries give their room back first.
+    mut kept: uint64 = 0
+    mut number: uint64 = 0
+    while number < used:
+        if mem.read_uint64(entries + number * size) != 0:
+            if kept != number:
+                mut word: uint64 = 0
+                while word < size:
+                    mem.write_uint64(entries + kept * size + word, mem.read_uint64(entries + number * size + word))
+                    word = word + 8
+            kept = kept + 1
+        number = number + 1
+    mem.write_uint64(address + 16, length)
+    mut wanted = capacity
+    if length * 2 >= capacity:
+        if capacity == 0:
+            wanted = 4
+            entries = mem.alloc(wanted * size, 8)
+        else:
+            wanted = capacity * 2
+            entries = mem.realloc(entries, capacity * size, 8, wanted * size)
+        assert entries != 0, "out of memory"
+        mem.write_uint64(address + 24, wanted)
+        mem.write_uint64(address + 32, entries)
+    places = mem.read_uint64(address + 72)
+    mut index = mem.read_uint64(address + 64)
+    if places != wanted * 2:
+        if places != 0:
+            mem.free(index, places * 8, 8)
+        index = mem.alloc(wanted * 16, 8)
+        assert index != 0, "out of memory"
+        mem.write_uint64(address + 64, index)
+        mem.write_uint64(address + 72, wanted * 2)
+    mut place: uint64 = 0
+    while place < wanted * 2:
+        mem.write_uint64(index + place * 8, 0)
+        place = place + 1
+    number = 0
+    while number < length:
+        value_dict_index_entry(address, mem.read_uint64(entries + number * size), number)
+        number = number + 1
+
+
+# Adds an entry with hash `hash` and returns the slot of its key. The
+# caller has found no entry with the key. A one-word key is written here,
+# as `key`. The caller stores a text key and the value.
+def value_dict_add(address: uint64, hash: uint64, key: uint64) -> uint64:
+    if mem.read_uint64(address + 16) == mem.read_uint64(address + 24):
+        value_dict_grow(address)
+    used = mem.read_uint64(address + 16)
+    entry = mem.read_uint64(address + 32) + used * value_dict_entry_size(address)
+    mem.write_uint64(entry, hash)
+    if mem.read_uint64(address + 56) == 0:
+        mem.write_uint64(entry + 8, key)
+    mem.write_uint64(address + 16, used + 1)
+    mem.write_uint64(address + 8, mem.read_uint64(address + 8) + 1)
+    value_dict_index_entry(address, hash, used)
+    return entry
+
+
+# The slot of the value of the entry whose key lies in the slot `entry`.
+def value_dict_value(address: uint64, entry: uint64) -> uint64:
+    return entry + mem.read_uint64(address + 40) * 8
+
+
+# The slot of the value of the entry at `entry`, which is 0 when the
+# dictionary does not hold the key.
+def value_dict_value_of(address: uint64, entry: uint64) -> uint64:
+    assert entry != 0, "dictionary key not found"
+    return value_dict_value(address, entry)
+
+
+# Takes the entry at `entry` out of the dictionary. The caller has
+# released what its key and its value own.
+def value_dict_take(address: uint64, entry: uint64) -> None:
+    mem.write_uint64(entry, 0)
+    mem.write_uint64(address + 8, mem.read_uint64(address + 8) - 1)
+
+
+# The slot of the key of the entry numbered `number`, or 0 when its key
+# was removed.
+def value_dict_entry(address: uint64, number: int64) -> uint64:
+    entry = mem.read_uint64(address + 32) + (number as uint64) * value_dict_entry_size(address)
+    if mem.read_uint64(entry) == 0:
+        return 0
+    return entry
+
+
+# Removes every entry and keeps the buffers. The caller has released what
+# the keys and the values own.
+def value_dict_reset(address: uint64) -> None:
+    mem.write_uint64(address + 8, 0)
+    mem.write_uint64(address + 16, 0)
+    index = mem.read_uint64(address + 64)
+    places = mem.read_uint64(address + 72)
+    mut place: uint64 = 0
+    while place < places:
+        mem.write_uint64(index + place * 8, 0)
+        place = place + 1

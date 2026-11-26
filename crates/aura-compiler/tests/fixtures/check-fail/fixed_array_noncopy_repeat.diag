@@ -1,0 +1,5 @@
+error[AU3031]: a repeated array element must be Copy
+ --> crates/aura-compiler/tests/fixtures/check-fail/fixed_array_noncopy_repeat.au:6:30
+  |
+6 |     slots: fixed[Cell, 3] = [item] * 3
+  |                              ^

@@ -1,0 +1,5 @@
+error[AU2065]: drop hook must be `def __drop__(mut self)` with no other parameters and a None result
+ --> crates/aura-compiler/tests/fixtures/check-fail/class_drop_signature.au:2:5
+  |
+2 |     def __drop__(self):
+  |     ^

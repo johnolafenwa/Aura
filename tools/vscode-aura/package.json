@@ -158,6 +158,17 @@
           "scope": "machine",
           "markdownDescription": "Full path to the `aura` executable the language server runs. Leave empty to use `aura` on `PATH`, then `~/.local/bin`, `~/.cargo/bin`, `/opt/homebrew/bin`, and `/usr/local/bin`."
         },
+        "aura.freestandingTarget": {
+          "type": "string",
+          "default": "",
+          "enum": ["", "x86_64-unknown-none", "aarch64-unknown-none", "riscv64gc-unknown-none-elf"],
+          "markdownDescription": "Selecting a target enables freestanding diagnostics, navigation and verification for that architecture. Leave empty to use the workspace’s Aura: Freestanding setting."
+        },
+        "aura.freestanding": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Check and navigate source using the freestanding compiler profile. Enable for a kernel or firmware workspace."
+        },
         "aura.verifyOnSave": {
           "type": "boolean",
           "default": true,

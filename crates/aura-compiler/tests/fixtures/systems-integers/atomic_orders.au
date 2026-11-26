@@ -1,0 +1,10 @@
+import mem
+
+export "C" def exchange(cell: uint64, other: uint64) -> uint16:
+    mem.atomic_store_uint8(cell, 255, "release")
+    old = mem.atomic_add_uint8(cell, 2, "relaxed")
+    mem.atomic_compare_exchange_uint8(cell, 1, old, "acq_rel", "acquire")
+    mem.atomic_store_uint16(other, 17)
+    mem.atomic_swap_uint16(other, mem.atomic_load_uint8(cell, "acquire") as uint16, "seq_cst")
+    mem.fence("acquire")
+    return mem.atomic_load_uint16(other, "relaxed")

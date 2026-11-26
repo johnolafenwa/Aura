@@ -110,6 +110,16 @@ fn collect_named_op_callees(function: &MirFunction, out: &mut Vec<String>) {
             ..
         } = value
         {
+            // Ordered memory operations inline the ordering at the call site.
+            // Their generic wrapper only has a runtime parameter for that order.
+            if op
+                .name()
+                .strip_prefix("mem::")
+                .and_then(aura_core::atomic_order::AtomicOperation::of)
+                .is_some()
+            {
+                continue;
+            }
             out.push(op.name().to_string());
         }
     }
@@ -123,6 +133,9 @@ fn collect_strings(value: &serde_json::Value, out: &mut Vec<String>) {
                 collect_strings(item, out);
             }
         }
+        // A resolved host operation names a runtime entry directly. Its
+        // callable-value wrapper is reachable only through a function operand.
+        serde_json::Value::Object(fields) if fields.len() == 1 && fields.contains_key("Host") => {}
         serde_json::Value::Object(fields) => {
             for (key, item) in fields {
                 out.push(key.clone());

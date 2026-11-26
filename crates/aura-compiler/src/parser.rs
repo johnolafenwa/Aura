@@ -1,3 +1,9 @@
+mod conditional;
+pub(crate) use conditional::root_imports;
+pub(crate) const CONDITION_RESULT: &str = "conditional predicate";
+mod module_state;
+mod property_setters;
+
 use crate::ast::{
     Argument, AssertStmt, AssignStmt, AssignTarget, AssocTypeBinding, AssocTypeDecl, BinaryOp,
     BindingPattern, BindingTarget, BreakStmt, ClassDecl, ClassPattern, ClassPatternField,
@@ -26,7 +32,7 @@ fn parse_error(span: Span, message: impl Into<String>) -> Diagnostic {
 
 fn unsupported_decorator_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::coded_at("AU2005", span, message)
-        .with_help("decorators apply only to module-level functions; in a class body, `@property` before a method declares a read-only property")
+        .with_help("decorators apply to module-level functions and class methods; write `@property` alone above a getter")
 }
 
 fn misplaced_decorator_error(span: Span) -> Diagnostic {
@@ -77,6 +83,7 @@ fn class_invariant_method(
         span,
         property: None,
         decorators: Vec::new(),
+        machine: None,
         doc: None,
         contracts: invariants,
         spec: false,
@@ -315,10 +322,56 @@ fn validate_rest_targets(target: &BindingTarget, rest_allowed: bool) -> Result<(
 }
 
 pub fn parse(source: &str) -> Result<Module> {
+    parse_with_module_scope(source, false)
+}
+
+pub(crate) fn parse_with_module_scope(source: &str, declaration_module: bool) -> Result<Module> {
+    parse_configured(
+        source,
+        declaration_module,
+        Some(conditional::Resolver::new(None)),
+    )
+}
+
+/// Validate every suite without resolving a build configuration or a package.
+pub fn parse_all_syntax(source: &str) -> Result<Module> {
+    parse_all_syntax_with_module_scope(source, false)
+}
+
+pub(crate) fn parse_all_syntax_with_module_scope(
+    source: &str,
+    declaration_module: bool,
+) -> Result<Module> {
+    parse_configured(source, declaration_module, None)
+}
+
+pub(crate) fn parse_for_path(
+    source: &str,
+    loader: &mut crate::ModuleLoader,
+    path: &std::path::Path,
+    declaration_module: bool,
+) -> Result<Module> {
+    parse_configured(
+        source,
+        declaration_module,
+        Some(conditional::Resolver::new(Some((loader, path)))),
+    )
+}
+
+fn parse_configured(
+    source: &str,
+    declaration_module: bool,
+    resolver: Option<conditional::Resolver<'_>>,
+) -> Result<Module> {
     let tokens = lex(source)?;
     let mut parser = Parser::new(tokens);
+    parser.module_storage = declaration_module || parser.has_explicit_entry();
     parser.source_lines = source.lines().map(str::to_owned).collect();
-    let mut module = parser.parse_module()?;
+    let mut module = parser.parse_with_possible_entry()?;
+    if let Some(mut resolver) = resolver {
+        parser.select_conditionals(&mut module, &mut resolver, declaration_module)?;
+        parser.finish_naked_functions(&mut module)?;
+    }
     check_module_documentation_limit(&module)?;
     record_decorator_text(&mut module, source);
     Ok(module)
@@ -328,10 +381,11 @@ pub fn parse(source: &str) -> Result<Module> {
 /// decorator or the definition. Comment lines inside the group are skipped.
 fn record_decorator_text(module: &mut Module, source: &str) {
     let lines = source.lines().collect::<Vec<_>>();
-    for item in &mut module.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
+    for function in module.items.iter_mut().flat_map(|item| match item {
+        Item::Function(function) => std::slice::from_mut(function),
+        Item::Class(class) => class.methods.as_mut_slice(),
+        _ => &mut [],
+    }) {
         let ends = function
             .decorators
             .iter()
@@ -433,8 +487,13 @@ fn parse_expression_with_recursion_depth(source: &str, recursion_depth: usize) -
     Ok(expr)
 }
 
+mod layout_controls;
+
 struct Parser {
     tokens: Vec<Token>,
+    declaration_ifs: Vec<conditional::Suite>,
+    projected: bool,
+    in_declaration_arm: bool,
     index: usize,
     recursion_depth: usize,
     current_function_returns_view: bool,
@@ -444,11 +503,15 @@ struct Parser {
     /// Whether the fields being parsed are those of an `extern "C"` class,
     /// where `array[T, N]` spells a fixed-size C array.
     extern_fields: bool,
+    c_bit_widths: std::collections::BTreeMap<String, u8>,
     /// Declarations generated for an `extern "C" union`, which join the
     /// module's items.
+    asm_spans: Vec<Span>,
+    deferred_naked: bool,
     generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
+    module_storage: bool,
     source_lines: Vec<String>,
     /// The `ghost` locals of the function being parsed. Reads of one in a
     /// ghost value, an `assert`, or a loop clause name it `ghost <name>`.
@@ -463,12 +526,19 @@ impl Parser {
     fn with_recursion_depth(tokens: Vec<Token>, recursion_depth: usize) -> Self {
         Self {
             tokens,
+            declaration_ifs: Vec::new(),
+            projected: false,
+            in_declaration_arm: false,
             index: 0,
             recursion_depth,
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            asm_spans: Vec::new(),
+            deferred_naked: false,
+            c_bit_widths: Default::default(),
             generated_items: Vec::new(),
+            module_storage: false,
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
         }
@@ -509,20 +579,45 @@ impl Parser {
     }
 
     fn parse_module(&mut self) -> Result<Module> {
+        self.parse_module_suite(false)
+    }
+
+    fn parse_module_suite(&mut self, nested: bool) -> Result<Module> {
         let mut imports = Vec::new();
         let mut constants = Vec::new();
         let mut items = Vec::new();
+        let mut module_asm = Vec::new();
         let mut top_level_stmts = Vec::new();
         // Module constants are the bindings above the first top-level
         // statement. From the first statement on, `name = value` is an
         // immutable script local, so a script reads top to bottom.
         let mut seen_statement = false;
         self.skip_newlines();
-        let doc = self.take_docstring()?;
+        let doc = if nested { None } else { self.take_docstring()? };
         self.skip_newlines();
 
-        while !self.at_eof() {
-            if self.at_keyword_import() || self.at_from_import_start() {
+        while !(self.at_eof() || nested && self.at_simple(&TokenKind::Dedent)) {
+            let suite = (self.at_simple(&TokenKind::KwIf) && !self.projected)
+                .then(|| self.declaration_kind(&imports, &constants, seen_statement))
+                .flatten();
+            if let Some(required) = suite {
+                for mut branch in
+                    self.parse_declaration_arms(required, |parser| parser.parse_module_suite(true))?
+                {
+                    imports.append(&mut branch.imports);
+                    constants.append(&mut branch.constants);
+                    items.append(&mut branch.items);
+                    top_level_stmts.append(&mut branch.top_level_stmts);
+                    module_asm.append(&mut branch.module_asm);
+                }
+            } else if matches!(self.current_kind(), TokenKind::Identifier(n) if n == "module_asm")
+                && matches!(self.peek_kind(1), Some(TokenKind::LParen))
+            {
+                let expr = self.parse_expr()?;
+                module_asm.push(crate::inline_asm::module_template(&expr)?.to_string());
+                self.asm_spans.push(expr.span);
+                self.expect_statement_terminator()?;
+            } else if self.at_keyword_import() || self.at_from_import_start() {
                 imports.push(self.parse_import()?);
             } else if self.at_type_alias_start() {
                 items.push(self.parse_item()?);
@@ -538,6 +633,10 @@ impl Parser {
                     self.current_span(),
                     "a public module constant must come before the first top-level statement",
                 ));
+            } else if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                self.parse_decorated_declaration(&mut items, &mut constants, seen_statement)?;
             } else if self.at_simple(&TokenKind::KwPublic)
                 || self.at_simple(&TokenKind::At)
                 || self.at_copy_class_start()
@@ -554,14 +653,28 @@ impl Parser {
                 items.push(self.parse_item()?);
             } else {
                 let statement = self.parse_stmt()?;
+                if let Stmt::Expr(stmt) = &statement {
+                    if crate::inline_asm::is_asm(&stmt.expr) {
+                        return Err(Diagnostic::coded_at(
+                            "AU2093",
+                            stmt.span,
+                            "use module_asm at module scope",
+                        ));
+                    }
+                }
                 seen_statement = true;
                 top_level_stmts.push(statement);
             }
             self.skip_newlines();
         }
 
-        items.append(&mut self.generated_items);
+        if !nested {
+            items.append(&mut self.generated_items);
+        }
         Ok(Module {
+            inactive_lines: Vec::new(),
+            module_asm,
+            asm_span: self.asm_spans.first().copied(),
             doc,
             imports,
             constants,
@@ -570,8 +683,18 @@ impl Parser {
         })
     }
 
+    fn at_const_marker(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "const")
+            && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+    }
+
     fn at_module_constant_start(&self) -> bool {
+        if self.at_const_marker() {
+            return true;
+        }
         match self.current_kind() {
+            TokenKind::KwMut => self.module_storage,
+            TokenKind::KwPublic if matches!(self.peek_kind(1), Some(TokenKind::KwMut)) => true,
             // `_ = expr` discards a value; it is a statement, not a constant.
             TokenKind::Identifier(name) if name == "_" => false,
             TokenKind::Identifier(_) => {
@@ -594,6 +717,11 @@ impl Parser {
 
     fn parse_module_constant(&mut self) -> Result<ConstantDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let required = self.at_const_marker();
+        if required {
+            self.bump();
+        }
+        let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let (name, span) = self.expect_identifier_with_span()?;
         let annotation = if self.eat_simple(&TokenKind::Colon).is_some() {
             Some(self.parse_type()?)
@@ -604,6 +732,9 @@ impl Parser {
         let value = self.parse_expr()?;
         self.expect_statement_terminator()?;
         Ok(ConstantDecl {
+            required,
+            placement: None,
+            mutable,
             public,
             name,
             annotation,
@@ -616,7 +747,7 @@ impl Parser {
         if self.at_simple(&TokenKind::At)
             && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
         {
-            return self.parse_decorated_function();
+            return self.parse_decorated_function(false).map(Item::Function);
         }
         if self.at_simple(&TokenKind::At) {
             let property = self.parse_property_marker()?;
@@ -845,6 +976,9 @@ impl Parser {
             }));
         }
 
+        if self.at_layout_modifier() {
+            return self.parse_controlled_c_class(public).map(Item::Class);
+        }
         if self.at_simple(&TokenKind::KwClass) {
             return Ok(Item::Class(self.parse_extern_class(public)?));
         }
@@ -971,7 +1105,7 @@ impl Parser {
             if matches!(kind, TokenKind::Star) {
                 return Err(parse_error(
                     self.tokens[index].span,
-                    "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
+                    "use `ptr[T]` for a typed pointer in an extern declaration",
                 ));
             }
             index += 1;
@@ -1091,7 +1225,56 @@ impl Parser {
         let mut fields: Vec<FieldDecl> = Vec::new();
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
+        self.parse_class_members(&mut fields, &mut methods, &mut invariants)?;
+        self.expect_simple(TokenKind::Dedent)?;
+        if let Some(method) = methods
+            .iter()
+            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                method.span,
+                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
+            ));
+        }
+        if let Some(first) = invariants.first() {
+            methods.push(class_invariant_method(public, first.span, invariants));
+        }
+
+        Ok(ClassDecl {
+            public,
+            copy,
+            name,
+            type_params,
+            type_param_bounds,
+            fields,
+            methods,
+            span,
+            doc,
+            c_layout: false,
+            c_arrays: std::collections::BTreeMap::new(),
+            layout_controls: Default::default(),
+            c_union: None,
+        })
+    }
+
+    fn parse_class_members(
+        &mut self,
+        fields: &mut Vec<FieldDecl>,
+        methods: &mut Vec<FunctionDecl>,
+        invariants: &mut Vec<ContractClause>,
+    ) -> Result<()> {
+        let mut members_are_selected = !self.in_declaration_arm;
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
+            if self.at_simple(&TokenKind::KwIf) {
+                // The syntax pass combines alternatives. Only the projected
+                // pass knows which preceding methods can name a setter.
+                members_are_selected = false;
+                self.parse_declaration_arms(true, |parser| {
+                    parser.parse_class_members(fields, methods, invariants)
+                })?;
+                continue;
+            }
             if self.at_lemma_def_start() {
                 return Err(Diagnostic::coded_at(
                     "AU2048",
@@ -1157,6 +1340,18 @@ impl Parser {
                 self.parse_pass_stmt()?;
                 continue;
             }
+            let preceding: &[FunctionDecl] = if members_are_selected { methods } else { &[] };
+            if self.at_property_setter(preceding) {
+                let setter = self.parse_property_setter(preceding)?;
+                methods.push(setter);
+                continue;
+            }
+            if self.at_simple(&TokenKind::At)
+                && !matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "property")
+            {
+                methods.push(self.parse_decorated_function(true)?);
+                continue;
+            }
             if self.at_simple(&TokenKind::At) {
                 let property = self.parse_property_marker()?;
                 let method_public = self.eat_simple(&TokenKind::KwPublic).is_some();
@@ -1175,35 +1370,7 @@ impl Parser {
             }
         }
 
-        self.expect_simple(TokenKind::Dedent)?;
-        if let Some(method) = methods
-            .iter()
-            .find(|method| method.name == crate::ast::CLASS_INVARIANT_METHOD)
-        {
-            return Err(Diagnostic::coded_at(
-                "AU2048",
-                method.span,
-                "`__invariant__` is reserved for checking a class's `invariant` clauses; rename the method",
-            ));
-        }
-        if let Some(first) = invariants.first() {
-            methods.push(class_invariant_method(public, first.span, invariants));
-        }
-
-        Ok(ClassDecl {
-            public,
-            copy,
-            name,
-            type_params,
-            type_param_bounds,
-            fields,
-            methods,
-            span,
-            doc,
-            c_layout: false,
-            c_arrays: std::collections::BTreeMap::new(),
-            c_union: None,
-        })
+        Ok(())
     }
 
     /// Parses the class of an `extern "C" class` declaration: a `copy`
@@ -1213,6 +1380,9 @@ impl Parser {
         let class = self.parse_class(public);
         self.extern_fields = outer;
         let mut class = class?;
+        class.layout_controls.bit_widths = std::mem::take(&mut self.c_bit_widths);
+        class.layout_controls.microsoft_bit_fields = !class.layout_controls.bit_widths.is_empty()
+            && crate::current_build_config().os == "windows";
         let name = &class.name;
         let rejected = if !class.type_params.is_empty() {
             Some((
@@ -1276,6 +1446,13 @@ impl Parser {
                 .replace("at least one field", "at least one member");
             error
         })?;
+        if !members.layout_controls.bit_widths.is_empty() {
+            return Err(Diagnostic::coded_at(
+                "AU2085",
+                members.span,
+                "declare bit-fields inside a C class",
+            ));
+        }
         let holder = crate::ast::c_union_members_class(&members.name);
         let name = std::mem::replace(&mut members.name, holder);
         if let Some(member) = members
@@ -1302,7 +1479,7 @@ impl Parser {
             // A member that is a class crosses as itself. A scalar or an
             // array crosses as the one field of a class declared for it.
             let boxed = members.c_arrays.contains_key(member)
-                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
+                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if name == "fixed" || C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
             let copy = if members.c_arrays.contains_key(member) {
                 "[:]"
             } else {
@@ -1320,6 +1497,9 @@ impl Parser {
             class_text.push_str(&format!(
                 "    @property\n    {visible}def {member}(self) -> uint8:\n        return __{name}_get_{member}(self){read}\n\
                  \x20   {visible}def from_{member}(value: uint8) -> {name}:\n        return __{name}_set_{member}({stored})\n"
+            ));
+            class_text.push_str(&format!(
+                "    {visible}def __write_{member}(mut self, value: uint8) -> None:\n        updated = __{name}_set_{member}({stored})\n        for i in range(0):\n            self.bytes[i] = updated.bytes[i]\n"
             ));
             if boxed {
                 items_text.push_str(&format!(
@@ -1358,10 +1538,11 @@ impl Parser {
         for mut item in generated.items {
             match &mut item {
                 Item::Class(class) if class.name == name => {
-                    for (pair, member) in class.methods.chunks_mut(2).zip(&members.fields) {
+                    for (pair, member) in class.methods.chunks_mut(3).zip(&members.fields) {
                         pair[0].return_type = member.ty.clone();
                         pair[0].doc = member.doc.clone();
                         pair[1].params[0].ty = member.ty.clone();
+                        pair[2].params[0].ty = member.ty.clone();
                     }
                     class.span = members.span;
                     class.doc = members.doc.take();
@@ -1505,9 +1686,14 @@ impl Parser {
     fn parse_field(&mut self) -> Result<FieldDecl> {
         let public = self.eat_simple(&TokenKind::KwPublic).is_some();
         let span = self.current_span();
+        self.reject_view_field()?;
         let name = self.expect_identifier()?;
         self.expect_simple(TokenKind::Colon)?;
+        self.reject_view_field()?;
         let ty = self.parse_type()?;
+        if self.extern_fields {
+            self.parse_field_width(&name, &ty)?;
+        }
         let default = if self.eat_simple(&TokenKind::Equal).is_some() {
             Some(self.parse_expr()?)
         } else {
@@ -1525,10 +1711,86 @@ impl Parser {
         })
     }
 
-    /// Parses a group of `@expression` lines and the module-level function
+    fn reject_view_field(&self) -> Result<()> {
+        if matches!(self.peek_kind(0), Some(TokenKind::Identifier(word)) if word == "view")
+            && matches!(
+                self.peek_kind(1),
+                Some(TokenKind::Identifier(_)) | Some(TokenKind::KwMut)
+            )
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2063",
+                self.current_span(),
+                "a class cannot store a view field",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Parses a group of `@expression` lines and the function or method
     /// they decorate. Comments and blank lines may sit inside the group.
-    fn parse_decorated_function(&mut self) -> Result<Item> {
+    fn parse_decorated_declaration(
+        &mut self,
+        items: &mut Vec<Item>,
+        constants: &mut Vec<ConstantDecl>,
+        seen_statement: bool,
+    ) -> Result<()> {
         let first = self.current_span();
+        let decorators = self.parse_decorator_group()?;
+        if !seen_statement
+            && self.at_module_constant_start()
+            && decorators
+                .iter()
+                .any(|d| crate::machine_attributes::attribute(d).is_some())
+        {
+            let mut constant = self.parse_module_constant()?;
+            constant.placement = Some(Box::new(crate::machine_data::placement(&decorators)?));
+            constants.push(constant);
+            return Ok(());
+        }
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        let mut function = if self.at_keyword_def() {
+            self.parse_function(public)?
+        } else if self.at_export_def_start() {
+            self.parse_export_function(public)?
+        } else {
+            return Err(misplaced_decorator_error(first));
+        };
+        self.attach_machine_attributes(&mut function, decorators)?;
+        items.push(Item::Function(function));
+        Ok(())
+    }
+
+    fn parse_decorated_function(&mut self, method: bool) -> Result<FunctionDecl> {
+        let first = self.current_span();
+        let decorators = self.parse_decorator_group()?;
+        if let Some(machine) = decorators
+            .iter()
+            .find(|d| crate::machine_attributes::attribute(d).is_some())
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2095",
+                machine.span,
+                "machine attributes require a module-level declaration",
+            ));
+        }
+        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
+        if !self.at_keyword_def() {
+            if method {
+                return Err(Diagnostic::coded_at(
+                    "AU2047",
+                    first,
+                    "a method decorator must come directly before a method definition",
+                ));
+            }
+            return Err(misplaced_decorator_error(first));
+        }
+        let mut function = self.parse_function_with_receiver(method, public)?;
+        function.decorators = decorators;
+        Ok(function)
+    }
+
+    fn parse_decorator_group(&mut self) -> Result<Vec<Decorator>> {
         let mut decorators = Vec::new();
         while self.at_simple(&TokenKind::At) {
             let at = self.expect_simple(TokenKind::At)?.span;
@@ -1543,17 +1805,10 @@ impl Parser {
             self.expect_newline()?;
             self.skip_newlines();
         }
-        let public = self.eat_simple(&TokenKind::KwPublic).is_some();
-        if !self.at_keyword_def() {
-            return Err(misplaced_decorator_error(first));
-        }
-        let mut function = self.parse_function(public)?;
-        function.decorators = decorators;
-        Ok(Item::Function(function))
+        Ok(decorators)
     }
 
-    /// Parses one `@property` line. `@property` is the only marker Aura
-    /// accepts: a general decorator is not part of the language.
+    /// Parses the reserved stand-alone `@property` marker.
     fn parse_property_marker(&mut self) -> Result<Span> {
         let span = self.expect_simple(TokenKind::At)?.span;
         let name = match self.current_kind() {
@@ -1655,6 +1910,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,
@@ -1777,6 +2033,13 @@ impl Parser {
         }
         self.expect_keyword(TokenKind::KwFor)?;
         let for_type = self.parse_type()?;
+        let delegation = if matches!(self.peek_kind(0), Some(TokenKind::Identifier(name)) if name == "by")
+        {
+            self.bump();
+            Some(self.expect_identifier_with_span()?)
+        } else {
+            None
+        };
         if self.eat_simple(&TokenKind::Colon).is_none() {
             // `impl Trait for Type` with no body asks for derived methods.
             self.expect_statement_terminator()?;
@@ -1788,7 +2051,8 @@ impl Parser {
                 for_type,
                 methods: Vec::new(),
                 span,
-                derived: true,
+                derived: delegation.is_none(),
+                delegation,
                 assoc_types: Vec::new(),
             });
         }
@@ -1809,6 +2073,7 @@ impl Parser {
             methods,
             span,
             derived: false,
+            delegation,
             assoc_types,
         })
     }
@@ -1905,6 +2170,7 @@ impl Parser {
             span,
             property: None,
             decorators: Vec::new(),
+            machine: None,
             doc,
             contracts,
             spec: false,
@@ -2169,6 +2435,11 @@ impl Parser {
         self.enter_recursion("statement")?;
         let result = self.parse_stmt_inner();
         self.exit_recursion();
+        if let Ok(Stmt::Expr(stmt)) = &result {
+            if crate::inline_asm::is_asm(&stmt.expr) {
+                self.asm_spans.push(stmt.span);
+            }
+        }
         result
     }
 
@@ -2357,6 +2628,8 @@ impl Parser {
         let mutable = self.eat_simple(&TokenKind::KwMut).is_some();
         let span = self.current_span();
         let target = self.parse_assign_target()?;
+        let member_span =
+            matches!(target, AssignTarget::Member { .. }).then(|| self.tokens[self.index - 1].span);
         let annotation = if matches!(target, AssignTarget::Name(_))
             && self.eat_simple(&TokenKind::Colon).is_some()
         {
@@ -2369,6 +2642,7 @@ impl Parser {
         self.expect_statement_terminator()?;
 
         Ok(AssignStmt {
+            member_span,
             mutable,
             target,
             annotation,
@@ -3426,11 +3700,11 @@ impl Parser {
                     let mut closed = false;
                     loop {
                         // `array[T, N]`: the length of a C array field.
-                        if name == C_ARRAY_TYPE_NAME && args.len() == 1 {
+                        if matches!(name.as_str(), C_ARRAY_TYPE_NAME | "fixed") && args.len() == 1 {
                             if let TokenKind::IntLiteral(length) = self.current_kind() {
                                 let length = length.to_string();
                                 let length_span = self.bump().span;
-                                if !self.extern_fields {
+                                if name == C_ARRAY_TYPE_NAME && !self.extern_fields {
                                     return Err(parse_error(
                                         span,
                                         "`array[T, N]` is the type of a field of an `extern \"C\"` class and names no type elsewhere; use `list[T]`",
@@ -3759,6 +4033,7 @@ impl Parser {
             })
             .collect();
         Ok(Stmt::Assign(AssignStmt {
+            member_span: None,
             mutable: false,
             op: None,
             span: name_span,
@@ -4344,7 +4619,7 @@ impl Parser {
         // is an ordinary name.
         let starts_array = matches!(
             self.peek_kind(1),
-            Some(TokenKind::Identifier(name)) if name == "Array"
+            Some(TokenKind::Identifier(name)) if matches!(name.as_str(), "Array" | "ptr")
         ) && matches!(self.peek_kind(2), Some(TokenKind::LBracket));
         starts_trait_object
             || starts_array

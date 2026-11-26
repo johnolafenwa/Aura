@@ -1,0 +1,9 @@
+from mem import read_mhartid
+import mem
+
+export "C" def cpu(vectors: uint64) -> uint64:
+    mem.disable_interrupts()
+    mem.write_mtvec(vectors)
+    mem.enable_interrupts()
+    mem.halt()
+    return read_mhartid()

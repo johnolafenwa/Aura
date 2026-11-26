@@ -4,9 +4,11 @@
 //! operator enums that both sides of the native boundary must agree on. It
 //! contains no parser, checker, or code generator.
 
+pub mod atomic_order;
 pub mod diag;
 pub mod host_path;
 pub mod integer;
+pub mod integer_bits;
 pub mod json_text;
 pub mod layout;
 pub mod ops;
